@@ -14,6 +14,9 @@ import { requestFit } from '../lib/wire-funding';
 import { wireBillsToShow, groupByVendor, groupTotals, tickGroup } from '../lib/wire-bill-tree'; // v55.83-VK — the company's bills as a tree
 import { requestCopyModel, requestCopyHtml } from '../lib/wire-request-print'; // v55.83-SQ — the two printable copies of a request // v55.83-SP — a request drawn from a transfer never goes over it
 import { supabase } from '../lib/supabase';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WV — the signed-in person's token travels with every wire call
+import { todayET, fmtET } from '../lib/et-time';
+import { applyConfirmationAnswer } from '../lib/wire-confirmation';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel';
@@ -21,6 +24,12 @@ import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting c
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function d16(x) { return String(x || '').substring(0, 16).replace('T', ' '); }
+// v55.83-WV (Codex 21 Nov) — ONE business date: today on the Hub's clock (Eastern, et-time.js), the SAME day the server checks "not in
+// the future" against. toISOString() was the UTC day: after ~6 pm in Houston it was already tomorrow.
+function localStamp(x) { return x ? fmtET(x, 'datetime') : ''; }
+function localToday() { return todayET(); }
+// the date "Sent on" starts from: the wire date when it is today or earlier, otherwise today
+function sendDateFor(pkg) { var t = localToday(); var w = pkg && pkg.planned_send_date ? String(pkg.planned_send_date).substring(0, 10) : ''; return w && w <= t ? w : t; }
 var INK = '#0f172a'; var SUB = '#334155'; var MUTED = '#64748b';
 var PST = {
   needs_check: { background: '#e0e7ff', color: '#312e81' }, flagged: { background: '#fee2e2', color: '#7f1d1d' },
@@ -54,7 +63,7 @@ var HIST_WORDS = {
   wire_check_overridden: '↷ overrode a check', wire_package_signoff_1: '✍ signed 1st', wire_package_signoff_2: '✍ signed 2nd (approved)',
   wire_package_sent: '📤 marked it sent', wire_package_attached: '🔗 attached the bank line', wire_package_rtm_proof: '📎 added RTM proof',
   bill_paid_via_set: '🏢 bills marked “paid through”', wire_package_cancelled: '✕ cancelled', wire_package_reversed: '↩ undid the wire', wire_package_mark_failed: '⚠ marking failed',
-  wire_recorded_after_the_fact: '🕘 recorded a wire sent before the Hub had wires', wire_sent_date_changed: '📅 corrected the sent date', bank_line_filed_professional_fees: '🗂 bank line filed under professional fees', // v55.83-RZ
+  wire_recorded_after_the_fact: '🕘 recorded a wire sent before the Hub had wires', wire_sent_date_changed: '📅 corrected the sent date', wire_date_changed: '📅 changed the wire date' /* WV */, bank_line_filed_professional_fees: '🗂 bank line filed under professional fees', // v55.83-RZ
 };
 // how to fix each blocking problem
 var FIX = {
@@ -316,7 +325,7 @@ export default function WirePackagesPanel(props) {
   var a5 = useState(null); var ed = a5[0]; var setEd = a5[1];
   var a6 = useState(null); var payees = a6[0]; var setPayees = a6[1];
   var a7 = useState(''); var note = a7[0]; var setNote = a7[1];
-  var a8 = useState({ date: new Date().toISOString().substring(0, 10), ref: '', file: null }); var sendF = a8[0]; var setSendF = a8[1];
+  var a8 = useState({ date: localToday(), ref: '', file: null, path: null, read: null, reading: false, typed: {} }); var sendF = a8[0]; var setSendF = a8[1];
   var a9 = useState(null); var cands = a9[0]; var setCands = a9[1];
   var a10 = useState(''); var ovr = a10[0]; var setOvr = a10[1];
   var a11 = useState({ ticks: {}, date: '', ref: '', file: null }); var proofF = a11[0]; var setProofF = a11[1];
@@ -327,6 +336,7 @@ export default function WirePackagesPanel(props) {
   var a16 = useState({}); var ovrDraft = a16[0]; var setOvrDraft = a16[1];
   var a17 = useState(null); var delAsk = a17[0]; var setDelAsk = a17[1];
   var a19 = useState(null); var dateAsk = a19[0]; var setDateAsk = a19[1]; // RZ — correcting the sent date
+  var a19w = useState(null); var wireDateAsk = a19w[0]; var setWireDateAsk = a19w[1]; // WV — changing the wire date of a wire not sent yet
   var a22 = useState(null); var vCopy = a22[0]; var setVCopy = a22[1];     // SQ — attaching the company's wire copy for one vendor
   var a21 = useState(null); var feeAsk = a21[0]; var setFeeAsk = a21[1];   // SP — changing the service fee of a sent request
   var a20 = useState(null); var past = a20[0]; var setPast = a20[1];         // RZ — recording a wire sent before the Hub had wires
@@ -343,7 +353,7 @@ export default function WirePackagesPanel(props) {
   function open(id) {
     setBusy(true); setNote(''); setCands(null); setOvr(''); setRelDraft({}); setDelAsk(null); setDateAsk(null); setFeeAsk(null); setVCopy(null);
     api({ action: 'get', id: id }).then(function (j) {
-      if (j && j.ok) { setDet(j); setEd(null); setProofF({ ticks: {}, date: '', ref: '', file: null }); if (j.package.raw_status === 'sent') { loadCands(id); } }
+      if (j && j.ok) { setDet(j); setEd(null); setProofF({ ticks: {}, date: '', ref: '', file: null }); setSendF({ pkgId: j.package.id, date: sendDateFor(j.package), ref: '', file: null, path: null, read: null, reading: false, typed: {} }); setWireDateAsk(null); if (j.package.raw_status === 'sent') { loadCands(id); } }
       else { toast.error((j && j.error) || 'Could not open the wire.'); }
     }).finally(function () { setBusy(false); });
   }
@@ -477,9 +487,9 @@ export default function WirePackagesPanel(props) {
     var feeV = String(ed.fee || '').replace(/,/g, '').trim();
     if (ed.kind === 'service_provider' && feeV && !(Number(feeV) >= 0)) { toast.error('The fee is not a number — type it like 250.00, or leave it empty.'); return; }
     var payload = { action: 'save_draft', id: ed.id, payee_kind: ed.kind, payee_name: ed.payee, fee_amount: ed.kind !== 'vendor' ? (Number(feeV) || 0) : 0, fee_note: ed.fee_note, memo: ed.memo, lines: lines };
+    if (ed.planned || ed.id) { payload.planned_send_date = ed.planned || null; } // v55.83-WV — the wire date, for every wire (was requests only)
     if (ed.kind !== 'vendor') { // v55.83-SP — only sent when it applies, so ordinary wires are saved exactly as before
       if (ed.fundId || ed.id) { payload.funding_txn_id = ed.fundId || null; }
-      if (ed.planned || ed.id) { payload.planned_send_date = ed.planned || null; }
       var flS = fundLine();
       if (flS) { var sumS = 0; lines.forEach(function (l) { sumS += l.amount; }); var fitS = requestFit(flS.remaining, sumS, Number(feeV) || 0);
         if (!fitS.fits) { toast.error('This request is $' + fmt(fitS.total) + ' but only $' + fmt(flS.remaining) + ' is left on the transfer — $' + fmt(fitS.over_by) + ' too much. Lower a bill amount or the fee.'); return; } }
@@ -503,10 +513,32 @@ export default function WirePackagesPanel(props) {
   function sendIt() {
     if (!sendF.ref || sendF.ref.trim().length < 3) { toast.error("Type the bank's wire reference / confirmation #."); return; }
     if (!sendF.file) { toast.error("Attach the bank's wire confirmation (PDF or screenshot)."); return; }
+    if (!sendF.date) { toast.error('Pick the date the wire was sent.'); return; }
+    if (sendF.date > localToday()) { toast.error('That date is in the future — mark it sent on or after the day it goes.'); return; }
     setBusy(true);
-    upload(sendF.file, det.package.id).then(function (u) {
-      return act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date, bank_reference: sendF.ref, proof_path: u.path, proof_name: u.name }, '📤 Marked SENT. When the money-out shows in the bank feed, attach it here.');
+    // v55.83-WV — the file read a moment ago is already uploaded: the same file is the proof (no second upload)
+    (sendF.path && sendF.pkgId === det.package.id && sendF.path.indexOf('pv/wire-' + det.package.id + '-') === 0 ? Promise.resolve({ path: sendF.path, name: sendF.file.name }) : upload(sendF.file, det.package.id)).then(function (u) {
+      return act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date, bank_reference: sendF.ref, proof_path: u.path, proof_name: u.name, confirmation_read: sendF.read ? sendF.read.read : null }, '📤 Marked SENT. When the money-out shows in the bank feed, attach it here.');
     }).catch(function (e) { toast.error((e && e.message) || 'Upload failed.'); setBusy(false); });
+  }
+  // v55.83-WV (Max 21 Nov: "it should be able to read the pdf or screenshot to update the reference ... and the sent on dates") — the
+  // confirmation is uploaded the moment it is picked, then READ: Reference and Sent on are filled unless the person typed them
+  // already; what was read and anything that does not match this wire is shown. Nothing is saved until "Mark as sent".
+  function pickConfirmation(file) {
+    if (!file) { return; }
+    var pkgId = det.package.id;
+    setSendF(function (f0) { return Object.assign({}, f0, { file: file, pkgId: pkgId, path: null, read: null, reading: true }); });
+    upload(file, pkgId).then(function (u) {
+      setSendF(function (f0) { return f0.file === file && f0.pkgId === pkgId ? Object.assign({}, f0, { path: u.path }) : f0; });
+      return api({ action: 'read_confirmation', id: pkgId, proof_path: u.path });
+    }).then(function (j) { setSendF(function (f0) { return applyConfirmationAnswer(f0, file, pkgId, j); }); })
+      .catch(function (e) { setSendF(function (f0) { return applyConfirmationAnswer(f0, file, pkgId, { ok: false, error: (e && e.message) || 'Upload failed — try again.' }); }); });
+  }
+  // v55.83-WV (Max 21 Nov: "be able to edit that field in the previous wires i created") — the wire date of a wire not sent yet;
+  // signatures stay valid (the date is not part of what was signed)
+  function saveWireDate() {
+    if (!wireDateAsk) { return; }
+    act({ action: 'set_wire_date', id: det.package.id, wire_date: wireDateAsk.date || null, reason: wireDateAsk.reason || '' }, function (j) { return j.to ? '📅 Wire date set to ' + j.to + '.' : '📅 Wire date cleared.'; });
   }
   // v55.83-SP — a request drawn from a transfer: no bank confirmation (nothing leaves our bank); the bills are recorded paid on the transfer
   function sendRequest() {
@@ -684,10 +716,6 @@ export default function WirePackagesPanel(props) {
                 <Btn color="#0f766e" onClick={fillToLeft} disabled={busy || !ed.bills}>{'⚡ Fill to the $' + fmt(fl.remaining) + ' that is left'}</Btn>
                 <span className="text-[11px]" style={{ color: SUB }}>Validated bills, oldest due first, the last one paid in part. The bills are recorded paid on {fl.date} — the day the money left our bank.</span>
               </div></div>; })()}
-          <div className="mt-2 flex gap-2 items-center flex-wrap">
-            <label className="text-[12px] font-bold" style={{ color: SUB }}>Planned for (optional) <input type="date" value={ed.planned || ''} onChange={function (e) { setEd(Object.assign({}, ed, { planned: e.target.value })); }} className={inp} style={inpS} /></label>
-            <span className="text-[11px]" style={{ color: MUTED }}>A label only — nothing is sent or recorded paid on that date by itself.</span>
-          </div>
         </div>}
       </div>}
       {/* step 2 */}
@@ -779,6 +807,10 @@ export default function WirePackagesPanel(props) {
           {ed.kind !== 'vendor' && <span className="flex gap-1 items-center"><span className="text-[12px] font-bold" style={{ color: SUB }}>+ {ed.payee} service fee (optional) $</span>
             <input value={ed.fee} onChange={function (e) { setEd(Object.assign({}, ed, { fee: e.target.value })); }} placeholder="0" className={inp} style={Object.assign({ width: 90 }, inpS)} />
             {feeN > 0 && <input value={ed.fee_note} onChange={function (e) { setEd(Object.assign({}, ed, { fee_note: e.target.value })); }} placeholder="what the fee is for" className={inp} style={Object.assign({ width: 170 }, inpS)} />}</span>}
+          {/* v55.83-WV (Max 21 Nov) — the real date of the wire, which may not be today; any date (a wire already sent, or a plan) */}
+          <label className="text-[12px] font-bold flex items-center gap-1" style={{ color: SUB }}>{ed.fundId ? '📅 Date funds used' : '📅 Wire date'}
+            <input type="date" value={ed.planned || ''} onChange={function (e) { setEd(Object.assign({}, ed, { planned: e.target.value })); }} className={inp} style={inpS} />
+            <span className="text-[11px] font-normal" style={{ color: MUTED }}>{(ed.planned ? '' : 'Optional — the day it was / will be sent. ') + 'A label only — nothing is sent or recorded paid on that date by itself.'}</span></label>
           <div className="flex-1" />
           <div className="text-[15px] font-extrabold" style={{ color: INK }}>{(ed.fundId ? 'This request: $' : 'Total to wire: $') + fmt(billsSum + feeN)}</div>
           <Btn big color="#0f766e" onClick={saveWire} disabled={busy || !picksN}>{busy ? 'Saving & checking…' : '💾 Save & check →'}</Btn>
@@ -839,19 +871,28 @@ export default function WirePackagesPanel(props) {
         <div className="mb-2 font-bold" style={{ color: '#065f46' }}>{'Approved by ' + A.signoff1.name + ' and ' + A.signoff2.name + '. The money is already with ' + P.payee_name + (P.funding && P.funding.date ? ' (transfer of ' + P.funding.date + ')' : '') + ' — no wire leaves our bank. When you send, each bill’s payment is recorded against that transfer, dated ' + ((P.funding && P.funding.date) || 'the transfer date') + '.'}</div>
         {P.planned_send_date && <div className="mb-1 text-[12px]" style={{ color: SUB }}>{'Planned for ' + P.planned_send_date + ' (a label — it does not send by itself).'}</div>}
         {perms.send ? <div className="flex gap-2 items-center flex-wrap">
-          <label className="text-[12px] font-bold" style={{ color: SUB }}>Request sent on <input type="date" value={sendF.date} onChange={function (e) { setSendF(Object.assign({}, sendF, { date: e.target.value })); }} className={inp} style={inpS} /></label>
+          <label className="text-[12px] font-bold" style={{ color: SUB }}>Request sent on <input type="date" value={sendF.date} max={localToday()} onChange={function (e) { setSendF(Object.assign({}, sendF, { date: e.target.value })); }} className={inp} style={inpS} /></label>
           <Btn big color="#1d4ed8" onClick={sendRequest} disabled={busy}>{'📤 Send request ' + P.label + ' to ' + P.payee_name}</Btn></div>
           : <div style={{ color: SUB }}>Waiting for someone with “Wires: Send”.</div>}</div>;
     } else if (st === 'ready_to_send') {
       nextBox = <div><div className="mb-1 text-[15px] font-extrabold" style={{ color: '#065f46' }}>{'📤 ' + sendWords(P) + ' — $' + fmt(P.total)}</div>
         <div className="mb-2 font-bold" style={{ color: '#065f46' }}>{'Approved by ' + A.signoff1.name + ' and ' + A.signoff2.name + '. Wire exactly $' + fmt(P.total) + ' to ' + P.payee_name + (P.payee_kind === 'vendor' ? ' (the vendor, directly)' : '') + ' from the bank, then fill this in:'}</div>
         {perms.send ? <div className="flex gap-2 items-center flex-wrap">
-          <label className="text-[12px] font-bold" style={{ color: SUB }}>Sent on <input type="date" value={sendF.date} onChange={function (e) { setSendF(Object.assign({}, sendF, { date: e.target.value })); }} className={inp} style={inpS} /></label>
-          <input value={sendF.ref} onChange={function (e) { setSendF(Object.assign({}, sendF, { ref: e.target.value })); }} placeholder="bank's wire reference #" className={inp} style={Object.assign({ width: 200 }, inpS)} />
-          <label className="text-[12px] font-bold rounded-lg px-2 py-1.5" style={{ color: INK, background: '#f1f5f9', border: '1px dashed #94a3b8', cursor: 'pointer' }}>📎 {sendF.file ? sendF.file.name : 'bank confirmation (PDF / screenshot)'}
-            <input type="file" accept="application/pdf,image/*" onChange={function (e) { setSendF(Object.assign({}, sendF, { file: e.target.files && e.target.files[0] })); }} style={{ display: 'none' }} /></label>
-          <Btn big color="#1d4ed8" onClick={sendIt} disabled={busy}>{'📤 Mark as sent to ' + (P.payee_kind === 'vendor' ? 'the vendor' : P.payee_name)}</Btn></div>
-          : <div style={{ color: SUB }}>Waiting for someone with “Wires: Send”.</div>}</div>;
+          <label className="text-[12px] font-bold rounded-lg px-2 py-1.5" style={{ color: INK, background: '#f1f5f9', border: '1px dashed #94a3b8', cursor: 'pointer' }}>📎 {sendF.file ? sendF.file.name : '1 · Attach the bank confirmation (PDF / screenshot) — the Hub reads it'}
+            <input type="file" accept="application/pdf,image/*" onChange={function (e) { var f1 = e.target.files && e.target.files[0]; e.target.value = ''; pickConfirmation(f1); }} style={{ display: 'none' }} /></label>
+          <label className="text-[12px] font-bold" style={{ color: SUB }}>Sent on <input type="date" value={sendF.date} max={localToday()} onChange={function (e) { setSendF(Object.assign({}, sendF, { date: e.target.value, typed: Object.assign({}, sendF.typed, { date: true }) })); }} className={inp} style={inpS} /></label>
+          <input value={sendF.ref} onChange={function (e) { setSendF(Object.assign({}, sendF, { ref: e.target.value, typed: Object.assign({}, sendF.typed, { ref: true }) })); }} placeholder="bank's wire reference #" className={inp} style={Object.assign({ width: 240 }, inpS)} />
+          <Btn big color="#1d4ed8" onClick={sendIt} disabled={busy || sendF.reading}>{'📤 Mark as sent to ' + (P.payee_kind === 'vendor' ? 'the vendor' : P.payee_name)}</Btn></div>
+          : <div style={{ color: SUB }}>Waiting for someone with “Wires: Send”.</div>}
+        {/* v55.83-WV — what the Hub read from the bank's confirmation, and anything that does not match this wire */}
+        {perms.send && sendF.reading && <div className="mt-2 text-[12px] font-bold" style={{ color: '#1d4ed8' }}>🔎 Reading the confirmation…</div>}
+        {perms.send && sendF.read && sendF.read.error && <div className="mt-2 text-[12px] font-extrabold" style={{ color: '#b45309' }}>{'⚠ ' + sendF.read.error}</div>}
+        {perms.send && sendF.read && sendF.read.read && <div className="mt-2 rounded-lg p-2 text-[12px]" style={{ background: (sendF.read.warnings || []).length ? '#fff7ed' : '#ecfdf5', border: '1px solid ' + ((sendF.read.warnings || []).length ? '#fdba74' : '#a7f3d0'), color: INK }}>
+          <div className="font-extrabold mb-0.5">{'🔎 Read from the confirmation — check it before you press “Mark as sent”:'}</div>
+          <div>{['Reference ' + (sendF.read.read.reference || '—') + (sendF.read.read.transaction_number ? ' · Transaction ' + sendF.read.read.transaction_number : ''), 'Wire date ' + (sendF.read.read.sent_date || '—'), 'Amount ' + (sendF.read.read.amount != null ? '$' + fmt(sendF.read.read.amount) : '—'), 'To ' + (sendF.read.read.beneficiary || '—'), sendF.read.read.status ? 'Status ' + sendF.read.read.status : null].filter(Boolean).join(' · ')}</div>
+          {(sendF.read.warnings || []).map(function (w, i) { return <div key={i} className="font-bold" style={{ color: '#9a3412' }}>{'⚠ ' + w}</div>; })}
+          {((sendF.typed && sendF.typed.date && sendF.read.fill && sendF.read.fill.sent_date && sendF.read.fill.sent_date !== sendF.date) || (sendF.typed && sendF.typed.ref && sendF.read.fill && sendF.read.fill.reference && sendF.read.fill.reference !== sendF.ref)) && <div className="mt-0.5" style={{ color: SUB }}>You typed your own value in a box, so it was kept. <button onClick={function () { setSendF(Object.assign({}, sendF, { date: sendF.read.fill.sent_date || sendF.date, ref: sendF.read.fill.reference || sendF.ref, typed: {} })); }} className="underline font-bold" style={{ color: '#1d4ed8' }}>Use what was read</button></div>}
+        </div>}</div>;
     } else if (st === 'sent') {
       nextBox = <div><div className="mb-1" style={{ color: INK }}>{(P.sent.after_the_fact ? '🕘 Recorded after the fact — sent about ' : 'Sent ') + P.sent.date + ' (ref ' + P.sent.reference + '). The Hub looks for the $' + fmt(amountNow) + ' money-out in the bank feed by itself (every bank sync / statement import) — when exactly one wire-looking line fits, the bills become PAID automatically. You can always pick the line yourself below. A line up to $' + ((cands && cands.auto_fee_max) || 100) + ' more is accepted — the extra is ' + (P.payee_kind === 'vendor' ? 'booked with the bill it paid (that bill’s category — cost of goods by default).' : 'part of the ' + P.payee_name + ' line, filed under professional fees.')}</div>
         {P.sent.after_the_fact && P.sent.after_the_fact_note && <div className="text-[11px] mb-1" style={{ color: SUB }}>{'Why: “' + P.sent.after_the_fact_note + '”'}</div>}
@@ -931,6 +972,18 @@ export default function WirePackagesPanel(props) {
           var cur = !s0[1] && (i === 0 || steps[i - 1][1]);
           return <div key={i} className="rounded-lg px-2 py-1 text-[11px] font-extrabold" style={s0[1] ? { background: '#d1fae5', color: '#065f46' } : cur ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: '#94a3b8' }}>{(s0[1] ? '✓ ' : (i + 1) + ' · ') + s0[0]}</div>;
         })}
+      </div>
+      {/* v55.83-WV (Max 21 Nov) — the two dates kept apart: when the wire was made in the Hub, and when it really went (per the bank) */}
+      <div className="rounded-lg px-3 py-2 mb-3 flex gap-x-5 gap-y-1 items-center flex-wrap text-[12px]" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: INK }}>
+        <span><span style={{ color: MUTED }}>Created in the Hub </span><b>{localStamp(P.created_at)}</b>{P.created_by ? <span style={{ color: MUTED }}>{' by ' + P.created_by}</span> : null}</span>
+        {P.sent && P.sent.date ? <span><span style={{ color: MUTED }}>{P.funding_txn_id ? 'Date funds used ' : 'Sent (per the bank confirmation) '}</span><b>{P.sent.date}</b></span>
+          : <span><span style={{ color: MUTED }}>{P.funding_txn_id ? 'Planned date funds used ' : 'Planned wire date '}</span><b>{P.planned_send_date || 'not set'}</b><span style={{ color: MUTED }}>{' · not marked sent yet'}</span>
+            {P.raw_status === 'draft' && (perms.prepare || perms.send) && !wireDateAsk && <button onClick={function () { setWireDateAsk({ date: P.planned_send_date || '', reason: '' }); }} className="ml-2 underline font-bold" style={{ color: '#1d4ed8' }}>📅 Change</button>}</span>}
+        {wireDateAsk && P.raw_status === 'draft' && <span className="flex gap-2 items-center flex-wrap">
+          <input type="date" value={wireDateAsk.date} onChange={function (e) { setWireDateAsk(Object.assign({}, wireDateAsk, { date: e.target.value })); }} className={inp} style={inpS} />
+          <input value={wireDateAsk.reason} onChange={function (e) { setWireDateAsk(Object.assign({}, wireDateAsk, { reason: e.target.value })); }} placeholder="why (optional)" className={inp} style={Object.assign({ width: 180 }, inpS)} />
+          <Btn color="#1d4ed8" onClick={saveWireDate} disabled={busy}>Save date</Btn><Btn light onClick={function () { setWireDateAsk(null); }}>Cancel</Btn>
+          {(A && (A.signoff1 || A.signoff2)) ? <span className="text-[11px]" style={{ color: MUTED }}>The signatures stay — the date is not part of what was signed.</span> : null}</span>}
       </div>
       {/* the ONE thing to do now */}
       <div className="rounded-xl p-3 mb-3 text-[13px]" style={{ background: '#f8fafc', border: '2px solid #1e293b' }}>
@@ -1045,6 +1098,8 @@ export default function WirePackagesPanel(props) {
             if (h.action === 'wire_package_reversed' || h.action === 'wire_package_cancelled') { extra = '“' + (d0.reason || d0.note || '') + '”'; }
             if (h.action === 'wire_package_sent') { extra = 'ref ' + (d0.bank_reference || ''); }
             if (h.action === 'wire_sent_date_changed') { extra = (d0.from || '?') + ' → ' + d0.to + ' — “' + (d0.reason || '') + '”'; } // RZ
+            if (h.action === 'wire_date_changed') { extra = (d0.from || 'none') + ' → ' + (d0.to || 'none') + (d0.reason ? ' — “' + d0.reason + '”' : ''); } // WV
+            if (h.action === 'wire_package_sent' && d0.read_from_confirmation) { extra += (d0.date_as_read === false && d0.read_from_confirmation.sent_date) ? ' · sent date typed over the one read (' + d0.read_from_confirmation.sent_date + ')' : (d0.date_as_read ? ' · sent date as read from the bank confirmation' : ' · bank confirmation read'); } // WV
             if (h.action === 'wire_package_attached' && d0.matched) { extra = d0.matched + (d0.bank_fee ? ' · extra charge $' + fmt(d0.bank_fee) : ''); } // RZ
             return <div key={i} className="text-[12px]" style={{ color: INK }}>{d16(h.at) + ' · ' + h.by + ' · ' + (HIST_WORDS[h.action] || h.action) + (extra ? ' · ' + extra : '')}</div>;
           })}</div>}
@@ -1092,11 +1147,14 @@ export default function WirePackagesPanel(props) {
         {perms.prepare ? <div className="text-[12px] mb-3" style={{ color: SUB }}>Click “＋ New wire” to prepare one.</div> : <div className="text-[12px]" style={{ color: SUB }}>Preparing a wire needs “Wires: Prepare”.</div>}
         {perms.prepare && <Btn big color="#0f766e" onClick={startNew}>＋ New wire</Btn>}</div>
       : <div className="overflow-x-auto rounded-lg" style={{ border: '1px solid #e2e8f0' }}><table className="w-full text-[12px]">
-        <thead><tr style={{ background: '#f1f5f9', color: SUB }}><th className="px-2 py-2 text-left">Wire</th><th className="px-2 py-2 text-left">To</th><th className="px-2 py-2 text-left">Vendors</th><th className="px-2 py-2 text-right">Amount</th><th className="px-2 py-2 text-left">Next step</th><th></th></tr></thead>
+        <thead><tr style={{ background: '#f1f5f9', color: SUB }}><th className="px-2 py-2 text-left">Wire</th><th className="px-2 py-2 text-left whitespace-nowrap">Created in the Hub</th><th className="px-2 py-2 text-left whitespace-nowrap" title="The date the wire was sent, as confirmed when it was marked sent. Not sent yet: the planned wire date, in grey.">Sent (bank confirmation)</th><th className="px-2 py-2 text-left">To</th><th className="px-2 py-2 text-left">Vendors</th><th className="px-2 py-2 text-right">Amount</th><th className="px-2 py-2 text-left">Next step</th><th></th></tr></thead>
         <tbody style={{ color: INK }}>
           {rows.map(function (p) {
             return <tr key={p.id} onClick={function () { open(p.id); }} style={{ borderTop: '1px solid #f1f5f9', cursor: 'pointer' }}>
-              <td className="px-2 py-2"><div className="font-mono font-extrabold">{p.label}</div><div className="text-[10px]" style={{ color: MUTED }}>{d16(p.created_at)}</div></td>
+              <td className="px-2 py-2"><div className="font-mono font-extrabold">{p.label}</div></td>
+              {/* v55.83-WV (Max 21 Nov: "a column ... wire creation (in system) and a column when it was actually sent from the confirmation") */}
+              <td className="px-2 py-2 whitespace-nowrap tabular-nums" style={{ color: SUB }}>{localStamp(p.created_at)}</td>
+              <td className="px-2 py-2 whitespace-nowrap tabular-nums">{p.sent_date ? <b>{p.sent_date}</b> : (p.planned_send_date ? <span style={{ color: MUTED }} title="Not marked sent yet — this is the planned wire date, not proof the money left">{'planned ' + p.planned_send_date + ' · not sent'}</span> : <span style={{ color: MUTED }}>not sent</span>)}</td>
               <td className="px-2 py-2 font-bold">{p.payee_name}</td>
               <td className="px-2 py-2">{p.vendors.join(', ')}<span style={{ color: MUTED }}>{' · ' + p.bills + ' bill(s)'}</span></td>
               <td className="px-2 py-2 text-right tabular-nums font-extrabold">${fmt(p.total)}</td>

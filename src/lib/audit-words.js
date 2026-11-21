@@ -80,6 +80,7 @@ export function describeAudit(row) {
     case 'wire_package_cancelled': s = 'Cancelled wire ' + (on || ''); reason(); break;
     case 'wire_package_deleted': s = 'Deleted pre-wire ' + (on || ''); reason(); break;
     case 'wire_package_reversed': s = 'Undid sent wire ' + (on || '') + ' — its bill payments were undone'; reason(); break;
+    case 'wire_date_changed': s = 'Changed the wire date of ' + (on || 'a wire'); fact((d.from ? niceDate(d.from) : 'none') + ' → ' + (d.to ? niceDate(d.to) : 'none')); reason(); break; // v55.83-WV
     case 'wire_sent_date_changed': s = 'Changed the sent date of wire ' + (on || ''); fact(niceDate(d.from) + ' → ' + niceDate(d.to)); reason(); break;
     case 'wire_recorded_after_the_fact': s = 'Recorded a past wire ' + (on || '') + (d.payee ? ' to ' + d.payee : ''); fact(money(d.total) ? 'Total ' + money(d.total) : null); reason(); break;
     case 'deposit_matched_to_invoice': s = 'Matched a deposit to ' + (refs.invoice ? 'invoice ' + refs.invoice : 'an invoice'); fact(on ? 'Deposit: ' + on : null); fact(money(d.applied) ? 'Applied ' + money(d.applied) : null); break;

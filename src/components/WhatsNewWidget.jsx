@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WV',
+    date: '2026-11-21',
+    title: 'Wires: the real date of the wire, and the bank confirmation is read for you',
+    items: [
+      { text: '**Every wire now has a wire date.** When you prepare a wire, pick the day it was (or will be) sent. It does not have to be today. It is a label only: nothing is sent or recorded paid on that date by itself.' },
+      { text: '**You can change the wire date on wires you already made**, also the ones both people already signed. Open the wire (🏦 Wires → click the wire) and press 📅 Change next to “Planned wire date”. The signatures stay, because the date is not part of what was signed. Each change is kept in the wire’s history (old date → new date).' },
+      { text: '**The bank confirmation is read for you.** When you mark a wire sent, attach the bank’s confirmation (PDF or screenshot) first. The Hub reads it and fills in the reference number and the Sent on date. It shows what it read, and warns you if the amount, the recipient or the status does not match this wire. Check the boxes, then press Mark as sent. If you already typed a box yourself, it is not overwritten. If the file cannot be read, type them as before.' },
+      { text: '**Two dates on the wires list:** “Created in the Hub” (when the wire was made here) and “Sent (bank confirmation)” (the date the money really went). A wire not marked sent shows its planned date in grey, marked “not sent”.' },
+      { text: '“Sent on” now starts from the wire date (or today), on Eastern time like the rest of the Hub. Before, in the evening it could show tomorrow’s date.' },
+      { text: 'Changing the sent date of a wire already marked sent: the date cannot be in the future, and a reason is still asked. Once the bank line is attached, the date is the bank line’s date and cannot change. The Hub now says so plainly.' },
+      { superAdminOnly: true, text: 'Technical (no SQL): wire-packages route — isDate is a real calendar check; new actions set_wire_date (draft only, incl. signed; wires.prepare|wires.send; writes planned_send_date conditional on status+updated_at; audit wire_date_changed from/to/signed/reason; planned_send_date is not in packageFingerprint so signatures stay valid) and read_confirmation (wires.send; path must be pv/wire-<id>-…; file downloaded from bills-private with the service role; AI reads PDF/image; parse + compare in lib/wire-confirmation.js; never writes). mark_sent audits read_from_confirmation + date_as_read + wire_date. set_sent_date adds no-future / same-date checks and a clear 409 per status. No-future checks (mark_sent, record_past_wire, set_sent_date, read compare) use todayET() — the Eastern business day the screen uses. Panel: hubFetch, wire date for every wire, dates strip, list columns, upload-then-read with stale-answer guard (applyConfirmationAnswer). Test: wv-wire-date (51).' },
+    ]
+  },
+  {
     version: 'v55.83-WF',
     date: '2026-11-21',
     title: 'Funds with RTM / NextTrade: each transfer shows what it still holds',

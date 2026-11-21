@@ -26,6 +26,9 @@ import { packageContext, inChunks, loadPayParties, aiReviewPackage } from '../..
 import { attachWire, autoMatchSentWires, wireCandidates, AUTO_FEE_MAX, fileAsProfessionalFees } from '../../../../lib/wire-auto-match'; // v55.83-RZ
 import { fundingLines, currencyMismatch } from '../../../../lib/wire-funding-server'; // v55.83-SP — requests drawn from a transfer
 import { requestFit, requestByVendor, payeeKey } from '../../../../lib/wire-funding';
+import { isRealDate, compareWireConfirmation } from '../../../../lib/wire-confirmation'; // v55.83-WV — the real wire date + reading the bank confirmation
+import { readWireConfirmation } from '../../../../lib/wire-confirmation-server';
+import { todayET } from '../../../../lib/et-time';
 var SP_HINT = ' — run sql/v55-83-SP-funded-requests.sql in Supabase first.';
 function spMissing(m) { return /funding_txn_id|planned_send_date|wire_request_|wire_funding_|schema cache/i.test(String(m || '')); }
 
@@ -34,9 +37,12 @@ export const maxDuration = 60;
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
-function isDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
+function isDate(s) { return isRealDate(s); } // v55.83-WV — a real calendar date, YYYY-MM-DD (2026-02-30 is refused)
 function isUuid(s) { return /^[0-9a-f-]{36}$/i.test(String(s || '')); }
 function nowIso() { return new Date().toISOString(); }
+// v55.83-WV (Codex 21 Nov) — ONE business date for 'today' on the screen and here: the Hub's Eastern-time day (et-time.js). The
+// UTC day ran a day ahead every evening in the US, so a wire dated with the person's 'today' could be judged against tomorrow.
+function businessToday() { return todayET(); }
 var SQL_HINT = ' — run sql/v55-83-RH-wire-packages.sql in Supabase first.';
 function fail(msg, status) { return NextResponse.json({ ok: false, error: msg }, { status: status || 400 }); }
 function dbErr(e) { var m = (e && e.message) || 'database error'; return fail(m + (/wire_package/.test(m) && !/WIRE_PACKAGE_LOCKED/.test(m) ? SQL_HINT : ''), /WIRE_PACKAGE_LOCKED/.test(m) ? 409 : 400); }
@@ -284,7 +290,7 @@ export async function POST(req) {
       // be more than what is left on that transfer (Max: "they should not go beyond the amount you transfer")
       var fundS = Object.prototype.hasOwnProperty.call(body, 'funding_txn_id') ? (body.funding_txn_id ? String(body.funding_txn_id) : null) : undefined;
       var planS = Object.prototype.hasOwnProperty.call(body, 'planned_send_date') ? (body.planned_send_date ? String(body.planned_send_date) : null) : undefined;
-      if (planS && !isDate(planS)) { return fail('The planned date is not a valid date.'); }
+      if (planS && !isDate(planS)) { return fail('The wire date "' + planS + '" is not a real date — pick it from the calendar.'); }
       var fundInfo = null;
       if (fundS) {
         if (kindS === 'vendor') { return fail('A wire straight to a vendor leaves from our own bank — it does not draw from a transfer.'); }
@@ -327,11 +333,12 @@ export async function POST(req) {
         var oldL = await db.from('wire_package_lines').select('id, bill_id, amount, marked_paid_via').eq('package_id', pkgId);
         if (oldL.error) { return dbErr(oldL.error); }
         var oldBy = {}; (oldL.data || []).forEach(function (l) { oldBy[l.bill_id] = l; });
-        var oldHead = await db.from('wire_packages').select('payee_name, payee_kind, fee_amount, memo').eq('id', pkgId).maybeSingle();
+        var oldHead = await db.from('wire_packages').select('*').eq('id', pkgId).maybeSingle();
         var oh = (oldHead && oldHead.data) || {};
         editDiff = { bills_added: [], bills_removed: [], amounts_changed: [] };
         if (oh.payee_name !== payeeS) { editDiff.payee = { from: oh.payee_name, to: payeeS }; }
         if (r2(oh.fee_amount) !== feeS) { editDiff.fee = { from: r2(oh.fee_amount), to: feeS }; }
+        if (planS !== undefined && String(oh.planned_send_date || '') !== String(planS || '')) { editDiff.wire_date = { from: oh.planned_send_date || null, to: planS }; } // v55.83-WV
         clean.forEach(function (c) { var o1 = oldBy[c.bill_id]; var bx = bSBy[c.bill_id] || {}; var lab = (bx.vendor_name || '') + ' ' + (bx.bill_number || '');
           if (!o1) { editDiff.bills_added.push({ bill: lab, amount: c.amount }); } else if (r2(o1.amount) !== c.amount) { editDiff.amounts_changed.push({ bill: lab, from: r2(o1.amount), to: c.amount }); } });
         (oldL.data || []).forEach(function (l) { if (!seenB[l.bill_id]) { editDiff.bills_removed.push({ bill_id: l.bill_id, amount: r2(l.amount) }); } });
@@ -390,7 +397,7 @@ export async function POST(req) {
       if (!(g1 && g1.ctx && g1.ctx.isSuperAdmin)) { return fail('Recording a past wire is for the super admin (it has no signatures).', 403); }
       var kindPW = String(body.payee_kind || ''); if (['service_provider', 'affiliate', 'vendor'].indexOf(kindPW) < 0) { return fail('Who did the wire go to — RTM, NextTrade or a vendor?'); }
       if (!isDate(body.sent_date)) { return fail('When was it sent (roughly)?'); }
-      if (String(body.sent_date) > nowIso().substring(0, 10)) { return fail('That date is in the future — a past wire was already sent.'); } // v55.83-SB (bug review 4)
+      if (String(body.sent_date) > businessToday()) { return fail('That date is in the future — a past wire was already sent.'); } // v55.83-SB (bug review 4)
       // v55.83-SP (Max, Nov 15: "Past requests also need to have confirmations with two signatures") — a past payment through
       // RTM / NextTrade is now a REQUEST drawn from the transfer that funded it, signed by two people like any other.
       if (kindPW !== 'vendor') { return fail('A past payment through RTM or NextTrade is now recorded as a request from the transfer that funded it, with two signatures: New wire → pick the company → pick the transfer → tick the bills. Its real date is kept.', 409); }
@@ -763,7 +770,7 @@ export async function POST(req) {
       if (P.status !== 'ready_to_send') { return fail(pkg.status === 'draft' ? 'Not approved yet: it needs a passing 🤖 audit on the current bills and BOTH sign-offs.' : 'This wire is already ' + pkg.status + '.', 409); }
       if (!isDate(body.sent_date)) { return fail('The date the wire was sent is required.'); }
       // v55.83-SP — a planned date never sends anything; "sent" means it already happened
-      if (String(body.sent_date) > nowIso().substring(0, 10)) { return fail('That date is in the future. Put a future date in "planned for"; mark it sent on the day it goes.'); }
+      if (String(body.sent_date) > businessToday()) { return fail('That date is in the future. Put a future date in the wire date; mark it sent on the day it goes.'); }
       // v55.83-SP — a REQUEST drawn from a transfer: no bank confirmation (no wire leaves our bank). One database step records
       // each bill's payment against the transfer (dated the day that money left) and marks the request attached — or nothing.
       if (pkg.funding_txn_id) {
@@ -794,7 +801,12 @@ export async function POST(req) {
         if (mkT.error) { await audit(db, userId, 'wire_package_mark_failed', 'wire_package', pkg.id, { error: mkT.error.message, bills: toMarkT }); }
         else { await audit(db, userId, 'bill_paid_via_set', 'wire_package', pkg.id, { paid_via: pkg.payee_name, bills: toMarkT }); }
       }
-      await audit(db, userId, 'wire_package_sent', 'wire_package', pkg.id, { total: P.live.total, sent_date: body.sent_date, bank_reference: refT, proof: pathT });
+      // v55.83-WV — what the AI read from the confirmation (if it was read) is kept with the sending, so anyone can see whether the
+      // date / reference were taken from the bank's file or typed over it
+      var rdT = body.confirmation_read && typeof body.confirmation_read === 'object' ? body.confirmation_read : null;
+      var rdKeep = rdT ? { reference: rdT.reference ? String(rdT.reference).substring(0, 80) : null, sent_date: isDate(rdT.sent_date) ? String(rdT.sent_date) : null, amount: Number.isFinite(Number(rdT.amount)) && rdT.amount != null ? r2(rdT.amount) : null } : null;
+      await audit(db, userId, 'wire_package_sent', 'wire_package', pkg.id, { total: P.live.total, sent_date: body.sent_date, bank_reference: refT, proof: pathT, wire_date: pkg.planned_send_date || null,
+        read_from_confirmation: rdKeep, date_as_read: rdKeep ? rdKeep.sent_date === String(body.sent_date) : null });
       return NextResponse.json({ ok: true });
     }
 
@@ -833,13 +845,56 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, matched: mn.matched.length > 0, result: mn });
     }
 
+    // ── v55.83-WV (Max, 21 Nov: "i need to enter the actual date of the wire which may not be the same day as today. Also be able
+    //    to edit that field in the previous wires i created") — the WIRE DATE of a wire not marked sent yet (also a fully signed one).
+    //    Stored in planned_send_date, which is NOT part of what the two people sign (packageFingerprint), so signatures stay valid.
+    //    When the wire is marked sent, "Sent on" starts from it; the sent date itself is still checked there (never in the future).
+    if (action === 'set_wire_date') {
+      var gWd = await perm(db, userId, ['wires.prepare', 'wires.send'], req);
+      if (!gWd) { return fail('Changing the wire date needs "Wires: Prepare" or "Wires: Send" — Settings → 🏦 Banking & Accounting Access.', 403); }
+      if (pkg.status !== 'draft') { return fail(pkg.status === 'sent' ? 'This wire is already marked sent — change its sent date instead (📅 Wrong date? Change the sent date).' : (pkg.status === 'attached' ? 'This wire is complete — its date is the bank line’s date and can no longer change.' : 'This wire is ' + pkg.status + ' — its date cannot change.'), 409); }
+      var wdNew = body.wire_date == null || body.wire_date === '' ? null : String(body.wire_date);
+      if (wdNew && !isDate(wdNew)) { return fail('"' + wdNew + '" is not a real date — pick it from the calendar.'); }
+      var wdOld = pkg.planned_send_date || null;
+      if (String(wdNew || '') === String(wdOld || '')) { return fail(wdNew ? 'The wire date is already ' + wdNew + ' — nothing to change.' : 'This wire has no wire date — nothing to clear.'); }
+      var whyWd = String(body.reason || '').trim().substring(0, 300);
+      var upWd = await db.from('wire_packages').update({ planned_send_date: wdNew, updated_at: nowIso() }).eq('id', pkg.id).eq('status', 'draft').eq('updated_at', pkg.updated_at).select('id');
+      if (upWd.error) { return fail(upWd.error.message + (spMissing(upWd.error.message) ? SP_HINT : ''), 400); }
+      if (!upWd.data || !upWd.data.length) { return fail('Someone changed this wire at the same moment — reload it and try again.', 409); }
+      await audit(db, userId, 'wire_date_changed', 'wire_package', pkg.id, { from: wdOld, to: wdNew, signed: !!(pkg.signoff1_by || pkg.signoff2_by), reason: whyWd || null });
+      return NextResponse.json({ ok: true, from: wdOld, to: wdNew, status: P.status });
+    }
+
+    // ── v55.83-WV (Max, 21 Nov: "it should be able to read the pdf or screenshot to update the reference and the screenshot and the
+    //    sent on dates") — the bank's confirmation the person just attached is READ (AI) and compared with this wire. Nothing is
+    //    written: the screen fills the boxes, the person checks them and presses "Mark as sent", which checks everything again.
+    if (action === 'read_confirmation') {
+      var gRc = await perm(db, userId, ['wires.send'], req);
+      if (!gRc) { return fail('Reading the bank confirmation needs "Wires: Send" — Settings → 🏦 Banking & Accounting Access.', 403); }
+      var pathRc = String(body.proof_path || '');
+      if (pathRc.indexOf('pv/wire-' + pkg.id + '-') !== 0 || pathRc.indexOf('..') >= 0) { return fail('That file is not a confirmation attached to this wire — attach it again.', 400); }
+      var rc = await readWireConfirmation(db, pathRc);
+      if (rc.error) { return fail(rc.error, rc.status || 502); }
+      var cmp = compareWireConfirmation(rc.read, { total: P.live.total, payee_name: pkg.payee_name }, businessToday());
+      return NextResponse.json({ ok: true, read: rc.read, fill: cmp.fill, warnings: cmp.warnings });
+    }
+
     // ── v55.83-RZ (Max 00:20: "we should be able to update the date of the wire and you will look for the actual wire") —
     //    correct the sent date of a SENT wire (before its bank line is attached), then search around the new date
     if (action === 'set_sent_date') {
       var gD2 = await perm(db, userId, ['wires.send'], req);
       if (!gD2) { return fail('Changing the sent date needs "Wires: Send".', 403); }
-      if (pkg.status !== 'sent') { return fail(pkg.status === 'attached' ? 'Its bank line is already attached — the date is the bank line’s date.' : 'Only a sent wire has a sent date.', 409); }
+      if (pkg.status !== 'sent') {
+        // v55.83-WV — say plainly why, in each case (the database also locks the date once the bank line is attached)
+        var whyNo = pkg.status === 'attached' ? (pkg.funding_txn_id ? 'This request is already sent and its bills are recorded paid on the date of the transfer it draws from — its sent date can no longer change.' : 'Its bank line is already attached — the wire’s date is now the bank line’s date and can no longer change here.')
+          : pkg.status === 'draft' ? 'This wire is not marked sent yet — change its wire date instead (📅 Wire date), or set the date when you mark it sent.'
+          : 'This wire is ' + pkg.status + ' — its date cannot change.';
+        return fail(whyNo, 409);
+      }
       if (!isDate(body.sent_date)) { return fail('Pick the date the wire was sent.'); }
+      // v55.83-WV — same rule as sending: a sent wire's date is never in the future; no change = nothing to save
+      if (String(body.sent_date) > businessToday()) { return fail('That date is in the future — a sent wire was sent on or before today.'); }
+      if (String(body.sent_date) === String(pkg.sent_date || '')) { return fail('The sent date is already ' + body.sent_date + ' — nothing to change.'); }
       var why2 = String(body.reason || '').trim();
       if (why2.length < 5) { return fail('Say why the date changes (e.g. sent on the 12th, not the 10th).'); }
       var ud = await db.from('wire_packages').update({ sent_date: body.sent_date, updated_at: nowIso() }).eq('id', pkg.id).eq('status', 'sent').select('id');
