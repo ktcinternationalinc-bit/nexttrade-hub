@@ -43,7 +43,18 @@ function makeEnv(rows, opts) {
     return api;
   }
   rows.forEach(function (x) { (st.perms[x.user_id] = st.perms[x.user_id] || {})[x.module_name] = x.has_access; });
-  var ctx = { module: {}, console: { error: function () {} }, supabase: { from: q },
+  // v55.83-WW — the switch is now saved by the server (/api/admin/permissions): this stand-in does what that route does
+  // (writes the switch under every name it is stored under, adds the asked name if missing); opts.failSecond = the server
+  // could not save. The route itself is run for real in test-v55-83-ww-grant-writes.js.
+  function hubFetch(url, init) {
+    var b = JSON.parse(init.body); var fam = PA.permFamily(b.module_name); if (fam.indexOf(b.module_name) < 0) { fam.unshift(b.module_name); }
+    if (url !== '/api/admin/permissions' || b.action !== 'set') { return Promise.resolve({ status: 400, json: function () { return Promise.resolve({ ok: false, error: 'wrong call' }); } }); }
+    if (opts.failSecond) { return Promise.resolve({ status: 500, json: function () { return Promise.resolve({ ok: false, error: 'network' }); } }); }
+    var have = false; rows.forEach(function (x) { if (x.user_id === b.target_user_id && fam.indexOf(x.module_name) >= 0) { x.has_access = b.has_access; if (x.module_name === b.module_name) { have = true; } } });
+    if (!have) { rows.push({ id: 'n' + rows.length, user_id: b.target_user_id, module_name: b.module_name, has_access: b.has_access }); }
+    return Promise.resolve({ status: 200, json: function () { return Promise.resolve({ ok: true }); } });
+  }
+  var ctx = { module: {}, console: { error: function () {} }, supabase: { from: q }, hubFetch: hubFetch, userProfile: { id: 'boss' },
     toast: { success: function (m) { st.toasts.push('ok:' + m); }, error: function (m) { st.toasts.push('err:' + m); } },
     SENSITIVE_PERMS_UI: {}, isSuperAdmin: true, TAB_PERMS: [], permFamily: PA.permFamily,
     setPermissions: function (fn) { st.perms = typeof fn === 'function' ? fn(st.perms) : fn; },

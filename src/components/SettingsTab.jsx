@@ -11,6 +11,7 @@ import AccountingVisibilityPanel from './AccountingVisibilityPanel';
 import BankBalancePermissions from './BankBalancePermissions'; // eslint-disable-line no-unused-vars -- v55.83-RI: its two grants now live in BankingAccessPanel
 import BankingAccessPanel, { BANKING_KEYS } from './BankingAccessPanel'; // v55.83-RI
 import { permFamily } from '../lib/permission-aliases'; // v55.83-UG
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WW — switches are saved by the server
 import ClickBooksOperatorPermissions from './ClickBooksOperatorPermissions';
 import { PERSONALITIES } from './AIGreeter';
 // v55.83-A.6.27.NEXT (Issue 7) — kill deactivated users leaking into Settings grids.
@@ -1126,6 +1127,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
   const togglePermission = async (userId, module, displayedHasAccess) => {
     if (staleUsers[userId]) { if (toast) toast.error('This person’s switches may be only partly saved. Reload the page before changing more.'); return; } // v55.83-UG
+    if (!isSuperAdmin) { if (toast) toast.error('Only the super admin can change permission switches.'); return; } // v55.83-WW — the server refuses it too
     if (SENSITIVE_PERMS_UI[module] && !isSuperAdmin && !displayedHasAccess) { if (toast) toast.error('Only the super admin can switch on “' + module + '”.'); return; } // v55.83-TP
     // These grants use the verified-super-admin API, never the legacy map.
     if (['bank.view_account_balances', 'Bank: View Account Balances', 'bank_balances.view', 'dashboard.full', 'Full dashboard access', 'Banking information access'].includes(module)) {
@@ -1144,18 +1146,14 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
     const newVal = !current;
     setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: newVal } })); // optimistic
     try {
-      const sel = await supabase.from('module_permissions').select('id').eq('user_id', userId).eq('module_name', module).maybeSingle();
-      if (sel.error) throw sel.error;
-      let res;
-      if (sel.data) {
-        res = await supabase.from('module_permissions').update({ has_access: newVal }).eq('id', sel.data.id);
-      } else {
-        res = await supabase.from('module_permissions').insert({ user_id: userId, module_name: module, has_access: newVal });
-      }
-      if (res && res.error) throw res.error;
+      // v55.83-WW (Max's rule 1 · Codex 21 Nov) — switches are changed ONLY by the server, for the verified signed-in super admin;
+      // nobody changes their own, and every change is audited. The server writes the switch under every name it is stored under.
+      const resp = await hubFetch('/api/admin/permissions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set', user_id: userProfile && userProfile.id, target_user_id: userId, module_name: module, has_access: newVal }) });
+      let j = null; try { j = await resp.json(); } catch (eJ) { j = null; }
+      if (!j || !j.ok) throw new Error((j && j.error) || ('the server did not answer (HTTP ' + resp.status + ')'));
       // v55.83-UG (Codex QA 18:06) — the same switch stored under its other names follows, so OFF really is OFF on the server
       const others = permFamily(module).filter(function (k) { return k !== module; });
-      if (others.length) { const r2 = await supabase.from('module_permissions').update({ has_access: newVal }).eq('user_id', userId).in('module_name', others); if (r2 && r2.error) throw r2.error; setPermissions(prev => { const nx = { ...(prev[userId] || {}) }; others.forEach(function (k) { if (nx[k] !== undefined) { nx[k] = newVal; } }); return { ...prev, [userId]: nx }; }); }
+      if (others.length) { setPermissions(prev => { const nx = { ...(prev[userId] || {}) }; others.forEach(function (k) { if (nx[k] !== undefined) { nx[k] = newVal; } }); return { ...prev, [userId]: nx }; }); }
       if (toast) toast.success((newVal ? 'Granted' : 'Removed') + ': ' + module);
     } catch (err) {
       console.error('[togglePermission]', err);
@@ -1164,7 +1162,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       let reread = false;
       try { const rr = await supabase.from('module_permissions').select('module_name, has_access').eq('user_id', userId); if (!rr.error && rr.data) { const fresh = {}; rr.data.forEach(function (x) { fresh[x.module_name] = x.has_access; }); setPermissions(prev => ({ ...prev, [userId]: fresh })); reread = true; } } catch (eR) { reread = false; }
       if (!reread) { setStaleUsers(prev => ({ ...prev, [userId]: true })); if (toast) toast.error('Part of this change may have saved, and the page could not check. Reload the page before changing this person’s switches.'); }
-      if (toast) toast.error('Could not save permission "' + module + '": ' + ((err && err.message) || 'unknown error') + '. (You may lack rights to edit permissions, or a DB policy is blocking it.)');
+      if (toast) toast.error('Could not save permission "' + module + '": ' + ((err && err.message) || 'unknown error') + '. (Only the super admin can change switches, and nobody can change their own.)');
     }
   };
 
@@ -1227,7 +1225,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
           name: f.name, name_ar: f.nameAr || '', email: f.email,
           password: f.password, role: f.role || 'team',
           reports_to: f.reportsTo || null, phone: f.phone || '',
-          modules: selectedModules
+          modules: isSuperAdmin ? selectedModules : [] // v55.83-WW — only the super admin picks starting switches (the server refuses others)
         })
       });
       var data = await res.json();
@@ -1387,10 +1385,11 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               </div>
               <div className="mt-3">
                 <label className="text-[10px] font-semibold mb-1 block">Module Access / الصلاحيات</label>
+                {!isSuperAdmin && <div className="text-[10px] text-slate-500 mb-1">Only the super admin picks starting switches. The person is added with everything off; the super admin switches on what they need.</div>}
                 <div className="flex gap-2 flex-wrap">
                   {MODULES.map(mod => (
                     <label key={mod} className={'flex items-center gap-1 px-2 py-1 rounded border text-[10px] cursor-pointer ' + (selectedModules.includes(mod) ? 'bg-blue-100 border-blue-300 text-blue-700 font-bold' : 'bg-white border-slate-200 text-slate-500')}>
-                      <input type="checkbox" checked={selectedModules.includes(mod)} onChange={() => toggleModule(mod)} className="w-3 h-3" />
+                      <input type="checkbox" checked={selectedModules.includes(mod)} disabled={!isSuperAdmin} onChange={() => toggleModule(mod)} className="w-3 h-3" />
                       {mod}
                     </label>
                   ))}

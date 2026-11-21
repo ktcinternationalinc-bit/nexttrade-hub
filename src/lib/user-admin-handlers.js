@@ -1,5 +1,15 @@
 import { authorizeUserAdmin, readUserAdminJson, requireTargetUserId, userAdminErrorResponse } from './user-admin-auth.js';
 import { authorizeUserAdminTarget } from './user-admin-protection.js';
+import { audit } from './audit-server.js'; // v55.83-WW
+
+// v55.83-WW (Max's rule 1: only the super admin promotes someone to super admin; nobody raises their own access) — role rules.
+var ROLE_OK = { super_admin: 1, admin: 1, team: 1, viewer: 1 };
+async function roleOf(supabase, profileId) {
+  var r = await supabase.from('users').select('id, role').eq('id', profileId).limit(1);
+  if (r.error) { return { error: 'The profile could not be checked right now.' }; }
+  var row = r.data && r.data[0];
+  return { role: row ? row.role : null, found: !!row };
+}
 
 // Dependency injection keeps authorization testable without calling a live service.
 // The production wrapper passes only the server environment and Supabase SDK.
@@ -18,6 +28,15 @@ async function POST(request) {
     var name = body.name;
     var nameAr = body.name_ar || '';
     var role = body.role || 'team';
+    if (!ROLE_OK[role]) { return adminJson({ error: 'Unknown role "' + role + '".' }, { status: 400 }); }
+    var meC = await roleOf(supabase, authorized.profileId);
+    if (meC.error) { return adminJson({ error: meC.error }, { status: 503 }); }
+    if (role === 'super_admin' && meC.role !== 'super_admin') { return adminJson({ error: 'Only the super admin can make someone a super admin.' }, { status: 403 }); }
+    // v55.83-WW (Codex 09:02 P1) — the starting switches are a grant like any other: only the super admin picks them. An admin can still add a
+    // person, with every switch OFF; refused BEFORE any sign-in, profile or switch is created (never a half-made account).
+    var askedMods = body.modules && Array.isArray(body.modules) ? body.modules.filter(function (m) { return typeof m === 'string' && m; }) : [];
+    if (body.modules !== undefined && body.modules !== null && !Array.isArray(body.modules)) { return adminJson({ error: 'The starting switches must be a list.' }, { status: 400 }); }
+    if (askedMods.length > 0 && meC.role !== 'super_admin') { return adminJson({ error: 'Only the super admin can choose the starting permission switches. Add the person with none ticked, then ask the super admin to switch on what they need.' }, { status: 403 }); }
     var reportsTo = body.reports_to || null;
     var phone = body.phone || '';
 
@@ -68,12 +87,15 @@ async function POST(request) {
       'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs',
       'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import',
       'Bank', 'Egypt Bank', 'Quotes', 'Reports', 'Welcome Briefing'];
-    var selectedMods = body.modules && Array.isArray(body.modules) ? body.modules : [];
+    var selectedMods = askedMods;
     var permRecords = allModules.map(function(mod) {
       return { user_id: dbResult.data.id, module_name: mod, has_access: selectedMods.includes(mod) };
     });
-    await supabase.from('module_permissions').insert(permRecords);
-
+    var permIns = await supabase.from('module_permissions').insert(permRecords);
+    // audit what is really stored (read back), not what was asked
+    var effective = []; var permErr = permIns && permIns.error ? permIns.error.message : null;
+    try { var rb = await supabase.from('module_permissions').select('module_name, has_access').eq('user_id', dbResult.data.id); (rb.data || []).forEach(function (r) { if (r.has_access === true) { effective.push(r.module_name); } }); if (rb.error && !permErr) { permErr = rb.error.message; } } catch (eRb) { permErr = permErr || 'read-back failed'; }
+    await audit(supabase, authorized.profileId, 'user_created', 'user', dbResult.data.id, { role: role, switches_on: effective, switches_asked: selectedMods, switch_save_error: permErr });
     return adminJson({ success: true, user: dbResult.data });
   } catch (err) {
     return userAdminErrorResponse(err);
@@ -89,6 +111,15 @@ async function PUT(request) {
     var userId = requireTargetUserId(body.id);
     if (!userId) return adminJson({ error: 'User ID required' }, { status: 400 });
     var targetIdentity = await authorizeUserAdminTarget(authorized, userId, env);
+    var meP = await roleOf(supabase, authorized.profileId); var tgP = await roleOf(supabase, userId);
+    if (meP.error || tgP.error) { return adminJson({ error: meP.error || tgP.error }, { status: 503 }); }
+    if (tgP.role === 'super_admin' && meP.role !== 'super_admin') { return adminJson({ error: 'Only the super admin can change a super admin\'s account.' }, { status: 403 }); }
+    if (body.role !== undefined) {
+      if (!ROLE_OK[body.role]) { return adminJson({ error: 'Unknown role "' + body.role + '".' }, { status: 400 }); }
+      if (String(userId).toLowerCase() === String(authorized.profileId).toLowerCase() && body.role !== tgP.role) { return adminJson({ error: 'Nobody can change their own role.' }, { status: 403 }); }
+      if (body.role === 'super_admin' && tgP.role !== 'super_admin' && meP.role !== 'super_admin') { return adminJson({ error: 'Only the super admin can make someone a super admin.' }, { status: 403 }); }
+    }
+    if (body.active === false && String(userId).toLowerCase() === String(authorized.profileId).toLowerCase()) { return adminJson({ error: 'You cannot switch off your own account.' }, { status: 403 }); }
     if (body.new_password && !targetIdentity.authUserId) return adminJson({ error: 'This profile has no verified sign-in whose password can be changed.' }, { status: 409 });
 
     var updates = {};
@@ -107,6 +138,8 @@ async function PUT(request) {
       updates.updated_at = new Date().toISOString();
       var result = await supabase.from('users').update(updates).eq('id', userId).select().single();
       if (result.error) return adminJson({ error: result.error.message }, { status: 400 });
+      if (updates.role !== undefined && updates.role !== tgP.role) { await audit(supabase, authorized.profileId, 'user_role_changed', 'user', userId, { before: tgP.role, after: updates.role }); }
+      if (updates.active !== undefined) { await audit(supabase, authorized.profileId, updates.active ? 'user_reactivated' : 'user_deactivated', 'user', userId, { role: tgP.role }); }
     }
 
     // Update password if provided
@@ -131,10 +164,15 @@ async function DELETE(request) {
     var permanent = url.searchParams.get('permanent') === 'true';
     if (!userId) return adminJson({ error: 'User ID required' }, { status: 400 });
     var targetIdentity = await authorizeUserAdminTarget(authorized, userId, env);
+    if (String(userId).toLowerCase() === String(authorized.profileId).toLowerCase()) { return adminJson({ error: 'You cannot switch off or delete your own account.' }, { status: 403 }); }
+    var meD = await roleOf(supabase, authorized.profileId); var tgD = await roleOf(supabase, userId);
+    if (meD.error || tgD.error) { return adminJson({ error: meD.error || tgD.error }, { status: 503 }); }
+    if ((tgD.role === 'super_admin' || permanent) && meD.role !== 'super_admin') { return adminJson({ error: permanent ? 'Only the super admin can delete an account for good.' : 'Only the super admin can switch off a super admin\'s account.' }, { status: 403 }); }
 
     if (!permanent) {
       var result = await supabase.from('users').update({ active: false, updated_at: new Date().toISOString() }).eq('id', userId).select().single();
       if (result.error) return adminJson({ error: result.error.message }, { status: 400 });
+      await audit(supabase, authorized.profileId, 'user_deactivated', 'user', userId, { role: tgD.role });
       return adminJson({ success: true, action: 'deactivated' });
     }
 
@@ -175,6 +213,7 @@ async function DELETE(request) {
     ];
     await Promise.allSettled(fkDeletes);
 
+    await audit(supabase, authorized.profileId, 'user_deleted_permanently', 'user', userId, { role: tgD.role }); // written before the row goes, by the super admin
     // Delete the user row
     var delResult = await supabase.from('users').delete().eq('id', userId);
     if (delResult.error) return adminJson({ error: 'Delete failed: ' + delResult.error.message }, { status: 400 });

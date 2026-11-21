@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WW',
+    date: '2026-11-21',
+    title: 'Only the super admin changes permission switches and roles',
+    items: [
+      { text: '**Permission switches are now saved by the server, and only for the super admin.** Settings → Module Access and 🏦 Banking & Accounting Access work as before for the super admin. Every change is written to the audit trail: who changed it, for whom, which switch, and what it was before.' },
+      { text: 'Nobody can change their own switches. A super admin already has everything, so their switches are not changed.' },
+      { text: 'Roles: only the super admin can make someone a super admin, and nobody can change their own role. An admin can no longer edit, switch off or delete a super admin. Only the super admin can delete an account for good. Role changes and switched-off accounts are written to the audit trail.' },
+      { text: 'Adding a new team member: only the super admin can tick starting switches. An admin can still add a person, with everything switched off, and the super admin then switches on what they need.' },
+      { text: 'An admin who is not the super admin now sees "Only the super admin can change permission switches" when trying to change a switch. If you want an admin to be able to change switches for others, tell us.' },
+      { superAdminOnly: true, text: 'Technical (permissions step B, Codex 21 Nov): NEW POST /api/admin/permissions (verifiedCaller; caller users.role must be super_admin and active; refuses own row, super_admin targets, bank-balance / full-dashboard keys; writes the whole permFamily, inserts the asked name if missing; hub_audit_log permission_changed with before / after). SettingsTab.togglePermission calls it via hubFetch instead of writing module_permissions from the browser. user-admin-handlers: role allow-list, only a super_admin sets super_admin, no own-role change, no self-deactivate / delete, non-super cannot PUT / DELETE a super_admin target (also outside the env list), permanent delete super_admin only; POST with starting modules is refused (403, before any sign-in / profile / switch is made) unless the caller is super_admin (Codex 09:02 P1); audit rows user_created (switches read back from the DB) / user_role_changed / user_deactivated / user_reactivated / user_deleted_permanently. SQL sql/v55-83-WW-grant-writes-server-only.sql (NOT run yet; only after Codex PASS and once this build is live): browser roles lose INSERT / UPDATE / DELETE on module_permissions and users (8 preference columns stay writable) and all access to hub_audit_log. Tests: test-v55-83-ww-grant-writes.js (real route + real team-admin handlers), sql-v55-83-ww-grant-writes.mjs (real Postgres 16, twice, with rollback).' },
+    ],
+  },
+  {
     version: 'v55.83-WQ',
     date: '2026-11-21',
     title: 'More accounting screens check who is signed in',
