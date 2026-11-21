@@ -39,12 +39,16 @@ function seed(installed) {
     ln('TX', '2026-06-09', 41000, null, 'Online Transfer to CHK ...9909 transaction#: 77000001'),   // recognised from the bank text only
     ln('TP', '2026-09-04', 500, RTM, 'WIRE PRIVATE', 'AP'),                                         // from a private account
     ln('EG', '2026-09-02', 10000, NT, 'WIRE EG', 'A1', { wave_business_id: 'OTHER_BUSINESS' }),     // another company's books
-    ln('OTHER', '2026-09-05', 77, null, 'ACH SOMETHING')];
+    ln('OTHER', '2026-09-05', 77, null, 'ACH SOMETHING'),
+    ln('IN1', '2026-09-20', 300, null, 'RTM RETURN', 'A1', { direction: 'in' }), ln('IN0', '2026-08-01', 50, null, 'OLD MONEY IN', 'A1', { direction: 'in' }),
+    ln('INV', '2026-09-21', 80, null, 'CUSTOMER PAID', 'A1', { direction: 'in', matched_invoice_id: 'inv-1' }), ln('INP', '2026-09-22', 90, null, 'PRIVATE IN', 'AP', { direction: 'in' }),
+    ln('INR', '2026-09-23', 40, null, 'ALREADY A REFUND', 'A1', { direction: 'in' }), ln('INT', '2026-09-24', 60, null, 'OWN TRANSFER IN', 'A1', { direction: 'in', transfer_group_id: 'g9' })];
+  db.t.accounting_invoice_payments = [];
   db.t.vendor_bills = [{ id: 'b1', wave_business_id: US, vendor_name: 'Kronos', bill_number: 'K-1', bill_date: '2026-09-10', category: 'trucking', total_amount: 6000, paid_via: NT, record_status: 'active', release_number: '1002-1' },
     { id: 'b2', wave_business_id: US, vendor_name: 'Rent Co', bill_number: 'R-9', bill_date: '2026-09-12', category: 'rent', total_amount: 900, paid_via: NT, record_status: 'active', release_number: null }];
   db.t.vendor_bill_payments = [{ id: 'p1', bill_id: 'b1', amount: 6000, paid_date: '2026-09-11', bank_transaction_id: 'T1', voided: false, method: 'rtm' },
     { id: 'p2', bill_id: 'b2', amount: 900, paid_date: '2026-09-20', bank_transaction_id: null, voided: false, method: 'rtm' }]; // paid through NextTrade, no transfer named
-  db.t.party_money_entries = [{ id: 'f1', party: NT, bucket: 'fee', kind: 'fee_from_transfer', amount: 500, source_bank_transaction_id: 'T1', entry_date: '2026-09-20', reason: 'handling' }];
+  db.t.party_money_entries = [{ id: 'r0', party: RTM, bucket: 'refund', kind: 'refund', amount: 40, source_bank_transaction_id: 'T2', bank_transaction_id: 'INR', entry_date: '2026-09-23', reason: 'old refund' }, { id: 'f1', party: NT, bucket: 'fee', kind: 'fee_from_transfer', amount: 500, source_bank_transaction_id: 'T1', entry_date: '2026-09-20', reason: 'handling' }];
   db.t.wire_packages = [{ id: 'w1', status: 'draft', funding_txn_id: 'T1', bank_transaction_id: null, fee_amount: 0, payee_name: NT }];
   db.t.wire_package_lines = [{ id: 'l1', package_id: 'w1', bill_id: 'b2', amount: 300, is_open: true }];
   db.calls = []; db.confirmed = { T1: true };
@@ -56,6 +60,7 @@ function seed(installed) {
     return { data: { found: false }, error: null };
   };
   db.rpcs.hub_party_transfer_set_state = function (a, dbx) { dbx.calls.push(['set_state', a.p]); if (a.p.bank_transaction_id === 'T2' && a.p.party !== RTM) { return { data: null, error: { message: 'HUB_GUARD: that transfer is not marked as sent to ' + a.p.party + '.' } }; } dbx.confirmed[a.p.bank_transaction_id] = a.p.state === 'confirmed'; return { data: { ok: true, from: 'needs_reconciliation', to: a.p.state, state: { found: true, party: a.p.party, status: a.p.state, amount: 10000, refunds: 0, bills: 6000, fees: 500, wire_fees: 0, entry_fees: 500, used: 6500, held: 3500, reserved: 300, available: 3200, remaining: 3200, requests: 1 } }, error: null }; };
+  db.rpcs.hub_party_refund = function (a, dbx) { dbx.calls.push(['refund', a.p]); return { data: { ok: true, action: 'refund', entry_id: 'new-refund', amount: a.p.amount, entry_date: '2026-09-20', state: { amount: 4000, refunds: 340, held: 3660, available: 3660 } }, error: null }; };
   db.rpcs.hub_party_fee = function (a, dbx) { dbx.calls.push(['fee', a.p]); if (a.p.amount > 3200) { return { data: null, error: { message: 'HUB_GUARD: only $3,200.00 of this transfer is free (to bills $6,000.00, fees $500.00, reserved $300.00). Release a reservation or reverse an allocation first.' } }; } return { data: { ok: true, action: a.p.action, entry_id: 'new-fee', amount: a.p.amount, entry_date: '2026-10-05', state: { found: true, amount: 10000, bills: 6000, fees: 500 + a.p.amount, held: 3500 - a.p.amount, reserved: 300, available: 3200 - a.p.amount } }, error: null }; };
   state.db = db; return db;
 }
@@ -171,6 +176,35 @@ function snap(db) { return JSON.stringify([db.t.bank_transactions, db.t.vendor_b
   check('it reads only when opened, and says the allocation date is not proof of vendor payment', ui.indexOf('if (shown && !data) { load(); }') > 0 && ui.indexOf('not proof the vendor was paid') > 0);
   var bt = fs.readFileSync(path.join(root, 'src/components/BillsTab.jsx'), 'utf8');
   check('mounted on the Bills page next to the advances panel, with its import', bt.indexOf("import FundsHeldPanel from './FundsHeldPanel'") > 0 && bt.indexOf('<FundsHeldPanel userProfile={userProfile} toast={toast} onChanged={load} />') > 0 && bt.indexOf('<AdvancesPanel userProfile={userProfile} toast={toast} onChanged={load} />') > 0);
+  // ── (WF B2) money back from the company ──
+  db = seed(false); state.perms = { 'accounting.view': true, 'bills.view': true, 'advances.manage': true, 'accounting.view_totals': true };
+  var rpre = await call({ action: 'refund', party: RTM, bank_transaction_id: 'T2', incoming_bank_transaction_id: 'IN1', amount: 300, reason: 'money back', request_id: 'click-rf01' });
+  check('refund WITHOUT the database step: 409 not switched on, nothing called', rpre._status === 409 && /not switched on yet/.test(rpre.error) && db.calls.length === 0, rpre);
+  var j9 = await call({ action: 'funds' }); var t2 = party(j9, RTM).transfers.filter(function (t) { return t.id === 'T2'; })[0];
+  check('the list shows a refund already recorded: the RTM transfer of 4,000 with 40 back holds 3,960, with the refund row', t2.refunded === 40 && t2.held === 3960 && t2.refunds.length === 1 && t2.refunds[0].amount === 40, t2);
+  var cands = await call({ action: 'refund_candidates', bank_transaction_id: 'T2' });
+  check('money-in lines a refund could be on: only IN1 (not before the transfer, not matched to an invoice, not private, not already a refund, not an own-account transfer)', cands.ok && cands.lines.length === 1 && cands.lines[0].id === 'IN1' && cands.lines[0].amount === 300, cands);
+  state.perms['bank.view_private'] = true;
+  var cands2 = await call({ action: 'refund_candidates', bank_transaction_id: 'T2' });
+  check('a person who may see private accounts also gets the private money-in line', cands2.ok && cands2.lines.map(function (x) { return x.id; }).sort().join(',') === 'IN1,INP', cands2);
+  delete state.perms['bank.view_private'];
+  db.t.accounting_invoice_payments = [{ id: 'ap1', bank_transaction_id: 'IN1', amount: 300, voided: false }];
+  check('a money-in line used by a customer payment is not offered', (await call({ action: 'refund_candidates', bank_transaction_id: 'T2' })).lines.length === 0);
+  db.t.accounting_invoice_payments = [];
+  state.perms = { 'accounting.view': true, 'bills.view': true, 'accounting.view_totals': true };
+  check('refund candidates need the 🔒 Advances: Manage switch', (await call({ action: 'refund_candidates', bank_transaction_id: 'T2' }))._status === 403);
+  db = seed(true); state.perms = { 'accounting.view': true, 'bills.view': true, 'advances.manage': true };
+  var rf1 = await call({ action: 'refund', party: RTM, bank_transaction_id: 'T2', incoming_bank_transaction_id: 'IN1', amount: 300.004, reason: 'money back', entry_date: '2026-09-20', request_id: 'click-rf02' });
+  var rc1 = db.calls.filter(function (c) { return c[0] === 'refund'; })[0];
+  check('refund WITH the database step: one database call with transfer, money-in line, cents, date, reason, click id, the verified person; a bare acknowledgment back', rf1.ok === true && rf1.action === 'refund' && rf1.entry_id === 'new-refund' && rf1.state === undefined && JSON.stringify(rf1).indexOf('3660') < 0 && rc1 && rc1[1].bank_transaction_id === 'T2' && rc1[1].incoming_bank_transaction_id === 'IN1' && rc1[1].amount === 300 && rc1[1].actor === 'u1' && rc1[1].request_id === 'click-rf02' && rc1[1].allow_closed === false, [rf1, rc1]);
+  var rpv = await call({ action: 'refund', party: RTM, bank_transaction_id: 'T2', incoming_bank_transaction_id: 'INP', amount: 10, reason: 'money back', request_id: 'click-rf03' });
+  check('refund on a private money-in line the person may not see: 404, nothing called', rpv._status === 404 && db.calls.filter(function (c) { return c[0] === 'refund'; }).length === 1, rpv);
+  state.perms = { 'accounting.view': true, 'bills.view': true };
+  var rnp = await call({ action: 'refund', party: RTM, bank_transaction_id: 'T2', incoming_bank_transaction_id: 'IN1', amount: 10, reason: 'money back', request_id: 'click-rf04' });
+  check('refund needs the 🔒 switch', rnp._status === 403, rnp);
+  var PR = require(path.join(root, 'src/components/FundsHeldPanel.jsx'));
+  var onR = { canManage: true, installed: true };
+  check('button: Money back is offered on a transfer that still holds unreserved money; not when it is all reserved, not on a bank-text one, not without the database step', PR.transferActions({ status: 'confirmed', held: 100, reserved: 0 }, onR).refund && PR.transferActions({ status: 'needs_reconciliation', held: 100, reserved: 0 }, onR).refund && !PR.transferActions({ status: 'confirmed', held: 100, reserved: 100 }, onR).refund && !PR.transferActions({ status: 'to_confirm_identity', held: 100 }, onR).refund && !PR.transferActions({ status: 'confirmed', held: 100 }, { canManage: true, installed: false }).refund);
   var src = fs.readFileSync(path.join(root, 'src/app/api/accounting/party-funds/route.js'), 'utf8');
   check('the route never writes a table itself (no insert / update / delete / upsert) — only the three database functions', !/\.insert\(|\.update\(|\.delete\(|\.upsert\(/.test(src) && src.indexOf("rpc('hub_party_transfer_set_state'") > 0 && src.indexOf("rpc('hub_party_fee'") > 0);
   check('API route style: no arrow functions, no template strings, no const / let', !/=>/.test(src) && !/`/.test(src) && !/\b(const|let)\s/.test(src));

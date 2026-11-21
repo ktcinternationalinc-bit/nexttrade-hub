@@ -27,6 +27,7 @@ export function transferActions(t, o) {
     unconfirm: can && t.status === 'confirmed',
     markFee: can && t.status === 'confirmed' && Number(t.available) > 0.005,
     reverseFee: can && t.status !== 'to_confirm_identity',
+    refund: can && t.status !== 'to_confirm_identity' && Number(t.held) - Number(t.reserved || 0) > 0.005, // v55.83-WF B2 — money back from the company
     why: !(o && o.installed) ? 'not switched on yet' : !(o && o.canManage) ? 'needs the 🔒 Advances: Manage permission' : t.status === 'to_confirm_identity' ? 'mark this bank line as sent to the company first (All Transactions)' : '',
   };
 }
@@ -60,11 +61,17 @@ export default function FundsHeldPanel(props) {
     if (!window.confirm(q)) { return; }
     act({ action: confirm ? 'confirm' : 'unconfirm', party: p.party, bank_transaction_id: t.id }, confirm ? 'Transfer confirmed' : 'Back to needs reconciliation');
   }
+  // v55.83-WF B2 — money back: pick the money-in line it arrived on (the server lists the possible ones)
+  function openRefund(p, t) {
+    setForm({ kind: 'refund', party: p.party, id: t.id, amount: '', date: '', reason: '', click: clickId(), max: Number(t.held) - Number(t.reserved || 0), lines: null, line: '' });
+    api({ action: 'refund_candidates', bank_transaction_id: t.id }).then(function (j) { setForm(function (f) { return f && f.kind === 'refund' && f.id === t.id ? Object.assign({}, f, { lines: (j && j.ok) ? (j.lines || []) : [], linesErr: (j && j.ok) ? '' : ((j && j.error) || 'Could not list the money-in lines.') }) : f; }); });
+  }
   function saveForm() {
     var a = Number(String(form.amount || '').replace(/,/g, ''));
     if (!(a > 0)) { toast.error('Type an amount above zero.'); return; }
     if (String(form.reason || '').trim().length < 3) { toast.error('Say why, in a few words.'); return; }
     if (form.kind === 'mark') { act({ action: 'fee_mark', party: form.party, bank_transaction_id: form.id, amount: a, entry_date: form.date, reason: form.reason, allow_closed: form.closed === true, request_id: form.click }, fmt(a) + ' marked as services rendered'); }
+    else if (form.kind === 'refund') { if (!form.line) { toast.error('Pick the money-in line the money came back on.'); return; } act({ action: 'refund', party: form.party, bank_transaction_id: form.id, incoming_bank_transaction_id: form.line, amount: a, entry_date: form.date || null, reason: form.reason, allow_closed: form.closed === true, request_id: form.click }, fmt(a) + ' recorded as money back from ' + form.party); }
     else { act({ action: 'fee_reverse', party: form.party, bank_transaction_id: form.id, amount: a, entry_date: form.date, reason: form.reason, fee_id: form.fee, allow_closed: form.closed === true, request_id: form.click }, fmt(a) + ' put back to available funds'); }
   }
   var chip = function (st) { var w = STATUS_WORDS[st] || STATUS_WORDS.needs_reconciliation; return <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded" style={{ background: w.bg, color: w.fg }}>{w.text}</span>; };
@@ -83,7 +90,7 @@ export default function FundsHeldPanel(props) {
         <div className="flex gap-3 items-baseline flex-wrap">
           <div className="text-[13px] font-extrabold" style={{ color: INK }}>{p.party}</div>
           {T ? <div className="flex gap-3 flex-wrap text-[12px]" style={{ color: SUB }}>
-            <span>Sent <b style={{ color: INK }}>{fmt(T.funds_sent)}</b></span><span>− to bills <b style={{ color: INK }}>{fmt(T.to_bills)}</b></span><span>− services rendered <b style={{ color: '#991b1b' }}>{fmt(T.services_rendered)}</b></span>
+            <span>Sent <b style={{ color: INK }}>{fmt(T.funds_sent)}</b></span>{T.refunded > 0.005 ? <span>− money back <b style={{ color: INK }}>{fmt(T.refunded)}</b></span> : null}<span>− to bills <b style={{ color: INK }}>{fmt(T.to_bills)}</b></span><span>− services rendered <b style={{ color: '#991b1b' }}>{fmt(T.services_rendered)}</b></span>
             <span>= held <b style={{ color: INK }}>{fmt(T.held)}</b></span><span>· reserved <b style={{ color: '#92400e' }}>{fmt(T.reserved)}</b></span><span>· available now <b style={{ color: '#166534' }}>{fmt(T.available)}</b></span>
             {T.not_confirmed > 0.005 ? <span>· not confirmed yet <b style={{ color: '#92400e' }}>{fmt(T.not_confirmed)}</b></span> : null}
           </div> : <div className="text-[11px]" style={{ color: MUTED }}>{'Totals hidden — ' + (p.totals_hidden || 'no permission') + '.'}</div>}
@@ -98,18 +105,21 @@ export default function FundsHeldPanel(props) {
               <tr style={{ borderTop: '1px solid #e2e8f0' }}>
                 <td className="p-1"><button type="button" onClick={function () { var o = Object.assign({}, open); o[t.id] = !isOpen; setOpen(o); }} className="font-bold text-left" style={{ color: '#1d4ed8' }}>{(isOpen ? '▾ ' : '▸ ') + t.date}</button><div className="text-[10px]" style={{ color: MUTED }}>{String(t.reference || '').substring(0, 60)}</div></td>
                 <td className="p-1">{chip(t.status)}{t.database_agrees === false ? <div className="text-[10px] font-bold" style={{ color: '#b91c1c' }}>the database and the report disagree — tell Claude</div> : null}</td>
-                <td className="p-1 text-right tabular-nums">{fmt(t.sent)}</td><td className="p-1 text-right tabular-nums">{fmt(t.to_bills)}</td><td className="p-1 text-right tabular-nums">{fmt(t.services_rendered)}</td>
+                <td className="p-1 text-right tabular-nums">{fmt(t.sent)}{t.refunded > 0.005 ? <div className="text-[10px]" style={{ color: MUTED }}>{'− ' + fmt(t.refunded) + ' back'}</div> : null}</td><td className="p-1 text-right tabular-nums">{fmt(t.to_bills)}</td><td className="p-1 text-right tabular-nums">{fmt(t.services_rendered)}</td>
                 <td className="p-1 text-right tabular-nums">{fmt(t.reserved)}</td><td className="p-1 text-right tabular-nums font-extrabold" style={{ color: '#166534' }}>{fmt(t.available)}</td>
                 <td className="p-1 whitespace-nowrap text-right">
                   {a.confirm && <button type="button" disabled={busy} onClick={function () { setState(p, t, true); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#166534', color: '#ffffff' }}>✓ Confirm</button>}
                   {a.markFee && <button type="button" disabled={busy} onClick={function () { setForm({ kind: 'mark', party: p.party, id: t.id, amount: '', date: today(), reason: '', click: clickId(), max: t.available }); }} className="ml-1 px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Mark services rendered</button>}
+                  {a.refund && <button type="button" disabled={busy} onClick={function () { openRefund(p, t); }} className="ml-1 px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e0f2fe', color: '#075985' }}>↩ Money back</button>}
                   {a.unconfirm && <button type="button" disabled={busy} onClick={function () { setState(p, t, false); }} className="ml-1 px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Undo confirm</button>}
-                  {!a.confirm && !a.markFee && !a.unconfirm && a.why ? <span className="text-[10px]" style={{ color: MUTED }}>{a.why}</span> : null}
+                  {!a.confirm && !a.markFee && !a.unconfirm && !a.refund && a.why ? <span className="text-[10px]" style={{ color: MUTED }}>{a.why}</span> : null}
                 </td>
               </tr>
-              {form && form.id === t.id && <tr><td colSpan={8} className="p-2" style={{ background: form.kind === 'mark' ? '#fff7ed' : '#f0fdf4' }}>
+              {form && form.id === t.id && <tr><td colSpan={8} className="p-2" style={{ background: form.kind === 'mark' ? '#fff7ed' : form.kind === 'refund' ? '#eff6ff' : '#f0fdf4' }}>
                 <div className="flex gap-2 items-center flex-wrap">
-                  <span className="text-[12px] font-extrabold">{form.kind === 'mark' ? 'Mark as ' + p.party + ' services rendered (an expense; no payment is made):' : 'Put a services-rendered amount back to available funds (no payment is made):'}</span>
+                  <span className="text-[12px] font-extrabold">{form.kind === 'mark' ? 'Mark as ' + p.party + ' services rendered (an expense; no payment is made):' : form.kind === 'refund' ? 'Money back from ' + p.party + ' on this transfer (lowers what it holds; not a fee, not income):' : 'Put a services-rendered amount back to available funds (no payment is made):'}</span>
+                  {form.kind === 'refund' && (form.lines === null ? <span className="text-[11px]" style={{ color: MUTED }}>Looking for money-in lines…</span> : form.linesErr ? <span className="text-[11px]" style={{ color: '#991b1b' }}>{form.linesErr}</span> : form.lines.length === 0 ? <span className="text-[11px]" style={{ color: '#92400e' }}>No unused money-in line since this transfer — the money must be in the bank feed first.</span> :
+                    <select className={inp} style={inpS} value={form.line} onChange={function (e) { var ln = (form.lines || []).filter(function (x) { return x.id === e.target.value; })[0]; setForm(Object.assign({}, form, { line: e.target.value, amount: ln ? String(Math.min(ln.amount, form.max)) : form.amount, date: ln ? ln.date : form.date })); }}><option value="">the money-in line it came back on…</option>{form.lines.map(function (ln) { return <option key={ln.id} value={ln.id}>{ln.date + ' · ' + String(ln.who).substring(0, 40) + ' · ' + fmt(ln.amount)}</option>; })}</select>)}
                   <span className="text-[11px] font-bold">$</span><input autoFocus className={inp} style={Object.assign({ width: 110 }, inpS)} value={form.amount} placeholder={'up to ' + fmt(form.max)} onChange={function (e) { setForm(Object.assign({}, form, { amount: e.target.value })); }} />
                   <span className="text-[11px] font-bold">date</span><input type="date" className={inp} style={inpS} value={form.date} max={today()} onChange={function (e) { setForm(Object.assign({}, form, { date: e.target.value })); }} />
                   <input className={inp} style={Object.assign({ minWidth: 220 }, inpS)} value={form.reason} placeholder="why (required)" onChange={function (e) { setForm(Object.assign({}, form, { reason: e.target.value })); }} />
@@ -127,6 +137,8 @@ export default function FundsHeldPanel(props) {
                   return <div key={i} className="text-[11px] flex gap-2 flex-wrap items-center" style={{ color: INK }}><span>{f.date}</span><span>{f.why}</span><span className="tabular-nums font-bold" style={{ color: Number(f.amount) < 0 ? '#166534' : '#991b1b' }}>{fmt(f.amount)}</span>
                     {canRev && <button type="button" disabled={busy} onClick={function () { setForm({ kind: 'reverse', party: p.party, id: t.id, fee: f.id, amount: String(f.amount), date: today(), reason: '', click: clickId(), max: f.amount }); }} className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#dcfce7', color: '#166534' }}>↩ Put back</button>}
                     {String(f.id || '').indexOf('request:') === 0 ? <span style={{ color: MUTED }}>(the fee of a wire — change it on the wire)</span> : null}</div>; })}
+                {(t.refunds || []).length > 0 && <div><div className="text-[11px] font-extrabold mt-2" style={{ color: SUB }}>Money back from the company (lowers what this transfer holds)</div>
+                  {t.refunds.map(function (r, i) { return <div key={i} className="text-[11px]" style={{ color: INK }}>{r.date + ' · ' + r.why + ' · '}<b className="tabular-nums">{fmt(r.amount)}</b></div>; })}</div>}
                 {t.reserved_for.length > 0 && <div><div className="text-[11px] font-extrabold mt-2" style={{ color: SUB }}>Reserved for requests not sent yet (held — not paid, not an expense)</div>
                   {t.reserved_for.map(function (r, i) { return <div key={i} className="text-[11px]" style={{ color: INK }}>{'request ' + String(r.request_id).substring(0, 8) + ' · ' + r.status + ' · '}<b className="tabular-nums">{fmt(r.amount)}</b></div>; })}</div>}
                 <div className="text-[10px] mt-2" style={{ color: MUTED }}>The date money is USED on a bill is the date entered when the request is sent. It is not proof the vendor was paid — that stays in the wire’s proof step.</div>

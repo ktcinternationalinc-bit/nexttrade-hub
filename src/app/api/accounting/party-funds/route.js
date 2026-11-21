@@ -24,7 +24,7 @@ import { feeExplanation, currentFundsWords } from '../../../../lib/party-funds';
 var API_BUILD_MARKER = 'v55.83-WF-party-funds';
 // (Codex 17:51 P2) NOT an instruction to install anything: the database step is released together with the screens that need it.
 var SQL_MISSING_WF = 'Confirming a transfer and marking services rendered are not switched on yet — they arrive with a later update. Nothing was changed.';
-var WRITES = { confirm: 1, unconfirm: 1, fee_mark: 1, fee_reverse: 1 };
+var WRITES = { confirm: 1, unconfirm: 1, fee_mark: 1, fee_reverse: 1, refund: 1 };
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -62,7 +62,7 @@ export async function POST(req) {
   try {
     var body = await req.json();
     var action = String(body.action || '');
-    if (action !== 'funds' && !WRITES[action]) { return fail('Unknown action.'); }
+    if (action !== 'funds' && action !== 'refund_candidates' && !WRITES[action]) { return fail('Unknown action.'); }
     var who = await verifiedCaller(req, body, createClient);
     if (who.error) { return fail(who.error, who.status || 401); }
     var userId = who.userId;
@@ -84,6 +84,29 @@ export async function POST(req) {
     var instR = await db.rpc('hub_party_funds_installed');
     var installed = !instR.error && instR.data === true;
 
+    // v55.83-WF B2 — the money-in lines a refund of this transfer could have arrived on (for the person who records it). Read-only.
+    // KTC's books, settled, not a duplicate, not paired between own accounts, not matched to an invoice, not already a refund;
+    // from the transfer's date on. Each line's own amount is shown (no totals). Private lines only for people who may see them.
+    if (action === 'refund_candidates') {
+      if (!canManage) { return fail('This needs the 🔒 "Advances: Manage" permission.', 403); }
+      var tq = await db.from('bank_transactions').select('id, date, posted_date, wave_business_id, account_id, third_party_payer').eq('id', body.bank_transaction_id || '').maybeSingle();
+      if (tq.error) { return readFail('the transfer', tq.error); }
+      if (!tq.data || tq.data.wave_business_id !== US_WAVE_BUSINESS_ID || isPrivateRow(tq.data, scope) || (!scope.all && !tq.data.account_id)) { return fail('Transfer not found.', 404); }
+      var since = String(tq.data.posted_date || tq.data.date || '').substring(0, 10);
+      var cq = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, account_id, transfer_group_id, review_status, pending').eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'in').neq('pending', true).neq('review_status', 'duplicate').is('matched_invoice_id', null).gte('date', since).order('date', { ascending: true }).limit(400);
+      if (cq.error) { return readFail('the money-in lines', cq.error); }
+      var cands = (cq.data || []).filter(function (x) { return !x.transfer_group_id && !isPrivateRow(x, scope) && (scope.all || !!x.account_id); });
+      var cIds = cands.map(function (x) { return x.id; }); var taken = {};
+      for (var ci = 0; ci < cIds.length; ci += 200) {
+        var eq2 = await db.from('party_money_entries').select('bank_transaction_id').eq('kind', 'refund').in('bank_transaction_id', cIds.slice(ci, ci + 200));
+        if (eq2.error && !/does not exist|schema cache|refund/i.test(String(eq2.error.message || ''))) { return readFail('the refunds already recorded', eq2.error); }
+        ((eq2 && eq2.data) || []).forEach(function (x) { taken[x.bank_transaction_id] = true; });
+        var ip = await db.from('accounting_invoice_payments').select('bank_transaction_id, voided').in('bank_transaction_id', cIds.slice(ci, ci + 200));
+        if (ip.error) { return readFail('the customer payments', ip.error); }
+        (ip.data || []).forEach(function (x) { if (x.voided !== true) { taken[x.bank_transaction_id] = true; } });
+      }
+      return NextResponse.json({ ok: true, lines: cands.filter(function (x) { return !taken[x.id]; }).slice(0, 60).map(function (x) { return { id: x.id, date: String(x.posted_date || x.date || '').substring(0, 10), who: x.merchant_name || x.name || '', amount: r2(x.amount_abs) }; }) });
+    }
     if (action === 'funds') {
       var gT = await assertPermission(db, userId, 'accounting.view_totals', req);
       var canTotals = !!(gT && gT.ok === true);
@@ -123,9 +146,10 @@ export async function POST(req) {
           var row = { id: t.id, date: t.date, reference: t.reference, identity: t.identity, status: status,
             bills: t.lifetime_rows.map(function (r) { return { bill_id: r.bill_id, vendor: r.vendor, bill_number: r.bill_number, paid_date: r.paid_date, release_number: r.release_number, portion: canTotals ? r.portion : null, bill_total: canTotals ? r.bill_total : null, category: r.source_bill.category }; }),
             fees: t.lifetime_fee_rows.map(function (r) { return { id: r.id, date: r.date, why: r.why, amount: canTotals ? r.amount : null }; }),
-            reserved_for: t.reserved_rows.map(function (r) { return { request_id: r.request_id, status: r.status, amount: canTotals ? r.amount : null }; }) };
+            reserved_for: t.reserved_rows.map(function (r) { return { request_id: r.request_id, status: r.status, amount: canTotals ? r.amount : null }; }),
+            refunds: (t.lifetime_refund_rows || []).map(function (r) { return { id: r.id, date: r.date, why: r.why, amount: canTotals ? r.amount : null }; }) };
           if (canTotals) {
-            row.sent = t.sent; row.to_bills = t.current.applied_to_bills; row.services_rendered = t.current.services_rendered; row.reserved = t.current.reserved; row.held = r2(t.sent - t.current.applied_to_bills - t.current.services_rendered);
+            row.sent = t.sent; row.to_bills = t.current.applied_to_bills; row.services_rendered = t.current.services_rendered; row.reserved = t.current.reserved; row.refunded = t.current.refunds || 0; row.held = r2(t.sent - row.refunded - t.current.applied_to_bills - t.current.services_rendered);
             // spendable only when the database says the transfer is confirmed; the database's number wins when it is there
             row.available = status === 'confirmed' ? (dbs ? r2(dbs.available) : r2(t.current.unused)) : 0;
             row.database_agrees = dbs ? Math.abs(r2(dbs.held) - row.held) < 0.005 && Math.abs(r2(dbs.reserved) - row.reserved) < 0.005 : null;
@@ -136,10 +160,10 @@ export async function POST(req) {
           paid_without_a_transfer_count: f.paid_without_a_transfer.lifetime_rows.length };
         if (canTotals && hiddenN === 0) {
           var spend = 0; var heldAll = 0; var unconf = 0; rows.forEach(function (r) { spend = r2(spend + r.available); heldAll = r2(heldAll + r.held); if (r.status !== 'confirmed') { unconf = r2(unconf + r.held - r.reserved); } });
-          o.totals = { funds_sent: f.current.funds_sent, to_bills: f.current.applied_to_bills, services_rendered: f.current.services_rendered, reserved: f.current.reserved, held: heldAll, available: spend, not_confirmed: unconf,
+          o.totals = { funds_sent: f.current.funds_sent, refunded: f.current.refunds || 0, to_bills: f.current.applied_to_bills, services_rendered: f.current.services_rendered, reserved: f.current.reserved, held: heldAll, available: spend, not_confirmed: unconf,
             paid_without_a_transfer: f.paid_without_a_transfer.lifetime_total, identity_to_confirm: f.identity_to_confirm.sent };
           o.words = currentFundsWords(f);
-          if (from || to) { o.period = { from: from, to: to, opening_held: f.period.opening_held, funds_sent: f.period.funds_sent, applied_to_bills: f.period.applied_to_bills, services_rendered: f.period.services_rendered, closing_held: f.period.closing_held, fee_deduction: f.period.fee_deduction, tax_professional_fees: f.period.tax_professional_fees, words: feeExplanation(f) }; }
+          if (from || to) { o.period = { from: from, to: to, opening_held: f.period.opening_held, funds_sent: f.period.funds_sent, refunds: f.period.refunds || 0, applied_to_bills: f.period.applied_to_bills, services_rendered: f.period.services_rendered, closing_held: f.period.closing_held, fee_deduction: f.period.fee_deduction, tax_professional_fees: f.period.tax_professional_fees, words: feeExplanation(f) }; }
         } else { o.totals = null; o.totals_hidden = canTotals ? 'includes a transfer from a private account' : 'needs the Bank & Financial Summary permission'; }
         out.push(o);
       }
@@ -171,6 +195,15 @@ export async function POST(req) {
     if (reason.length < 3) { return fail('Say why, in a few words.'); }
     if (body.entry_date && !isDate(body.entry_date)) { return fail('Pick the date.'); }
     if (action === 'fee_reverse' && !body.fee_id) { return fail('Pick the fee to reverse.'); }
+    if (action === 'refund') {
+      // v55.83-WF B2 — money back from the company, against ITS transfer, on the money-in line it arrived on (database: hub_party_refund)
+      var inq = await db.from('bank_transactions').select('id, wave_business_id, direction, account_id').eq('id', body.incoming_bank_transaction_id || '').maybeSingle();
+      if (inq.error) { return readFail('the money-in line', inq.error); }
+      if (!inq.data || isPrivateRow(inq.data, scope) || (!scope.all && !inq.data.account_id)) { return fail('Money-in line not found.', 404); }
+      var rr = await db.rpc('hub_party_refund', { p: { party: party.name, bank_transaction_id: line.id, incoming_bank_transaction_id: inq.data.id, amount: amount, entry_date: body.entry_date || null, reason: reason, actor: userId, request_id: rid, allow_closed: isSuper && body.allow_closed === true } });
+      if (rr.error) { return guardFail(rr, canTotalsW); }
+      return NextResponse.json(ack(action, rr.data));
+    }
     var rf = await db.rpc('hub_party_fee', { p: { action: action === 'fee_mark' ? 'mark' : 'reverse', party: party.name, bank_transaction_id: line.id, amount: amount, entry_date: body.entry_date || null, reason: reason,
       fee_id: action === 'fee_reverse' ? String(body.fee_id).replace(/^entry:/, '') : null, actor: userId, request_id: rid, allow_closed: isSuper && body.allow_closed === true } });
     if (rf.error && rf.error.code === '23505') { rf = await db.rpc('hub_party_fee', { p: { action: action === 'fee_mark' ? 'mark' : 'reverse', party: party.name, bank_transaction_id: line.id, amount: amount, entry_date: body.entry_date || null, reason: reason,
