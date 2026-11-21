@@ -801,12 +801,15 @@ export async function POST(req) {
         if (mkT.error) { await audit(db, userId, 'wire_package_mark_failed', 'wire_package', pkg.id, { error: mkT.error.message, bills: toMarkT }); }
         else { await audit(db, userId, 'bill_paid_via_set', 'wire_package', pkg.id, { paid_via: pkg.payee_name, bills: toMarkT }); }
       }
-      // v55.83-WV — what the AI read from the confirmation (if it was read) is kept with the sending, so anyone can see whether the
-      // date / reference were taken from the bank's file or typed over it
-      var rdT = body.confirmation_read && typeof body.confirmation_read === 'object' ? body.confirmation_read : null;
-      var rdKeep = rdT ? { reference: rdT.reference ? String(rdT.reference).substring(0, 80) : null, sent_date: isDate(rdT.sent_date) ? String(rdT.sent_date) : null, amount: Number.isFinite(Number(rdT.amount)) && rdT.amount != null ? r2(rdT.amount) : null } : null;
+      // v55.83-WV (Codex 09:09) — whether the date / reference are the ones the SERVER read from THIS proof file (its own audit row of
+      // read_confirmation for exactly this path); nothing the screen sends about a reading is trusted or stored
+      var rdKeep = null;
+      try {
+        var rq = await db.from('hub_audit_log').select('details, created_at').eq('action', 'wire_confirmation_read').eq('entity_id', String(pkg.id)).order('created_at', { ascending: true }).limit(200); // the LAST read of this path counts
+        ((rq && rq.data) || []).forEach(function (h) { var d = h.details || {}; if (d.path === pathT && d.read) { rdKeep = { reference: d.fill && d.fill.reference ? d.fill.reference : null, sent_date: d.read.sent_date || null, amount: d.read.amount != null ? d.read.amount : null, currency: d.read.currency || null }; } });
+      } catch (eRk) { rdKeep = null; }
       await audit(db, userId, 'wire_package_sent', 'wire_package', pkg.id, { total: P.live.total, sent_date: body.sent_date, bank_reference: refT, proof: pathT, wire_date: pkg.planned_send_date || null,
-        read_from_confirmation: rdKeep, date_as_read: rdKeep ? rdKeep.sent_date === String(body.sent_date) : null });
+        server_read: rdKeep, date_as_read: rdKeep && rdKeep.sent_date ? rdKeep.sent_date === String(body.sent_date) : null, reference_as_read: rdKeep && rdKeep.reference ? rdKeep.reference === refT : null });
       return NextResponse.json({ ok: true });
     }
 
@@ -876,6 +879,9 @@ export async function POST(req) {
       var rc = await readWireConfirmation(db, pathRc);
       if (rc.error) { return fail(rc.error, rc.status || 502); }
       var cmp = compareWireConfirmation(rc.read, { total: P.live.total, payee_name: pkg.payee_name }, businessToday());
+      // v55.83-WV (Codex 09:09) — what the SERVER read is kept (audit only; the wire itself is not touched), so "Mark as sent" can
+      // later record whether the sent date / reference are the ones read from THIS file — never what a screen says it read
+      await audit(db, userId, 'wire_confirmation_read', 'wire_package', pkg.id, { path: pathRc, read: rc.read, fill: cmp.fill, warnings: cmp.warnings });
       return NextResponse.json({ ok: true, read: rc.read, fill: cmp.fill, warnings: cmp.warnings });
     }
 

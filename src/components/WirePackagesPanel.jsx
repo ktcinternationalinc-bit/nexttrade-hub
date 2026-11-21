@@ -16,7 +16,7 @@ import { requestCopyModel, requestCopyHtml } from '../lib/wire-request-print'; /
 import { supabase } from '../lib/supabase';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WV — the signed-in person's token travels with every wire call
 import { todayET, fmtET } from '../lib/et-time';
-import { applyConfirmationAnswer } from '../lib/wire-confirmation';
+import { applyConfirmationAnswer, startConfirmationFile, confirmationSendProblem } from '../lib/wire-confirmation';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel';
@@ -63,7 +63,7 @@ var HIST_WORDS = {
   wire_check_overridden: '↷ overrode a check', wire_package_signoff_1: '✍ signed 1st', wire_package_signoff_2: '✍ signed 2nd (approved)',
   wire_package_sent: '📤 marked it sent', wire_package_attached: '🔗 attached the bank line', wire_package_rtm_proof: '📎 added RTM proof',
   bill_paid_via_set: '🏢 bills marked “paid through”', wire_package_cancelled: '✕ cancelled', wire_package_reversed: '↩ undid the wire', wire_package_mark_failed: '⚠ marking failed',
-  wire_recorded_after_the_fact: '🕘 recorded a wire sent before the Hub had wires', wire_sent_date_changed: '📅 corrected the sent date', wire_date_changed: '📅 changed the wire date' /* WV */, bank_line_filed_professional_fees: '🗂 bank line filed under professional fees', // v55.83-RZ
+  wire_recorded_after_the_fact: '🕘 recorded a wire sent before the Hub had wires', wire_sent_date_changed: '📅 corrected the sent date', wire_date_changed: '📅 changed the wire date', wire_confirmation_read: '🔎 bank confirmation read' /* WV */, bank_line_filed_professional_fees: '🗂 bank line filed under professional fees', // v55.83-RZ
 };
 // how to fix each blocking problem
 var FIX = {
@@ -511,14 +511,12 @@ export default function WirePackagesPanel(props) {
     if (left.length) { toast.error('Open and check every bill before you sign — ' + left.length + ' not checked yet (👁 Open & check, in the bills list below).'); return; }
     act({ action: 'signoff', id: det.package.id, note: note }, function (j) { return j.approved ? '✅ 2nd signature — APPROVED. It can be sent now.' : '✍ 1st signature recorded — now a DIFFERENT person signs.'; }).then(function () { setNote(''); }); }
   function sendIt() {
-    if (!sendF.ref || sendF.ref.trim().length < 3) { toast.error("Type the bank's wire reference / confirmation #."); return; }
-    if (!sendF.file) { toast.error("Attach the bank's wire confirmation (PDF or screenshot)."); return; }
-    if (!sendF.date) { toast.error('Pick the date the wire was sent.'); return; }
-    if (sendF.date > localToday()) { toast.error('That date is in the future — mark it sent on or after the day it goes.'); return; }
+    var probS = confirmationSendProblem(sendF, det.package.id, localToday()); // v55.83-WV (Codex 09:09) — one rule set, tested in the library
+    if (probS) { toast.error(probS); return; }
     setBusy(true);
     // v55.83-WV — the file read a moment ago is already uploaded: the same file is the proof (no second upload)
     (sendF.path && sendF.pkgId === det.package.id && sendF.path.indexOf('pv/wire-' + det.package.id + '-') === 0 ? Promise.resolve({ path: sendF.path, name: sendF.file.name }) : upload(sendF.file, det.package.id)).then(function (u) {
-      return act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date, bank_reference: sendF.ref, proof_path: u.path, proof_name: u.name, confirmation_read: sendF.read ? sendF.read.read : null }, '📤 Marked SENT. When the money-out shows in the bank feed, attach it here.');
+      return act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date, bank_reference: sendF.ref, proof_path: u.path, proof_name: u.name }, '📤 Marked SENT. When the money-out shows in the bank feed, attach it here.');
     }).catch(function (e) { toast.error((e && e.message) || 'Upload failed.'); setBusy(false); });
   }
   // v55.83-WV (Max 21 Nov: "it should be able to read the pdf or screenshot to update the reference ... and the sent on dates") — the
@@ -527,7 +525,8 @@ export default function WirePackagesPanel(props) {
   function pickConfirmation(file) {
     if (!file) { return; }
     var pkgId = det.package.id;
-    setSendF(function (f0) { return Object.assign({}, f0, { file: file, pkgId: pkgId, path: null, read: null, reading: true }); });
+    var defDate = sendDateFor(det.package);
+    setSendF(function (f0) { return startConfirmationFile(f0, file, pkgId, defDate); }); // v55.83-WV (Codex 09:09) — the previous file's filled values go
     upload(file, pkgId).then(function (u) {
       setSendF(function (f0) { return f0.file === file && f0.pkgId === pkgId ? Object.assign({}, f0, { path: u.path }) : f0; });
       return api({ action: 'read_confirmation', id: pkgId, proof_path: u.path });
@@ -889,9 +888,9 @@ export default function WirePackagesPanel(props) {
         {perms.send && sendF.read && sendF.read.error && <div className="mt-2 text-[12px] font-extrabold" style={{ color: '#b45309' }}>{'⚠ ' + sendF.read.error}</div>}
         {perms.send && sendF.read && sendF.read.read && <div className="mt-2 rounded-lg p-2 text-[12px]" style={{ background: (sendF.read.warnings || []).length ? '#fff7ed' : '#ecfdf5', border: '1px solid ' + ((sendF.read.warnings || []).length ? '#fdba74' : '#a7f3d0'), color: INK }}>
           <div className="font-extrabold mb-0.5">{'🔎 Read from the confirmation — check it before you press “Mark as sent”:'}</div>
-          <div>{['Reference ' + (sendF.read.read.reference || '—') + (sendF.read.read.transaction_number ? ' · Transaction ' + sendF.read.read.transaction_number : ''), 'Wire date ' + (sendF.read.read.sent_date || '—'), 'Amount ' + (sendF.read.read.amount != null ? '$' + fmt(sendF.read.read.amount) : '—'), 'To ' + (sendF.read.read.beneficiary || '—'), sendF.read.read.status ? 'Status ' + sendF.read.read.status : null].filter(Boolean).join(' · ')}</div>
+          <div>{['Reference ' + (sendF.read.read.reference || '—') + (sendF.read.read.transaction_number ? ' · Transaction ' + sendF.read.read.transaction_number : ''), 'Wire date ' + (sendF.read.read.sent_date || '—'), 'Amount ' + (sendF.read.read.amount != null ? (sendF.read.read.currency ? sendF.read.read.currency + ' ' + fmt(sendF.read.read.amount) : fmt(sendF.read.read.amount) + ' (currency not shown — unverified)') : '—'), 'To ' + (sendF.read.read.beneficiary || '—'), sendF.read.read.status ? 'Status ' + sendF.read.read.status : null].filter(Boolean).join(' · ')}</div>
           {(sendF.read.warnings || []).map(function (w, i) { return <div key={i} className="font-bold" style={{ color: '#9a3412' }}>{'⚠ ' + w}</div>; })}
-          {((sendF.typed && sendF.typed.date && sendF.read.fill && sendF.read.fill.sent_date && sendF.read.fill.sent_date !== sendF.date) || (sendF.typed && sendF.typed.ref && sendF.read.fill && sendF.read.fill.reference && sendF.read.fill.reference !== sendF.ref)) && <div className="mt-0.5" style={{ color: SUB }}>You typed your own value in a box, so it was kept. <button onClick={function () { setSendF(Object.assign({}, sendF, { date: sendF.read.fill.sent_date || sendF.date, ref: sendF.read.fill.reference || sendF.ref, typed: {} })); }} className="underline font-bold" style={{ color: '#1d4ed8' }}>Use what was read</button></div>}
+          {((sendF.typed && sendF.typed.date && sendF.read.fill && sendF.read.fill.sent_date && sendF.read.fill.sent_date !== sendF.date) || (sendF.typed && sendF.typed.ref && sendF.read.fill && sendF.read.fill.reference && sendF.read.fill.reference !== sendF.ref)) && <div className="mt-0.5" style={{ color: SUB }}>You typed your own value in a box, so it was kept. <button onClick={function () { setSendF(Object.assign({}, sendF, { date: sendF.read.fill.sent_date || sendF.date, ref: sendF.read.fill.reference || sendF.ref, typed: {}, filledFrom: sendF.file })); }} className="underline font-bold" style={{ color: '#1d4ed8' }}>Use what was read</button></div>}
         </div>}</div>;
     } else if (st === 'sent') {
       nextBox = <div><div className="mb-1" style={{ color: INK }}>{(P.sent.after_the_fact ? '🕘 Recorded after the fact — sent about ' : 'Sent ') + P.sent.date + ' (ref ' + P.sent.reference + '). The Hub looks for the $' + fmt(amountNow) + ' money-out in the bank feed by itself (every bank sync / statement import) — when exactly one wire-looking line fits, the bills become PAID automatically. You can always pick the line yourself below. A line up to $' + ((cands && cands.auto_fee_max) || 100) + ' more is accepted — the extra is ' + (P.payee_kind === 'vendor' ? 'booked with the bill it paid (that bill’s category — cost of goods by default).' : 'part of the ' + P.payee_name + ' line, filed under professional fees.')}</div>
@@ -1099,7 +1098,7 @@ export default function WirePackagesPanel(props) {
             if (h.action === 'wire_package_sent') { extra = 'ref ' + (d0.bank_reference || ''); }
             if (h.action === 'wire_sent_date_changed') { extra = (d0.from || '?') + ' → ' + d0.to + ' — “' + (d0.reason || '') + '”'; } // RZ
             if (h.action === 'wire_date_changed') { extra = (d0.from || 'none') + ' → ' + (d0.to || 'none') + (d0.reason ? ' — “' + d0.reason + '”' : ''); } // WV
-            if (h.action === 'wire_package_sent' && d0.read_from_confirmation) { extra += (d0.date_as_read === false && d0.read_from_confirmation.sent_date) ? ' · sent date typed over the one read (' + d0.read_from_confirmation.sent_date + ')' : (d0.date_as_read ? ' · sent date as read from the bank confirmation' : ' · bank confirmation read'); } // WV
+            if (h.action === 'wire_package_sent' && d0.server_read) { extra += (d0.date_as_read === false ? ' · sent date typed over the one read (' + d0.server_read.sent_date + ')' : (d0.date_as_read ? ' · sent date as read from the bank confirmation' : ' · bank confirmation read')) + (d0.reference_as_read === false ? ' · reference typed over the one read' : ''); } // WV
             if (h.action === 'wire_package_attached' && d0.matched) { extra = d0.matched + (d0.bank_fee ? ' · extra charge $' + fmt(d0.bank_fee) : ''); } // RZ
             return <div key={i} className="text-[12px]" style={{ color: INK }}>{d16(h.at) + ' · ' + h.by + ' · ' + (HIST_WORDS[h.action] || h.action) + (extra ? ' · ' + extra : '')}</div>;
           })}</div>}

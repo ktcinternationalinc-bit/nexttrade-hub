@@ -122,7 +122,9 @@ console.log('WV — the real wire date, editing it on past wires, reading the ba
   check('a PDF confirmation is read: reference (+ transaction number), wire date, amount, recipient', rd.ok && rd.read.reference === '00012345' && rd.read.transaction_number === '98765432100' && rd.read.sent_date === '2026-07-13' && rd.read.amount === 1000 && rd.read.beneficiary === 'ACME FREIGHT CORPORATION', rd);
   check('… the boxes to fill: reference keeps leading zeros and the transaction number; the sent date; NO warning (amount and payee match)', rd.fill.reference === '00012345 / txn 98765432100' && rd.fill.sent_date === '2026-07-13' && rd.warnings.length === 0, rd);
   check('… the file went to the AI as a PDF document block, from the private file (not from the request)', req1 && req1.body.messages[0].content[0].type === 'document' && req1.body.messages[0].content[0].source.media_type === 'application/pdf' && req1.body.messages[0].content[0].source.data.length > 100 && /Wire date/.test(req1.body.messages[0].content[1].text), req1 && req1.body.messages[0].content[0].type);
-  check('… reading writes NOTHING: the wire, its files and its status are unchanged', JSON.stringify(pk(id)) === before && db.t.wire_package_files.length === filesBefore && pk(id).status === 'draft', null);
+  check('… reading never touches the wire: the wire, its files and its status are unchanged', JSON.stringify(pk(id)) === before && db.t.wire_package_files.length === filesBefore && pk(id).status === 'draft', null);
+  var ar = auditOf('wire_confirmation_read', id);
+  check('… what the SERVER read is kept in the audit (path + read + what was filled) — the only write', ar.length === 1 && ar[0].details.path === pathPdf && ar[0].details.read.reference === '00012345' && ar[0].details.fill.sent_date === '2026-07-13', ar);
   var pathPng = 'pv/wire-' + id + '-2-screenshot.png';
   files['bills-private/' + pathPng] = fakeFile('', 400); // the bucket gave no type: the file name decides
   aiAnswer = aiText({ is_wire_confirmation: true, reference: '00012345', status: 'Pending', sent_date: dayAdd(today, 2), amount: '1,250.00', currency: 'USD', beneficiary: 'Someone Else Ltd' });
@@ -149,10 +151,12 @@ console.log('WV — the real wire date, editing it on past wires, reading the ba
   var lateFut = await call('u1', { action: 'mark_sent', id: id, sent_date: '2026-11-22', bank_reference: '00012345', proof_path: pathPdf, proof_name: 'c.pdf' });
   unfreeze();
   check('late evening (21 Nov 9:30 pm Eastern = 22 Nov UTC): "22 Nov" is refused as the future — the server uses the SAME Eastern day as the screen', !lateFut.ok && /in the future/.test(lateFut.error) && pk(id).status === 'draft', lateFut);
-  var sent = await call('u1', { action: 'mark_sent', id: id, sent_date: '2026-07-13', bank_reference: '00012345 / txn 98765432100', proof_path: pathPdf, proof_name: 'c.pdf', confirmation_read: { reference: '00012345', sent_date: '2026-07-13', amount: 1000 } });
+  aiAnswer = aiText({ is_wire_confirmation: true, reference: '00012345', transaction_number: '98765432100', status: 'Sent', sent_date: '2026-07-13', amount: 1000, currency: 'USD', beneficiary: 'ACME FREIGHT CORPORATION' });
+  var reread = await call('u1', { action: 'read_confirmation', id: id, proof_path: pathPdf }); // the last read of this file is a good one again
+  var sent = await call('u1', { action: 'mark_sent', id: id, sent_date: '2026-07-13', bank_reference: '00012345 / txn 98765432100', proof_path: pathPdf, proof_name: 'c.pdf', confirmation_read: { reference: 'FORGED', sent_date: '2026-07-13', amount: 1 } });
   var as = auditOf('wire_package_sent', id);
   check('marked SENT with the date read from the confirmation; the same uploaded file is the proof', sent.ok && pk(id).status === 'sent' && pk(id).sent_date === '2026-07-13' && db.t.wire_package_files.filter(function (f) { return f.package_id === id && f.path === pathPdf; }).length === 1, sent);
-  check('… the sending is audited with what was read, the wire date, and that the sent date is the one read', as.length === 1 && as[0].details.read_from_confirmation && as[0].details.read_from_confirmation.reference === '00012345' && as[0].details.date_as_read === true && as[0].details.wire_date === '2026-07-13', as);
+  check('… the sending is audited with what the SERVER read from this exact file (what the screen sent, "FORGED", is ignored): date and reference as read, the wire date', reread.ok && as.length === 1 && as[0].details.server_read && as[0].details.server_read.reference === '00012345 / txn 98765432100' && as[0].details.server_read.sent_date === '2026-07-13' && as[0].details.date_as_read === true && as[0].details.reference_as_read === true && as[0].details.wire_date === '2026-07-13' && JSON.stringify(as[0].details).indexOf('FORGED') < 0 && as[0].details.read_from_confirmation === undefined, as);
   var lst2 = await call('u1', { action: 'list' });
   var row2 = (lst2.packages || []).filter(function (p) { return p.id === id; })[0];
   check('the list now shows the SENT date (per the confirmation) next to the created date', row2 && row2.sent_date === '2026-07-13' && !!row2.created_at, row2);
@@ -210,6 +214,57 @@ console.log('WV — the real wire date, editing it on past wires, reading the ba
   check('screen: another wire opened since → the old answer changes nothing', stW.ref === '' && stW.pkgId === 'P2', stW);
   var stE = WC.applyConfirmationAnswer(st0, fileA, 'P1', { ok: false, error: 'AI off' });
   check('screen: a failed read leaves the boxes for typing and says why', stE.ref === '' && stE.date === '2026-11-21' && stE.read.error === 'AI off' && stE.reading === false, stE);
+
+  // ── unknown currency (Codex 09:09 minor): the amount is called unverified, never an unqualified match
+  var cu1 = WC.compareWireConfirmation({ reference: 'R-1', sent_date: '2026-07-13', amount: 1000, currency: null }, { total: 1000, payee_name: 'Acme Freight' }, '2026-11-21');
+  var cu2 = WC.compareWireConfirmation({ reference: 'R-1', sent_date: '2026-07-13', amount: 900, currency: null }, { total: 1000, payee_name: 'Acme Freight' }, '2026-11-21');
+  var cu3 = WC.compareWireConfirmation({ reference: 'R-1', sent_date: '2026-07-13', amount: 1000, currency: 'USD' }, { total: 1000, payee_name: 'Acme Freight' }, '2026-11-21');
+  check('no currency read: same number → "unverified … only if it is in US dollars"; different number → also said; USD + same number → no warning', cu1.warnings.length === 1 && /unverified: it matches this \$1000\.00 wire only if it is in US dollars/.test(cu1.warnings[0]) && /also a different number/.test(cu2.warnings.join(' ')) && cu3.warnings.length === 0, [cu1, cu2, cu3]);
+
+  // ── Codex 09:09 P2 — the ACTUAL pickConfirmation + sendIt from the screen file, run on a stand-in screen state
+  var panelSrc = fs.readFileSync(path.join(root, 'src/components/WirePackagesPanel.jsx'), 'utf8').replace(/\r\n/g, '\n');
+  function grab(name) { var a0 = panelSrc.indexOf('  function ' + name + '('); var b0 = panelSrc.indexOf('\n  }\n', a0); if (a0 < 0 || b0 < 0) { throw new Error('not found: ' + name); } return panelSrc.substring(a0, b0 + 4); }
+  function screen(answers, pkgId) {
+    var env = { sendF: { pkgId: pkgId || 'PKG1', date: '2026-11-21', ref: '', file: null, path: null, read: null, reading: false, typed: {} }, toasts: [], acts: [], pending: {} };
+    env.det = { package: { id: pkgId || 'PKG1', planned_send_date: null } };
+    env.setSendF = function (v) { env.sendF = typeof v === 'function' ? v(env.sendF) : v; };
+    env.setBusy = function () {}; env.toast = { error: function (m) { env.toasts.push(m); } };
+    env.localToday = function () { return '2026-11-21'; }; env.sendDateFor = function () { return '2026-11-21'; };
+    env.upload = function (file, pk0) { return Promise.resolve({ path: 'pv/wire-' + pk0 + '-' + file.name, name: file.name }); };
+    env.api = function (p) { var key = p.proof_path.split('-').pop(); var a = answers[key]; if (a && a.defer) { return new Promise(function (res) { env.pending[key] = function () { res(a.answer); }; }); } return Promise.resolve(a || { ok: false, error: 'unreadable' }); };
+    env.act = function (p) { env.acts.push(p); return Promise.resolve({ ok: true }); };
+    env.applyConfirmationAnswer = WC.applyConfirmationAnswer; env.startConfirmationFile = WC.startConfirmationFile; env.confirmationSendProblem = WC.confirmationSendProblem;
+    var fns = new Function('env', 'with (env) { ' + grab('pickConfirmation') + '\n' + grab('sendIt') + '\n return { pickConfirmation: pickConfirmation, sendIt: sendIt }; }')(env);
+    env.pick = fns.pickConfirmation; env.send = fns.sendIt; return env;
+  }
+  function tick() { return new Promise(function (r) { setTimeout(r, 5); }); }
+  var okA = { ok: true, read: { reference: 'OLD-REFERENCE' }, fill: { reference: 'OLD-REFERENCE', sent_date: '2026-10-01' }, warnings: [] };
+  var okB = { ok: true, read: { reference: 'NEW-REF' }, fill: { reference: 'NEW-REF', sent_date: '2026-10-05' }, warnings: [] };
+  var fA = { name: 'old.pdf' }; var fB = { name: 'new.pdf' };
+  var e1 = screen({ 'old.pdf': okA, 'new.pdf': { ok: false, error: 'unreadable' } });
+  e1.pick(fA); await tick();
+  check('handler: file A read → its reference and date are filled', e1.sendF.ref === 'OLD-REFERENCE' && e1.sendF.date === '2026-10-01', e1.sendF);
+  e1.pick(fB); await tick(); e1.send(); await tick();
+  check('Codex scenario: A read, B picked and UNREADABLE, send pressed → refused; A\'s reference is gone, the date is back to the default, NOTHING sent', e1.acts.length === 0 && e1.sendF.ref === '' && e1.sendF.date === '2026-11-21' && /reference/.test(e1.toasts.join(' ')), [e1.sendF, e1.toasts, e1.acts]);
+  e1.setSendF(Object.assign({}, e1.sendF, { ref: 'TYPED-B', typed: { ref: true } })); e1.send(); await tick();
+  check('… manual entry still works: type the reference for B and send → mark_sent with B\'s file and the typed reference, never A\'s values', e1.acts.length === 1 && e1.acts[0].bank_reference === 'TYPED-B' && e1.acts[0].sent_date === '2026-11-21' && e1.acts[0].proof_path === 'pv/wire-PKG1-new.pdf' && e1.acts[0].confirmation_read === undefined, e1.acts);
+  var e2 = screen({ 'old.pdf': okA, 'new.pdf': { ok: true, read: {}, fill: { reference: 'NEW-REF' }, warnings: ['No sent date could be read — pick it yourself.'] } });
+  e2.pick(fA); await tick(); e2.pick(fB); await tick();
+  check('partial B (reference only): B\'s reference, the date back to the default — A\'s date never stays', e2.sendF.ref === 'NEW-REF' && e2.sendF.date === '2026-11-21', e2.sendF);
+  var e3 = screen({ 'old.pdf': okA, 'new.pdf': { ok: false, error: 'unreadable' } });
+  e3.setSendF(Object.assign({}, e3.sendF, { ref: 'MY-REF', date: '2026-09-30', typed: { ref: true, date: true } }));
+  e3.pick(fA); await tick(); e3.pick(fB); await tick(); e3.send(); await tick();
+  check('values the person TYPED survive replacing the file (and are sent with B)', e3.sendF.ref === 'MY-REF' && e3.sendF.date === '2026-09-30' && e3.acts.length === 1 && e3.acts[0].bank_reference === 'MY-REF' && e3.acts[0].proof_path === 'pv/wire-PKG1-new.pdf', [e3.sendF, e3.acts]);
+  var e4 = screen({ 'old.pdf': okA, 'new.pdf': okB });
+  e4.pick(fA); await tick(); e4.pick(fB); await tick(); e4.send(); await tick();
+  check('a successful B replaces A: B\'s reference and date are sent with B\'s file', e4.acts.length === 1 && e4.acts[0].bank_reference === 'NEW-REF' && e4.acts[0].sent_date === '2026-10-05' && e4.acts[0].proof_path === 'pv/wire-PKG1-new.pdf', e4.acts);
+  var e5 = screen({ 'old.pdf': { defer: true, answer: okA }, 'new.pdf': okB });
+  e5.pick(fA); await tick(); e5.pick(fB); await tick(); e5.pending['old.pdf'](); await tick();
+  check('a DELAYED answer for A arriving after B was read changes nothing', e5.sendF.ref === 'NEW-REF' && e5.sendF.date === '2026-10-05' && e5.sendF.file === fB, e5.sendF);
+  var e6 = screen({ 'old.pdf': { defer: true, answer: okA } });
+  e6.pick(fA); await tick(); e6.setSendF(Object.assign({}, e6.sendF, { ref: 'TYPED', typed: { ref: true } })); e6.send(); await tick();
+  check('send pressed while the file is still being read → "still reading", nothing sent', e6.acts.length === 0 && /Still reading/.test(e6.toasts.join(' ')), [e6.toasts, e6.acts]);
+  check('library guard: a box filled from an EARLIER file can never go with a later one', /earlier file/.test(WC.confirmationSendProblem({ file: fB, pkgId: 'P', ref: 'R-1', date: '2026-10-01', filledFrom: fA }, 'P', '2026-11-21') || ''), null);
 
   // ── the screen code (static pins: what the in-memory route cannot see)
   var panel = fs.readFileSync(path.join(root, 'src/components/WirePackagesPanel.jsx'), 'utf8');

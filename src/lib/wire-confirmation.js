@@ -78,6 +78,7 @@ export function compareWireConfirmation(read, wire, today) {
   else { fill.sent_date = r.sent_date; }
   var total = Math.round((Number(w.total) || 0) * 100) / 100;
   if (r.currency && r.currency !== 'USD') { warnings.push('The confirmation is in ' + r.currency + ', not USD — its amount cannot be compared with this wire. Check it by hand.'); }
+  else if (!r.currency && r.amount != null) { warnings.push('No currency could be read — the amount (' + r.amount.toFixed(2) + ') is unverified: it matches this $' + total.toFixed(2) + ' wire only if it is in US dollars. Check it.' + (Math.abs(r.amount - total) > 0.005 ? ' It is also a different number from this wire.' : '')); } // v55.83-WV (Codex 09:09)
   else if (r.amount == null) { warnings.push('No amount could be read — check the confirmation shows $' + total.toFixed(2) + '.'); }
   else if (Math.abs(r.amount - total) > 0.005) { warnings.push('The confirmation shows $' + r.amount.toFixed(2) + ' but this wire is $' + total.toFixed(2) + ' — check it is the right wire before marking it sent.'); }
   if (r.beneficiary && w.payee_name) {
@@ -89,8 +90,9 @@ export function compareWireConfirmation(read, wire, today) {
 }
 
 // v55.83-WV (Codex 21 Nov) — how the screen's "send" boxes take an answer from the reader. state = { file, pkgId, path, date, ref,
-// read, reading, typed: { date, ref } }; file / pkgId = what the answer was asked for. A stale answer (another file picked since,
-// or another wire opened) changes NOTHING; a box the person typed in themselves is never overwritten.
+// read, reading, typed: { date, ref }, filledFrom }; file / pkgId = what the answer was asked for. A stale answer (another file
+// picked since, or another wire opened) changes NOTHING; a box the person typed in themselves is never overwritten. filledFrom = the
+// file whose reading filled a box (so a box filled from an EARLIER file can never be sent with a later one).
 export function applyConfirmationAnswer(state, file, pkgId, answer) {
   var s = state || {};
   if (s.file !== file || String(s.pkgId || '') !== String(pkgId || '')) { return s; }
@@ -98,7 +100,29 @@ export function applyConfirmationAnswer(state, file, pkgId, answer) {
   if (!a.ok) { return Object.assign({}, s, { reading: false, read: { error: a.error || 'The confirmation could not be read — type the reference and pick the date yourself.' } }); }
   var nx = Object.assign({}, s, { reading: false, read: a });
   var typed = s.typed || {};
-  if (a.fill && a.fill.reference && !typed.ref) { nx.ref = a.fill.reference; }
-  if (a.fill && a.fill.sent_date && !typed.date) { nx.date = a.fill.sent_date; }
+  if (a.fill && a.fill.reference && !typed.ref) { nx.ref = a.fill.reference; nx.filledFrom = file; }
+  if (a.fill && a.fill.sent_date && !typed.date) { nx.date = a.fill.sent_date; nx.filledFrom = file; }
   return nx;
+}
+
+// v55.83-WV (Codex 09:09 P2) — a NEW file is picked: whatever the PREVIOUS file filled in is wiped (the reference emptied, the date
+// back to the wire's own default), so a replacement that cannot be read never leaves the old file's values ready to send. Values the
+// person typed themselves stay. Reading starts for the new file.
+export function startConfirmationFile(state, file, pkgId, defaultDate) {
+  var s = state || {}; var typed = s.typed || {};
+  return Object.assign({}, s, { file: file, pkgId: pkgId, path: null, read: null, reading: true, filledFrom: null,
+    ref: typed.ref ? s.ref : '', date: typed.date ? s.date : (defaultDate || '') });
+}
+
+// v55.83-WV (Codex 09:09 P2) — what stops "Mark as sent" (null = it may go). today = the Eastern business day.
+export function confirmationSendProblem(state, pkgId, today) {
+  var s = state || {};
+  if (!s.file) { return "Attach the bank's wire confirmation (PDF or screenshot)."; }
+  if (String(s.pkgId || '') !== String(pkgId || '')) { return 'This confirmation was attached to another wire — attach it again here.'; }
+  if (s.reading) { return 'Still reading the confirmation — wait a moment.'; }
+  if (s.filledFrom && s.filledFrom !== s.file) { return 'The reference / date came from an earlier file — check them against this file.'; }
+  if (!s.ref || String(s.ref).trim().length < 3) { return "Type the bank's wire reference / confirmation #."; }
+  if (!s.date) { return 'Pick the date the wire was sent.'; }
+  if (today && s.date > today) { return 'That date is in the future — mark it sent on or after the day it goes.'; }
+  return null;
 }
