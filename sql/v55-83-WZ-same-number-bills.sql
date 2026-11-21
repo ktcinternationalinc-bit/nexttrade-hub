@@ -27,7 +27,8 @@ BEGIN
   IF TG_OP = 'UPDATE' AND (OLD.record_status IS NULL OR OLD.record_status = 'active')
      AND k IS NOT DISTINCT FROM public.hub_bill_exact_key(OLD.vendor_name, OLD.bill_number, OLD.bill_date, OLD.total_amount)
      AND nk IS NOT DISTINCT FROM public.hub_bill_number_key(OLD.vendor_name, OLD.bill_number)
-     AND NEW.wave_business_id IS NOT DISTINCT FROM OLD.wave_business_id THEN
+     AND NEW.wave_business_id IS NOT DISTINCT FROM OLD.wave_business_id
+     AND coalesce(OLD.bill_type, '') NOT ILIKE 'credit%' THEN
     RETURN NEW;
   END IF;
   IF k IS NOT NULL THEN

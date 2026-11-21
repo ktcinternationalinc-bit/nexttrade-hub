@@ -936,7 +936,10 @@ export async function POST(req) {
       // the price check runs NOW (with the type picked here); a flagged bill is validated only with a written resolution
       var vResolution = String(body.price_resolution || '').trim();
       if (vType !== vb2.data.bill_type) {
-        await db.from('vendor_bills').update({ bill_type: vType, bill_type_source: 'manual' }).eq('id', body.id);
+        // v55.83-WZ (Codex 10:52) — the type change is checked by the database (a credit turned into a payable bill can be a second
+        // copy of a bill): a refusal stops here with the duplicate message (catch below) and nothing is audited as saved
+        var vTU = await db.from('vendor_bills').update({ bill_type: vType, bill_type_source: 'manual' }).eq('id', body.id).select('id').maybeSingle();
+        if (vTU.error && /HUB_EXACT_DUPLICATE|HUB_GUARD/.test(vTU.error.message || '')) { throw new Error(vTU.error.message); }
         await audit(db, userId, 'bill_validation_progress_saved', 'vendor_bill', body.id, { bill_type: { from: vb2.data.bill_type || null, to: vType } }); // review #15
       }
       var vPC = await runPriceCheck(db, body.id, null, { actorId: userId });
@@ -1161,6 +1164,7 @@ export async function POST(req) {
         delete vpPatch.validation_draft; vpWarn = 'type and direction saved; the ticks and notes are kept only after sql/v55-83-RU-validation-progress.sql is run';
         vpUp = Object.keys(vpPatch).length ? await db.from('vendor_bills').update(vpPatch).eq('id', body.id).select('id').maybeSingle() : { data: { id: body.id } };
       }
+      if (vpUp.error && /HUB_EXACT_DUPLICATE/.test(vpUp.error.message || '')) { throw new Error(vpUp.error.message); } // v55.83-WZ — plain 409 (catch below), nothing saved
       if (vpUp.error) { return NextResponse.json({ error: vpUp.error.message }, { status: 500 }); }
       if (Object.keys(vpChanged).length) {
         await audit(db, userId, 'bill_validation_progress_saved', 'vendor_bill', body.id, vpChanged);
@@ -2049,7 +2053,7 @@ export async function POST(req) {
     return NextResponse.json({ error: 'Unknown action.' }, { status: 400 });
   } catch (e) {
     // v55.83-UQ — the database refused the exact same bill (two people saving it at the same moment): a plain 409, not a server error
-    if (/HUB_EXACT_DUPLICATE/.test(String((e && e.message) || ''))) { return NextResponse.json({ error: exactDupMessage(e.message).replace('It was NOT added again.', 'It was NOT saved.'), duplicate: true, duplicate_level: 'exact' }, { status: 409 }); }
+    if (/HUB_EXACT_DUPLICATE/.test(String((e && e.message) || ''))) { return NextResponse.json({ error: exactDupMessage(e.message).replace('It was NOT added again', 'It was NOT saved'), duplicate: true, duplicate_level: 'exact' }, { status: 409 }); }
     // v55.83-US — a database guard refused it (payment over what is left / void while paid): a plain 409 with its own words
     if (/HUB_GUARD/.test(String((e && e.message) || ''))) { return NextResponse.json({ error: String(e.message).replace(/^[sS]*HUB_GUARD:s*/, '') + ' Nothing was changed.' }, { status: 409 }); }
     return NextResponse.json({ error: (e && e.message) || 'Bills request failed.' }, { status: 500 });
