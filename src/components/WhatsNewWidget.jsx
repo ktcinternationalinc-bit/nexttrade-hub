@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WZ',
+    date: '2026-11-21',
+    title: 'No duplicate bills',
+    items: [
+      { text: '**A bill can no longer be entered twice.** A second bill with the same vendor and the same bill number is refused when it is saved, whatever its date or amount, and the message names the bill that is already there. This works for typed bills, imported PDFs and e-mails, and repeating bills. (Needs a one-time database step.)' },
+      { text: 'The vendor name is matched the forgiving way (“NexPac Corp.” is “NEXPAC CORPORATION”), and so is the number (dashes and spaces ignored). The same number from a different vendor is still allowed.' },
+      { text: '**Wires:** a disputed bill, or a bill that has another copy from the same vendor, now blocks the wire and can no longer be overridden. An override given earlier no longer counts. Resolve the dispute, or void the extra copy, first.' },
+      { text: '**Bills → Duplicates to resolve:** lists the bills that were entered twice before this rule. Click “Keep this one” on the copy to keep; the others are voided, never deleted. A copy with money on it or on a wire is not voided, and the reason is shown.' },
+      { superAdminOnly: true, text: 'Technical: sql/v55-83-WZ-same-number-bills.sql extends hub_bill_exact_guard with hub_bill_number_key (vendor + number, same business, active, not a credit document), still raising HUB_EXACT_DUPLICATE; repair of existing pairs stays possible. wire-audit.js: BILL_DISPUTED and the same-vendor DUP_* codes leave OVERRIDABLE. New route /api/accounting/bill-duplicates (read only) and DuplicateBillsPanel using the Bills void_bill action.' }
+    ]
+  },
+  {
     version: 'v55.83-WV',
     date: '2026-11-21',
     title: 'Wires: the real date of the wire, and the bank confirmation is read for you',

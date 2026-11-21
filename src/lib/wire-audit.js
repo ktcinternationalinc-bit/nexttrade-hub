@@ -316,10 +316,14 @@ export var PKG_STATUS_LABEL = {
 // An override is for ONE check on ONE bill of THIS exact wire (fingerprint):
 // change the wire and it no longer counts.
 // ═══════════════════════════════════════════════════════════════════════════
-export var OVERRIDABLE = { BILL_NUMBER_MISSING: 1, BILL_DATE_MISSING: 1, DIRECTION_MISSING: 1, REFERENCE_MISSING: 1, RELEASE_MISSING: 1, RELEASE_UNKNOWN: 1, DUP_RELEASE: 1, DUP_RELEASE_IN_WIRE: 1, DUP_REF: 1, DUP_REF_IN_WIRE: 1, DUP_OTHER_REF: 1, DUP_OTHER_REF_IN_WIRE: 1, BILL_DISPUTED: 1 };
+export var OVERRIDABLE = { BILL_NUMBER_MISSING: 1, BILL_DATE_MISSING: 1, DIRECTION_MISSING: 1, REFERENCE_MISSING: 1, RELEASE_MISSING: 1, RELEASE_UNKNOWN: 1, DUP_RELEASE: 1, DUP_RELEASE_IN_WIRE: 1 };
+// v55.83-WZ (Max, 21 Nov: "i don't want any duplicate bills. it needs to be blocked from the get go") — a disputed bill and a bill that
+// has another active copy from the SAME vendor are no longer overridable; an override saved before this change does not count for them
+// (applyOverrides only ever applies to codes in OVERRIDABLE). Different vendors with an equal number stay a warning, as before.
 export var NOT_OVERRIDABLE_WHY = {
   BILL_VOID: 'a void bill cannot be paid', BILL_NOT_VALIDATED: 'a bill must be validated before it can be wired', OVERPAID: 'the books would be paid more than the bill', PAID_BEFORE: 'the bill is already paid in full',
   IN_OTHER_PACKAGE: 'the bill is on another wire', PAYEE_MISMATCH: 'the bill belongs to another company / vendor', FEE_NOT_ALLOWED: 'only RTM wires carry a fee',
+  BILL_DISPUTED: 'a disputed bill is resolved first, then paid', DUP_REF: 'another copy of this bill from the same vendor is in the Hub — void the extra copy first', DUP_REF_IN_WIRE: 'the same bill is on this wire twice', DUP_OTHER_REF: 'another bill from the same vendor has the same reference and date — void the extra copy first', DUP_OTHER_REF_IN_WIRE: 'the same bill is on this wire twice',
   NO_BILLS: 'a wire needs bills', NO_PAYEE: 'pick who the wire goes to', NOT_OUT: 'not money out',
 };
 export function checkKey(c) { return String(c.code) + '|' + String(c.bill_id || '') + '|' + String(c.text || ''); }

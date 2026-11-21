@@ -22,6 +22,7 @@ import BillDocViewer, { BillDocToggle } from './BillDocViewer'; // v55.83-SN —
 import WireQuickView from './WireQuickView'; // v55.83-SU — open the wire / request that paid a bill
 import PayablesPanel from './PayablesPanel'; // v55.83-SJ
 import BillReportsPanel from './BillReportsPanel';
+import DuplicateBillsPanel from './DuplicateBillsPanel'; // v55.83-WZ — bills with the same vendor and number, to resolve
 import VendorStatementPanel from './VendorStatementPanel'; // v55.83-WT — check a vendor's statement (read-only)
 import BillPeek from './BillPeek'; // v55.83-WT — the bill pop-up, opened from the statement check
 import { statementMoney } from '../lib/vendor-statement'; // v55.83-WT
@@ -519,6 +520,7 @@ export default function BillsTab(props) {
       <button onClick={function () { setPanel(panel === 'repeating' ? null : 'repeating'); }} title="Bills that come back every week / month / 3 months / year — set up once, the Hub makes each bill on its date" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'repeating' ? { background: '#9a3412', color: '#ffffff' } : { background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74' }}>🔁 Repeating bills</button>{/* v55.83-TV */}
       <button onClick={function () { setPanel(panel === 'nextrade' ? null : 'nextrade'); }} title="KTC bills made from Nextrade expenses — owed to Nextrade" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'nextrade' ? { background: '#1e3a8a', color: '#ffffff' } : { background: '#eff6ff', color: '#1e3a8a', border: '1px solid #93c5fd' }}>🟦 Nextrade bills</button>{/* v55.83-TW */}
       <button onClick={function () { setPanel(panel === 'reports' ? null : 'reports'); }} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'reports' ? { background: '#14532d', color: '#ffffff' } : { background: '#f0fdf4', color: '#14532d', border: '1px solid #86efac' }}>📊 Reports</button>
+      {canView && <button onClick={function () { setPanel(panel === 'duplicates' ? null : 'duplicates'); }} title="Bills with the same vendor and bill number — keep one, void the others" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: panel === 'duplicates' ? '#991b1b' : '#fef2f2', color: panel === 'duplicates' ? '#ffffff' : '#991b1b', border: '1px solid #fca5a5' }}>Duplicates to resolve</button>}
       {canView && <button onClick={function () { setPanel(panel === 'statement' ? null : 'statement'); }} title="Import a vendor's statement (their list of open bills) and check every line against our bills, payments and wires — read-only, nothing is changed" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'statement' ? { background: '#0f766e', color: '#ffffff' } : { background: '#f0fdfa', color: '#134e4a', border: '1px solid #5eead4' }}>🧾 Check a vendor statement</button>}{/* v55.83-WT */}
       {canManage && <button onClick={function () { if (fileInputRef.current) { fileInputRef.current.click(); } }} disabled={busy || reading}
         className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#7c3aed', color: '#ffffff' }}>{reading ? 'Reading…' : '📷 Import bill(s)'}</button>}
@@ -567,6 +569,7 @@ export default function BillsTab(props) {
     {panel === 'reports' && <PayablesPanel bills={(data && data.bills) || []} userId={userProfile && userProfile.id} />}
     {panel === 'reports' && <BillReportsPanel api={api} onClose={function () { setPanel(null); }} />}
     {/* v55.83-WT — read-only: it is given the list already loaded here and opens bills / wires with the read-only viewers */}
+    {panel === 'duplicates' && canView && <DuplicateBillsPanel userProfile={userProfile} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}
     {panel === 'statement' && canView && <VendorStatementPanel bills={bills} payments={payments} enrichWarnings={(data && data.enrich_warnings) || []} userProfile={userProfile} onClose={function () { setPanel(null); }}
       onOpenBill={function (f) { setPeekBill(f); }} onOpenWire={function (w) { setWireQuick(w); }} />}
 
