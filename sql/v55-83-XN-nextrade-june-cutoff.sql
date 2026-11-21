@@ -204,6 +204,15 @@ BEGIN
       PERFORM pg_advisory_xact_lock(hashtextextended('hub-company-line:' || r.line_id::text, 0));
       PERFORM 1 FROM public.company_bill_links WHERE id = r.link_id AND status = 'void' AND cutoff_voided IS TRUE FOR UPDATE;
       IF NOT FOUND THEN CONTINUE; END IF;
+      -- only a line that STILL makes a KTC bill gets its bill back: a line moved meanwhile to a category KTC does not pay (or turned
+      -- into money in) keeps its bill void, and it is named back. The same rule as hub_company_categorize.
+      IF NOT EXISTS (SELECT 1 FROM public.bank_transactions b JOIN public.company_categories k ON k.company_id = v_company AND k.key = b.company_category
+                      WHERE b.id = r.line_id AND b.direction = 'out' AND k.active IS TRUE
+                        AND coalesce(k.makes_ktc_bill, k.kind IN ('expense', 'cogs', 'other_expense') AND k.is_payroll IS NOT TRUE)) THEN
+        UPDATE public.company_bill_links SET cutoff_voided = false, updated_by = v_actor, updated_at = now() WHERE id = r.link_id;
+        v_kept := v_kept || jsonb_build_object('bill_id', r.bill_id, 'bill_number', (SELECT bill_number FROM public.vendor_bills WHERE id = r.bill_id), 'why', 'its line is no longer in a category KTC pays');
+        CONTINUE;
+      END IF;
       SELECT total_amount INTO v_amt FROM public.vendor_bills WHERE id = r.bill_id FOR UPDATE;
       UPDATE public.vendor_bills SET record_status = 'active', updated_at = now() WHERE id = r.bill_id AND record_status = 'void';
       UPDATE public.company_bill_links SET status = 'active', cutoff_voided = false, updated_by = v_actor, updated_at = now() WHERE id = r.link_id;

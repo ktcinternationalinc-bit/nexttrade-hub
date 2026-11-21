@@ -32,7 +32,7 @@ for (var g of ['v55-83-XN-nextrade-june-cutoff.sql', 'v55-83-XN-nextrade-june-cu
   check('script ' + g + ' runs (twice: safe to re-run)', !e2, e2);
 }
 var xnDef = (await one("select pg_get_functiondef('public.hub_company_categorize(jsonb)'::regprocedure) d")).d;
-var udL = udDef.split('\n'); var xnL = xnDef.split('\n'); var extra = xnL.filter(function (l) { return udL.indexOf(l) < 0; }); var lost = udL.filter(function (l) { return xnL.indexOf(l) < 0; });
+var udL = udDef.replace(/\r/g, '').split('\n'); var xnL = xnDef.replace(/\r/g, '').split('\n'); var extra = xnL.filter(function (l) { return udL.indexOf(l) < 0; }); var lost = udL.filter(function (l) { return xnL.indexOf(l) < 0; });
 check('hub_company_categorize is the UD function with ONLY the XN change (line date read + the cut-off check)', lost.length === 1 && /transfer_group_id INTO v_line/.test(lost[0]) && extra.length === 4 && /transfer_group_id, date INTO v_line/.test(extra.join('\n')) && /company_ktc_bill_cutoff/.test(extra.join('\n')), { lost: lost, extra: extra });
 
 await db.exec("insert into plaid_accounts values ('NCHK','Nextrade checking','1795','depository','NEXTRADE_BOOKS',false)");
@@ -89,7 +89,9 @@ check('… one OFF audit row', (await one("select count(*)::int n from hub_audit
 await db.exec("insert into company_categories (company_id, key, label, kind, direction, makes_ktc_bill) values ('NEXTRADE_BOOKS','owner_draw','Owner draw','expense','out',false) on conflict do nothing");
 var on3 = await cutoff(true); var rv = await cat(L6, 'owner_draw', '2026-03-03');
 var off2 = await cutoff(false);
-check('OFF never revives a bill whose line was moved to a "KTC does not pay" category in between', (await st(b6)) === 'void' || (await link(L6)).status === 'void' ? (await st(b6)) === 'void' : false, { on3: on3, rv: rv, off2: off2, st: await st(b6), link: await link(L6) });
+check('OFF never revives a bill whose line was moved to a "KTC does not pay" category in between: it stays void and is named back', (await st(b6)) === 'void' && (await link(L6)).status === 'void' && (await link(L6)).cutoff_voided === false && off2.kept.some(function (k) { return k.bill_id === b6 && /no longer in a category KTC pays/.test(k.why); }), { on3: on3, rv: rv, off2: off2, st: await st(b6), link: await link(L6) });
+var off3 = await cutoff(false);
+check('… and pressing OFF again does not bring it back either', off3.count === 0 && (await st(b6)) === 'void');
 check('cut-off row: Nextrade only (RTM cannot be stored)', /violates check constraint/.test(await err("insert into company_ktc_bill_cutoff (company_id, cutoff_date) values ('RTM_BOOKS','2026-06-01')") || ''));
 check('the button and the table are closed to the browser roles (service role only)', (await one("select has_function_privilege('anon','public.hub_company_bill_cutoff(jsonb)','execute') a, has_function_privilege('authenticated','public.hub_company_bill_cutoff(jsonb)','execute') b")).a === false);
 console.log('\nXN SQL: ' + pass + ' passed, ' + failN + ' failed');
