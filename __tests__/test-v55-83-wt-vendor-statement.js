@@ -368,6 +368,38 @@ function noWrites() { return st.calls.filter(function (c) { return /^from:|^rpc:
   check('EXECUTED reader path: switching to "as of their statement date" leaves the later payment out → LATE-1 is OPEN — MATCHES and the mode says so', hu4.indexOf('As of their statement date 2026-11-15: our payments made after it are left out (1).') > 0 && hu4.indexOf('ALREADY PAID') < 0, hu4.substring(0, 600));
   check('EXECUTED reader path: still nothing written — one read request, no database call', sent.length === 1 && noWrites());
 
+  // ── 9c. EXECUTED: a NEW import starts from nothing (cf. Codex 09:09 on WV): statement A read and checked, then statement B fails →
+  // nothing of A is left on the screen; and a late answer to an earlier read can never overwrite the current one
+  var queue = [];
+  require.cache[hfPath] = { id: hfPath, filename: hfPath, loaded: true, exports: { hubFetch: function (url, init) { var d; var pr = new Promise(function (res) { d = res; }); queue.push({ body: JSON.parse(init.body), answer: function (a) { d({ status: 200, json: function () { return Promise.resolve(a); } }); } }); return pr; } } };
+  savedReact = require.cache[reactPath]; delete require.cache[panelPath];
+  require.cache[reactPath] = { id: reactPath, filename: reactPath, loaded: true, exports: shim };
+  var LivePanel3 = require(panelPath).default;
+  require.cache[reactPath] = savedReact; delete require.cache[panelPath]; require.cache[hfPath] = savedHf;
+  hs = { vals: [], i: 0 };
+  function render3() { hs.i = 0; return LivePanel3(props2); }
+  function tick() { return new Promise(function (r) { setTimeout(r, 15); }); }
+  var answerA = { ok: true, statement: { vendor_name: 'NexPac Corporation', statement_date: '2026-11-15', printed_total: 300, currency: 'USD' }, problems: [], incomplete: [], lines: [{ n: 1, ref: 'LATE-1', date: '2026-10-01', amount: 300, open: 300, kind: 'invoice' }] };
+  find(render3(), function (el) { return el.type === 'textarea'; }).props.onChange({ target: { value: 'statement A free text' } });
+  btn(render3(), 'Read the pasted text').props.onClick(); queue[0].answer(answerA); await tick();
+  btn(render3(), '3. Check every line').props.onClick();
+  check('EXECUTED new import: statement A is read and checked (LATE-1 shown)', html(render3()).indexOf('LATE-1') > 0 && html(render3()).indexOf('ALREADY PAID') > 0);
+  find(render3(), function (el) { return el.type === 'textarea'; }).props.onChange({ target: { value: 'statement B free text' } });
+  btn(render3(), 'Read the pasted text').props.onClick();
+  var midB = html(render3());
+  check('EXECUTED new import: the moment B is started, A\'s lines, results and statement date are gone (nothing to check yet)', midB.indexOf('LATE-1') < 0 && midB.indexOf('ALREADY PAID') < 0 && midB.indexOf('3. Check every line') < 0 && midB.indexOf('Reading…') > 0, midB.substring(0, 400));
+  queue[1].answer({ ok: false, error: 'The statement could not be read: overloaded.' }); await tick();
+  var failB = html(render3());
+  check('EXECUTED new import: B fails → only B\'s error is shown; NONE of A\'s figures remain usable', failB.indexOf('The statement could not be read: overloaded.') > 0 && failB.indexOf('LATE-1') < 0 && failB.indexOf('3. Check every line') < 0 && failB.indexOf('$300.00') < 0, failB.substring(0, 400));
+  find(render3(), function (el) { return el.type === 'textarea'; }).props.onChange({ target: { value: 'statement C free text' } });
+  btn(render3(), 'Read the pasted text').props.onClick();
+  find(render3(), function (el) { return el.type === 'textarea'; }).props.onChange({ target: { value: 'statement D free text' } });
+  btn(render3(), 'Read the pasted text').props.onClick();
+  queue[3].answer(Object.assign({}, answerA, { lines: [{ n: 1, ref: 'DUP-5', date: '2026-10-01', amount: 450, open: 450, kind: 'invoice' }] })); await tick();
+  queue[2].answer(answerA); await tick();
+  var lateC = html(render3());
+  check('EXECUTED new import: a LATE answer to the earlier read C does not overwrite the current read D (DUP-5 stays, LATE-1 never appears)', lateC.indexOf('DUP-5') > 0 && lateC.indexOf('LATE-1') < 0 && lateC.indexOf('Reading…') < 0, lateC.substring(0, 400));
+
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('CRASH', e && e.stack); process.exit(1); });

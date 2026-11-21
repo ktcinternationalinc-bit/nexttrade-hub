@@ -56,6 +56,10 @@ export default function VendorStatementPanel(props) {
   var s15 = useState('current'); var asOf = s15[0]; var setAsOf = s15[1];
   var s16 = useState({}); var picks = s16[0]; var setPicks = s16[1];       // line n → our bill id, for a number several of our bills carry
   var fileRef = React.useRef(null);
+  var reqRef = React.useRef(0); // which read is the current one: a late answer to an earlier read is dropped
+  // a new import always starts from nothing: the previous statement's lines, ticks, picks and results are cleared FIRST, so a read
+  // that then fails can never leave the last statement's figures on the screen as if they were this one's (cf. Codex 09:09 on WV)
+  function clearAll() { reqRef.current++; setRead(null); setLines([]); setChecked(false); setPicks({}); setPicked({}); setSheet(null); setShowOnly(''); setStDate(''); setPrinted(''); setCur('USD'); setAsOf('current'); setBusy(false); }
 
   function startFrom(r, ls) {
     var choices0 = vendorChoices(bills, r.statement && r.statement.vendor_name, payments);
@@ -67,14 +71,15 @@ export default function VendorStatementPanel(props) {
     setCur(/^(US\$|\$|USD|US ?DOLLARS?)$/.test(c0) ? 'USD' : c0.substring(0, 8));
   }
   function ask(payload, label) {
-    setBusy(true); setErr(''); setChecked(false); setSheet(null);
+    var myReq = ++reqRef.current; setBusy(true); setErr('');
     return hubFetch('/api/accounting/vendor-statement', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ action: 'read', user_id: userProfile && userProfile.id }, payload)) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ') — try again.' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; })
       .then(function (j) {
+        if (myReq !== reqRef.current) { return; } // a later import has started — this answer is not for it
         if (!j || !j.ok) { setErr((j && j.error) || 'The statement could not be read.'); return; }
         startFrom({ source: 'reader', statement: j.statement || {}, problems: j.problems || [], file: label, incomplete: j.incomplete || [], pages: j.pages || null }, j.lines || []);
-      }).finally(function () { setBusy(false); });
+      }).finally(function () { if (myReq === reqRef.current) { setBusy(false); } });
   }
   function openSheet(sheets, label) {
     if (!sheets.length) { setErr('The spreadsheet is empty.'); return; }
@@ -100,21 +105,24 @@ export default function VendorStatementPanel(props) {
   function onFile(e) {
     var f = (e.target.files || [])[0]; e.target.value = '';
     if (!f) { return; }
+    clearAll(); setErr(''); var pickNo = reqRef.current; // the file is read in the background: if another import starts meanwhile, this one stops
     if (f.size > 10 * 1024 * 1024) { setErr('That file is over 10 MB — split the statement.'); return; }
     var rd = new FileReader();
     if (SHEET_EXT.test(f.name)) {
-      rd.onload = function () { var sh = null; try { sh = workbookSheets(rd.result, /\.(csv|tsv)$/i.test(f.name)); } catch (eX) { setErr('The spreadsheet could not be opened (' + ((eX && eX.message) || 'error') + ').'); return; } openSheet(sh, f.name); };
+      rd.onload = function () { if (pickNo !== reqRef.current) { return; } var sh = null; try { sh = workbookSheets(rd.result, /\.(csv|tsv)$/i.test(f.name)); } catch (eX) { setErr('The spreadsheet could not be opened (' + ((eX && eX.message) || 'error') + ').'); return; } openSheet(sh, f.name); };
       rd.readAsArrayBuffer(f); return;
     }
     if (!FILE_TYPES[f.type]) { setErr('Use a PDF, a photo (JPG / PNG / WebP), a spreadsheet (.xlsx / .xls / .csv) — or paste the lines.'); return; }
     rd.onload = function () {
+      if (pickNo !== reqRef.current) { return; }
       var b64 = String(rd.result).split(',')[1] || '';
       // the real page count goes along, so the server can say when the reader did not read every page
-      (f.type === 'application/pdf' ? pdfPageCountFromBase64(b64) : Promise.resolve(null)).then(function (n) { return ask({ media_type: f.type, file_base64: b64, page_count: n || undefined }, f.name); });
+      (f.type === 'application/pdf' ? pdfPageCountFromBase64(b64) : Promise.resolve(null)).then(function (n) { if (pickNo !== reqRef.current) { return null; } return ask({ media_type: f.type, file_base64: b64, page_count: n || undefined }, f.name); });
     };
     rd.readAsDataURL(f);
   }
   function readPaste() {
+    clearAll(); setErr('');
     var rows = tabRows(paste);
     if (rows) { var g = guessColumns(rows); openSheet([{ name: 'pasted', rows: rows, use: g.header >= 0, header: g.header, map: g.map }], 'pasted rows'); return; }
     ask({ text: paste }, 'pasted text');
