@@ -46,7 +46,6 @@ export const BUILD_HISTORY = [
       { text: 'Nothing here changes a bill, a payment, a wire, inventory or the warehouse. It needs the new “Warehouse check” switches in Settings → Banking & Accounting Access, and the warehouse must first offer its receipts to the Hub (waiting for Max). Until Max approves a tolerance, nothing is called “matched”.' },
       { superAdminOnly: true, text: 'Technical: api/accounting/weight-check (verified sign-in; bills.weight_check.view / validate / accept / resolve / settings; history window; KTC bills only; no money in answers); src/lib/weight-check.js (rules), weight-check-server.js, weight-check-feed-server.js (reads GET /api/hub-feed/receipts on the approved warehouse address, field allowlists, whole-receipt checks; the endpoint is not on the warehouse yet). SQL sql/v55-83-XB-weight-check.sql (new append-only wc_* tables) must be run by Max.' }
     ]
-    ]
   },
   {
     ]
