@@ -369,7 +369,7 @@ export async function POST(req) {
       var winU = await windowFloorFor(db, gate.ctx);
       if (winU && winU.error) { return NextResponse.json({ ok: false, error: winU.error, api_build_marker: API_BUILD_MARKER }, { status: 503 }); }
       var urU = await undoCategoryPick(db, by, body.payload && body.payload.undo_id, null, { priv: privU, floor: (winU && winU.floor) || null, business: US_WAVE_BUSINESS_ID });
-      if (!urU.ok) { return NextResponse.json({ ok: false, error: urU.error, needs_sql: urU.needs_sql === true, api_build_marker: API_BUILD_MARKER }, { status: urU.status || 400 }); }
+      if (!urU.ok) { return NextResponse.json({ ok: false, error: urU.error, needs_sql: urU.needs_sql === true, retryable: urU.retryable === true, partial: urU.partial === true, api_build_marker: API_BUILD_MARKER }, { status: urU.status || 400 }); }
       var labU = {}; try { var lcU = await db.from('expense_categories').select('key, label'); ((lcU && lcU.data) || []).forEach(function (cU) { labU[cU.key] = cU.label; }); } catch (eLU) {}
       await audit(db, by, 'category_pick_undo', 'bank_transaction', urU.line_id, { to: urU.to, look: urU.look, rule: urU.rule });
       return NextResponse.json(Object.assign({}, urU, { message: undoWords(urU, function (kU) { return labU[kU]; }), api_build_marker: API_BUILD_MARKER }));

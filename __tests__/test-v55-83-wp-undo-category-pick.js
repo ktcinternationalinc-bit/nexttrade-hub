@@ -126,6 +126,43 @@ function undo(id, user) { return call({ action: 'undo_category_pick', payload: {
   check('an undo point written by the withdrawn WP build (format 1) is refused in plain words', uO1.ok === false && /before the current undo rules/.test(uO1.error));
   var rtS = fs.readFileSync(path.join(root, 'src/app/api/accounting/expense-rules/route.js'), 'utf8');
   check('ROUTE wiring: the undo passes the person’s private-account scope, history window and the company; a failed private or window check refuses (503)', rtS.indexOf('var privU = await privateScope(db, by);') > 0 && rtS.indexOf('var winU = await windowFloorFor(db, gate.ctx);') > 0 && rtS.indexOf('{ priv: privU, floor: (winU && winU.floor) || null, business: US_WAVE_BUSINESS_ID }') > 0 && /import \{ windowFloorFor \} from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/visibility-window-server'/.test(rtS));
+  // ── Codex 08:28 P2: an undo that stops half-way keeps its Undo button, decided from the answer's shape, never its words
+  freshDb(); var pH = await pickIt('t1', 'utilities'); var realFrom = global.__db.from.bind(global.__db); var failLook = true;
+  global.__db.from = function (tbl) { var q = realFrom(tbl); if (tbl !== 'bank_transactions') { return q; } var sel = q.select.bind(q); q.select = function (cols) { if (failLook && cols === U.LOOK_COLS) { var bad = { in: function () { return bad; }, then: function (ok) { return Promise.resolve({ data: null, error: { message: 'statement timeout' } }).then(ok); } }; return bad; } return sel(cols); }; return q; };
+  var uH = await undo(pH.undo_id);
+  check('PARTIAL (real route): the picked line is put back, the look-alikes could not be read → the answer says retryable and partial, with the route marker; look-alikes not touched', uH.ok === false && uH.retryable === true && uH.partial === true && !!uH.api_build_marker && row('t1').classification === null && row('t2').classification === 'utilities', uH);
+  failLook = false; var uH2 = await undo(pH.undo_id);
+  check('RETRY (real route): the same undo id finishes the rest — look-alikes back, rule off, the line not touched twice', uH2.ok === true && uH2.line === 'already_back' && row('t2').classification === null && row('t3').classification === 'rent' && rules()[0].active === false, uH2);
+  global.__db.from = realFrom;
+  var B = require(path.join(root, 'src/lib/undo-bar-state.js'));
+  check('BAR RULE: kept for a retryable answer and for no server answer at all; hidden for a final refusal and for success — whatever the words say', B.keepUndoBar(uH) === true && B.keepUndoBar({ ok: false, error: 'Could not reach the server (network).' }) === true && B.keepUndoBar(null) === true && B.keepUndoBar({ ok: false, error: 'This line was changed again — try again', api_build_marker: 'x' }) === false && B.keepUndoBar({ ok: true, api_build_marker: 'x' }) === false && B.undoChangedSomething(uH) === true && B.undoChangedSomething({ ok: false, api_build_marker: 'x' }) === false);
+  // the REAL undoPick handler of each screen, taken from its source and run with stand-ins for its state and helpers
+  function runHandler(file, apiName, reloadCall, answers) {
+    var src = fs.readFileSync(path.join(root, 'src/components/' + file + '.jsx'), 'utf8'); var m = src.match(/function undoPick\(\) \{[^\n]*\n/); if (!m) { return { error: 'handler not found' }; }
+    var st = { pt: { id: 'U1' }, busy: false, reloads: 0, toasts: [], calls: 0 }; var queue = answers.slice();
+    var env = { setUndoBusy: function (v) { st.busy = v; }, setUndoPt: function (v) { st.pt = v; }, toast: { success: function (t) { st.toasts.push('ok:' + t); }, error: function (t) { st.toasts.push('err:' + t); } }, keepUndoBar: B.keepUndoBar, undoChangedSomething: B.undoChangedSomething };
+    env[apiName] = function (action, payload) { st.calls++; st.lastPayload = payload; return Promise.resolve(queue.shift()); };
+    var reloadName = reloadCall.split('(')[0]; env[reloadName] = function () { st.reloads++; };
+    var names = Object.keys(env); var body = 'var undoPt = st.pt; var undoBusy = st.busy; ' + m[0] + ' return undoPick;';
+    var make = new Function(['st'].concat(names).join(','), body.replace('var undoPt = st.pt; var undoBusy = st.busy; ', ''));
+    return { st: st, run: function () { var f = new Function(['st'].concat(names).join(','), 'var undoPt = st.pt; var undoBusy = st.busy; ' + m[0] + ' return undoPick();'); return f.apply(null, [st].concat(names.map(function (n) { return env[n]; }))); } };
+  }
+  var SCREENS = [['ProfitabilityTab', 'erApi', 'startExpenses({ ignoreCache: true })'], ['PeriodStatsTab', 'erApi', 'load(from, to)'], ['AllTransactionsTab', 'api', 'quietReload()']];
+  for (var si = 0; si < SCREENS.length; si++) {
+    var sc = SCREENS[si];
+    if (sc[0] === 'PeriodStatsTab') { global.from = '2026-01-01'; global.to = '2026-12-31'; }
+    var h = runHandler(sc[0], sc[1], sc[2], [uH, Object.assign({}, uH2, { api_build_marker: 'x', message: 'Undone.' })]);
+    if (h.error) { check('HANDLER ' + sc[0] + ' found', false, h.error); continue; }
+    await h.run(); await new Promise(function (r) { setTimeout(r, 0); });
+    var afterPartial = { pt: h.st.pt, reloads: h.st.reloads, busy: h.st.busy };
+    await h.run(); await new Promise(function (r) { setTimeout(r, 0); });
+    check('HANDLER ' + sc[0] + ' (real code): a half-finished undo KEEPS the Undo bar with the same undo id and reloads the screen; pressing Undo again sends that same id, finishes, and then the bar goes', afterPartial.pt && afterPartial.pt.id === 'U1' && afterPartial.reloads === 1 && afterPartial.busy === false && h.st.calls === 2 && h.st.lastPayload.undo_id === 'U1' && h.st.pt === null && h.st.reloads === 2, [afterPartial, h.st]);
+    var hf = runHandler(sc[0], sc[1], sc[2], [{ ok: false, error: 'This line was changed again after your pick — try again later', api_build_marker: 'x' }]);
+    await hf.run(); await new Promise(function (r) { setTimeout(r, 0); });
+    check('HANDLER ' + sc[0] + ' (real code): a FINAL refusal hides the bar even when its words say “try again” (no text matching)', hf.st.pt === null && hf.st.reloads === 0);
+  }
+  var srcs = ['ProfitabilityTab', 'PeriodStatsTab', 'AllTransactionsTab'].map(function (f) { return fs.readFileSync(path.join(root, 'src/components/' + f + '.jsx'), 'utf8'); });
+  check('no screen decides by matching English words any more', srcs.every(function (x) { return x.indexOf('try again|reach the server|did not answer') < 0 && /import \{ keepUndoBar, undoChangedSomething \} from '\.\.\/lib\/undo-bar-state'/.test(x); }));
   // ── 5. who and when
   freshDb(); var p12 = await pickIt('t1', 'utilities');
   var uO = await undo(p12.undo_id, 'u2'); var uN = await undo(p12.undo_id, 'u3');

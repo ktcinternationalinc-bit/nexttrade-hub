@@ -18,6 +18,7 @@ import AvgProfitCell from './AvgProfitCell'; // v55.83-WK — average profit per
 import CustomerBalances, { BalanceCell } from './CustomerBalances'; // v55.83-WY — held for / still owed by each customer, today, not in profit
 import { balanceOfCustomer } from '../lib/customer-balances';
 import UndoPickBar from './UndoPickBar'; // v55.83-WS — undo the last category pick
+import { keepUndoBar, undoChangedSomething } from '../lib/undo-bar-state'; // v55.83-WS — the Undo bar stays only when the undo can be finished
 import CombinedShippingNote from './CombinedShippingNote'; // v55.83-VS — neutral note: a combined transportation cost is known, nothing to fix
 import InboundTruckingView from './InboundTruckingView'; // v55.83-VR — Kronos freight against pounds received (tracking only)
 import { expenseScope, expenseRequests, pendingRequests, loadExpensePeriods, totalExpenses, finalPnl, expensesOffReason } from '../lib/pnl-expenses'; // v55.83-VQ — expense columns and the final P&L per period
@@ -146,7 +147,7 @@ export default function ProfitabilityTab(props) {
   var canPick = (userProfile && userProfile.role === 'super_admin') || props.isSuperAdmin === true || (props.modulePerms || {})['bank.classify'] === true; // the same switch as Stats → Income Statement
   // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
   var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
-  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); startExpenses({ ignoreCache: true }); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (j && j.error && !/try again|reach the server|did not answer/i.test(j.error)) { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
+  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); startExpenses({ ignoreCache: true }); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (keepUndoBar(j)) { if (undoChangedSomething(j)) { startExpenses({ ignoreCache: true }); } } else { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
   function erApi(action, payload) {
     return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })

@@ -10,6 +10,7 @@
 // into Bank Review matching.
 import React, { useState, useEffect } from 'react';
 import UndoPickBar from './UndoPickBar'; // v55.83-WP — undo the last category pick
+import { keepUndoBar, undoChangedSomething } from '../lib/undo-bar-state'; // v55.83-WS — the Undo bar stays only when the undo can be finished
 import DuplicateCheckPanel from './DuplicateCheckPanel'; // v55.83-SO
 import { supabase } from '../lib/supabase';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
@@ -77,7 +78,7 @@ export default function AllTransactionsTab(props) {
   // non-JSON reply becomes a message on screen instead of a silent nothing
   // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
   var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
-  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); api('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); quietReload(); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (j && j.error && !/try again|reach the server|did not answer/i.test(j.error)) { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
+  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); api('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); quietReload(); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (keepUndoBar(j)) { if (undoChangedSomething(j)) { quietReload(); } } else { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
   function api(action, payload) {
     return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })

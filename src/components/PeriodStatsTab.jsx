@@ -6,6 +6,7 @@ import { remainderRows } from '../lib/paid-through-blocks'; // v55.83-SR
 import { spendingByCategoryCsv, spendingDetailCsv, incomeStatementCsv } from '../lib/tax-pack'; // v55.83-WF step C — the accountant pack's spending files
 import React, { useState, useEffect } from 'react';
 import UndoPickBar from './UndoPickBar'; // v55.83-WP — undo the last category pick
+import { keepUndoBar, undoChangedSomething } from '../lib/undo-bar-state'; // v55.83-WS — the Undo bar stays only when the undo can be finished
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
@@ -94,7 +95,7 @@ export default function PeriodStatsTab(props) {
   var sSv = useState({}); var saving = sSv[0]; var setSaving = sSv[1];
   // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
   var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
-  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); load(from, to); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (j && j.error && !/try again|reach the server|did not answer/i.test(j.error)) { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
+  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); load(from, to); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (keepUndoBar(j)) { if (undoChangedSomething(j)) { load(from, to); } } else { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
   function erApi(action, payload) {
     return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })

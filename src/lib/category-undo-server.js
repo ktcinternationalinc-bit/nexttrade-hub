@@ -145,7 +145,7 @@ export async function undoCategoryPick(db, by, undoId, nowMs, scope) {
   for (var i = 0; i < lookIds.length; i += 200) {
     var rr = await db.from('bank_transactions').select(LOOK_COLS).in('id', lookIds.slice(i, i + 200));
     // the look-alikes could not be read → stop here, said plainly; nothing more is changed and the undo can be run again
-    if (!rr || rr.error) { return { ok: false, status: 400, error: 'The line itself was put back, but the look-alike lines could not be read (' + ((rr && rr.error && rr.error.message) || 'no answer') + '). Press Undo again to finish.' }; }
+    if (!rr || rr.error) { return { ok: false, status: 503, retryable: true, partial: !already, error: 'The line itself was put back, but the look-alike lines could not be read (' + ((rr && rr.error && rr.error.message) || 'no answer') + '). Press Undo again to finish.' }; }
     (rr.data || []).forEach(function (t) { curLook[t.id] = t; });
   }
   var groups = {};
