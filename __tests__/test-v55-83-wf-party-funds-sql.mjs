@@ -231,6 +231,45 @@ try {
   check('REPORT: the October rows name the ORIGINAL September transfer, and September\'s figures did not change when October was paid', rOct.period.applied_rows.every(function (r) { return r.transfer_id === P && r.transfer_date === '2026-09-02'; }) && rOct.period.applied_rows.length === 2 && rSep.period.applied_rows.length === 1);
   check('REPORT and DATABASE agree on what the transfer holds today (2,200)', rOct.current.unused === 2200 && Number((await st(P)).available) === 2200);
 
+  // ── (WF B2) MONEY BACK from the company: hub_party_refund ──
+  async function incoming(amount, date, extra) { seq++; var e = extra || {}; var r = await db.query("INSERT INTO public.bank_transactions (wave_business_id, account_id, direction, amount_abs, date, posted_date, pending, name) VALUES ($1, 'A1', $2, $3, $4, $4, false, $5) RETURNING id", [e.biz || 'KTC', e.dir || 'in', amount, date, 'MONEY BACK ' + seq]); return r.rows[0].id; }
+  function refund(c, p) { click++; return q(c, 'SELECT public.hub_party_refund($1::jsonb) AS r', [JSON.stringify(Object.assign({ actor: ACTOR, request_id: 'rf-' + click, reason: 'money returned by the company' }, p))]); }
+  var RT = await transfer(1000, RTM, '2026-10-01'); await confirm(db, RT, RTM); var RB = await bill(400, RTM, '2026-10-02');
+  var rrq = await request(RT, RTM, 0, [[RB, 400]]); var rrs = await send(db, rrq.id, '2026-10-05');
+  var IN1 = await incoming(300, '2026-10-10');
+  var rf1 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN1, amount: 300 });
+  var rs1 = await st(RT);
+  check('refund: 300 back on a money-in line — recorded against ITS transfer: refunds 300, held 300 (1,000 − 400 bills − 300), dated the day the money arrived', rrs.rows && rrs.rows[0].r.ok === true && rf1.rows && rf1.rows[0].r.ok === true && rf1.rows[0].r.entry_date === '2026-10-10' && Number(rs1.refunds) === 300 && Number(rs1.held) === 300 && Number(rs1.available) === 300, [rf1, rs1]);
+  check('refund: it is not a fee and creates no payment', Number(rs1.fees) === 0 && Number((await db.query('SELECT count(*)::int AS n FROM public.vendor_bill_payments WHERE bank_transaction_id = $1', [RT])).rows[0].n) === 1);
+  var IN2 = await incoming(500, '2026-10-11');
+  var rf2 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN1, amount: 10 });
+  check('refund: the same money-in line cannot be used for a second refund', /already recorded as a refund/.test(rf2.error || ''), rf2);
+  var rf3 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 400 });
+  check('refund: more than the transfer still holds (400 > 300) is refused', /more than this transfer still holds/.test(rf3.error || '') && Number((await st(RT)).refunds) === 300, rf3);
+  var OUTL = await incoming(50, '2026-10-12', { dir: 'out' });
+  var rf4 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: OUTL, amount: 50 });
+  check('refund: a money-OUT line cannot be the money coming back', /money-IN line/.test(rf4.error || ''), rf4);
+  var EGL = await incoming(50, '2026-10-12', { biz: 'OTHER_BOOKS' });
+  var rf5 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: EGL, amount: 50 });
+  check('refund: money that came back into the books of another company is refused', /different company/.test(rf5.error || ''), rf5);
+  var INV = await incoming(80, '2026-10-12'); await db.query('INSERT INTO public.accounting_invoice_payments (bank_transaction_id, amount, voided) VALUES ($1, 80, false)', [INV]);
+  var rf6 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: INV, amount: 80 });
+  check('refund: a money-in line already used for a customer payment is refused', /customer payment/.test(rf6.error || ''), rf6);
+  var rf7 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 100, entry_date: '2026-10-05' });
+  check('refund: cannot be dated before the money arrived', /before the money arrived/.test(rf7.error || ''), rf7);
+  var rf8 = await refund(db, { party: NT, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 100 });
+  check('refund: against a transfer of the other company is refused', /not a transfer marked as sent to/.test(rf8.error || ''), rf8);
+  var sameR = { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 100, request_id: 'rf-same', actor: ACTOR, reason: 'part back' };
+  var rr1 = await q(db, 'SELECT public.hub_party_refund($1::jsonb) AS r', [JSON.stringify(sameR)]); var rr2 = await q(db, 'SELECT public.hub_party_refund($1::jsonb) AS r', [JSON.stringify(sameR)]);
+  check('refund: the same click twice records it ONCE (second answer says repeat)', rr1.rows && rr2.rows && rr2.rows[0].r.repeat === true && Number((await st(RT)).refunds) === 400 && Number((await st(RT)).held) === 200, [rr1, rr2, await st(RT)]);
+  var rfOld = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: await incoming(5, '2026-09-20'), amount: 5 });
+  check('refund: money that came back inside a CLOSED month is refused for an ordinary permitted person', /closed month/.test(rfOld.error || ''), rfOld);
+  // the helper and the database agree after the refunds
+  var rfE = (await db.query("SELECT id, party, bucket, kind, amount::float AS amount, bank_transaction_id, source_bank_transaction_id, entry_date::text AS entry_date FROM public.party_money_entries WHERE source_bank_transaction_id = $1", [RT])).rows;
+  var rfP = (await db.query('SELECT id, bill_id, amount::float AS amount, paid_date::text AS paid_date, bank_transaction_id, voided FROM public.vendor_bill_payments WHERE bank_transaction_id = $1', [RT])).rows;
+  var rfL = (await db.query('SELECT id, date::text AS date, amount_abs::float AS amount_abs, third_party_payer, direction, name FROM public.bank_transactions WHERE id = $1', [RT])).rows;
+  var rfH = PF.partyFundsBreakdown({ parties: [{ name: RTM }], bankLines: rfL, pays: rfP, bills: [], requests: [], entries: rfE, from: '2026-10-01', to: '2026-10-31' })[0];
+  check('refund: the REPORT from the real rows agrees with the database — refunds 400, held 200; October: sent 1,000 − refunds 400 − bills 400 = closing 200', rfH.current.refunds === 400 && rfH.current.unused === 200 && rfH.period.refunds === 400 && rfH.period.closing_held === 200 && rfH.period.fee_deduction === 0 && rfH.arithmetic_ok, rfH.period);
   // ── closed month ──
   await db.query("CREATE SCHEMA IF NOT EXISTS clickbooks_us; CREATE TABLE IF NOT EXISTS clickbooks_us.books (code text PRIMARY KEY, locked_through date); INSERT INTO clickbooks_us.books VALUES ('KTC_US', '2026-10-31') ON CONFLICT (code) DO UPDATE SET locked_through = EXCLUDED.locked_through;");
   var cm1 = await feeCall(db, { action: 'mark', party: NT, bank_transaction_id: N1, amount: 20, entry_date: '2026-10-20' });

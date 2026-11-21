@@ -381,6 +381,81 @@ BEGIN
   RETURN v_res;
 END $fn$;
 
+
+-- 9. MONEY BACK FROM THE COMPANY (a refund of a transfer) — recorded against ITS transfer, never as a fee (Max's note, point 2:
+--    "reversals / refunds must reconcile explicitly"). The money arrived on a KTC bank line (money in); that line is named, and
+--    one incoming line can be used for one refund only. The refund lowers what the transfer holds; it cannot exceed what is
+--    still held and not reserved. No payment is created. One click id = one result.
+--    p: { party, bank_transaction_id (the transfer), incoming_bank_transaction_id, amount, entry_date, reason, actor, request_id, allow_closed }
+CREATE UNIQUE INDEX IF NOT EXISTS party_money_entries_refund_line ON public.party_money_entries (bank_transaction_id) WHERE kind = 'refund';
+CREATE OR REPLACE FUNCTION public.hub_party_refund(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+DECLARE v_party text := nullif(trim(coalesce(p->>'party', '')), ''); v_txn uuid := nullif(p->>'bank_transaction_id', '')::uuid;
+  v_in uuid := nullif(p->>'incoming_bank_transaction_id', '')::uuid; v_amt numeric := round(coalesce((p->>'amount')::numeric, 0), 2);
+  v_date date; v_reason text := nullif(left(trim(coalesce(p->>'reason', '')), 300), ''); v_actor uuid := nullif(p->>'actor', '')::uuid;
+  v_req text := nullif(p->>'request_id', ''); v_closed_ok boolean := coalesce((p->>'allow_closed')::boolean, false);
+  t record; i record; s jsonb; v_fp text; v_old record; v_id uuid; lock_through date; v_res jsonb; v_first uuid; v_second uuid; v_priv boolean := true; v_used numeric;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: no signed-in person.'; END IF;
+  IF v_party IS NULL OR NOT EXISTS (SELECT 1 FROM public.paid_through_parties x WHERE x.name = v_party) THEN RAISE EXCEPTION 'HUB_GUARD: unknown company.'; END IF;
+  IF v_txn IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: pick the transfer the money came back from.'; END IF;
+  IF v_in IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: pick the bank line the money came back on.'; END IF;
+  IF v_req IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: missing click id — refresh and try again.'; END IF;
+  IF v_amt <= 0 THEN RAISE EXCEPTION 'HUB_GUARD: type an amount above zero.'; END IF;
+  IF v_reason IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: say why (a short reason).'; END IF;
+  -- locks: the company, then the two bank lines in a fixed order (no deadlock with another writer on either line)
+  PERFORM pg_advisory_xact_lock(hashtextextended('hub-party:' || v_party, 0));
+  IF v_txn::text < v_in::text THEN v_first := v_txn; v_second := v_in; ELSE v_first := v_in; v_second := v_txn; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('hub-bank-line:' || v_first::text, 0));
+  PERFORM pg_advisory_xact_lock(hashtextextended('hub-bank-line:' || v_second::text, 0));
+  v_fp := md5(concat_ws('|', 'refund', lower(v_party), v_txn::text, v_in::text, v_amt::text, coalesce(p->>'entry_date', ''), v_reason));
+  SELECT r.request_id, r.fingerprint, r.result INTO v_old FROM public.hub_party_requests r WHERE r.request_id = v_req;
+  IF v_old.request_id IS NOT NULL THEN
+    IF v_old.fingerprint = v_fp THEN RETURN v_old.result || jsonb_build_object('repeat', true); END IF;
+    RAISE EXCEPTION 'HUB_GUARD: that click was already used for something else — refresh and try again.';
+  END IF;
+  SELECT b.id, b.direction, b.pending, b.review_status, b.third_party_payer, b.wave_business_id, b.account_id INTO t FROM public.bank_transactions b WHERE b.id = v_txn FOR UPDATE;
+  IF t.id IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: the transfer was not found.'; END IF;
+  IF coalesce(t.direction, '') <> 'out' OR lower(trim(coalesce(t.third_party_payer, ''))) <> lower(v_party) THEN RAISE EXCEPTION 'HUB_GUARD: that is not a transfer marked as sent to %.', v_party; END IF;
+  SELECT b.id, b.direction, b.pending, b.review_status, b.wave_business_id, b.amount_abs, b.transfer_group_id, coalesce(b.posted_date, b.date) AS d,
+         to_jsonb(b)->>'matched_invoice_id' AS inv INTO i FROM public.bank_transactions b WHERE b.id = v_in FOR UPDATE;
+  IF i.id IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: the bank line the money came back on was not found.'; END IF;
+  IF coalesce(i.direction, '') <> 'in' THEN RAISE EXCEPTION 'HUB_GUARD: money coming back is a money-IN line.'; END IF;
+  IF i.pending IS TRUE OR coalesce(i.review_status, '') = 'duplicate' THEN RAISE EXCEPTION 'HUB_GUARD: that money-in line is pending or a duplicate copy.'; END IF;
+  IF i.wave_business_id IS DISTINCT FROM t.wave_business_id THEN RAISE EXCEPTION 'HUB_GUARD: the money came back into a different company''s books.'; END IF;
+  IF i.transfer_group_id IS NOT NULL THEN RAISE EXCEPTION 'HUB_GUARD: that money-in line is paired as a transfer between KTC''s own accounts.'; END IF;
+  IF i.inv IS NOT NULL THEN RAISE EXCEPTION 'HUB_GUARD: that money-in line is already matched to an invoice.'; END IF;
+  SELECT coalesce(sum(x.amount), 0) INTO v_used FROM (
+    SELECT a.amount FROM public.accounting_invoice_payments a WHERE a.bank_transaction_id = v_in AND a.voided IS NOT TRUE
+    UNION ALL SELECT o.amount FROM public.order_deposit_links o WHERE o.bank_transaction_id = v_in AND o.voided IS NOT TRUE) x;
+  IF v_used > 0.005 THEN RAISE EXCEPTION 'HUB_GUARD: that money-in line is already used for a customer payment.'; END IF;
+  IF EXISTS (SELECT 1 FROM public.party_money_entries e WHERE e.kind = 'refund' AND e.bank_transaction_id = v_in) THEN RAISE EXCEPTION 'HUB_GUARD: that money-in line is already recorded as a refund.'; END IF;
+  IF v_amt > round(abs(coalesce(i.amount_abs, 0)), 2) + 0.005 THEN RAISE EXCEPTION 'HUB_GUARD: the refund is more than the money-in line.'; END IF;
+  v_date := coalesce(nullif(p->>'entry_date', '')::date, i.d);
+  IF v_date < i.d THEN RAISE EXCEPTION 'HUB_GUARD: a refund cannot be dated before the money arrived (%).', i.d; END IF;
+  IF v_date > (now() AT TIME ZONE 'America/New_York')::date THEN RAISE EXCEPTION 'HUB_GUARD: the date cannot be in the future.'; END IF;
+  IF to_regclass('clickbooks_us.books') IS NOT NULL AND NOT v_closed_ok THEN
+    EXECUTE 'select locked_through from clickbooks_us.books where code = ''KTC_US''' INTO lock_through;
+    IF lock_through IS NOT NULL AND v_date <= lock_through THEN
+      RAISE EXCEPTION 'HUB_GUARD: % is inside a closed month (books are closed through %). Only a person allowed to correct closed months can date it there.', v_date, lock_through;
+    END IF;
+  END IF;
+  s := public.hub_party_transfer_state(v_txn, NULL);
+  IF v_amt > (s->>'held')::numeric - (s->>'reserved')::numeric + 0.005 THEN
+    RAISE EXCEPTION 'HUB_GUARD: the refund is more than this transfer still holds and has not reserved.';
+  END IF;
+  BEGIN EXECUTE 'select coalesce(a.is_private, false) from public.plaid_accounts a where a.plaid_account_id = $1' INTO v_priv USING t.account_id; EXCEPTION WHEN others THEN v_priv := true; END;
+  INSERT INTO public.party_money_entries (party, bucket, amount, kind, source_bank_transaction_id, bank_transaction_id, action_id, entry_date, reason, request_id, created_by, is_private)
+  VALUES (v_party, 'refund', v_amt, 'refund', v_txn, v_in, gen_random_uuid(), v_date, v_reason, v_req, v_actor, coalesce(v_priv, true)) RETURNING id INTO v_id;
+  v_res := jsonb_build_object('ok', true, 'action', 'refund', 'entry_id', v_id, 'amount', v_amt, 'entry_date', v_date, 'state', public.hub_party_transfer_state(v_txn, NULL));
+  INSERT INTO public.hub_party_requests (request_id, action, party, fingerprint, result, created_by) VALUES (v_req, 'refund', v_party, v_fp, v_res, v_actor);
+  INSERT INTO public.hub_audit_log (actor_id, action, entity, entity_id, details) VALUES (v_actor, 'party_transfer_refund', 'bank_transaction', v_txn::text,
+    jsonb_build_object('party', v_party, 'amount', v_amt, 'entry_date', v_date, 'incoming_line', v_in, 'reason', v_reason, 'entry_id', v_id, 'closed_month_allowed', v_closed_ok, 'before', s));
+  RETURN v_res;
+END $fn$;
+REVOKE ALL ON FUNCTION public.hub_party_refund(jsonb) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.hub_party_refund(jsonb) TO service_role;
+
 REVOKE ALL ON FUNCTION public.hub_party_transfer_state(uuid, uuid) FROM public, anon, authenticated;
 REVOKE ALL ON FUNCTION public.wire_funding_summary(uuid, uuid) FROM public, anon, authenticated;
 REVOKE ALL ON FUNCTION public.wire_request_send(uuid, uuid, date) FROM public, anon, authenticated;
@@ -398,6 +473,7 @@ GRANT EXECUTE ON FUNCTION public.hub_party_fee(jsonb) TO service_role;
 CREATE OR REPLACE FUNCTION public.hub_party_funds_installed() RETURNS boolean LANGUAGE sql STABLE AS $fn$
   SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'hub_party_transfer_state')
      AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'hub_party_fee')
+     AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'hub_party_refund')
      AND to_regclass('public.party_funding_transfers') IS NOT NULL
      AND (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_party_transfer_guard' AND t.tgenabled <> 'D') = 4;
 $fn$;
@@ -409,5 +485,5 @@ SELECT 'one calculation of what a transfer holds' AS check_item, CASE WHEN posit
 UNION ALL SELECT 'no writer can take a transfer below zero (4 guards on)', CASE WHEN public.hub_party_funds_installed() THEN 'OK' ELSE 'PROBLEM' END
 UNION ALL SELECT 'a request leaves its own reservation out when it is sent', CASE WHEN position('wire_funding_summary(w.funding_txn_id, w.id)' in pg_get_functiondef('public.wire_request_send(uuid,uuid,date)'::regprocedure)) > 0 THEN 'OK' ELSE 'PROBLEM' END
 UNION ALL SELECT 'old advance moves are retired for new entries', CASE WHEN EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_b_entry_rules' AND t.tgenabled <> 'D') THEN 'OK' ELSE 'PROBLEM' END
-UNION ALL SELECT 'only the Hub server can mark services rendered or confirm a transfer', CASE WHEN NOT has_function_privilege('authenticated', 'public.hub_party_fee(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_transfer_set_state(jsonb)', 'EXECUTE')
+UNION ALL SELECT 'only the Hub server can mark services rendered, record a refund or confirm a transfer', CASE WHEN NOT has_function_privilege('authenticated', 'public.hub_party_fee(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_transfer_set_state(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_refund(jsonb)', 'EXECUTE')
         AND has_function_privilege('service_role', 'public.hub_party_fee(jsonb)', 'EXECUTE') THEN 'OK' ELSE 'PROBLEM' END;

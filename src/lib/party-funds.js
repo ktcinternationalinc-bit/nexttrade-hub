@@ -52,7 +52,7 @@ export function partyFundsBreakdown(o) {
     var pk = key(party.name);
     var idOf = {}; var lines = (o.bankLines || []).filter(function (t) { var who = fundingIdentity(t); if (!who || key(who.payer) !== pk) { return false; } idOf[t.id] = who.basis; return true; })
       .sort(function (a, b) { return day(a.date) < day(b.date) ? -1 : day(a.date) > day(b.date) ? 1 : String(a.id) < String(b.id) ? -1 : 1; });
-    var transfers = lines.map(function (t) { return { id: t.id, date: day(t.date), reference: t.name || '', sent: r2(Math.abs(Number(t.amount_abs != null ? t.amount_abs : t.amount) || 0)), identity: idOf[t.id], lifetime_rows: [], lifetime_fee_rows: [], reserved_now: 0, reserved_rows: [] }; });
+    var transfers = lines.map(function (t) { return { id: t.id, date: day(t.date), reference: t.name || '', sent: r2(Math.abs(Number(t.amount_abs != null ? t.amount_abs : t.amount) || 0)), identity: idOf[t.id], lifetime_refund_rows: [], lifetime_rows: [], lifetime_fee_rows: [], reserved_now: 0, reserved_rows: [] }; });
     var tById = {}; transfers.forEach(function (t) { tById[t.id] = t; });
     // THE SAME TRANSFER SEEN TWICE (one bank account connected twice gives two bank lines with the bank's own transaction number):
     // it is ONE transfer. The stamped line is kept (else the first); the other is listed, counted nowhere, and anything recorded
@@ -113,34 +113,38 @@ export function partyFundsBreakdown(o) {
       if (held) { t.reserved_now = r2(t.reserved_now + held); t.reserved_rows.push({ request_id: w.id, status: w.status, amount: held, fee: r2(w.fee_amount) }); } // bills AND fee: the whole commitment
     });
     (o.entries || []).forEach(function (e) {
+      // v55.83-WF B2 — MONEY BACK from the company (a refund) lowers what its transfer holds; it is never a fee and never a bill
+      if (key(e.party) === pk && e.bucket === 'refund' && e.kind === 'refund') { var tR = tById[e.source_bank_transaction_id] || null; if (tR) { tR.lifetime_refund_rows.push({ transfer_id: tR.id, date: day(e.entry_date || e.created_at), amount: r2(e.amount), incoming_line: e.bank_transaction_id || null, id: 'entry:' + e.id, why: e.reason || 'money back' }); } return; }
       if (key(e.party) !== pk || e.bucket !== 'fee') { return; }
       if (e.wire_package_id) { return; } // v55.83-WF: an entry that points at a wire is a NOTE about that wire's fee — the wire carries the fee, once (same rule as the database)
       var t = tById[e.source_bank_transaction_id || e.bank_transaction_id] || null;
       feeRow(t, e.amount, e.entry_date || (t && t.date) || e.created_at, e.reason || 'services rendered', 'entry:' + e.id);
     });
 
-    var per = { funds_sent: 0, applied_rows: [], fee_rows: [], opening_held: 0 };
-    var asOf = { funds_sent: 0, applied_to_bills: 0, services_rendered: 0 };
-    var cur = { funds_sent: 0, applied_to_bills: 0, services_rendered: 0, reserved: 0 };
+    var per = { funds_sent: 0, applied_rows: [], fee_rows: [], refund_rows: [], opening_held: 0 };
+    var asOf = { funds_sent: 0, applied_to_bills: 0, services_rendered: 0, refunds: 0 };
+    var cur = { funds_sent: 0, applied_to_bills: 0, services_rendered: 0, reserved: 0, refunds: 0 };
     var unresolved = false; var byText = { count: 0, sent: 0 };
     transfers.forEach(function (t) {
       t.counted_as_of = !to || t.date <= to;
       if (t.identity === 'bank_text') { byText.count++; byText.sent = r2(byText.sent + t.sent); }
       t.as_of_rows = t.lifetime_rows.filter(function (r) { return !to || r.paid_date <= to; });
       t.as_of_fee_rows = t.lifetime_fee_rows.filter(function (r) { return !to || r.date <= to; });
-      t.as_of = { applied_to_bills: sum(t.as_of_rows, 'portion'), services_rendered: sum(t.as_of_fee_rows, 'amount') };
-      t.as_of.held = t.counted_as_of ? r2(t.sent - t.as_of.applied_to_bills - t.as_of.services_rendered) : 0;
-      t.current = { applied_to_bills: sum(t.lifetime_rows, 'portion'), services_rendered: sum(t.lifetime_fee_rows, 'amount'), reserved: t.reserved_now };
-      t.current.unused = r2(t.sent - t.current.applied_to_bills - t.current.services_rendered - t.current.reserved); // negative only if the records disagree — shown, never hidden
+      t.as_of_refund_rows = t.lifetime_refund_rows.filter(function (r) { return !to || r.date <= to; });
+      t.as_of = { applied_to_bills: sum(t.as_of_rows, 'portion'), services_rendered: sum(t.as_of_fee_rows, 'amount'), refunds: sum(t.as_of_refund_rows, 'amount') };
+      t.as_of.held = t.counted_as_of ? r2(t.sent - t.as_of.refunds - t.as_of.applied_to_bills - t.as_of.services_rendered) : 0;
+      t.current = { applied_to_bills: sum(t.lifetime_rows, 'portion'), services_rendered: sum(t.lifetime_fee_rows, 'amount'), refunds: sum(t.lifetime_refund_rows, 'amount'), reserved: t.reserved_now };
+      t.current.unused = r2(t.sent - t.current.refunds - t.current.applied_to_bills - t.current.services_rendered - t.current.reserved); // negative only if the records disagree — shown, never hidden
       if (t.as_of.held < -0.005 || t.current.unused < -0.005) { unresolved = true; }
       if (inRange(t.date, from, to)) { per.funds_sent = r2(per.funds_sent + t.sent); }
       if (from && t.date < from) { per.opening_held = r2(per.opening_held + t.sent); }
       if (t.counted_as_of) { asOf.funds_sent = r2(asOf.funds_sent + t.sent); }
-      asOf.applied_to_bills = r2(asOf.applied_to_bills + t.as_of.applied_to_bills); asOf.services_rendered = r2(asOf.services_rendered + t.as_of.services_rendered);
+      asOf.applied_to_bills = r2(asOf.applied_to_bills + t.as_of.applied_to_bills); asOf.services_rendered = r2(asOf.services_rendered + t.as_of.services_rendered); asOf.refunds = r2(asOf.refunds + t.as_of.refunds);
       cur.funds_sent = r2(cur.funds_sent + t.sent); cur.applied_to_bills = r2(cur.applied_to_bills + t.current.applied_to_bills);
-      cur.services_rendered = r2(cur.services_rendered + t.current.services_rendered); cur.reserved = r2(cur.reserved + t.current.reserved);
+      cur.services_rendered = r2(cur.services_rendered + t.current.services_rendered); cur.reserved = r2(cur.reserved + t.current.reserved); cur.refunds = r2(cur.refunds + t.current.refunds);
       t.lifetime_rows.forEach(function (r) { if (inRange(r.paid_date, from, to)) { per.applied_rows.push(r); } if (from && r.paid_date < from) { per.opening_held = r2(per.opening_held - r.portion); } });
       t.lifetime_fee_rows.forEach(function (r) { if (inRange(r.date, from, to)) { per.fee_rows.push(r); } if (from && r.date < from) { per.opening_held = r2(per.opening_held - r.amount); } });
+      t.lifetime_refund_rows.forEach(function (r) { if (inRange(r.date, from, to)) { per.refund_rows.push(r); } if (from && r.date < from) { per.opening_held = r2(per.opening_held - r.amount); } });
       delete t.reserved_now;
     });
     var looseInPeriod = looseFees.filter(function (r) { return inRange(r.date, from, to); });
@@ -149,21 +153,22 @@ export function partyFundsBreakdown(o) {
     var unlinkedPeriod = unlinked.filter(function (r) { return inRange(r.paid_date, from, to); });
     var unlinkedAsOf = unlinked.filter(function (r) { return !to || r.paid_date <= to; });
     var applied = sum(per.applied_rows, 'portion'); var fees = sum(per.fee_rows, 'amount');
-    var closing = r2(per.opening_held + per.funds_sent - applied - fees);
-    var asOfHeld = r2(asOf.funds_sent - asOf.applied_to_bills - asOf.services_rendered);
+    var refunds = sum(per.refund_rows, 'amount');
+    var closing = r2(per.opening_held + per.funds_sent - refunds - applied - fees);
+    var asOfHeld = r2(asOf.funds_sent - asOf.refunds - asOf.applied_to_bills - asOf.services_rendered);
     return {
       party: party.name, transfers: transfers,
-      // PERIOD: flows only. opening_held + funds_sent − applied_to_bills − services_rendered = closing_held
-      period: { from: from, to: to, opening_held: per.opening_held, funds_sent: per.funds_sent, applied_to_bills: applied, services_rendered: fees, closing_held: closing,
-        applied_rows: per.applied_rows, fee_rows: per.fee_rows,
+      // PERIOD: flows only. opening_held + funds_sent − refunds − applied_to_bills − services_rendered = closing_held
+      period: { from: from, to: to, opening_held: per.opening_held, funds_sent: per.funds_sent, refunds: refunds, applied_to_bills: applied, services_rendered: fees, closing_held: closing,
+        applied_rows: per.applied_rows, fee_rows: per.fee_rows, refund_rows: per.refund_rows,
         fee_deduction: r2(fees + sum(looseInPeriod, 'amount')), // INTERNAL: the only amount that reduces profit as a professional fee in this period
         fees_without_a_transfer: sum(looseInPeriod, 'amount'), loose_fee_rows: looseInPeriod,
         tax_professional_fees: per.funds_sent },                 // TAX presentation: the full original transfers of the period, once
       // AS OF the end of `to`: dated records only. held = funds sent − applied to bills − services rendered (reservations are NOT in here)
-      as_of: { date: to, funds_sent: asOf.funds_sent, applied_to_bills: asOf.applied_to_bills, services_rendered: asOf.services_rendered, held: asOfHeld },
+      as_of: { date: to, funds_sent: asOf.funds_sent, refunds: asOf.refunds, applied_to_bills: asOf.applied_to_bills, services_rendered: asOf.services_rendered, held: asOfHeld },
       // CURRENT (today, whatever dates were asked for): held today = reserved + unused, nothing overlaps
-      current: { funds_sent: cur.funds_sent, applied_to_bills: cur.applied_to_bills, services_rendered: cur.services_rendered, reserved: cur.reserved,
-        unused: r2(cur.funds_sent - cur.applied_to_bills - cur.services_rendered - cur.reserved) },
+      current: { funds_sent: cur.funds_sent, refunds: cur.refunds, applied_to_bills: cur.applied_to_bills, services_rendered: cur.services_rendered, reserved: cur.reserved,
+        unused: r2(cur.funds_sent - cur.refunds - cur.applied_to_bills - cur.services_rendered - cur.reserved) },
       arithmetic_ok: Math.abs(r2(closing - asOfHeld)) < 0.005,   // the sums agree with each other — says NOTHING about whether the records are right
       // transfers recognized only from the bank's text (not stamped by a person): counted as money sent, and listed here to be confirmed
       identity_to_confirm: byText,

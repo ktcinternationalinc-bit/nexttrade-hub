@@ -176,6 +176,19 @@ check('an ordinary wire NOT sent yet (draft, no funding transfer) reserves nothi
 check('a draft whose bank line is set but which is not a funded request still reserves nothing (only funding_txn_id reserves)', wRun([{ id: 'dw2', status: 'ready', bank_transaction_id: 't', funding_txn_id: null, fee_amount: 100, lines: [{ bill_id: 'q', amount: 500, is_open: true }] }]).current.reserved === 0);
 check('an attached wire on a bank line that is NOT one of this company\'s transfers adds no fee here', wRun([Object.assign({}, ord, { bank_transaction_id: 'someone-else' })]).period.fee_deduction === 0);
 
+// ── (WF B2) money BACK from the company: a refund lowers its transfer — never a fee, never a bill ──
+var RF = { parties: parties, bills: [bill('rb1', 'V', 'trucking', 4000, '2026-09-05')], requests: [],
+  bankLines: [line('RT', '2026-09-01', 10000, 'RTM Capital')], pays: [pay('rp1', 'rb1', 4000, 'RT', '2026-09-06')],
+  entries: [{ id: 'rf1', party: 'RTM Capital', bucket: 'refund', kind: 'refund', amount: 1500, source_bank_transaction_id: 'RT', bank_transaction_id: 'IN-1', entry_date: '2026-10-03' },
+    fee('rf2', 'RTM Capital', 500, 'RT', '2026-09-20')] };
+var rSep = of(F.partyFundsBreakdown(Object.assign({}, RF, { from: '2026-09-01', to: '2026-09-30' })), 'RTM Capital');
+var rOct = of(F.partyFundsBreakdown(Object.assign({}, RF, { from: '2026-10-01', to: '2026-10-31' })), 'RTM Capital');
+check('refund: September (before the money came back) — held 5,500, no refund yet', rSep.period.closing_held === 5500 && rSep.period.refunds === 0 && rSep.as_of.held === 5500);
+check('refund: October — opening 5,500 − refund 1,500 = closing 4,000; the refund row names its transfer and the incoming line', rOct.period.opening_held === 5500 && rOct.period.refunds === 1500 && rOct.period.closing_held === 4000 && rOct.period.refund_rows.length === 1 && rOct.period.refund_rows[0].transfer_id === 'RT' && rOct.period.refund_rows[0].incoming_line === 'IN-1' && rOct.arithmetic_ok, rOct.period);
+check('refund: it is NOT a fee and NOT a bill (October fee 0, bills 0); tax line unchanged by it in this helper', rOct.period.fee_deduction === 0 && rOct.period.applied_to_bills === 0 && rOct.period.tax_professional_fees === 0);
+check('refund: conservation per transfer — sent 10,000 = refund 1,500 + bills 4,000 + fee 500 + unused 4,000', rOct.transfers[0].current.refunds === 1500 && rOct.transfers[0].current.unused === 4000 && rOct.current.unused === 4000 && rOct.as_of.refunds === 1500 && rOct.as_of.held === 4000);
+check('refund: another company does not see this refund', of(F.partyFundsBreakdown(Object.assign({}, RF, { from: '2026-10-01', to: '2026-10-31' })), 'NextTrade Industries').period.refunds === 0);
+check('refund: a refund entry that names no transfer of this company is ignored, not guessed', of(F.partyFundsBreakdown(Object.assign({}, RF, { entries: [{ id: 'x', party: 'RTM Capital', bucket: 'refund', kind: 'refund', amount: 9, source_bank_transaction_id: 'nope', entry_date: '2026-10-03' }] })), 'RTM Capital').current.refunds === 0);
 var src = fs.readFileSync(path.join(root, 'src/lib/party-funds.js'), 'utf8');
 check('no example amount is hard-coded in the application code', !/66000|52000|12000|10000|66,000|52,000/.test(src));
 check('the helper is pure: no database, no fetch, no supabase import', !/supabase|fetch\(|\.from\(|rpc\(/.test(src));
