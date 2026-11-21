@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WT',
+    date: '2026-11-21',
+    title: 'Check a vendor statement against our bills, payments and wires',
+    items: [
+      { text: '🧾 **New button on Accounting → Bills: "Check a vendor statement".** When a vendor sends their list of open bills, import it — a PDF, a photo, a spreadsheet, or paste the lines. A PDF or photo is read by the Hub reader; a spreadsheet is read column by column (you see and can change which column is which), so its numbers are never retyped.' },
+      { text: 'You confirm which vendor it is (the same name with Inc / Corp is ticked for you), and you can correct any line before the check. The Hub adds up their lines from the OPEN amounts and warns you in red when they do not match the total printed on the statement, or when the read was incomplete (a page not read, a statement too long for one read).' },
+      { text: 'Every line gets an answer: **ALREADY PAID** (with the date, the amount and the wire or bank line — click to open it), **OPEN — MATCHES**, **DIFFERENT AMOUNT** (both figures and the difference), **MISSING FROM THE HUB**, **POSSIBLY PAID TWICE** (with the payments as evidence — check before doing anything), **VOIDED IN THE HUB**, or **SEVERAL OF OUR BILLS — PICK ONE** when two of our bills carry the same number. A bill with only the same amount and date is shown as a suggestion, never as a match.' },
+      { text: 'Compare with our bills as they are today, or as of their statement date (our payments made after it are left out). A payment made after their statement is never called a payment they failed to apply.' },
+      { text: 'Below the lines: **our open bills for that vendor that are NOT on their statement**. At the top: what they say we owe, what we show open, and the difference — in the statement currency only, other currencies shown apart.' },
+      { text: 'Click any bill number to open the bill; "Show it in the Bills list" takes you straight to it. **⬇ Export (CSV)** gives you the whole check as a file to send back to the vendor or keep.' },
+      { text: 'It only checks. It never changes a bill, a payment or a wire, and the statement is not saved in the Hub.' },
+      { superAdminOnly: true, text: 'Technical: new route api/accounting/vendor-statement (action read only, PDF / photo / free text; verifiedCaller bearer identity, accounting.view + bills.manage or bills.view; maxDuration 300; no table, rpc, storage or audit access; stop_reason max_tokens and pages_read below the browser page count = incomplete). The model call moved from readBillFromBase64 into the shared lib/bill-reader-call.js askBillReader (bill import passes the same block, prompt and 3000 tokens; statement 16000). New pure lib/vendor-statement.js: STATEMENT_PROMPT, parseStatementReading / cleanStatementLines, owedOf / statementAddsUp (open column rule), guessColumns / linesFromRows / parseSheetDate / tabRows (sheets without AI), vendorChoices, livePayments (void / reversed out, one per id, as-of), checkStatement (normNum, then similarNumber; amount + date = suggestion; possibly paid twice only with evidence; several bills = pick; current or as of), statementCsv (formula-safe cells). The check runs in the browser on the complete Bills list; the list adds payment_id to paid_by_wires and enrich_warnings when wire details fail. BillPeek takes optional paidLabel / extraLines / note / goBillsLabel (Profitability use unchanged). Test test-v55-83-wt-vendor-statement.js; PC pin follows the moved call. No SQL.' },
+    ]
+  },
+  {
     version: 'v55.83-WR',
     date: '2026-11-21',
     title: 'P&L by period: change a category right in the pop-up',

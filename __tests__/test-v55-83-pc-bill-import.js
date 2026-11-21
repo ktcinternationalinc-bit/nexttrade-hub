@@ -51,7 +51,9 @@ ok('2a: extract_bill requires bills.manage (it is in WRITE_ACTIONS)', /extract_b
 var bes = R('src/lib/bill-extract-server.js');
 ok('2b (PF): PDF as document block, images as image blocks, via the hub\'s Anthropic pattern (shared server lib)',
   /type: 'document', source: \{ type: 'base64', media_type: 'application\/pdf'/.test(bes) &&
-  /type: 'image', source: \{ type: 'base64', media_type: mediaType/.test(bes) && /api\.anthropic\.com\/v1\/messages/.test(bes));
+  /type: 'image', source: \{ type: 'base64', media_type: mediaType/.test(bes) &&
+  // v55.83-WT — the model call itself moved into the shared src/lib/bill-reader-call.js (the bill import passes the same block, prompt and 3000 tokens)
+  /askBillReader\(\[block, \{ type: 'text', text: prompt \}\], 3000\)/.test(bes) && /api\.anthropic\.com\/v1\/messages/.test(R('src/lib/bill-reader-call.js')));
 ok('2c (PF): extraction returns a DRAFT — the extract action never inserts a bill',
   /draft: rd\.draft, problems: rd\.problems/.test(br) && !/extract_bill[\s\S]{0,400}vendor_bills'\)\.insert/.test(br));
 ok('2d: attachment_path travels on save with graceful retry when the PC column is missing',

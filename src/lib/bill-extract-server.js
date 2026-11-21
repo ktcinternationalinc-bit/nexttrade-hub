@@ -7,6 +7,7 @@ import { BILL_EXTRACT_PROMPT, parseBillExtraction, BILL_MEDIA_TYPES, importSort,
 import { saveBillLines, runPriceCheck } from './bill-lines-server';
 import { defaultDirectionFor } from './bill-lines';
 import { exactSameBill, exactSameWords } from './bill-dup-scan'; // v55.83-UQ
+import { askBillReader } from './bill-reader-call'; // v55.83-WT — the one reader call, shared with the vendor statement check
 
 // v55.83-RP — the bill TYPE every VALIDATED bill of this vendor carries, when they all agree (else null: never guessed)
 export async function vendorBillType(db, vendorName) {
@@ -105,29 +106,12 @@ export async function readBillFromBase64(b64, mediaType, opts) {
   var prompt = BILL_EXTRACT_PROMPT + (pageMode ? '\n' + BILL_PAGES_PROMPT + (forced ? '\n' + forcedPagesPrompt(forced) : '') : '');
   if (!b64 || b64.length < 100) { return { error: 'The file is empty.', status: 400 }; }
   if (b64.length > 14000000) { return { error: 'File too large — keep it under ~10 MB.', status: 413 }; }
-  var aiKey = process.env.ANTHROPIC_API_KEY;
-  if (!aiKey) { return { error: 'The AI reader is not configured on this server (ANTHROPIC_API_KEY).', status: 503 }; }
+  if (!process.env.ANTHROPIC_API_KEY) { return { error: 'The AI reader is not configured on this server (ANTHROPIC_API_KEY).', status: 503 }; }
   var block = kind === 'document'
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } };
-  var models = ['claude-sonnet-4-6', 'claude-haiku-4-5'];
-  var rawText = null; var lastErr = null;
-  for (var mi = 0; mi < models.length && rawText == null; mi++) {
-    try {
-      var resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': aiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: models[mi], max_tokens: 3000, // v55.83-RQ — the lines need room
-          messages: [{ role: 'user', content: [block, { type: 'text', text: prompt }] }] })
-      });
-      var aj = await resp.json();
-      if (aj && aj.error) { throw new Error(aj.error.message || 'model error'); }
-      var parts = (aj && aj.content) || [];
-      var texts = [];
-      for (var ci = 0; ci < parts.length; ci++) { if (parts[ci].type === 'text' && parts[ci].text) { texts.push(parts[ci].text); } }
-      rawText = texts.join('\n');
-    } catch (eAI) { lastErr = eAI; }
-  }
+  var asked = await askBillReader([block, { type: 'text', text: prompt }], 3000); // v55.83-RQ — the lines need room
+  var rawText = asked.text; var lastErr = asked.error;
   if (rawText == null) { return { error: 'The bill could not be read: ' + ((lastErr && lastErr.message) || 'AI unavailable') + '.', status: 502 }; }
   var parsed = parseBillExtraction(rawText);
   if (!parsed.draft) { return { error: parsed.problems.join(' '), status: 422 }; }

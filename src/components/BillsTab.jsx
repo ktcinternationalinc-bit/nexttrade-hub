@@ -21,6 +21,9 @@ import BillDocViewer, { BillDocToggle } from './BillDocViewer'; // v55.83-SN —
 import WireQuickView from './WireQuickView'; // v55.83-SU — open the wire / request that paid a bill
 import PayablesPanel from './PayablesPanel'; // v55.83-SJ
 import BillReportsPanel from './BillReportsPanel';
+import VendorStatementPanel from './VendorStatementPanel'; // v55.83-WT — check a vendor's statement (read-only)
+import BillPeek from './BillPeek'; // v55.83-WT — the bill pop-up, opened from the statement check
+import { statementMoney } from '../lib/vendor-statement'; // v55.83-WT
 import { allocateBankLine } from '../lib/bill-bank-pay'; // v55.83-TH
 import { describeAudit, niceWhen, niceDate } from '../lib/audit-words'; // v55.83-TH
 // v55.83-RP — where an imported value came from, said plainly to the person validating it
@@ -44,6 +47,7 @@ export default function BillsTab(props) {
   var sE = useState(''); var loadErr = sE[0]; var setLoadErr = sE[1]; // v55.83-SA — why the list did not load, ON the screen (a toast is missed; an empty list looks like "no bills")
   var s2 = useState(false); var busy = s2[0]; var setBusy = s2[1];
   var sWq = useState(null); var wireQuick = sWq[0]; var setWireQuick = sWq[1]; // v55.83-SU
+  var sPk = useState(null); var peekBill = sPk[0]; var setPeekBill = sPk[1]; // v55.83-WT — a bill opened from the statement check (bill facts)
   var s3 = useState(null); var editing = s3[0]; var setEditing = s3[1]; // bill draft or null
   var s4 = useState(null); var paying = s4[0]; var setPaying = s4[1];   // {bill, amount, paid_date, bank_transaction_id}
   var s5 = useState('open'); var filter = s5[0]; var setFilter = s5[1];
@@ -393,6 +397,13 @@ export default function BillsTab(props) {
       className="px-2 py-0.5 rounded text-[10px] font-extrabold" title="Click to run the validation checks"
       style={{ background: '#ffedd5', color: '#431407', border: '1px dashed #fdba74' }}>{b.validation_draft && b.validation_draft.at ? 'PENDING · started' : 'PENDING'}</button>;
   }
+  // v55.83-WT — "Show it in the Bills list" from the statement check: every filter cleared, that bill number searched, the bill
+  // opened (View bill), and the row scrolled to. Only what is SHOWN changes — the bill itself is not touched.
+  function showBillInList(f) {
+    closePanels(); setFilter('all'); setTypeF(''); setDirF(''); setPriceF(''); setValF(''); setListView('all');
+    setBillQ(String(f.bill_number || '')); setExpanded(f.id);
+    setTimeout(function () { try { var el = document.getElementById('bill-row-' + f.id); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } } catch (eS) { /* nothing to scroll to */ } }, 150);
+  }
   function openDoc(path) {
     var priv = String(path).indexOf('pv/') === 0;
     var bucket = priv ? 'bills-private' : 'attachments';
@@ -483,6 +494,14 @@ export default function BillsTab(props) {
   var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white nt-light';
   return <div className="nt-paper rounded-xl border border-slate-200 p-3" style={{ background: '#ffffff', color: '#0f172a' }}>
     {wireQuick && <WireQuickView wire={wireQuick} userProfile={userProfile} onClose={function () { setWireQuick(null); }} />}
+    {peekBill && <div onClick={function () { setPeekBill(null); }} style={{ position: 'fixed', inset: 0, zIndex: 320, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}><div onClick={function (e) { e.stopPropagation(); }}>
+      <BillPeek row={{ bill_number: peekBill.bill_number, vendor: peekBill.vendor_name, bill_date: peekBill.bill_date, release: peekBill.release_number, bill_total_cents: Math.round((Number(peekBill.total) || 0) * 100), cents: Math.round((Number(peekBill.paid) || 0) * 100), attachment_path: peekBill.attachment_path }}
+        paidLabel="Paid so far" goBillsLabel="Show it in the Bills list"
+        extraLines={[['Open', statementMoney(peekBill.open)], ['Status', peekBill.status + (peekBill.disputed ? ' · disputed' : '') + (peekBill.paid_via ? ' · paid through ' + peekBill.paid_via : '')], ['Due date', peekBill.due_date || '—'], ['Validation', peekBill.validation_status === 'validated' ? 'validated' : 'not validated'],
+          ['Payments', (peekBill.payments || []).length ? peekBill.payments.map(function (p) { return (p.date || '?') + ' ' + statementMoney(p.amount) + (p.wire ? ' · ' + p.wire.label : (p.bank ? ' · bank line' : '')) + (p.method ? ' · ' + p.method : ''); }).join(' | ') : 'none'],
+          ['On a wire now', peekBill.wire_state_words || '—']]}
+        note="Opened from the statement check — read-only. To change this bill, show it in the Bills list and use its buttons there."
+        onOpenDoc={openDoc} onGoBills={function () { var pb = peekBill; setPeekBill(null); showBillInList(pb); }} onClose={function () { setPeekBill(null); }} /></div></div>}
     {loadErr && <div className="rounded-lg px-3 py-2 mb-2 text-[13px] font-extrabold flex gap-2 items-center flex-wrap" style={{ background: '#fef2f2', color: '#991b1b', border: '2px solid #fca5a5' }}>
       <span>{'⛔ The bills did not load: ' + loadErr}</span>
       <button onClick={load} className="px-2 py-1 rounded text-[12px] font-extrabold" style={{ background: '#991b1b', color: '#ffffff' }}>Try again</button></div>}
@@ -499,6 +518,7 @@ export default function BillsTab(props) {
       <button onClick={function () { setPanel(panel === 'repeating' ? null : 'repeating'); }} title="Bills that come back every week / month / 3 months / year — set up once, the Hub makes each bill on its date" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'repeating' ? { background: '#9a3412', color: '#ffffff' } : { background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74' }}>🔁 Repeating bills</button>{/* v55.83-TV */}
       <button onClick={function () { setPanel(panel === 'nextrade' ? null : 'nextrade'); }} title="KTC bills made from Nextrade expenses — owed to Nextrade" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'nextrade' ? { background: '#1e3a8a', color: '#ffffff' } : { background: '#eff6ff', color: '#1e3a8a', border: '1px solid #93c5fd' }}>🟦 Nextrade bills</button>{/* v55.83-TW */}
       <button onClick={function () { setPanel(panel === 'reports' ? null : 'reports'); }} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'reports' ? { background: '#14532d', color: '#ffffff' } : { background: '#f0fdf4', color: '#14532d', border: '1px solid #86efac' }}>📊 Reports</button>
+      {canView && <button onClick={function () { setPanel(panel === 'statement' ? null : 'statement'); }} title="Import a vendor's statement (their list of open bills) and check every line against our bills, payments and wires — read-only, nothing is changed" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'statement' ? { background: '#0f766e', color: '#ffffff' } : { background: '#f0fdfa', color: '#134e4a', border: '1px solid #5eead4' }}>🧾 Check a vendor statement</button>}{/* v55.83-WT */}
       {canManage && <button onClick={function () { if (fileInputRef.current) { fileInputRef.current.click(); } }} disabled={busy || reading}
         className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#7c3aed', color: '#ffffff' }}>{reading ? 'Reading…' : '📷 Import bill(s)'}</button>}
       {canManage && <select value={scanDays} onChange={function (e) { setScanDays(e.target.value); }} title="How far back the mailbox scan looks" className="px-1.5 py-1 rounded-lg border border-slate-300 text-[10px] nt-light">
@@ -544,6 +564,9 @@ export default function BillsTab(props) {
     {/* v55.83-SJ — what we owe by age + bills on the books before they are paid */}
     {panel === 'reports' && <PayablesPanel bills={(data && data.bills) || []} userId={userProfile && userProfile.id} />}
     {panel === 'reports' && <BillReportsPanel api={api} onClose={function () { setPanel(null); }} />}
+    {/* v55.83-WT — read-only: it is given the list already loaded here and opens bills / wires with the read-only viewers */}
+    {panel === 'statement' && canView && <VendorStatementPanel bills={bills} payments={payments} enrichWarnings={(data && data.enrich_warnings) || []} userProfile={userProfile} onClose={function () { setPanel(null); }}
+      onOpenBill={function (f) { setPeekBill(f); }} onOpenWire={function (w) { setWireQuick(w); }} />}
 
     {/* v55.83-QS (Max, Nov 8 01:02: "the import bills is not working... nothing
         happens") — status lines (reading, multi-import results, mailbox scan,
@@ -696,7 +719,7 @@ export default function BillsTab(props) {
             var late = b.record_status === 'active' && b.open > 0.005 && b.due_date && b.due_date < TODAY;
             var dupOn = b.record_status === 'active' && !!b.dup_flag; var dupStrong = dupOn && b.dup_flag.level === 'strong'; // v55.83-SV
             return <React.Fragment key={b.id}>
-              <tr style={dupOn ? { background: dupStrong ? '#e9d5ff' : '#f3e8ff', color: '#3b0764', borderBottom: '1px solid #c084fc', boxShadow: 'inset 4px 0 0 #7e22ce' } : late ? { background: '#ffedd5', color: '#431407', borderBottom: '1px solid #e2e8f0' } : { background: '#ffffff', color: '#0f172a', borderBottom: '1px solid #e2e8f0' }}>
+              <tr id={'bill-row-' + b.id} style={dupOn ? { background: dupStrong ? '#e9d5ff' : '#f3e8ff', color: '#3b0764', borderBottom: '1px solid #c084fc', boxShadow: 'inset 4px 0 0 #7e22ce' } : late ? { background: '#ffedd5', color: '#431407', borderBottom: '1px solid #e2e8f0' } : { background: '#ffffff', color: '#0f172a', borderBottom: '1px solid #e2e8f0' }}>
                 <td className="py-1.5 pr-2 font-semibold">{b.vendor_name}{dupOn && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title={b.dup_flag.reasons.join('\n')} style={{ background: '#6b21a8', color: '#ffffff' }}>{dupStrong ? '⚠ LIKELY DUPLICATE' : '⚠ POSSIBLE DUPLICATE'}</span>}{b.paid_via && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Another company pays this — it stays out of what-we-owe and cash forecasts; link it to the payment you send that company (All Transactions → 🔗 → 🏢)" style={{ background: '#fce7f3', color: '#9d174d' }}>🏢 via {b.paid_via}</span>}{b.release_number && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Release this bill belongs to" style={{ background: '#e0e7ff', color: '#312e81' }}>REL {b.release_number}</span>}{b.shipment_direction && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title={SRC_WORDS[b.direction_source] || ''} style={{ background: '#f1f5f9', color: '#334155' }}>{b.shipment_direction === 'inbound' ? '⬅ IN' : 'OUT ➡'}</span>}{b.bill_type ? <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title={SRC_WORDS[b.bill_type_source] || ''} style={{ background: '#fef3c7', color: '#7c2d12' }}>{BILL_TYPE_LABEL[b.bill_type]}</span> : (b.validation_status !== 'validated' && b.record_status === 'active' ? <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Type not known yet — picked at validation" style={{ background: '#fee2e2', color: '#7f1d1d' }}>type?</span> : null)}{b.other_reference && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Other reference" style={{ background: '#ecfeff', color: '#155e75' }}>REF {b.other_reference}</span>}</td>
                 <td className="py-1.5 pr-2">{b.bill_number || '—'}</td>
                 <td className="py-1.5 pr-2">{b.bill_date}</td>

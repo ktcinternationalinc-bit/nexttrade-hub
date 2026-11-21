@@ -335,7 +335,7 @@ export async function POST(req) {
 
     // ── list: bills with status + payments
     if (action === 'list') {
-      var L = await loadBills(db);
+      var L = await loadBills(db); var enrichWarn = []; // v55.83-WT
       var rows = decorate(L.bills, L.pays);
       var totals = { open: 0, overdue: 0, open_count: 0 };
       var today = new Date().toISOString().substring(0, 10);
@@ -363,7 +363,7 @@ export async function POST(req) {
           var wsBy = billWireStates((wpR && wpR.data) || [], (allWL && allWL.data) || [], billById);
           rows.forEach(function (b) { var ws = wsBy[b.id]; if (ws) { b.wire_state = ws; b.wire_state_words = wireStateWords(ws, b.open); } });
         }
-      } catch (eWS) { /* wires SQL not run */ }
+      } catch (eWS) { enrichWarn.push('which bills are on a wire being prepared / sent could not be loaded (' + ((eWS && eWS.message) || 'error') + ')'); } // v55.83-WT (Codex 21 Nov) — said, never silent
       // v55.83-SU — link from a bill to the wire / request that paid it (a bill paid in parts can have several)
       try {
         var paidWL = await fetchAll(function () { return db.from('wire_package_lines').select('bill_id, package_id, amount, payment_id, is_open').eq('is_open', false); });
@@ -377,16 +377,16 @@ export async function POST(req) {
         }
         var byBillW = {};
         paidWL.forEach(function (l) { var w = pwBy[l.package_id]; if (!w || w.status !== 'attached') { return; }
-          (byBillW[l.bill_id] = byBillW[l.bill_id] || []).push({ kind: 'package', id: w.id, label: 'WP-' + String(w.seq || 0).padStart(4, '0'), status: w.status, payee: w.payee_name, request: !!w.funding_txn_id, amount: r2(l.amount) }); });
+          (byBillW[l.bill_id] = byBillW[l.bill_id] || []).push({ kind: 'package', id: w.id, label: 'WP-' + String(w.seq || 0).padStart(4, '0'), status: w.status, payee: w.payee_name, request: !!w.funding_txn_id, amount: r2(l.amount), payment_id: l.payment_id }); }); // v55.83-WT — payment_id: which payment this wire carried (the statement check names the wire of each payment)
         rows.forEach(function (b) { if (byBillW[b.id]) { b.paid_by_wires = byBillW[b.id]; } });
-      } catch (ePW) { /* wires SQL not run */ }
+      } catch (ePW) { enrichWarn.push('which wire paid each bill could not be loaded (' + ((ePW && ePW.message) || 'error') + ')'); } // v55.83-WT
       // v55.83-SV — compare every live bill with every other one, on every load (never only at entry).
       var dupCount = 0;
       try {
         var dupScan = scanBills(rows, await loadDupDismissed(db));
         rows.forEach(function (b) { var df = dupScan.byId[b.id]; if (df) { b.dup_flag = df; dupCount++; } });
       } catch (eDS) { /* a scan problem never blocks the list */ }
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, bills: rows, payments: L.pays, totals: totals, dup_flagged: dupCount });
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, bills: rows, payments: L.pays, totals: totals, dup_flagged: dupCount, enrich_warnings: enrichWarn }); // v55.83-WT — the statement check says when the wire details are incomplete
     }
 
     // ── save_bill: create or update (active bills only)
