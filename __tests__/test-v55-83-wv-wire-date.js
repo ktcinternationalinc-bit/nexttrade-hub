@@ -274,7 +274,8 @@ console.log('WV — the real wire date, editing it on past wires, reading the ba
   var panel = fs.readFileSync(path.join(root, 'src/components/WirePackagesPanel.jsx'), 'utf8');
   check('screen: "today" is the Eastern business day (todayET), not the UTC toISOString day', /function localToday\(\) \{ return todayET\(\); \}/.test(panel) && panel.indexOf("useState({ date: new Date().toISOString()") < 0, null);
   check('screen: opening a wire resets the send boxes to ITS date (wire date if not in the future, else today)', /setSendF\(\{ pkgId: j\.package\.id, date: sendDateFor\(j\.package\)/.test(panel) && /return w && w <= t \? w : t;/.test(panel), null);
-  check('screen: the read file is reused as proof only for the same wire', /sendF\.path && sendF\.pkgId === det\.package\.id && sendF\.path\.indexOf\('pv\/wire-' \+ det\.package\.id \+ '-'\) === 0/.test(panel), null);
+  // v55.83-XC — the same rule, plus the inbox file attached to THIS wire (the server checks that link again in mark_sent)
+  check('screen: the read file is reused as proof only for the same wire', /sendF\.path && sendF\.pkgId === det\.package\.id && \(sendF\.path\.indexOf\('pv\/wire-' \+ det\.package\.id \+ '-'\) === 0 \|\| \(sendF\.file && sendF\.file\.inbox === true/.test(panel), null);
   check('screen: the list has "Created in the Hub" and "Sent (bank confirmation)" columns; a not-sent wire shows "planned … · not sent"', /Created in the Hub<\/th>/.test(panel) && /Sent \(bank confirmation\)<\/th>/.test(panel) && /'planned ' \+ p\.planned_send_date \+ ' · not sent'/.test(panel), null);
   check('screen: wire calls go through hubFetch (the signed-in person\'s token)', /return hubFetch\('\/api\/accounting\/wire-packages'/.test(panel) && /import \{ hubFetch \} from '\.\.\/lib\/hub-fetch'/.test(panel), null);
   check('screen: requests say "Date funds used" (no wire leaves our bank)', /Date funds used/.test(panel), null);

@@ -33,6 +33,23 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XC',
+    date: '2026-11-21',
+    title: 'Wires: one place for all the bank confirmations',
+    items: [
+      { text: '**🏦 Wires → 📥 Bank confirmations.** Drop the bank’s wire confirmations here, many at once (PDFs or screenshots). The Hub reads each one and finds the wire it belongs to.' },
+      { text: '**You confirm the wire.** When one wire fits, press ✓ Yes, this is the wire. When several fit, or none, pick it from the list yourself. The file is then attached to that wire as its bank confirmation. Attaching does not mark a wire sent.' },
+      { text: '**To mark that wire sent:** open it and press 📥 Use the confirmation from the inbox. The reference and the Sent on date are filled from the file, then press Mark as sent. No second upload.' },
+      { text: '**Anything that does not match is noted and e-mailed** to everyone with ClickBooks access: a different amount, recipient or date, a bank status that is not “sent”, a confirmation that matches no wire, or a wire sent 3 days ago with no confirmation. Each problem is noted and e-mailed once. The e-mail says which wire and what kind of problem, never amounts or account details: open the Hub to see them.' },
+      { text: 'The same file cannot be added twice. A file that is not a wire confirmation can be set aside with a reason. Nothing is ever deleted, and every step is kept in the history.' },
+      { text: 'The inbox works after the super admin runs its database step for this version. Until then the page says so; the rest of Wires works as before.' },
+      { superAdminOnly: true, text: 'Technical: sql/v55-83-XC-wire-confirmation-inbox.sql (re-runnable, deletes nothing): wire_confirmation_inbox (path pv/wire-inbox-…, server sha256 unique, status new/read/unreadable/proposed/several/no_wire/linked/dismissed, linked/dismissed final + complete, never deleted) and wire_discrepancy_notices (unique dedupe_key, mail_status only sent with real counts, never deleted or rewritten); browsers revoked, service role only. Route wire-packages actions inbox_list / inbox_add / inbox_read / inbox_link / inbox_dismiss (wires.send for writes) in lib/wire-inbox-server.js handleInbox; matching + discrepancies in lib/wire-inbox.js; recipients = active users passing accounting.clickbooks.access; notifyServer type wire_discrepancy. Link writes wire_package_files bank_confirmation + a wire_confirmation_read audit for that path, so mark_sent records server_read. mark_sent accepts a pv/wire-inbox- path only when linked to that wire, and never lists the same file twice. Missing-confirmation check runs on inbox_list for people with Wires: Send; wires sent before 21 Nov 2026 or recorded after the fact are not nagged. Tests: xc-wire-inbox (42), sql-v55-83-xc (23, Postgres 16).' }
+    ]
+  },
+  {
+    ]
+  },
+  {
     version: 'v55.83-XV',
     date: '2026-11-23',
     title: 'Invoices: charge shipping below cost + 7% — with a written reason',

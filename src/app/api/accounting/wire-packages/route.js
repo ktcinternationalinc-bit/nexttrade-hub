@@ -29,6 +29,7 @@ import { requestFit, requestByVendor, payeeKey } from '../../../../lib/wire-fund
 import { isRealDate, compareWireConfirmation } from '../../../../lib/wire-confirmation'; // v55.83-WV — the real wire date + reading the bank confirmation
 import { readWireConfirmation } from '../../../../lib/wire-confirmation-server';
 import { todayET } from '../../../../lib/et-time';
+import { handleInbox, inboxPathLinkedTo, linkedConfirmation } from '../../../../lib/wire-inbox-server'; // v55.83-XC — the bank-confirmation inbox
 var SP_HINT = ' — run sql/v55-83-SP-funded-requests.sql in Supabase first.';
 function spMissing(m) { return /funding_txn_id|planned_send_date|wire_request_|wire_funding_|schema cache/i.test(String(m || '')); }
 
@@ -523,6 +524,14 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, release_number: fieldR === 'release_number' ? relR : undefined, other_reference: fieldR === 'other_reference' ? relR : undefined, field: fieldR, value: relR });
     }
 
+    // ── v55.83-XC (Max, 21 Nov: "a place to enter screenshots for wires in one place and the hub able to sort them out and put them
+    //    in the proper wire for confirmation ... discrepancy ... note and send to emails ... and keep an audit") — 📥 Bank confirmations
+    if (String(action || '').indexOf('inbox_') === 0) {
+      var canSendX = !!(await perm(db, userId, ['wires.send'], req));
+      var rX = await handleInbox(db, userId, action, body, { canSend: canSendX, today: businessToday(), readConfirmation: readWireConfirmation, loadPackage: loadPackage, compare: compareWireConfirmation });
+      return NextResponse.json(rX.json, { status: rX.status || 200 });
+    }
+
     if (!isUuid(body.id)) { return fail('id required.'); }
     var P = await loadPackage(db, body.id);
     if (P.error) { return dbErr(P.error); }
@@ -578,7 +587,12 @@ export async function POST(req) {
           mineV.forEach(function (l) { var f = l.rtm_file_id && fileBy[l.rtm_file_id]; if (f && !seenF[f.id]) { seenF[f.id] = true; v.copies.push({ id: f.id, path: f.path, file_name: f.file_name, paid_date: l.rtm_paid_date || null, reference: l.rtm_reference || null }); } });
         });
       } catch (eBv) { /* the plain table still shows */ }
-      return NextResponse.json({ ok: true, package: {
+      // v55.83-XC — a confirmation attached to this (not yet sent) wire from the inbox, with what the server read from it
+      var inboxG = null;
+      if (pkg.status === 'draft' && !pkg.funding_txn_id) {
+        try { var ic = await linkedConfirmation(db, pkg.id); if (ic) { var cmpI = ic.read ? compareWireConfirmation(ic.read, { total: P.live.total, payee_name: pkg.payee_name }, businessToday()) : null; inboxG = { id: ic.id, path: ic.path, file_name: ic.file_name, read: ic.read || null, fill: cmpI ? cmpI.fill : null, warnings: cmpI ? cmpI.warnings : [] }; } } catch (eIc) { inboxG = null; }
+      }
+      return NextResponse.json({ ok: true, inbox_confirmation: inboxG, package: {
         id: pkg.id, label: packageLabel(pkg), payee_kind: pkg.payee_kind, payee_name: pkg.payee_name, fee_amount: r2(pkg.fee_amount), fee_note: pkg.fee_note, memo: pkg.memo,
         status: P.status, raw_status: pkg.status, created_at: pkg.created_at, created_by: nmG[pkg.created_by] || null,
         bills_total: t.bills, total: t.total, approved_total: pkg.approved_total != null ? r2(pkg.approved_total) : null,
@@ -791,9 +805,14 @@ export async function POST(req) {
       var refT = String(body.bank_reference || '').trim().substring(0, 80);
       if (refT.length < 3) { return fail("The bank's wire reference / confirmation number is required."); }
       var pathT = String(body.proof_path || '');
-      if (pathT.indexOf('pv/wire-') !== 0) { return fail("Attach the bank's wire confirmation (PDF or screenshot) — it is part of the approval record."); }
-      var fT = await db.from('wire_package_files').insert({ package_id: pkg.id, kind: 'bank_confirmation', path: pathT, file_name: String(body.proof_name || '').substring(0, 120) || null, uploaded_by: userId });
-      if (fT.error) { return dbErr(fT.error); }
+      if (pathT.indexOf('pv/wire-') !== 0 || pathT.indexOf('..') >= 0) { return fail("Attach the bank's wire confirmation (PDF or screenshot) — it is part of the approval record."); }
+      // v55.83-XC — a file from the inbox counts only when that confirmation was attached to THIS wire
+      if (pathT.indexOf('pv/wire-inbox-') === 0 && !(await inboxPathLinkedTo(db, pathT, pkg.id))) { return fail('That bank confirmation is not attached to this wire — attach it from 📥 Bank confirmations first, or attach the file here.', 409); }
+      var exT = await db.from('wire_package_files').select('id').eq('package_id', pkg.id).eq('path', pathT).limit(1); // the same file is never listed twice
+      if (!(exT && exT.data && exT.data.length)) {
+        var fT = await db.from('wire_package_files').insert({ package_id: pkg.id, kind: 'bank_confirmation', path: pathT, file_name: String(body.proof_name || '').substring(0, 120) || null, uploaded_by: userId });
+        if (fT.error) { return dbErr(fT.error); }
+      }
       var upT = await db.from('wire_packages').update({ status: 'sent', approved_total: P.live.total, sent_by: userId, sent_at: nowIso(), sent_date: body.sent_date, bank_reference: refT, updated_at: nowIso() })
         .eq('id', pkg.id).eq('status', 'draft').eq('updated_at', pkg.updated_at).select('id');
       if (upT.error) { return dbErr(upT.error); }

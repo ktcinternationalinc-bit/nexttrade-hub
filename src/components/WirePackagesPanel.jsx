@@ -20,6 +20,7 @@ import { PKG_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
+import WireInboxPanel from './WireInboxPanel'; // v55.83-XC — 📥 Bank confirmations
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function d16(x) { return String(x || '').substring(0, 16).replace('T', ' '); }
@@ -339,6 +340,7 @@ export default function WirePackagesPanel(props) {
   var a22 = useState(null); var vCopy = a22[0]; var setVCopy = a22[1];     // SQ — attaching the company's wire copy for one vendor
   var a21 = useState(null); var feeAsk = a21[0]; var setFeeAsk = a21[1];   // SP — changing the service fee of a sent request
   var a20 = useState(null); var past = a20[0]; var setPast = a20[1];         // RZ — recording a wire sent before the Hub had wires
+  var a23 = useState(false); var inboxOpen = a23[0]; var setInboxOpen = a23[1]; // XC — the bank-confirmation inbox shown above the list
   var a18 = useState(null); var viewLine = a18[0]; var setViewLine = a18[1]; // RY — the bill opened from the wire // v55.83-RO — the delete / undo question, inline // v55.83-RL — reasons being typed, per check
 
   // v55.83-RJ (review gap 9) — every call returns an answer object; a timeout / non-JSON reply becomes a readable error, never a frozen screen
@@ -514,7 +516,9 @@ export default function WirePackagesPanel(props) {
     if (probS) { toast.error(probS); return; }
     setBusy(true);
     // v55.83-WV — the file read a moment ago is already uploaded: the same file is the proof (no second upload)
-    (sendF.path && sendF.pkgId === det.package.id && sendF.path.indexOf('pv/wire-' + det.package.id + '-') === 0 ? Promise.resolve({ path: sendF.path, name: sendF.file.name }) : upload(sendF.file, det.package.id)).then(function (u) {
+    // v55.83-XC — or the confirmation already attached to this wire from 📥 Bank confirmations (the server checks it belongs to this wire)
+    var readyPath = sendF.path && sendF.pkgId === det.package.id && (sendF.path.indexOf('pv/wire-' + det.package.id + '-') === 0 || (sendF.file && sendF.file.inbox === true && sendF.path.indexOf('pv/wire-inbox-') === 0));
+    (readyPath ? Promise.resolve({ path: sendF.path, name: sendF.file.name }) : upload(sendF.file, det.package.id)).then(function (u) {
       return act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date, bank_reference: sendF.ref, proof_path: u.path, proof_name: u.name }, '📤 Marked SENT. When the money-out shows in the bank feed, attach it here.');
     }).catch(function (e) { toast.error((e && e.message) || 'Upload failed.'); setBusy(false); });
   }
@@ -531,6 +535,16 @@ export default function WirePackagesPanel(props) {
       return api({ action: 'read_confirmation', id: pkgId, proof_path: u.path });
     }).then(function (j) { setSendF(function (f0) { return applyConfirmationAnswer(f0, file, pkgId, j); }); })
       .catch(function (e) { setSendF(function (f0) { return applyConfirmationAnswer(f0, file, pkgId, { ok: false, error: (e && e.message) || 'Upload failed — try again.' }); }); });
+  }
+  // v55.83-XC — the bank confirmation attached to this wire from the inbox: used as the proof, with what the server read from it
+  // (reference and Sent on filled the same way as a file picked here; anything the person typed stays)
+  function takeInboxConfirmation() {
+    var ic = det && det.inbox_confirmation; if (!ic) { return; }
+    var pkgId = det.package.id; var pseudo = { name: ic.file_name || 'bank confirmation', inbox: true };
+    setSendF(function (f0) {
+      var s1 = Object.assign({}, startConfirmationFile(f0, pseudo, pkgId, sendDateFor(det.package)), { path: ic.path });
+      return applyConfirmationAnswer(s1, pseudo, pkgId, ic.read ? { ok: true, read: ic.read, fill: ic.fill, warnings: ic.warnings || [] } : { ok: false, error: 'This confirmation could not be read — type the reference and pick the date yourself.' });
+    });
   }
   // v55.83-WV (Max 21 Nov: "be able to edit that field in the previous wires i created") — the wire date of a wire not sent yet;
   // signatures stay valid (the date is not part of what was signed)
@@ -875,6 +889,7 @@ export default function WirePackagesPanel(props) {
     } else if (st === 'ready_to_send') {
       nextBox = <div><div className="mb-1 text-[15px] font-extrabold" style={{ color: '#065f46' }}>{'📤 ' + sendWords(P) + ' — $' + fmt(P.total)}</div>
         <div className="mb-2 font-bold" style={{ color: '#065f46' }}>{'Approved by ' + A.signoff1.name + ' and ' + A.signoff2.name + '. Wire exactly $' + fmt(P.total) + ' to ' + P.payee_name + (P.payee_kind === 'vendor' ? ' (the vendor, directly)' : '') + ' from the bank, then fill this in:'}</div>
+        {perms.send && det.inbox_confirmation && !(sendF.file && sendF.file.inbox) && <div className="mb-2"><Btn color="#0f766e" disabled={busy} onClick={takeInboxConfirmation}>{'📥 Use the confirmation from the inbox: ' + (det.inbox_confirmation.file_name || 'bank confirmation')}</Btn></div>}
         {perms.send ? <div className="flex gap-2 items-center flex-wrap">
           <label className="text-[12px] font-bold rounded-lg px-2 py-1.5" style={{ color: INK, background: '#f1f5f9', border: '1px dashed #94a3b8', cursor: 'pointer' }}>📎 {sendF.file ? sendF.file.name : '1 · Attach the bank confirmation (PDF / screenshot) — the Hub reads it'}
             <input type="file" accept="application/pdf,image/*" onChange={function (e) { var f1 = e.target.files && e.target.files[0]; e.target.value = ''; pickConfirmation(f1); }} style={{ display: 'none' }} /></label>
@@ -1113,9 +1128,11 @@ export default function WirePackagesPanel(props) {
     <div className="flex gap-2 items-center flex-wrap mb-1">
       <div className="text-[16px] font-extrabold" style={{ color: INK }}>📤 Wires — approved before the money leaves</div>
       <div className="flex-1" />
+      <Btn light={!inboxOpen} color="#1e293b" onClick={function () { setInboxOpen(!inboxOpen); }}>{inboxOpen ? '✕ Close bank confirmations' : '📥 Bank confirmations'}</Btn>
       {perms.superAdmin && <Btn light onClick={startPast} disabled={busy}>🕘 Record a past wire</Btn>}
       {perms.prepare && <Btn big color="#0f766e" onClick={startNew} disabled={busy}>＋ New wire</Btn>}
     </div>
+    {inboxOpen && <div className="mb-3"><WireInboxPanel api={function (pl) { return api(pl).then(function (j) { if (j && j.ok && (pl.action === 'inbox_link' || pl.action === 'inbox_dismiss')) { load(); } return j; }); }} toast={toast} supabase={supabase} perms={perms} /></div>}
     {past && payees && <PastWireForm past={past} setPast={setPast} payees={payees} busy={busy} onPick={pastPick} onParty={startPaidFor} onSave={savePast} />}
     <div className="text-[12px] mb-3" style={{ color: SUB }}><b>Paying a vendor now:</b> ＋ New wire → pick who gets the money → tick the bills → it checks itself → 2 people sign → send it at the bank → attach the bank line. <b>Already paid, before the Hub had wires:</b> 🕘 Record a past wire → pick who paid (us, or a company that paid for us).</div>
     {/* v55.83-RJ (review gaps 7, 15) — anything that would stop a wire, said up front */}
