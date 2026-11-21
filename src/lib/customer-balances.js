@@ -35,17 +35,24 @@ export function customerBalances(input) {
   function hiddenBank(txId) { if (!txId || priv.all) { return false; } var acc = (d.accountOf || {})[txId]; return !!(acc && priv.hidden && priv.hidden[acc]); }
   function inWindow(dt) { return !floor || !dt || day(dt) >= floor; }
   var skipped = { private_bank: 0, outside_window: 0, other_business: 0 };
+  // (Codex 09:48 P2) a customer credit APPLIED to an invoice lowers its balance without a payment row: that is a documented
+  // adjustment, so it is part of the expected balance; nothing else is assumed
+  var appliedTo = {}; (d.credits || []).forEach(function (r) { if (String(r.status || '') === 'applied' && r.applied_to_invoice_id) { appliedTo[r.applied_to_invoice_id] = (appliedTo[r.applied_to_invoice_id] || 0) + cents(r.amount); } });
 
   (d.invoices || []).forEach(function (i) {
     if (!live(i)) { return; }
     if (i.business && i.business !== 'US') { skipped.other_business++; return; }
     if (!inWindow(i.invoice_date)) { skipped.outside_window++; return; }
-    var tot = cents(i.total_amount); var paid = cents(i.amount_paid);
-    var bal = (i.balance_due === null || i.balance_due === undefined) ? tot - paid : cents(i.balance_due);
+    var tot = cents(i.total_amount); var paid = cents(i.amount_paid); var adj = appliedTo[i.id] || 0;
+    var expected = tot - paid - adj; var stored = (i.balance_due === null || i.balance_due === undefined) ? null : cents(i.balance_due);
+    var bal = stored === null ? expected : stored;
     var cur = String(i.currency || 'USD').toUpperCase();
     var c = cust(i.accounting_customer_id);
-    var row = { invoice_id: i.id, number: i.invoice_number || '', date: day(i.invoice_date), currency: cur, total_cents: tot, paid_cents: paid, balance_cents: bal };
-    if (bal < 0 || paid > tot) { row.over_cents = Math.max(-bal, paid - tot); c.recon.push(row); return; } // listed, never added
+    var row = { invoice_id: i.id, number: i.invoice_number || '', date: day(i.invoice_date), currency: cur, total_cents: tot, paid_cents: paid, balance_cents: bal, credit_applied_cents: adj };
+    // TO CHECK (listed with the reason, never added to held or owed): the invoice's own figures disagree with each other, or more
+    // was paid than its total. A disagreement is never "repaired" here — total minus paid is not assumed to be the truth either.
+    if (paid + adj > tot || bal < 0) { row.over_cents = Math.max(-bal, paid + adj - tot); row.reason = 'more paid than its total'; c.recon.push(row); return; }
+    if (stored !== null && Math.abs(stored - expected) > 1) { row.expected_cents = expected; row.reason = 'its balance does not match total minus paid'; c.recon.push(row); return; }
     if (bal <= 0) { return; }
     if (cur !== 'USD') { c.other_currency[cur] = (c.other_currency[cur] || 0) + bal; return; } // never summed into dollars
     row.partly = paid > 0;

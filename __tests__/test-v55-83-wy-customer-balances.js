@@ -38,6 +38,13 @@ check('UNDERPAID (Max): every invoice with a balance open — part paid 60 and n
 // paid more than the total on the invoice itself → listed to check, never added
 var r7 = run({ invoices: [inv('x', 'A', 100, 120)], credits: [cr('c1', 'A', 20)] }); var a7 = custOf(r7, 'Alpha');
 check('NEEDS CHECK: an invoice whose own figures show more paid than its total is listed apart and NOT added to held (the credit row already holds the 20 once)', a7.recon.length === 1 && a7.recon[0].over_cents === 2000 && a7.held_cents === 2000 && a7.owed_cents === 0 && r7.totals.recon_count === 1);
+// (Codex 09:48 P2) an invoice whose own figures disagree is TO CHECK, never confirmed debt
+var rP = run({ invoices: [Object.assign(inv('m1', 'A', 100, 40), { balance_due: 100 }), Object.assign(inv('m2', 'A', 100, 100), { balance_due: 100 })] }); var aP = custOf(rP, 'Alpha');
+check('CODEX P2: total 100 / paid 40 / stored balance 100, and total 100 / paid 100 / stored balance 100 → both TO CHECK with the reason; owed 0 (not 100 + 100)', aP.owed_cents === 0 && aP.recon.length === 2 && aP.recon.every(function (x) { return x.reason === 'its balance does not match total minus paid'; }) && aP.recon.some(function (x) { return x.invoice_id === 'm1' && x.expected_cents === 6000 && x.balance_cents === 10000; }) && rP.totals.recon_count === 2, aP);
+var rQ = run({ invoices: [inv('ok1', 'A', 100, 40), inv('ok2', 'A', 100, 100)] }); var aQ = custOf(rQ, 'Alpha');
+check('CONTROLS: a consistent part-paid invoice is owed 60; a consistent fully paid one is not listed; nothing to check', aQ.owed_cents === 6000 && aQ.owed_partly_cents === 6000 && aQ.recon.length === 0 && aQ.owed.length === 1);
+var rR = run({ invoices: [Object.assign(inv('adj', 'A', 100, 40), { balance_due: 30 })], credits: [cr('ca', 'A', 30, { status: 'applied', applied_to_invoice_id: 'adj' })] }); var aR = custOf(rR, 'Alpha');
+check('SUPPORTED ADJUSTMENT: a customer credit of 30 APPLIED to the invoice explains the lower balance (100 − 40 paid − 30 credit = 30) → owed 30, not to check; the applied credit is not held', aR.owed_cents === 3000 && aR.recon.length === 0 && aR.held_cents === 0, aR);
 // scope
 var r8 = run({ invoices: [inv('v', 'A', 100, 0, { record_status: 'void' }), inv('e', 'A', 100, 0, { business: 'EG' }), inv('old', 'A', 100, 0, { invoice_date: '2025-01-01' }), inv('ok', 'A', 10, 0), inv('eur', 'A', 30, 0, { currency: 'EUR' })], credits: [cr('pc', 'A', 9, { source_transaction_id: 'tx-priv' }), cr('ob', 'A', 7, { wave_business_id: 'OTHER' })], floor: '2026-01-01', priv: { all: false, hidden: { ACC9: true } }, accountOf: { 'tx-priv': 'ACC9' } });
 var a8 = custOf(r8, 'Alpha');

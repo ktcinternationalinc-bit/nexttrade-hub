@@ -92,7 +92,7 @@ export async function POST(req) {
       var cbInv = await fetchAll(function () { return db.from('accounting_invoices').select('id, invoice_number, accounting_customer_id, invoice_date, total_amount, amount_paid, balance_due, record_status, currency, wave_business_id').order('id', { ascending: true }); });
       var cbCs = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name, business_tag').order('id', { ascending: true }); });
       var cbNames = {}; var cbTag = {}; cbCs.forEach(function (c) { cbNames[c.id] = c.company_name || c.contact_name || ''; if (c.business_tag) { cbTag[c.id] = c.business_tag; } });
-      var cbCr = await db.from('customer_credits').select('id, accounting_customer_id, amount, status, source_transaction_id, created_at, wave_business_id').eq('status', 'open').limit(5000);
+      var cbCr = await db.from('customer_credits').select('id, accounting_customer_id, amount, status, source_transaction_id, applied_to_invoice_id, created_at, wave_business_id').in('status', ['open', 'applied']).limit(5000);
       if (cbCr.error) { return bad('The customer credits could not be read (' + cbCr.error.message + ').', 503); }
       var cbUn = await db.from('unapplied_deposits').select('id, accounting_customer_id, amount, status, bank_transaction_id, created_at, wave_business_id').eq('status', 'open').limit(5000);
       if (cbUn.error) { return bad('The unapplied deposits could not be read (' + cbUn.error.message + ').', 503); }

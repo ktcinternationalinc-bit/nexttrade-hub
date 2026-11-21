@@ -39,7 +39,7 @@ export default function CustomerBalances(props) {
         <span><b style={{ color: HELD }}>{'Held for customers ' + money(t.held_cents)}</b></span>
         <span><b style={{ color: OWED }}>{'Still owed by customers ' + money(t.owed_cents)}</b>{' (part paid ' + money(t.owed_partly_cents) + ' · not paid at all ' + money(t.owed_unpaid_cents) + ')'}</span>
         {t.unidentified_cents ? <span><b>{'Customer not identified ' + money(t.unidentified_cents)}</b></span> : null}
-        {t.recon_count ? <span style={{ color: '#b45309' }}><b>{t.recon_count + ' invoice(s) to check'}</b>{' — they show more paid than their total'}</span> : null}
+        {t.recon_count ? <span style={{ color: '#b45309' }}><b>{t.recon_count + ' invoice(s) to check'}</b>{' — their own figures disagree, so they are left out of both amounts'}</span> : null}
       </div>
       <table className="w-full"><tbody>
         {shown.map(function (c) { var k = c.customer_id || c.customer; var isO = opened === k; return [
@@ -51,7 +51,7 @@ export default function CustomerBalances(props) {
           isO ? <tr key={k + ':x'}><td colSpan={3} style={{ background: '#f8fafc', padding: 4 }}>
             {c.owed.map(function (r) { return <div key={r.invoice_id} style={{ display: 'flex', gap: 8 }}><button type="button" onClick={function (e) { e.stopPropagation(); if (props.onOpenInvoice) { props.onOpenInvoice(r.invoice_id); } }} style={{ color: '#1d4ed8', fontWeight: 800, textDecoration: 'underline' }}>{r.number || 'invoice'}</button><span>{r.date + ' · total ' + money(r.total_cents) + ' · paid ' + money(r.paid_cents) + ' · '}<b style={{ color: OWED }}>{'owed ' + money(r.balance_cents)}</b>{(r.partly ? ' · part paid' : ' · not paid') + (r.age_days !== null && r.age_days !== undefined ? ' · ' + r.age_days + ' days' : '')}</span></div>; })}
             {c.held.map(function (h) { return <div key={h.kind + h.id}><b style={{ color: HELD }}>{'held ' + money(h.cents)}</b>{' · ' + (h.kind === 'credit' ? 'customer credit' : 'deposit not applied') + (h.date ? ' since ' + h.date : '') + ' — to return by wire or apply to a next invoice'}</div>; })}
-            {(c.recon || []).map(function (r) { return <div key={'r' + r.invoice_id} style={{ color: '#b45309' }}>{'To check: ' + (r.number || 'invoice') + ' shows ' + money(r.paid_cents) + ' paid on a total of ' + money(r.total_cents) + ' — not counted in either amount until checked'}</div>; })}
+            {(c.recon || []).map(function (r) { return <div key={'r' + r.invoice_id} style={{ color: '#b45309' }}><button type="button" onClick={function (e) { e.stopPropagation(); if (props.onOpenInvoice) { props.onOpenInvoice(r.invoice_id); } }} style={{ color: '#b45309', fontWeight: 800, textDecoration: 'underline' }}>{r.number || 'invoice'}</button>{' to check: ' + (r.reason || 'its figures disagree') + ' — total ' + money(r.total_cents) + ', paid ' + money(r.paid_cents) + (r.credit_applied_cents ? ', credit applied ' + money(r.credit_applied_cents) : '') + ', balance on the invoice ' + money(r.balance_cents) + '. Not counted in either amount until checked.'}</div>; })}
             {Object.keys(c.other_currency || {}).map(function (cur) { return <div key={cur} style={{ color: SUB }}>{'Also owed in ' + cur + ': ' + ((c.other_currency[cur] || 0) / 100).toFixed(2) + ' ' + cur + ' (not added to the dollars)'}</div>; })}
           </td></tr> : null]; })}
       </tbody></table>
