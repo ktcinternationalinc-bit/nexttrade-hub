@@ -68,7 +68,7 @@ export default function FundsHeldPanel(props) {
   // the company actually paid them, a reference / where the proof is, and confirms they were ALREADY paid out of this transfer.
   function openRecordPaid(p, t) {
     setForm({ kind: 'record_paid', party: p.party, id: t.id, max: Number(t.held), date: '', reference: '', reason: '', already: false, picks: {}, bills: null, click: clickId() });
-    api({ action: 'record_paid_candidates', party: p.party }).then(function (j) { setForm(function (f) { return f && f.kind === 'record_paid' && f.id === t.id ? Object.assign({}, f, { bills: (j && j.ok) ? (j.bills || []) : [], billsErr: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the bills.') }) : f; }); });
+    api({ action: 'record_paid_candidates', party: p.party, bank_transaction_id: t.id }).then(function (j) { setForm(function (f) { return f && f.kind === 'record_paid' && f.id === t.id ? Object.assign({}, f, { bills: (j && j.ok) ? (j.bills || []) : [], billsErr: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the bills.') }) : f; }); });
   }
   function pickedTotal(fm) { var tot = 0; Object.keys((fm && fm.picks) || {}).forEach(function (k) { tot += Number(String(fm.picks[k] || '').replace(/,/g, '')) || 0; }); return Math.round(tot * 100) / 100; }
   function saveRecordPaid() {
@@ -140,9 +140,9 @@ export default function FundsHeldPanel(props) {
                 <div className="text-[11px] mb-1" style={{ color: SUB }}>{'Only bills that were really paid by ' + p.party + ' from this money. A new bill that still needs paying goes through Wires → New → ' + p.party + ' (two signatures). Type the date ' + p.party + ' paid, not the date we sent the money.'}</div>
                 {form.bills === null ? <div className="text-[11px]" style={{ color: MUTED }}>Looking for open bills…</div> : form.billsErr ? <div className="text-[11px]" style={{ color: '#991b1b' }}>{form.billsErr}</div> : form.bills.length === 0 ? <div className="text-[11px]" style={{ color: MUTED }}>No open bill can be recorded here.</div> :
                   <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #fde68a', borderRadius: 6 }}>{form.bills.map(function (b) { var on = Object.prototype.hasOwnProperty.call(form.picks || {}, b.id);
-                    return <label key={b.id} className="flex gap-2 items-center text-[11px] px-2 py-0.5" style={{ color: INK, borderTop: '1px solid #fef3c7' }}>
-                      <input type="checkbox" checked={on} onChange={function (e) { var pk = Object.assign({}, form.picks); if (e.target.checked) { pk[b.id] = String(b.open); } else { delete pk[b.id]; } setForm(Object.assign({}, form, { picks: pk })); }} />
-                      <span>{b.bill_date || '—'}</span><b>{b.vendor}</b><span>{'bill ' + (b.bill_number || '—')}</span><span style={{ color: MUTED }}>{'open ' + fmt(b.open) + (b.currency !== 'USD' ? ' ' + b.currency : '')}</span>
+                    return <label key={b.id} className="flex gap-2 items-center text-[11px] px-2 py-0.5" style={{ color: b.same_currency === false ? MUTED : INK, borderTop: '1px solid #fef3c7' }} title={b.same_currency === false ? 'This bill is in ' + b.currency + ' and the transfer is not — it cannot be recorded against it (no conversion is made).' : ''}>
+                      <input type="checkbox" disabled={b.same_currency === false} checked={on} onChange={function (e) { var pk = Object.assign({}, form.picks); if (e.target.checked) { pk[b.id] = String(b.open); } else { delete pk[b.id]; } setForm(Object.assign({}, form, { picks: pk })); }} />
+                      <span>{b.bill_date || '—'}</span><b>{b.vendor}</b><span>{'bill ' + (b.bill_number || '—')}</span><span style={{ color: MUTED }}>{'open ' + fmt(b.open) + (b.currency !== 'USD' ? ' ' + b.currency : '')}</span>{b.same_currency === false ? <span className="font-bold" style={{ color: '#b45309' }}>{'other currency — cannot be recorded here'}</span> : null}
                       {on && <input className={inp} style={Object.assign({ width: 90 }, inpS)} value={form.picks[b.id]} onChange={function (e) { var pk = Object.assign({}, form.picks); pk[b.id] = e.target.value; setForm(Object.assign({}, form, { picks: pk })); }} />}
                     </label>; })}</div>}
                 <div className="flex gap-2 items-center flex-wrap mt-2">

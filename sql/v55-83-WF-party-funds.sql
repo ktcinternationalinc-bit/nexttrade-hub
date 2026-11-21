@@ -502,7 +502,7 @@ DECLARE v_party text := nullif(trim(coalesce(p->>'party', '')), ''); v_txn uuid 
   v_reason text := nullif(left(trim(coalesce(p->>'reason', '')), 300), ''); v_actor uuid := nullif(p->>'actor', '')::uuid;
   v_req text := nullif(p->>'request_id', ''); v_closed_ok boolean := coalesce((p->>'allow_closed')::boolean, false);
   v_bills jsonb := coalesce(p->'bills', '[]'::jsonb); t record; x record; v_fp text; v_old record; lock_through date; v_state text;
-  v_ids uuid[] := ARRAY[]::uuid[]; v_pid uuid; v_total numeric := 0; v_res jsonb; s jsonb; v_n int;
+  v_ids uuid[] := ARRAY[]::uuid[]; v_pid uuid; v_total numeric := 0; v_res jsonb; s jsonb; v_n int; v_cur text; v_bcur text; v_bname text;
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: no signed-in person.'; END IF;
   IF v_party IS NULL OR NOT EXISTS (SELECT 1 FROM public.paid_through_parties z WHERE z.name = v_party) THEN RAISE EXCEPTION 'HUB_GUARD: unknown company.'; END IF;
@@ -526,6 +526,7 @@ BEGIN
   IF t.id IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: the transfer was not found.'; END IF;
   IF coalesce(t.direction, '') <> 'out' OR t.transfer_group_id IS NOT NULL OR lower(trim(coalesce(t.third_party_payer, ''))) <> lower(v_party) THEN RAISE EXCEPTION 'HUB_GUARD: that is not a transfer marked as sent to %. Mark it first (All Transactions).', v_party; END IF;
   IF t.pending IS TRUE OR coalesce(t.review_status, '') = 'duplicate' THEN RAISE EXCEPTION 'HUB_GUARD: that bank line is pending or a duplicate copy.'; END IF;
+  SELECT upper(coalesce(nullif(to_jsonb(b)->>'iso_currency', ''), 'USD')) INTO v_cur FROM public.bank_transactions b WHERE b.id = v_txn; -- Codex 09:27: no conversion is made
   SELECT f.state INTO v_state FROM public.party_funding_transfers f WHERE f.bank_transaction_id = v_txn;
   IF v_state = 'confirmed' THEN RAISE EXCEPTION 'HUB_GUARD: this transfer is already confirmed — bills it already paid are recorded BEFORE confirming. Put it back to needs reconciliation first (that changes nothing already recorded).'; END IF;
   IF t.d IS NOT NULL AND v_date < t.d THEN RAISE EXCEPTION 'HUB_GUARD: % cannot have paid these bills out of this transfer before the money was sent (%).', v_party, t.d; END IF;
@@ -543,6 +544,8 @@ BEGIN
     IF x.amount IS NULL OR x.amount <= 0 THEN RAISE EXCEPTION 'HUB_GUARD: every bill needs an amount above zero.'; END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('hub-bill:' || x.bill_id::text, 0));
     IF NOT EXISTS (SELECT 1 FROM public.vendor_bills vb WHERE vb.id = x.bill_id AND vb.record_status = 'active') THEN RAISE EXCEPTION 'HUB_GUARD: a bill was not found or is not active.'; END IF;
+    SELECT upper(coalesce(nullif(to_jsonb(vb)->>'currency', ''), 'USD')), concat_ws(' ', vb.vendor_name, vb.bill_number) INTO v_bcur, v_bname FROM public.vendor_bills vb WHERE vb.id = x.bill_id;
+    IF v_bcur <> v_cur THEN RAISE EXCEPTION 'HUB_GUARD: % is in %, the transfer is in % — a bill in another currency cannot be recorded against it (no conversion is made). Nothing was recorded.', v_bname, v_bcur, v_cur; END IF;
     INSERT INTO public.vendor_bill_payments (bill_id, amount, paid_date, bank_transaction_id, method, created_by, request_id)
     VALUES (x.bill_id, x.amount, v_date, v_txn, 'historical_reconciliation', v_actor, v_req) RETURNING id INTO v_pid;
     v_ids := v_ids || v_pid; v_total := v_total + x.amount;

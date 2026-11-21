@@ -97,6 +97,11 @@ export async function POST(req) {
     if (action === 'record_paid_candidates') {
       if (!canManage) { return fail('This needs the 🔒 "Advances: Manage" permission.', 403); }
       var pcParty = parties.filter(function (p) { return p.name === body.party; })[0]; if (!pcParty) { return fail('Pick NextTrade or RTM.'); }
+      // Codex 09:27 — no currency conversion: only bills in the transfer's own currency can be recorded against it
+      var pcT = await db.from('bank_transactions').select('id, iso_currency, wave_business_id, account_id').eq('id', body.bank_transaction_id || '').maybeSingle();
+      if (pcT.error) { return readFail('the transfer', pcT.error); }
+      if (!pcT.data || pcT.data.wave_business_id !== US_WAVE_BUSINESS_ID || isPrivateRow(pcT.data, scope) || (!scope.all && !pcT.data.account_id)) { return fail('Transfer not found.', 404); }
+      var pcCur = String(pcT.data.iso_currency || 'USD').toUpperCase();
       var vbq; try { vbq = await fetchAllRows(function () { return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, total_amount, paid_via, record_status, currency').eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('record_status', 'active').order('id', { ascending: true }); }); } catch (eVb) { return readFail('the bills', eVb); }
       var vbs = vbq.filter(function (b) { return !b.paid_via || String(b.paid_via).toLowerCase() === pcParty.name.toLowerCase(); });
       var vIds = vbs.map(function (b) { return b.id; }); var paidB = {}; var onWire = {};
@@ -110,7 +115,8 @@ export async function POST(req) {
       }
       var cb = vbs.map(function (b) { return { id: b.id, vendor: b.vendor_name || '', bill_number: b.bill_number || '', bill_date: b.bill_date || null, total: r2(b.total_amount), currency: String(b.currency || 'USD').toUpperCase(), open: r2((Number(b.total_amount) || 0) - (paidB[b.id] || 0) - (onWire[b.id] || 0)), via: b.paid_via || null }; })
         .filter(function (b) { return b.open > 0.005; }).sort(function (a, b) { return String(a.bill_date || '') < String(b.bill_date || '') ? -1 : 1; });
-      return NextResponse.json({ ok: true, bills: cb.slice(0, 500) });
+      cb.forEach(function (b) { b.same_currency = b.currency === pcCur; });
+      return NextResponse.json({ ok: true, transfer_currency: pcCur, bills: cb.slice(0, 500) });
     }
     if (action === 'refund_candidates') {
       if (!canManage) { return fail('This needs the 🔒 "Advances: Manage" permission.', 403); }
@@ -225,6 +231,12 @@ export async function POST(req) {
       var rpRef = String(body.reference || '').trim().substring(0, 200); if (rpRef.length < 3) { return fail('Type the payment reference or where the proof is.'); }
       if (body.already_paid !== true) { return fail('Tick that these bills were ALREADY paid by ' + party.name + ' out of this transfer. New bills go through Wires → New.'); }
       var rpWhy = String(body.reason || '').trim().substring(0, 300); if (rpWhy.length < 3) { return fail('Say why, in a few words.'); }
+      // Codex 09:27 — a bill in another currency than the transfer is refused (no conversion is made); the database checks it again
+      var rpT = await db.from('bank_transactions').select('iso_currency').eq('id', line.id).maybeSingle(); if (rpT.error) { return readFail('the transfer', rpT.error); }
+      var rpCur = String((rpT.data && rpT.data.iso_currency) || 'USD').toUpperCase();
+      var rpB = await db.from('vendor_bills').select('id, vendor_name, bill_number, currency').in('id', rpClean.map(function (x) { return x.bill_id; })); if (rpB.error) { return readFail('the bills', rpB.error); }
+      var rpOff = (rpB.data || []).filter(function (b) { return String(b.currency || 'USD').toUpperCase() !== rpCur; });
+      if (rpOff.length) { return fail(rpOff.map(function (b) { return (b.vendor_name || 'A bill') + ' ' + (b.bill_number || '') + ' is in ' + String(b.currency).toUpperCase(); }).join('; ') + ' — the transfer is in ' + rpCur + '. A bill in another currency cannot be recorded against it (no conversion is made). Nothing was recorded.', 409); }
       var rpR = await db.rpc('hub_party_record_paid', { p: { party: party.name, bank_transaction_id: line.id, bills: rpClean, paid_date: body.paid_date, reference: rpRef, already_paid: true, reason: rpWhy, actor: userId, request_id: rid, allow_closed: isSuper && body.allow_closed === true } });
       if (rpR.error) { return guardFail(rpR, canTotalsW); }
       var rpA = ack(action, rpR.data); rpA.bills = rpClean.length; return NextResponse.json(rpA);

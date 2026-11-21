@@ -322,6 +322,10 @@ try {
   var zAud = (await db.query("SELECT count(*)::int AS n FROM public.hub_audit_log WHERE action = 'party_historical_reconciliation' AND entity_id = $1", [String(Z)])).rows[0].n;
   check('Record bills already paid: recorded ONCE (same click twice = repeat), dated the day the company paid, method historical_reconciliation, reference kept, audited as history', !zp1.error && zp1b.rows && zp1b.rows[0].r.repeat === true && zPay.length === 1 && zPay[0].method === 'historical_reconciliation' && zPay[0].d === '2026-11-16' && zRow && zRow.reference === 'RTM wire copy 16 Nov' && zRow.n === 1 && zAud === 1 && Number((await st(Z)).bills) === 200, [zp1, zp1b, zRow, zPay, zAud]);
   var zFake = await q(db, "INSERT INTO public.vendor_bill_payments (bill_id, amount, paid_date, bank_transaction_id, method, created_by) VALUES ($1, 50, '2026-11-16', $2, 'historical_reconciliation', $3) RETURNING id", [ZB2, Z, ACTOR]);
+  await db.query('ALTER TABLE public.vendor_bills ADD COLUMN IF NOT EXISTS currency text');
+  var ZC = await bill(150, RTM); await db.query("UPDATE public.vendor_bills SET currency = 'CAD' WHERE id = $1", [ZC]);
+  var zCad = await recordPaid(db, Z, RTM, [[ZC, 150]], '2026-11-16');
+  check('Record bills already paid: a CAD bill against the USD transfer is refused by the database (no conversion is made), nothing recorded (Codex 09:27)', /is in CAD, the transfer is in USD/.test(zCad.error || '') && Number((await st(Z)).bills) === 200, [zCad, await st(Z)]);
   check('writing method historical_reconciliation straight into the table (not through the action) is refused', /Record bills already paid/.test(zFake.error || ''), zFake);
   await confirm(db, Z, RTM);
   var zp2 = await pay(db, ZB2, 100, Z, '2026-11-17'); var zp3 = await recordPaid(db, Z, RTM, [[ZB2, 100]], '2026-11-17');

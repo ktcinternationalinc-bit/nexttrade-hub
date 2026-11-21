@@ -47,7 +47,8 @@ function seed(installed) {
   db.t.vendor_bills = [{ id: 'b1', wave_business_id: US, vendor_name: 'Kronos', bill_number: 'K-1', bill_date: '2026-09-10', category: 'trucking', total_amount: 6000, paid_via: NT, record_status: 'active', release_number: '1002-1' },
     { id: 'b2', wave_business_id: US, vendor_name: 'Rent Co', bill_number: 'R-9', bill_date: '2026-09-12', category: 'rent', total_amount: 900, paid_via: NT, record_status: 'active', release_number: null },
     { id: 'b3', wave_business_id: US, vendor_name: 'Ocean Line', bill_number: 'O-3', bill_date: '2026-09-15', category: 'freight', total_amount: 500, paid_via: null, record_status: 'active', release_number: null },
-    { id: 'b4', wave_business_id: US, vendor_name: 'Other Co', bill_number: 'X-1', bill_date: '2026-09-16', category: 'freight', total_amount: 70, paid_via: NT, record_status: 'active', release_number: null }];
+    { id: 'b4', wave_business_id: US, vendor_name: 'Other Co', bill_number: 'X-1', bill_date: '2026-09-16', category: 'freight', total_amount: 70, paid_via: NT, record_status: 'active', release_number: null },
+    { id: 'b5', wave_business_id: US, vendor_name: 'Maple Freight', bill_number: 'C-5', bill_date: '2026-09-17', category: 'freight', total_amount: 800, paid_via: null, record_status: 'active', release_number: null, currency: 'CAD' }];
   db.t.vendor_bill_payments = [{ id: 'p1', bill_id: 'b1', amount: 6000, paid_date: '2026-09-11', bank_transaction_id: 'T1', voided: false, method: 'rtm' },
     { id: 'p2', bill_id: 'b2', amount: 900, paid_date: '2026-09-20', bank_transaction_id: null, voided: false, method: 'rtm' }]; // paid through NextTrade, no transfer named
   db.t.party_money_entries = [{ id: 'r0', party: RTM, bucket: 'refund', kind: 'refund', amount: 40, source_bank_transaction_id: 'T2', bank_transaction_id: 'INR', entry_date: '2026-09-23', reason: 'old refund' }, { id: 'f1', party: NT, bucket: 'fee', kind: 'fee_from_transfer', amount: 500, source_bank_transaction_id: 'T1', entry_date: '2026-09-20', reason: 'handling' }];
@@ -187,8 +188,11 @@ function snap(db) { return JSON.stringify([db.t.bank_transactions, db.t.vendor_b
   var j9 = await call({ action: 'funds' }); var t2 = party(j9, RTM).transfers.filter(function (t) { return t.id === 'T2'; })[0];
   check('a refund already in the records is still SHOWN: the RTM transfer of 4,000 with 40 back holds 3,960, with the refund row', t2.refunded === 40 && t2.held === 3960 && t2.refunds.length === 1 && t2.refunds[0].amount === 40, t2);
   // ── (WF) Record bills already paid — history, its own action (Codex 21 Nov 09:05) ──
-  var cnd = await call({ action: 'record_paid_candidates', party: RTM });
-  check('bills that can be recorded as already paid by RTM: open, not on an open wire, paid through RTM or by nobody — only Ocean Line 500 (NextTrade bills, paid bills left out)', cnd.ok && cnd.bills.length === 1 && cnd.bills[0].id === 'b3' && cnd.bills[0].open === 500, cnd);
+  var cnd = await call({ action: 'record_paid_candidates', party: RTM, bank_transaction_id: 'T2' });
+  var cOcean = (cnd.bills || []).filter(function (b) { return b.id === 'b3'; })[0]; var cMaple = (cnd.bills || []).filter(function (b) { return b.id === 'b5'; })[0];
+  check('bills that can be recorded as already paid by RTM: open, not on an open wire, paid through RTM or by nobody — Ocean Line 500 usable; the CAD bill listed as other currency (NextTrade bills, paid bills left out)', cnd.ok && cnd.transfer_currency === 'USD' && cnd.bills.length === 2 && cOcean && cOcean.open === 500 && cOcean.same_currency === true && cMaple && cMaple.currency === 'CAD' && cMaple.same_currency === false, cnd);
+  var rpCad = await call(Object.assign({ action: 'record_paid', party: RTM, bank_transaction_id: 'T2', bills: [{ bill_id: 'b5', amount: 200 }], paid_date: '2026-09-18', reference: 'RTM wire copy', already_paid: true, reason: 'reconciling T2', request_id: 'click-rpcad' }));
+  check('Record bills already paid: a CAD bill against the USD transfer is refused (409, no conversion is made), nothing called (Codex 09:27)', rpCad._status === 409 && /Maple Freight C-5 is in CAD/.test(rpCad.error || '') && /no conversion/.test(rpCad.error || '') && db.calls.filter(function (c) { return c[0] === 'record_paid'; }).length === 0, rpCad);
   var good = { action: 'record_paid', party: RTM, bank_transaction_id: 'T2', bills: [{ bill_id: 'b3', amount: 200.004 }], paid_date: '2026-09-18', reference: 'RTM wire copy', already_paid: true, reason: 'reconciling T2', request_id: 'click-rp01' };
   var bad = [
     [Object.assign({}, good, { paid_date: '' }), /actually paid/],
@@ -202,7 +206,7 @@ function snap(db) { return JSON.stringify([db.t.bank_transactions, db.t.vendor_b
   var rp1 = await call(good); var rpc1 = db.calls.filter(function (c) { return c[0] === 'record_paid'; })[0];
   check('Record bills already paid: one database call with the company, transfer, bills in cents, the paid date, reference, statement, reason, click id, the verified person; a bare acknowledgment', rp1.ok === true && rp1.action === 'record_paid' && rp1.bills === 1 && rp1.state === undefined && rpc1 && rpc1[1].party === RTM && rpc1[1].bank_transaction_id === 'T2' && rpc1[1].bills[0].amount === 200 && rpc1[1].paid_date === '2026-09-18' && rpc1[1].reference === 'RTM wire copy' && rpc1[1].already_paid === true && rpc1[1].actor === 'u1' && rpc1[1].request_id === 'click-rp01' && rpc1[1].allow_closed === false, [rp1, rpc1]);
   state.perms = { 'accounting.view': true, 'bills.view': true };
-  check('Record bills already paid and its bill list need the 🔒 Advances: Manage switch', (await call(Object.assign({}, good, { request_id: 'click-rp02' })))._status === 403 && (await call({ action: 'record_paid_candidates', party: RTM }))._status === 403);
+  check('Record bills already paid and its bill list need the 🔒 Advances: Manage switch', (await call(Object.assign({}, good, { request_id: 'click-rp02' })))._status === 403 && (await call({ action: 'record_paid_candidates', party: RTM, bank_transaction_id: 'T2' }))._status === 403);
   db = seed(false); state.perms = { 'accounting.view': true, 'bills.view': true, 'advances.manage': true };
   var rp0 = await call(Object.assign({}, good, { request_id: 'click-rp03' }));
   check('Record bills already paid WITHOUT the database step: 409, nothing called', rp0._status === 409 && db.calls.filter(function (c) { return c[0] === 'record_paid'; }).length === 0, rp0);
