@@ -18,6 +18,8 @@ export function billNumberKey(vendor, number) {
 }
 function live(b) { return !b.record_status || b.record_status === 'active'; }
 function isCredit(b) { return /^credit/i.test(String(b.bill_type || '')); }
+// the one identity of a payable bill: company + vendor + number (null for a credit document, an inactive bill, no vendor or no number)
+export function billIdentity(b) { if (!b || !live(b) || isCredit(b)) { return null; } var k = billNumberKey(b.vendor_name, b.bill_number); return k ? String(b.wave_business_id || '') + '#' + k : null; }
 
 // bills: [{ id, vendor_name, bill_number, bill_date, total_amount, record_status, wave_business_id, bill_type, disputed,
 //           validation_status, release_number, created_at, attachment_path }]

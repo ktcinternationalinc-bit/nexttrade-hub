@@ -48,7 +48,9 @@ ok('1f: …the same release on another date in the books → passes (information
 // ── reference + date
 var r1 = bill('r1', 'Fast Trucking', 'INV-77', '1003-030', 500, '2026-11-02');
 ok('2a: same reference + SAME date on one wire, same vendor → BLOCK', lvl(run([line(r1), line(bill('r2', 'Fast Trucking', 'inv-77', '1003-031', 500, '2026-11-02'))]), 'DUP_REF_IN_WIRE').indexOf('block') >= 0);
-ok('2b: same reference on a DIFFERENT date → passes (information only)', run([line(r1), line(bill('r3', 'Fast Trucking', 'INV-77', '1003-031', 500, '2026-12-02'))]).pass);
+// v55.83-WZ realign (Max 21 Nov: "i don't want any duplicate bills"; Codex 10:22 P1) — the same vendor + bill number is the SAME bill
+// whatever its date: two such bills on one wire now BLOCK (it used to pass as information only)
+ok('2b: same vendor + same bill number on a DIFFERENT date, both on the wire → BLOCK (same bill twice)', (function () { var rr = run([line(r1), line(bill('r3', 'Fast Trucking', 'INV-77', '1003-031', 500, '2026-12-02'))]); return !rr.pass && rr.checks.some(function (c) { return c.code === 'DUP_REF_IN_WIRE' && c.level === 'block'; }); })());
 var refBooks = run([line(r1)], { sameNumber: { 'INV-77': [{ bill_id: 'x', vendor_name: 'Fast Trucking', bill_date: '2026-11-02', paid_total: 500 }] } });
 ok('2c: same vendor + reference + date already in the books (paid) → BLOCK "a duplicate bill"', !refBooks.pass && refBooks.checks.some(function (c) { return c.code === 'DUP_REF' && c.level === 'block' && /duplicate bill/.test(c.text) && /ALREADY PAID/.test(c.text); }));
 var refOtherV = run([line(r1)], { sameNumber: { 'INV-77': [{ bill_id: 'y', vendor_name: 'Other Co', bill_date: '2026-11-02' }] } });

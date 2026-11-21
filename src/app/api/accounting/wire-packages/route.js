@@ -94,7 +94,7 @@ async function loadPackage(db, id) {
   if (lr.error) { return { error: lr.error }; }
   var ctx = await packageContext(db, id, lr.data || []);
   var pkg = pr.data;
-  var input = { pkg: pkg, lines: ctx.lines, sameRelease: ctx.sameRelease, sameNumber: ctx.sameNumber, sameOther: ctx.sameOther, knownReleases: ctx.knownReleases, otherOpen: ctx.otherOpen };
+  var input = { pkg: pkg, lines: ctx.lines, sameRelease: ctx.sameRelease, sameNumber: ctx.sameNumber, sameIdentity: ctx.sameIdentity, sameOther: ctx.sameOther, knownReleases: ctx.knownReleases, otherOpen: ctx.otherOpen };
   var hash = packageFingerprint(pkg, ctx.lines);
   // v55.83-RL — approved overrides (who + why) for THIS exact wire turn their ⛔ into ↷; the rest still block
   var ovr = [];
@@ -104,7 +104,10 @@ async function loadPackage(db, id) {
   // v55.83-RJ (review gap 6) — proof that the vendors were paid is asked from RTM-type companies only (NextTrade: bills only, no proof step)
   var paidThrough = pkg.payee_kind === 'service_provider' || (!!pkg.funding_txn_id && pkg.payee_kind !== 'vendor'); // v55.83-SQ — a request to NextTrade works like one to RTM: their wire copies are expected
   var rtmPending = paidThrough ? ctx.lines.filter(function (l) { return !l.rtm.confirmed_at; }).length : 0;
-  return { pkg: pkg, rawLines: lr.data || [], ctx: ctx, input: input, live: live, hash: hash, overrides: ovr, status: packageStatus(pkg, hash, rtmPending), rtmPending: rtmPending, paidThrough: paidThrough };
+  // v55.83-WZ (Codex 10:22) — a wire approved BEFORE a new block existed (e.g. a duplicate or a disputed bill that could then be
+  // overridden) is re-checked live: while today's checks find a block, it is flagged, not ready to send
+  var stP = packageStatus(pkg, hash, rtmPending); if (stP === 'ready_to_send' && live && live.pass !== true) { stP = 'flagged'; }
+  return { pkg: pkg, rawLines: lr.data || [], ctx: ctx, input: input, live: live, hash: hash, overrides: ovr, status: stP, rtmPending: rtmPending, paidThrough: paidThrough };
 }
 
 // v55.83-US — a wire line refused by the database (hub_wire_line_cap: more than is left on the bill), or the old one-wire rule
@@ -767,6 +770,7 @@ export async function POST(req) {
     if (action === 'mark_sent') {
       var gT = await perm(db, userId, ['wires.send'], req);
       if (!gT) { return fail('Marking a wire sent needs "Wires: Send" — Settings → 🏦 Banking & Accounting Access.', 403); }
+      if (pkg.status === 'draft' && P.live && P.live.pass !== true) { return fail('This wire no longer passes its checks — ' + (P.live.checks || []).filter(function (c) { return c.level === 'block'; }).map(function (c) { return c.text; }).slice(0, 3).join(' · ') + ' Fix it (reopen the wire, take the bill off or resolve it) before it can be sent.', 409); } // v55.83-WZ — re-checked at send time
       if (P.status !== 'ready_to_send') { return fail(pkg.status === 'draft' ? 'Not approved yet: it needs a passing 🤖 audit on the current bills and BOTH sign-offs.' : 'This wire is already ' + pkg.status + '.', 409); }
       if (!isDate(body.sent_date)) { return fail('The date the wire was sent is required.'); }
       // v55.83-SP — a planned date never sends anything; "sent" means it already happened

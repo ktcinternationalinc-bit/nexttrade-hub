@@ -17,6 +17,7 @@
 // written to the append-only audit trail.
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
+import { sameIdentityFor } from '../../../../lib/bill-identity-server'; // v55.83-WZ
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { audit } from '../../../../lib/audit-server';
@@ -75,6 +76,7 @@ async function gather(db, txIds) {
     var nb = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status, bill_date', 'bill_number', nums); // RK: + date
     nb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.bill_number); (sameNumber[k] = sameNumber[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_date: b.bill_date || null }); });
   }
+  var sameIdentity = await sameIdentityFor(db, bills); // v55.83-WZ — the same bill by vendor + number, any date / amount / spelling
   // releases known to the business (warehouse orders + invoices)
   var known = [];
   if (rels.length) {
@@ -104,7 +106,7 @@ async function gather(db, txIds) {
         .map(function (o) { return { amount: r2(o.amount), paid_date: o.paid_date, bank_transaction_id: o.bank_transaction_id || null, label: o.bank_transaction_id ? (otherLabel[o.bank_transaction_id] || 'another bank payment') : (o.method ? 'recorded ' + o.method : 'recorded payment') }; });
       return { payment_id: p.id, bill_id: p.bill_id, amount: r2(p.amount), method: p.method || null, bill: billBy[p.bill_id] || {}, other_payments: others };
     });
-    return { wire: wire, txn: t, lines: lines, sameRelease: sameRelease, sameNumber: sameNumber, knownReleases: known };
+    return { wire: wire, txn: t, lines: lines, sameRelease: sameRelease, sameNumber: sameNumber, sameIdentity: sameIdentity, knownReleases: known };
   }
   return { build: build, txBy: txBy };
 }

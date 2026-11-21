@@ -46,11 +46,25 @@ export function wireFingerprint(wire, lines, opts) {
 //           sameRelease: { RELEASE: [{bill_id, vendor_name, bill_number}] }   (ALL active bills carrying that release)
 //           sameNumber:  { BILLNUMBER: [{bill_id, vendor_name}] }             (ALL active bills carrying that number)
 //           knownReleases: ['1003-021', ...]                                   (releases found in orders / invoices) }
+// v55.83-WZ — the one identity of a payable bill: company + vendor written any way + number with dashes / spaces ignored. A copy of
+// billIdentity() in src/lib/bill-duplicates.js (this file stays import-free); __tests__/test-v55-83-wz-no-duplicate-bills.js checks they agree.
+var WZ_DROP = ['INCORPORATED', 'CORPORATION', 'COMPANY', 'LIMITED', 'INC', 'LLC', 'LTD', 'CORP', 'CO', 'LLP', 'LP', 'THE'];
+export function billIdentity(b) {
+  if (!b || (b.record_status && b.record_status !== 'active') || /^credit/i.test(String(b.bill_type || ''))) { return null; }
+  var n = String(b.bill_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  var v = String(b.vendor_name || '').toUpperCase().replace(/&/g, ' AND ').replace(/[^A-Z0-9 ]/g, ' ');
+  v = ' ' + v.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '') + ' ';
+  WZ_DROP.forEach(function (w) { v = v.split(' ' + w + ' ').join(' '); });
+  v = v.replace(/\s+/g, '');
+  if (!v || !n) { return null; }
+  return String(b.wave_business_id || '') + '#' + v + '|' + n;
+}
 export function auditWire(input) {
   var wire = (input && input.wire) || {};
   var lines = (input && input.lines) || [];
   var sameRel = (input && input.sameRelease) || {};
   var sameNum = (input && input.sameNumber) || {};
+  var sameId = (input && input.sameIdentity) || {}; var idSeen = {}; // v55.83-WZ — { identity: [{ bill_id, vendor_name, bill_number, bill_date, total_amount, paid_total }] }
   var sameOther = (input && input.sameOther) || {}; var oSeen = {};
   var known = {}; ((input && input.knownReleases) || []).forEach(function (k) { known[normRef(k)] = true; });
   var checks = [];
@@ -167,6 +181,25 @@ export function auditWire(input) {
         } else if (sameV) {
           add('info', 'SAME_REF_OTHER_DATE', who + ': reference ' + num + ' was also used by ' + (o.vendor_name || '?') + ' on ' + day(o.bill_date) + paidTxt2 + ' — a different date.');
         }
+      });
+    }
+    // ── v55.83-WZ (Max 21 Nov: "i don't want any duplicate bills"; Codex 10:22 P1) — the SAME bill by the one WZ identity (company +
+    // vendor written any way + number with dashes / spaces ignored), WHATEVER its date or amount: on this wire twice, or another
+    // active copy in the Hub. Always a block, never overridable (wire-audit OVERRIDABLE). A credit document and another vendor or
+    // company are not the same bill. Nothing already reported for the same pair above is said twice.
+    var idk = billIdentity(b);
+    if (idk) {
+      var idPrev = idSeen[idk];
+      if (idPrev && !checks.some(function (c) { return c.code === 'DUP_REF_IN_WIRE' && c.level === 'block' && c.bill_id === l.bill_id; })) {
+        add('block', 'DUP_REF_IN_WIRE', who + ' and ' + idPrev.who + ' are the SAME bill (same vendor and bill number' + (sameDay(idPrev.date, b.bill_date) === false ? ', even with different dates' : '') + ') — it is on this wire twice. Remove one.');
+      }
+      if (!idPrev) { idSeen[idk] = { who: who, date: b.bill_date }; }
+      (sameId[idk] || []).forEach(function (o) {
+        if (o.bill_id === l.bill_id || lines.some(function (x) { return x.bill_id === o.bill_id; })) { return; }
+        if (dupSeen[String(l.bill_id) + '|' + String(o.bill_id)]) { return; }
+        dupSeen[String(l.bill_id) + '|' + String(o.bill_id)] = true;
+        var paidId = o.paid_total > 0.005 ? ' — it was ALREADY PAID ($' + r2(o.paid_total).toFixed(2) + ')' : '';
+        add('block', 'DUP_REF', who + ': another copy of this bill is in the Hub — ' + (o.vendor_name || '?') + ' ' + copyWords(o) + paidId + '. Same vendor and bill number' + (sameDay(o.bill_date, b.bill_date) === false ? ' (a different date)' : '') + ': a duplicate. Void the extra copy in 💸 Bills → Duplicates to resolve.', { other_bill_id: o.bill_id });
       });
     }
     // ── v55.83-RL (Max 12:18 "a reference column ... besides the bill # and release #") — the other reference

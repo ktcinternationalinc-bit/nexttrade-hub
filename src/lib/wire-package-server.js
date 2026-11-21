@@ -3,6 +3,7 @@
 // other bills sharing a release / reference number, releases known from the
 // orders and invoices, and which bills already sit on another open package.
 import { normRef, packageLabel } from './wire-audit';
+import { sameIdentityFor } from './bill-identity-server'; // v55.83-WZ
 
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function chunk(arr, n) { var out = []; for (var i = 0; i < arr.length; i += n) { out.push(arr.slice(i, i + n)); } return out; }
@@ -56,15 +57,18 @@ export async function packageContext(db, pkgId, pkgLines) {
       ob.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.other_reference); (sameOther[k] = sameOther[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date || null, total_amount: b.total_amount, created_at: b.created_at || null }); });
     } catch (eOr) { sameOther = {}; }
   }
+  var sameIdentity = await sameIdentityFor(db, bills); // v55.83-WZ — the same bill by vendor + number, any date / amount / spelling
   var otherIds = [];
   Object.keys(sameOther).forEach(function (k) { sameOther[k].forEach(function (o) { if (billIds.indexOf(o.bill_id) < 0 && otherIds.indexOf(o.bill_id) < 0) { otherIds.push(o.bill_id); } }); });
   Object.keys(sameRelease).forEach(function (k) { sameRelease[k].forEach(function (o) { if (billIds.indexOf(o.bill_id) < 0 && otherIds.indexOf(o.bill_id) < 0) { otherIds.push(o.bill_id); } }); });
   Object.keys(sameNumber).forEach(function (k) { sameNumber[k].forEach(function (o) { if (billIds.indexOf(o.bill_id) < 0 && otherIds.indexOf(o.bill_id) < 0) { otherIds.push(o.bill_id); } }); });
+  Object.keys(sameIdentity).forEach(function (k) { sameIdentity[k].forEach(function (o) { if (billIds.indexOf(o.bill_id) < 0 && otherIds.indexOf(o.bill_id) < 0) { otherIds.push(o.bill_id); } }); });
   if (otherIds.length) {
     var op = await inChunks(db, 'vendor_bill_payments', 'bill_id, amount, voided', 'bill_id', otherIds);
     var opBy = {}; op.forEach(function (p) { if (p.voided !== true) { opBy[p.bill_id] = r2((opBy[p.bill_id] || 0) + (Number(p.amount) || 0)); } });
     Object.keys(sameRelease).forEach(function (k) { sameRelease[k].forEach(function (o) { o.paid_total = opBy[o.bill_id] || 0; }); });
     Object.keys(sameNumber).forEach(function (k) { sameNumber[k].forEach(function (o) { o.paid_total = opBy[o.bill_id] || 0; }); });
+    Object.keys(sameIdentity).forEach(function (k) { sameIdentity[k].forEach(function (o) { o.paid_total = opBy[o.bill_id] || 0; }); });
     Object.keys(sameOther).forEach(function (k) { sameOther[k].forEach(function (o) { o.paid_total = opBy[o.bill_id] || 0; }); });
   }
   var known = [];
@@ -90,7 +94,7 @@ export async function packageContext(db, pkgId, pkgLines) {
     return { line_id: l.id, payment_id: l.payment_id || null, bill_id: l.bill_id, amount: r2(l.amount), bill: billBy[l.bill_id] || {}, other_payments: others, will_mark: l.marked_paid_via === true,
       rtm: { paid_date: l.rtm_paid_date || null, reference: l.rtm_reference || null, file_id: l.rtm_file_id || null, confirmed_by: l.rtm_confirmed_by || null, confirmed_at: l.rtm_confirmed_at || null } };
   });
-  return { lines: lines, sameRelease: sameRelease, sameNumber: sameNumber, sameOther: sameOther, knownReleases: known, otherOpen: otherOpen, billBy: billBy };
+  return { lines: lines, sameRelease: sameRelease, sameNumber: sameNumber, sameIdentity: sameIdentity, sameOther: sameOther, knownReleases: known, otherOpen: otherOpen, billBy: billBy };
 }
 
 // Paid-through companies (RTM Capital, NextTrade Industries) — same source as Bills.
