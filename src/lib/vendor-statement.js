@@ -177,11 +177,27 @@ export function cleanStatementLines(arr, problems, info) {
       return;
     }
     var tA = r.amount === null ? null : cents(r.amount); var tO = r.open === null ? null : cents(r.open);
-    var bySince = eqTot(tO, since.owed, since.count) || eqTot(tA, since.owed, since.count);
-    var byAll = eqTot(tO, all.owed, all.count) || eqTot(tA, all.owed, all.count);
-    var colSince = openCol && eqTot(tA, since.amt, since.count);
-    var colAll = openCol && eqTot(tA, all.amt, all.count);
-    var equals = bySince || byAll || colSince || colAll;
+    // Codex 10:04 — EACH populated column of a total row is checked against ITS OWN column: the open / outstanding total against
+    // the open amounts (owedOf rule), the original-amount total against the original amounts. A matching original total can never
+    // clear a wrong open total. An amount-only total on an open-column statement may be either the original column's total or the
+    // balance (no open total printed to contradict it).
+    function scopeCheck(s) {
+      if (s.count === 0) { return null; }
+      var res = { ok: true, failed: [], column: false, viaOwed: false, column_sum: null };
+      if (tO !== null && Math.abs(tO - s.owed) > 1) { res.ok = false; res.failed.push({ col: 'open', printed: tO / 100, sum: s.owed / 100 }); }
+      if (tA !== null) {
+        if (openCol) {
+          var colOk = Math.abs(tA - s.amt) <= 1; var owedOk = tO === null && Math.abs(tA - s.owed) <= 1;
+          if (owedOk) { res.viaOwed = true; } else if (colOk) { res.column = true; res.column_sum = s.amt / 100; }
+          if (!colOk && !owedOk) { res.ok = false; res.failed.push(tO === null ? { col: 'total', printed: tA / 100, sum: s.owed / 100 } : { col: 'original', printed: tA / 100, sum: s.amt / 100 }); }
+        } else if (Math.abs(tA - s.owed) > 1) { res.ok = false; res.failed.push({ col: 'total', printed: tA / 100, sum: s.owed / 100 }); }
+        else { res.viaOwed = true; }
+      }
+      return res;
+    }
+    var cs = scopeCheck(since); var ca = scopeCheck(all);
+    var hitScope = cs && cs.ok ? 'since' : (ca && ca.ok ? 'all' : null); var hit = hitScope === 'since' ? cs : (hitScope === 'all' ? ca : null);
+    var equals = !!hit;
     if (r.role === 'candidate' && !equals) {
       n++;
       var unk = { n: n, ref: null, date: null, due_date: null, amount: r.amount, open: r.open, kind: 'unknown', po: r.po, page: r.page, src: r.src };
@@ -189,11 +205,11 @@ export function cleanStatementLines(arr, problems, info) {
       probs.push('A row with only an amount (' + money(r.open !== null ? r.open : r.amount) + (r.src ? ', ' + r.src : (r.page ? ', page ' + r.page : '')) + ') has no number, date or type and does NOT equal the lines above it — it is not taken as an invoice or as their total. Check it on the statement.');
       return;
     }
-    var sumHit = bySince ? since.owed : all.owed;
-    var value = (bySince || byAll) ? (eqTot(tO, sumHit, 1) ? r.open : r.amount) : (r.open !== null ? r.open : r.amount);
+    var value = r.open !== null ? r.open : r.amount; // the open / outstanding total is the payable figure when it is printed
     var t = { after_line: n, label: r.label, amount: r.amount, open: r.open, value: value, page: r.page, src: r.src,
-      equals: equals, of: (bySince || colSince) ? 'since' : ((byAll || colAll) ? 'all' : null), column_only: equals && !bySince && !byAll,
-      equals_all: byAll, subtotal: !!(r.label && SUBTOTAL_WORD.test(r.label)), labelled: r.role === 'total',
+      equals: equals, of: hitScope, column_only: !!(hit && tO === null && hit.column && !hit.viaOwed), column_sum: hit ? hit.column_sum : null,
+      failed: (cs || ca) && !equals ? (cs || ca).failed : [],
+      equals_all: !!(ca && ca.ok && (tO !== null || ca.viaOwed)), subtotal: !!(r.label && SUBTOTAL_WORD.test(r.label)), labelled: r.role === 'total',
       lines_since: since.count, lines_all: all.count, sum_since: since.owed / 100, sum_all: all.owed / 100 };
     totals.push(t);
     var trow = { n: null, ref: r.ref, date: null, due_date: null, amount: r.amount, open: r.open, kind: 'total', po: null, page: r.page, src: r.src };
@@ -204,7 +220,7 @@ export function cleanStatementLines(arr, problems, info) {
   if (dropped) { probs.push(dropped + ' row(s) had no invoice number and no amount and were left out.'); }
   if (badDates) { probs.push(badDates + ' date(s) could not be read as real dates and were left empty.'); }
   totals.forEach(function (t) {
-    if (!t.equals) { probs.push('Their total row ' + money(t.value) + (t.label ? ' (“' + t.label + '”)' : '') + ' does NOT equal the lines read above it (' + money(t.sum_since) + (t.lines_all !== t.lines_since ? ', or ' + money(t.sum_all) + ' for all lines so far' : '') + ') — a line may be missing or misread.'); }
+    if (!t.equals) { probs.push('Their total row ' + money(t.value) + (t.label ? ' (“' + t.label + '”)' : '') + ' is NOT correct: ' + totalFailWords(t) + ' — a line may be missing or misread.'); }
   });
   // the statement total: the last labelled grand total (never a subtotal), else the last total row equal to ALL lines (owedOf rule)
   var grand = null;
@@ -215,12 +231,20 @@ export function cleanStatementLines(arr, problems, info) {
   inf.grand_total = grand ? grand.value : null;
   return out;
 }
+// What failed on a total row, column by column (Codex 10:04): "the open total $500.00 does not equal the open amounts above it ($600.00)"
+export function totalFailWords(t) {
+  var COL = { open: ['open total', 'open amounts'], original: ['original-amount total', 'original amounts'], total: ['total', 'lines'] };
+  var f = (t && t.failed) || [];
+  if (!f.length) { return 'it does not equal the lines above it (' + money(t.sum_since) + ')'; }
+  return f.map(function (x) { var w = COL[x.col] || COL.total; return 'the ' + w[0] + ' ' + money(x.printed) + ' does not equal the ' + w[1] + ' above it (' + money(x.sum) + ')'; }).join('; ');
+}
 // Words for a recognised total row (screen + export)
 export function totalRowWords(t) {
   var cnt = t.of === 'since' ? t.lines_since : t.lines_all;
-  return (t.subtotal ? 'Subtotal row ' : 'Total row ') + money(t.value) + (t.label ? ' (“' + t.label + '”)' : '') + (t.equals
-    ? ' = ' + (t.column_only ? 'the amount column of ' : '') + 'the ' + cnt + ' line' + (cnt === 1 ? '' : 's') + ' above it ✓ — taken as their total, not as an invoice'
-    : ' — NOT equal to the lines above it (' + money(t.sum_since) + ') — taken as their total, not as an invoice; a line may be missing or misread');
+  var head = (t.subtotal ? 'Subtotal row ' : 'Total row ') + money(t.column_only ? t.amount : t.value) + (t.column_only ? ' (original-amount column)' : '') + (t.label ? ' (“' + t.label + '”)' : '');
+  return head + (t.equals
+    ? ' = ' + (t.column_only ? 'the original amounts of ' : '') + 'the ' + cnt + ' line' + (cnt === 1 ? '' : 's') + ' above it ✓ — taken as their total, not as an invoice'
+    : ' — NOT correct: ' + totalFailWords(t) + ' — taken as their total, not as an invoice; a line may be missing or misread');
 }
 
 // Does the statement have an OPEN / balance column? (any invoice line with an open amount)
@@ -580,7 +604,7 @@ export function statementCsv(res, meta) {
   out.push(csvRow(['Read-only check: nothing in the Hub was changed.', (res.mode && res.mode.words) || '']));
   if (m.incomplete) { out.push(csvRow(['INCOMPLETE READ — not a clean check: ' + m.incomplete])); }
   (m.warnings || []).forEach(function (w) { out.push(csvRow(['Warning', w])); });
-  (m.total_rows || []).forEach(function (t) { out.push(csvRow(['Their total row (not an invoice)', t.value, t.equals ? 'equals the lines above it' : 'does NOT equal the lines above it (' + t.sum_since + ')'])); }); // v55.83-XA
+  (m.total_rows || []).forEach(function (t) { out.push(csvRow(['Their total row (not an invoice)', t.label || '', t.src || (t.page ? 'page ' + t.page : ''), t.open !== null && t.open !== undefined ? 'open ' + t.open : '', t.amount !== null && t.amount !== undefined ? 'original ' + t.amount : '', t.equals ? 'correct' : 'NOT correct: ' + totalFailWords(t)])); }); // v55.83-XA: label, page / source, each column, its check
   out.push('');
   out.push(csvRow(['Line', 'Source', 'Their number', 'Their date', 'Their due date', 'Their amount', 'Their open', 'Kind', 'Their PO / ref', 'Counted in their total', 'Result', 'How matched', 'Our bill #', 'Our bill date', 'Our total', 'Our paid', 'Our open', 'Our status', 'Payments (date amount wire)', 'Evidence', 'Notes']));
   (res.rows || []).forEach(function (r) {

@@ -11,7 +11,7 @@ import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { hubFetch } from '../lib/hub-fetch';
 import { pdfPageCountFromBase64 } from '../lib/pdf-page-count-browser';
-import { checkStatement, cleanStatementLines, statementAddsUp, totalRowWords, vendorChoices, statementCsv, guessColumns, linesFromRows, tabRows, cleanStatementAmount,
+import { checkStatement, cleanStatementLines, statementAddsUp, totalRowWords, totalFailWords, vendorChoices, statementCsv, guessColumns, linesFromRows, tabRows, cleanStatementAmount,
   STATUS, STATUS_KEYS, SHEET_ROLES, SHEET_ROLE_LABEL, statementMoney as money } from '../lib/vendor-statement';
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
@@ -137,7 +137,7 @@ export default function VendorStatementPanel(props) {
   var printedN = cleanStatementAmount(printed);
   var addsUp = statementAddsUp(clean, printedN);
   var res = useMemo(function () { return checked && vendorNames.length ? checkStatement({ lines: clean, vendorNames: vendorNames, bills: bills, payments: payments, statementDate: stDate, asOf: asOf, picks: picks, statementCurrency: cur }) : null; }, [checked, vendorNames.join('|'), clean, bills, payments, stDate, asOf, picks, cur]); // eslint-disable-line
-  var incompleteList = ((read && read.incomplete) || []).filter(function (x) { return !/^their total row /.test(x); }).filter(function (x) { return x.indexOf(' row(s) with only an amount ') < 0; }).concat(totalRows.filter(function (t) { return !t.equals; }).map(function (t) { return 'their total row ' + money(t.value) + ' does not equal the lines read above it (' + money(t.sum_since) + ')'; })).concat(cleanInfo.info.unknown_rows ? [cleanInfo.info.unknown_rows + ' row(s) with only an amount (no number, date or type) that are neither an invoice we can look up nor equal to the lines above'] : []);
+  var incompleteList = ((read && read.incomplete) || []).filter(function (x) { return !/^their total row /.test(x); }).filter(function (x) { return x.indexOf(' row(s) with only an amount ') < 0; }).concat(totalRows.filter(function (t) { return !t.equals; }).map(function (t) { return 'their total row ' + money(t.value) + (t.label ? ' (' + t.label + ')' : '') + ': ' + totalFailWords(t); })).concat(cleanInfo.info.unknown_rows ? [cleanInfo.info.unknown_rows + ' row(s) with only an amount (no number, date or type) that are neither an invoice we can look up nor equal to the lines above'] : []);
   var incomplete = incompleteList.join('; ');
   var warnings = [].concat(enrichWarnings.map(function (w) { return 'Wire details are incomplete: ' + w + '. A payment without its wire is not proof of anything — the status comes from the payments only.'; }),
     cur !== 'USD' ? ['The statement is in ' + cur + '. Only our bills in ' + cur + ' are compared and added up against it; bills in other currencies are shown apart, never compared or added in (no exchange rate is assumed).'] : [],

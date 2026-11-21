@@ -40,7 +40,7 @@ check('unlabelled amount-only 9,350 vs lines 5,350: NOT a total and NOT an invoi
 var RU = V.checkStatement({ lines: L2, vendorNames: ['NexPac Corporation'], bills: bills, payments: [] });
 check('… in the check it is ROW TO CHECK — NO NUMBER (never MISSING FROM THE HUB) and is not added to what they say we owe', RU.rows[3].status === 'to_check' && RU.totals.by_status.missing.count === 0 && RU.totals.they_say_we_owe === 5350 && /Check it on the statement|check it on the statement/.test(RU.rows[3].notes.join(' ')), RU.rows[3]);
 var labelled = V.cleanStatementLines([{ ref: 'A', date: '2026-10-01', amount: 100 }, { ref: 'Total', amount: 900 }], (p2 = []), (i2 = {}));
-check('a LABELLED total ("Total") that does not equal the lines stays a total row, said in red (a line may be missing)', labelled.length === 1 && i2.totals.length === 1 && i2.totals[0].equals === false && i2.total_mismatch === true && /NOT equal to the lines above it/.test(V.totalRowWords(i2.totals[0])) && p2.some(function (p) { return /does NOT equal the lines read above it/.test(p); }));
+check('a LABELLED total ("Total") that does not equal the lines stays a total row, said in red (a line may be missing)', labelled.length === 1 && i2.totals.length === 1 && i2.totals[0].equals === false && i2.total_mismatch === true && /NOT correct: the total \$900\.00 does not equal the lines above it \(\$100\.00\)/.test(V.totalRowWords(i2.totals[0])) && p2.some(function (p) { return /is NOT correct: the total \$900\.00/.test(p); }));
 var expl = V.cleanStatementLines([{ ref: 'A', date: '2026-10-01', amount: 100 }, { ref: null, amount: 30, kind: 'credit' }, { ref: null, amount: 20, kind: 'payment' }], [], (i2 = {}));
 check('an amount-only row the reader marked credit or payment keeps that kind (never turned into a total); credits are negative', expl.length === 3 && expl[1].kind === 'credit' && expl[1].amount === -30 && expl[2].kind === 'payment' && i2.totals.length === 0);
 var openSt = V.cleanStatementLines([{ ref: 'A', date: '2026-10-01', amount: 1000, open: 400 }, { ref: 'P1', date: '2026-10-05', amount: -600, kind: 'payment' }, { ref: 'B', date: '2026-10-06', amount: 500, open: 500 }, { ref: null, amount: null, open: 900 }], [], (i2 = {}));
@@ -61,7 +61,19 @@ check('reader answer: the total row is a total (not a line), its 2,850 becomes t
 var P2 = V.parseStatementReading(JSON.stringify({ vendor_name: 'V', printed_total: 3000, lines: [{ r: 'A', d: '2026-09-02', amt: 2850 }, { r: null, d: null, amt: 2850 }] }));
 check('reader answer: a printed total that differs from the last total row is said', P2.problems.some(function (p) { return /is not the same as its last total row/.test(p); }), P2.problems);
 var csv = V.statementCsv(R, { total_rows: info.totals });
-check('export: the total row is listed as "Their total row (not an invoice)" with its check, and is not a line of the export', csv.indexOf('Their total row (not an invoice),9350,equals the lines above it') > 0 && csv.split('\r\n').filter(function (x) { return /^\d+,/.test(x); }).length === 4, csv.substring(0, 600));
+check('export: the total row is listed as "Their total row (not an invoice)" with its source row, its column and its check, and is not a line of the export', csv.indexOf('Their total row (not an invoice),,row 6,,original 9350,correct') > 0 && csv.split('\r\n').filter(function (x) { return /^\d+,/.test(x); }).length === 4, csv.substring(0, 700));
+// ── Codex 10:04 — an Original + Open (outstanding) statement: EACH column of the total row against its own column
+function twoCol(tAmt, tOpen) { var i = {}; var p = []; var ls = V.cleanStatementLines([{ ref: 'A', date: '2026-10-01', amount: 1000, open: 600, page: 2 }, { ref: 'Total', amount: tAmt, open: tOpen, page: 2 }], p, i); return { ls: ls, i: i, p: p }; }
+var bad = twoCol(1000, 500);
+check('Original 1000 / Open 600, Total row original 1000 / OPEN 500 → NOT correct: the open total 500 does not equal the open amounts 600 (the matching original total does NOT clear it); incomplete; their printed open 500 stays the statement total and visibly disagrees', bad.i.totals[0].equals === false && bad.i.total_mismatch === true && bad.i.grand_total === 500 && V.statementAddsUp(bad.ls, bad.i.grand_total).agrees === false && /the open total \$500\.00 does not equal the open amounts above it \(\$600\.00\)/.test(V.totalRowWords(bad.i.totals[0])) && bad.p.some(function (x) { return /is NOT correct: the open total \$500\.00 does not equal the open amounts above it/.test(x); }), [bad.i.totals, bad.p]);
+var good = twoCol(1000, 600);
+check('control: Total row original 1000 / open 600 → correct ✓, the payable statement total is the OPEN 600', good.i.totals[0].equals === true && good.i.totals[0].value === 600 && good.i.grand_total === 600 && good.p.length === 0);
+var origOnly = twoCol(1000, null);
+check('control: an original-amount-only total 1000 on the same statement → correct as the ORIGINAL column ("$1,000.00 (original-amount column) = the original amounts of the 1 line"), never shown as the open balance, not promoted', origOnly.i.totals[0].equals === true && origOnly.i.totals[0].column_only === true && origOnly.i.grand_total === null && /^Total row \$1,000\.00 \(original-amount column\) \(“Total”\) = the original amounts of the 1 line above it ✓/.test(V.totalRowWords(origOnly.i.totals[0])), V.totalRowWords(origOnly.i.totals[0]));
+var badOrig = twoCol(900, 600);
+check('the reverse: open 600 correct but ORIGINAL 900 wrong (lines 1000) → NOT correct, the original-amount total is named', badOrig.i.totals[0].equals === false && /the original-amount total \$900\.00 does not equal the original amounts above it \(\$1,000\.00\)/.test(V.totalFailWords(badOrig.i.totals[0])));
+var badCsv = V.statementCsv({ rows: [], ours_not_on_statement: [], totals: {}, mode: { words: '' } }, { total_rows: bad.i.totals });
+check('export of the wrong open total: label, page, both columns and the column-by-column failure', badCsv.indexOf('Their total row (not an invoice),Total,page 2,open 500,original 1000,NOT correct: the open total $500.00 does not equal the open amounts above it ($600.00)') > 0, badCsv);
 
 // ── 5. the real route: the reader returns his total row as a line
 var st = { reply: null };
@@ -88,7 +100,10 @@ function call(body) { return Route.POST(new Request('http://x/api', { method: 'P
   check('ROUTE: an amount-only row that does not equal the lines read → kept as a row to check (kind unknown), the read is INCOMPLETE, no statement total invented', j2.ok === true && j2.lines[1].kind === 'unknown' && j2.incomplete.some(function (x) { return /1 row\(s\) with only an amount/.test(x); }) && j2.statement.printed_total === null, j2);
   st.reply = JSON.stringify({ vendor_name: 'NexPac Corporation', lines: [{ r: '14401', d: '2026-09-02', amt: 3000 }, { r: 'Total', amt: 9350 }] });
   var j3 = await call({ action: 'read', text: 'NexPac statement pasted' });
-  check('ROUTE: a LABELLED total that does not equal the lines → INCOMPLETE ("their total row $9,350.00 does not equal the lines read above it ($3,000.00)")', j3.ok === true && j3.lines[1].kind === 'total' && j3.incomplete.some(function (x) { return /their total row \$9,350\.00 does not equal the lines read above it \(\$3,000\.00\)/.test(x); }), j3.incomplete);
+  check('ROUTE: a LABELLED total that does not equal the lines → INCOMPLETE ("their total row $9,350.00 (Total): the total $9,350.00 does not equal the lines above it ($3,000.00)")', j3.ok === true && j3.lines[1].kind === 'total' && j3.incomplete.some(function (x) { return /their total row \$9,350\.00 \(Total\): the total \$9,350\.00 does not equal the lines above it \(\$3,000\.00\)/.test(x); }), j3.incomplete);
+  st.reply = JSON.stringify({ vendor_name: 'V', lines: [{ r: 'A', d: '2026-10-01', amt: 1000, open: 600 }, { r: 'Total', amt: 1000, open: 500 }] });
+  var j4 = await call({ action: 'read', text: 'two-column statement' });
+  check('ROUTE (Codex 10:04): Original 1000 / Open 600 with a Total row of original 1000 / open 500 → INCOMPLETE naming the open total', j4.ok === true && j4.incomplete.some(function (x) { return /the open total \$500\.00 does not equal the open amounts above it \(\$600\.00\)/.test(x); }) && j4.adds_up.agrees === false, j4);
   check('ROUTE: still no table / rpc touched', calls.length === 0, calls);
 
   // ── 6. the panel, driven: paste his rows (tab-separated) → columns → the total row shown as a checked total → check: nothing missing
@@ -121,7 +136,15 @@ function call(body) { return Route.POST(new Request('http://x/api', { method: 'P
   var amountInput = find(render(), function (el) { return el.type === 'input' && el.props['aria-label'] === 'Amount, line 4'; });
   amountInput.props.onChange({ target: { value: '400' } });
   var h3 = RS.renderToStaticMarkup(render());
-  check('PANEL: correcting a line re-checks the total row live — 14455 typed as 400 → the total no longer equals → INCOMPLETE READ', h3.indexOf('⛔ Total row $9,350.00 — NOT equal to the lines above it ($5,750.00)') > 0 && h3.indexOf('INCOMPLETE READ') > 0, h3.substring(0, 900));
+  check('PANEL: correcting a line re-checks the total row live — 14455 typed as 400 → the total no longer equals → INCOMPLETE READ', h3.indexOf('⛔ Total row $9,350.00 — NOT correct: the total $9,350.00 does not equal the lines above it ($5,750.00)') > 0 && h3.indexOf('INCOMPLETE READ') > 0, h3.substring(0, 900));
+
+  // the two-column statement (Codex 10:04) through the panel: the wrong OPEN total shows INCOMPLETE and stays inspectable
+  hs = { vals: [], i: 0 };
+  find(render(), function (el) { return el.type === 'textarea'; }).props.onChange({ target: { value: 'Invoice #\tDate\tOriginal Amount\tOpen\nA-1\t10/01/2026\t1,000.00\t600.00\nTotal\t\t1,000.00\t500.00' } });
+  btn(render(), 'Read the pasted text').props.onClick();
+  btn(render(), 'Use these columns').props.onClick();
+  var h4 = RS.renderToStaticMarkup(render());
+  check('PANEL (Codex 10:04): Original 1,000 / Open 600 with Total 1,000 / 500 → "the open total $500.00 does not equal the open amounts above it ($600.00)" and INCOMPLETE READ; the line itself stays listed', h4.indexOf('the open total $500.00 does not equal the open amounts above it ($600.00)') > 0 && h4.indexOf('INCOMPLETE READ') > 0 && h4.indexOf('Read from pasted rows: 1 line') > 0, (h4.match(/INCOMPLETE[^<]*|Total row[^<]*|Read from[^<]*/g) || []));
 
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
