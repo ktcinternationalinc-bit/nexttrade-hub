@@ -475,6 +475,11 @@ const ACTION_PERMS = [
   { key: 'bills.view',    label: 'Bills: View',    desc: 'See vendor bills (what the company owes) and the cash-flow view.' },
   { key: 'bills.manage',  label: 'Bills: Manage',  desc: 'Add/edit/void bills and record bill payments. Implies view.' },
   { key: 'bills.price_rules', label: 'Bills: Price rules', desc: 'Enter expected prices of products / services and commission rules; the Hub checks every bill against them and flags differences for a person.' },
+  { key: 'bills.weight_check.view', label: 'Warehouse check: View', desc: 'See billed vs scanned-in weights on bills, the exception report and report history (v55.83-XB).' },
+  { key: 'bills.weight_check.validate', label: 'Warehouse check: Validate', desc: 'Recheck the warehouse, confirm bill ↔ receipt links, run reports, validate a match, report an issue.' },
+  { key: 'bills.weight_check.accept', label: 'Warehouse check: Accept a discrepancy', desc: 'Accept a weight / quantity difference with a reason.' },
+  { key: 'bills.weight_check.resolve', label: 'Warehouse check: Resolve issues', desc: 'Close a reported weight issue with evidence.' },
+  { key: 'bills.weight_check.settings', label: 'Warehouse check: Settings', desc: 'Approve product mappings (tolerance and lb-per-yard factors: super admin only).' },
   // v55.83-TW / TX — Nextrade and RTM own books, and NextTrade / RTM advances
   { key: 'company.nextrade.view', label: 'Nextrade books: View', desc: 'Accounting → 🟦 Nextrade: see Nextrade’s own bank and credit-card lines, categories and rules. Balances and totals still need their own permissions.' },
   { key: 'company.nextrade.manage', label: 'Nextrade books: Manage', desc: 'Categorize Nextrade lines (an expense makes a KTC bill at once), edit Nextrade’s categories, rules and the category mapping to KTC. Implies view.' },

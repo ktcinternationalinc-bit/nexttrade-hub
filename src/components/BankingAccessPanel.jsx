@@ -56,6 +56,12 @@ export var BANKING_GROUPS = [
     { key: 'bills.view', label: 'See bills', desc: 'Vendor bills and what is due.', needsKtc: true },
     { key: 'bills.manage', label: 'Add / change bills', desc: 'Add, edit, void bills and record payments.', needsKtc: true },
     { key: 'bills.price_rules', label: 'Set price rules', desc: 'Enter the expected prices of products and services (and the NexPac 12.5% commission) the Hub checks every bill against.', needsKtc: true },
+    // v55.83-XB — bill-to-warehouse weight check (separate switches: seeing, validating, accepting a difference, resolving an issue, settings)
+    { key: 'bills.weight_check.view', label: 'Warehouse check: View', desc: 'See billed vs scanned-in weights on bills, the exception report and the report history (no money shown).', needsKtc: true },
+    { key: 'bills.weight_check.validate', label: 'Warehouse check: Validate', desc: 'Recheck the warehouse, confirm which receipt belongs to a bill, run and save reports, validate a match, report an issue.', needsKtc: true },
+    { key: 'bills.weight_check.accept', label: 'Warehouse check: Accept a discrepancy', desc: 'Accept a weight / quantity difference with a reason (stays visible as “discrepancy accepted”).', needsKtc: true },
+    { key: 'bills.weight_check.resolve', label: 'Warehouse check: Resolve issues', desc: 'Close a reported weight issue with a resolution and evidence.', needsKtc: true },
+    { key: 'bills.weight_check.settings', label: 'Warehouse check: Settings', desc: 'Approve which warehouse product a bill product is. The tolerance and any pounds-per-yard factor stay with the super admin.', needsKtc: true },
   ] },
   { title: '5 · Wires', note: 'Needs ClickBooks (KTC Hub) in group 1.', items: [
     { key: 'wires.view', label: 'See wires', desc: 'See every wire, its checks and the bills it paid.', needsKtc: true },

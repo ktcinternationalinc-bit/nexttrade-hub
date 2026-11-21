@@ -26,6 +26,8 @@ import DuplicateBillsPanel from './DuplicateBillsPanel'; // v55.83-WZ — bills 
 import BillCategoryRulesPanel from './BillCategoryRulesPanel'; // v55.83-WX — vendor (+ amount / words) → category
 import VendorStatementPanel from './VendorStatementPanel'; // v55.83-WT — check a vendor's statement (read-only)
 import BillPeek from './BillPeek'; // v55.83-WT — the bill pop-up, opened from the statement check
+import WarehouseCheckBox from './WarehouseCheckBox'; // v55.83-XB — billed vs scanned-in weight, inside a bill's details
+import WeightCheckPanel from './WeightCheckPanel'; // v55.83-XB — the warehouse-check exception report + report history
 import { statementMoney } from '../lib/vendor-statement'; // v55.83-WT
 import { allocateBankLine } from '../lib/bill-bank-pay'; // v55.83-TH
 import { describeAudit, niceWhen, niceDate } from '../lib/audit-words'; // v55.83-TH
@@ -44,6 +46,7 @@ export default function BillsTab(props) {
   var bossB = isSuperAdmin; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   var canView = bossB || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true;
   var canManage = bossB || modulePerms['bills.manage'] === true;
+  var canWeightCheck = canView && (bossB || modulePerms['bills.weight_check.view'] === true); // v55.83-XB (the server checks again)
   var toast = props.toast || { success: function () {}, error: function () {} };
 
   var s1 = useState(null); var data = s1[0]; var setData = s1[1];
@@ -528,6 +531,7 @@ export default function BillsTab(props) {
       {canView && <button onClick={function () { setPanel(panel === 'catrules' ? null : 'catrules'); }} title="Rules that put a category on bills: a vendor, an exact amount or a range, words on the bill → category (e.g. a monthly partner fee)" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'catrules' ? { background: '#312e81', color: '#ffffff' } : { background: '#e0e7ff', color: '#312e81' }}>🏷 Category rules</button>}
       {canView && <button onClick={function () { setPanel(panel === 'duplicates' ? null : 'duplicates'); }} title="Bills with the same vendor and bill number — keep one, void the others" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: panel === 'duplicates' ? '#991b1b' : '#fef2f2', color: panel === 'duplicates' ? '#ffffff' : '#991b1b', border: '1px solid #fca5a5' }}>Duplicates to resolve</button>}
       {canView && <button onClick={function () { setPanel(panel === 'statement' ? null : 'statement'); }} title="Import a vendor's statement (their list of open bills) and check every line against our bills, payments and wires — read-only, nothing is changed" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'statement' ? { background: '#0f766e', color: '#ffffff' } : { background: '#f0fdfa', color: '#134e4a', border: '1px solid #5eead4' }}>🧾 Check a vendor statement</button>}{/* v55.83-WT */}
+      {canWeightCheck && <button onClick={function () { setPanel(panel === 'weightcheck' ? null : 'weightcheck'); }} title="Compare what suppliers billed (lb / yards per product and reference) with what was actually scanned into the NextTrade warehouse, decide every difference, and keep numbered reports" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'weightcheck' ? { background: '#0f172a', color: '#ffffff' } : { background: '#f8fafc', color: '#0f172a', border: '1px solid #94a3b8' }}>🏭 Warehouse check</button>}{/* v55.83-XB */}
       {canManage && <button onClick={function () { if (fileInputRef.current) { fileInputRef.current.click(); } }} disabled={busy || reading}
         className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#7c3aed', color: '#ffffff' }}>{reading ? 'Reading…' : '📷 Import bill(s)'}</button>}
       {canManage && <select value={scanDays} onChange={function (e) { setScanDays(e.target.value); }} title="How far back the mailbox scan looks" className="px-1.5 py-1 rounded-lg border border-slate-300 text-[10px] nt-light">
@@ -577,6 +581,7 @@ export default function BillsTab(props) {
     {/* v55.83-WT — read-only: it is given the list already loaded here and opens bills / wires with the read-only viewers */}
     {panel === 'catrules' && canView && <BillCategoryRulesPanel userProfile={userProfile} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}
     {panel === 'duplicates' && canView && <DuplicateBillsPanel userProfile={userProfile} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}
+    {panel === 'weightcheck' && canWeightCheck && <WeightCheckPanel bills={bills} toast={toast} openDoc={openDoc} onClose={function () { setPanel(null); }} />}{/* v55.83-XB */}
     {panel === 'statement' && canView && <VendorStatementPanel bills={bills} payments={payments} enrichWarnings={(data && data.enrich_warnings) || []} userProfile={userProfile} onClose={function () { setPanel(null); }}
       onOpenBill={function (f) { setPeekBill(f); }} onOpenWire={function (w) { setWireQuick(w); }} />}
 
@@ -1011,6 +1016,7 @@ export default function BillsTab(props) {
                 <div><BillDocViewer bill={b} api={api} toast={toast} canManage={canManage} onChanged={load} /></div>
                 <div>
                 <BillLinesPanel bill={b} api={api} toast={toast} canManage={canManage} onChanged={load} onRules={function () { setPanel('rules'); }} />
+                {canWeightCheck && <WarehouseCheckBox bill={b} toast={toast} />}{/* v55.83-XB */}
                 {b.notes && <div className="text-[11px] mb-1"><b>Notes:</b> {b.notes}</div>}
                 {paysOf(b.id).length === 0 ? <span className="text-[11px]">No payments yet.</span> :
                   paysOf(b.id).map(function (p) {

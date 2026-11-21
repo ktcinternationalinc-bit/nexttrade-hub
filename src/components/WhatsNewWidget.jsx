@@ -33,6 +33,26 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XB',
+    date: '2026-11-21',
+    title: 'Warehouse check: what a supplier billed vs what was actually scanned into the warehouse',
+    items: [
+      { text: '**New: Warehouse check.** Open a bill in Accounting → Bills: a “🏭 Warehouse Check” box shows, for each product, the pounds (or yards) billed beside what was really scanned in at the NextTrade warehouse, the difference, and the receipt and scan rows behind it.' },
+      { text: 'Bills → “🏭 Warehouse check” lists every difference for a bill date range, with filters (vendor, reference, warehouse, result, reviewer, unresolved issues), counts and a spreadsheet export. Click a bill to see it and its PDF on top of the list; closing it brings you back to the same place.' },
+      { text: 'Each difference gets a decision: **Accept discrepancy** (with a reason; it stays visible as “discrepancy accepted”, never “matched”) or **Report an issue** (a ticket for the person you choose; it stays open until it is resolved with evidence). Decisions can be reopened with a reason. “Recheck warehouse” only reads the warehouse again; it never approves anything.' },
+      { text: 'The Hub links a bill to a receipt only when a person confirms it, and compares a product only through an approved product mapping. If the warehouse cannot be reached, the bill says “Warehouse unavailable / not checked”, never “no goods received”.' },
+      { text: 'If the bill, the link, the mapping or the scans change after a decision, the item comes back as “Needs revalidation” with what changed; the earlier decision and its evidence are kept. Shipping the goods out later does not reopen anything.' },
+      { text: 'Saved reports get a number (WC-year-number) and are never overwritten; Report history opens any of them as it stood, what was decided since, and where each item stands now. A report with open items never shows as approved.' },
+      { text: 'Nothing here changes a bill, a payment, a wire, inventory or the warehouse. It needs the new “Warehouse check” switches in Settings → Banking & Accounting Access, and the warehouse must first offer its receipts to the Hub (waiting for Max). Until Max approves a tolerance, nothing is called “matched”.' },
+      { superAdminOnly: true, text: 'Technical: api/accounting/weight-check (verified sign-in; bills.weight_check.view / validate / accept / resolve / settings; history window; KTC bills only; no money in answers); src/lib/weight-check.js (rules), weight-check-server.js, weight-check-feed-server.js (reads GET /api/hub-feed/receipts on the approved warehouse address, field allowlists, whole-receipt checks; the endpoint is not on the warehouse yet). SQL sql/v55-83-XB-weight-check.sql (new append-only wc_* tables) must be run by Max.' }
+    ]
+    ]
+  },
+  {
+    ]
+    ]
+  },
+  {
     version: 'v55.83-XO',
     date: '2026-11-22',
     title: 'Starting balance with NextTrade / RTM',
