@@ -45,6 +45,7 @@ export default function CompanyBooksTab(props) {
   var s17 = useState(null); var ruleForm = s17[0]; var setRuleForm = s17[1];
   var s18 = useState(''); var sqlMissing = s18[0]; var setSqlMissing = s18[1];
   var s19 = useState({}); var kinds = s19[0]; var setKinds = s19[1];
+  var s21 = useState(null); var cutoff = s21[0]; var setCutoff = s21[1]; // v55.83-XN — { on, would_stop, would_stop_total, stopped, can_set, installed }
   var s20 = useState(null); var rowPanel = s20[0]; var setRowPanel = s20[1]; // v55.83-UB — { id, mode: 'newcat' | 'transfer', ... } under one row
 
   function api(payload) {
@@ -99,7 +100,27 @@ export default function CompanyBooksTab(props) {
     if (v === 'accounts') { api({ action: 'accounts' }).then(function (j) { if (j && j.ok) { setAccounts(j.accounts || []); } else { setErr((j && j.error) || ''); } }); }
     if (v === 'mapping') { api({ action: 'mapping' }).then(function (j) { if (j && j.ok) { setMapping(j); } else { setErr((j && j.error) || ''); } }); }
   }
-  useEffect(function () { if (comp) { loadCats(); loadLines(); } }, [props.company]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(function () { if (comp) { loadCats(); loadLines(); loadCutoff(); } }, [props.company]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-XN (Max, 21 Nov: "JUST ONE BUTTON TO IGNORE ALL OF THEM FROM CREATING KTC BILLS PRIOR TO JUNE 1 2026") — the super admin's
+  // one button. ON: the KTC bills made from Nextrade lines before 1 June 2026 are voided (kept, never deleted) and no earlier line
+  // makes one again. OFF: exactly those bills come back. A bill with money on it or on a wire is left alone and named.
+  function loadCutoff() { if (!comp || comp.key !== 'nextrade') { setCutoff(null); return; } api({ action: 'bill_cutoff' }).then(function (j) { setCutoff(j && j.ok ? j : null); }); }
+  function moneyC(v) { return '$' + Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function pressCutoff() {
+    if (!cutoff || !cutoff.can_set) { return; }
+    var turnOn = cutoff.on !== true;
+    var q = turnOn
+      ? 'Stop KTC bills from Nextrade lines dated BEFORE 1 June 2026?\n\n' + cutoff.would_stop + ' KTC bill(s)' + (cutoff.would_stop_total !== null && cutoff.would_stop_total !== undefined ? ' (' + moneyC(cutoff.would_stop_total) + ')' : '') + ' made from those lines will be voided, so KTC is not asked to pay them. Nothing is deleted. A bill with money recorded on it or on a wire is left as it is and named.\n\nFrom now on, no Nextrade line before 1 June 2026 makes a KTC bill. You can turn this off later: the same bills come back.'
+      : 'Turn OFF the 1 June 2026 cut-off?\n\nThe ' + (cutoff.stopped || 0) + ' KTC bill(s) it voided come back as bills KTC owes Nextrade.';
+    if (!window.confirm(q)) { return; }
+    setBusy(true);
+    api({ action: 'set_bill_cutoff', on: turnOn }).then(function (j) {
+      if (!j || !j.ok) { toast.error((j && j.error) || 'Not done.'); return; }
+      var kept = (j.kept || []).map(function (k) { return (k.bill_number || 'a bill') + ' (' + k.why + ')'; });
+      toast.success(turnOn ? (j.count + ' KTC bill(s) from Nextrade lines before 1 June 2026 voided. No earlier line makes a KTC bill now.' + (kept.length ? ' Left as they are: ' + kept.join(', ') + '.' : '')) : (j.count + ' KTC bill(s) brought back. The cut-off is off.'));
+      loadCutoff(); loadLines();
+    }).finally(function () { setBusy(false); });
+  }
   if (!comp) { return <div className="p-3 text-[12px]">Unknown company.</div>; }
 
   function setCategory(ids, key) {
@@ -204,6 +225,7 @@ export default function CompanyBooksTab(props) {
         <input className={inp} style={inpS} placeholder="Find (description or amount)" value={q} onChange={function (e) { setQ(e.target.value); }} />
         {canManage && <button onClick={applyRulesAsk} disabled={busy} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#ede9fe', '#5b21b6')}>📏 Apply rules to uncategorized</button>}
         {canManage && comp.key === 'nextrade' && <button onClick={function () { setBusy(true); api({ action: 'missing_bills' }).then(function (j) { if (!j || !j.ok) { toast.error((j && j.error) || 'Not done.'); setBusy(false); return; } if (!j.count) { toast.success('Every line in a "KTC pays this" category already has its KTC bill.'); setBusy(false); return; } if (!window.confirm(j.count + ' earlier line(s) are in a category KTC pays (e.g. Warehouse staff) but have no KTC bill yet. Make their KTC bills now (one per line, owed to Nextrade)?')) { setBusy(false); return; } api({ action: 'make_missing_bills' }).then(function (k) { if (k && k.ok) { toast.success(k.made + ' KTC bill(s) made' + (k.left ? ' · ' + k.left + ' left — press again' : '')); } else { toast.error((k && k.error) || 'Not done.'); } loadLines(); }).finally(function () { setBusy(false); }); }); }} disabled={busy} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#dbeafe', '#1e3a8a')}>🧾 Make the missing KTC bills</button>}
+        {comp.key === 'nextrade' && cutoff && cutoff.can_set && <button onClick={pressCutoff} disabled={busy || !cutoff.installed} title={cutoff.installed ? '' : 'Needs sql/v55-83-XN-nextrade-june-cutoff.sql run in Supabase first'} className="px-2 py-1 rounded text-[10px] font-extrabold" style={cutoff.on ? btn('#dcfce7', '#14532d') : btn('#fee2e2', '#7f1d1d')}>{cutoff.on ? '✓ No KTC bills before 1 June 2026 — ON (' + (cutoff.stopped || 0) + ' stopped) · turn off' : '⛔ Stop KTC bills from Nextrade lines before 1 June 2026' + (cutoff.would_stop ? ' (' + cutoff.would_stop + ')' : '')}</button>}
         <button onClick={function () { exportCsv([['date', 'account', 'description', 'in/out', 'amount', 'category', 'KTC bill']].concat(shown.map(function (l) { return [l.date, l.account_label, l.name, l.direction, l.amount_abs, l.company_category ? (catByKey[l.company_category] || {}).label || l.company_category : '', l.ktc_bill ? l.ktc_bill.mode : '']; })), comp.key + '-transactions-' + from + '-to-' + to + '.csv'); }} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#f0fdf4', '#166534')}>⬇ Export CSV</button>
         <span className="text-[10px]" style={{ color: '#64748b' }}>{shown.length} line(s)</span>
       </div>

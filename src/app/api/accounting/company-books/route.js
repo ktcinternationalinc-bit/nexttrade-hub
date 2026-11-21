@@ -13,7 +13,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { audit } from '../../../../lib/audit-server';
 import { companyByKey, COMPANY_KINDS, categoryKey, bestCompanyRule, companyTotals, normMatch, NEXTRADE_COMPANY_ID } from '../../../../lib/companies';
-import { categorizeLine, partyName, wantsBill } from '../../../../lib/nextrade-bills-server'; // v55.83-TW (Codex P1-2): one database function, all or nothing
+import { categorizeLine, partyName, wantsBill, loadBillCutoff, beforeCutoff, NEXTRADE_BILL_CUTOFF } from '../../../../lib/nextrade-bills-server'; // v55.83-TW (Codex P1-2): one database function, all or nothing
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP private bank accounts — respected here too
 import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
@@ -24,6 +24,7 @@ var SQL_MISSING_UB = 'Transfers and category directions need one database update
 
 var API_BUILD_MARKER = 'v55.83-TW-company-books';
 export const maxDuration = 60;
+var SQL_MISSING_XN = 'The button that stops KTC bills from Nextrade lines before 1 June 2026 needs one database update first: run sql/v55-83-XN-nextrade-june-cutoff.sql in Supabase (SQL Editor). Nothing was changed.';
 var SQL_MISSING = 'Nextrade and RTM books need one database update first: run sql/v55-83-TW-company-books.sql in Supabase (SQL Editor).';
 var LINE_COLS = 'id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, pending, review_status, wave_business_id, company_category, company_category_source, company_category_at, transfer_group_id';
 
@@ -95,11 +96,52 @@ export async function POST(req) {
 
     var comp = companyByKey(body.company);
     if (!comp) { return fail('Say which company: Nextrade or RTM.'); }
-    var WRITES = { set_category: 1, save_category: 1, category_active: 1, save_rule: 1, rule_active: 1, apply_rules: 1, save_mapping: 1, pair_transfer: 1, unpair_transfer: 1, make_missing_bills: 1 };
+    var WRITES = { set_category: 1, save_category: 1, category_active: 1, save_rule: 1, rule_active: 1, apply_rules: 1, save_mapping: 1, pair_transfer: 1, unpair_transfer: 1, make_missing_bills: 1, set_bill_cutoff: 1 };
     var g = await assertPermission(db, userId, WRITES[action] ? comp.managePerm : comp.viewPerm, req);
     if ((!g || g.ok !== true) && !WRITES[action]) { g = await assertPermission(db, userId, comp.managePerm, req); }
     if (!g || g.ok !== true) { return fail('This needs the "' + comp.label + (WRITES[action] ? ': Manage' : ': View') + '" permission — ask the super admin to grant it in Settings.', 403); }
     var cid = comp.id;
+    // v55.83-XN (Max, 21 Nov: "JUST ONE BUTTON TO IGNORE ALL OF THEM FROM CREATING KTC BILLS PRIOR TO JUNE 1 2026") — the button.
+    // bill_cutoff: is it on, and how many KTC bills from earlier Nextrade lines it would stop (count; the total only with the totals
+    // permission). set_bill_cutoff: ON / OFF, super admin only, one database function (sql/v55-83-XN-nextrade-june-cutoff.sql).
+    if (action === 'bill_cutoff' || action === 'set_bill_cutoff') {
+      if (comp.key !== 'nextrade') { return fail('Only Nextrade lines make KTC bills.'); }
+      var isSuperCB = !!(g.ctx && g.ctx.isSuperAdmin === true);
+      if (action === 'set_bill_cutoff') {
+        if (!isSuperCB) { return fail('Only the super admin can turn this on or off.', 403); }
+        if (body.on !== true && body.on !== false) { return fail('Say ON or OFF.'); }
+        var rc = await db.rpc('hub_company_bill_cutoff', { p: { actor: userId, company_id: cid, on: body.on, cutoff_date: NEXTRADE_BILL_CUTOFF } });
+        if (rc.error) {
+          var mc = String(rc.error.message || '');
+          if (/HUB_GUARD:/.test(mc)) { return fail(mc.replace(/^[\s\S]*HUB_GUARD:\s*/, '') + ' Nothing was changed.'); }
+          if (/hub_company_bill_cutoff|company_ktc_bill_cutoff|cutoff_voided|does not exist|schema cache/i.test(mc)) { return fail(SQL_MISSING_XN, 409); }
+          return fail('Not saved (' + mc + '). Nothing was changed.', 500);
+        }
+        var dc = rc.data || {};
+        await audit(db, userId, body.on ? 'nextrade_bill_cutoff_pressed_on' : 'nextrade_bill_cutoff_pressed_off', 'company', cid, { count: Number(dc.count) || 0, kept: (dc.kept || []).length });
+        return NextResponse.json({ ok: true, on: dc.on === true, count: Number(dc.count) || 0, kept: dc.kept || [], api_build_marker: API_BUILD_MARKER });
+      }
+      var co = await loadBillCutoff(db); if (co.error) { return readFail('the cut-off', co.error); }
+      var lkC = await db.from('company_bill_links').select('source_bank_transaction_id, bill_id').eq('company_id', cid).eq('status', 'active').eq('mode', 'created').limit(10000);
+      if (lkC.error) { return readFail('the Nextrade bills', lkC.error); }
+      var lidC = (lkC.data || []).map(function (l) { return l.source_bank_transaction_id; }); var before = {};
+      for (var ci = 0; ci < lidC.length; ci += 200) {
+        var lqC = await db.from('bank_transactions').select('id, date').in('id', lidC.slice(ci, ci + 200)).lt('date', NEXTRADE_BILL_CUTOFF);
+        if (lqC.error) { return readFail('the Nextrade lines', lqC.error); }
+        (lqC.data || []).forEach(function (l) { before[l.id] = true; });
+      }
+      var billsC = (lkC.data || []).filter(function (l) { return before[l.source_bank_transaction_id]; }).map(function (l) { return l.bill_id; }); var totC = 0;
+      for (var bj = 0; bj < billsC.length; bj += 200) {
+        var bqC = await db.from('vendor_bills').select('id, total_amount, record_status').in('id', billsC.slice(bj, bj + 200));
+        if (bqC.error) { return readFail('the KTC bills', bqC.error); }
+        (bqC.data || []).forEach(function (b) { if (b.record_status === 'active') { totC += Number(b.total_amount) || 0; } });
+      }
+      var stoppedC = null;
+      if (co.installed) { var vcC = await db.from('company_bill_links').select('id', { count: 'exact', head: true }).eq('company_id', cid).eq('status', 'void').eq('cutoff_voided', true); stoppedC = vcC.error ? null : (vcC.count || 0); }
+      var gTotC = await assertPermission(db, userId, 'accounting.view_totals', req);
+      return NextResponse.json({ ok: true, installed: co.installed === true, on: co.on === true, cutoff_date: co.date || NEXTRADE_BILL_CUTOFF, set_at: co.set_at || null,
+        would_stop: billsC.length, would_stop_total: gTotC && gTotC.ok === true ? Math.round(totC * 100) / 100 : null, stopped: stoppedC, can_set: isSuperCB, api_build_marker: API_BUILD_MARKER });
+    }
 
     if (action === 'accounts') {
       var ac = await db.from('plaid_accounts').select('plaid_account_id, name, official_name, mask, type, subtype, connection_id, current_balance, updated_at').eq('wave_business_id', cid);
@@ -267,6 +309,7 @@ export async function POST(req) {
       var cm = await loadCats(db, cid); if (cm.error) { return { error: cm.error }; }
       var billCats = {}; (cm.data || []).forEach(function (c) { if (c.active && wantsBill({ direction: 'out' }, c)) { billCats[c.key] = c; } });
       var keys = Object.keys(billCats); if (!keys.length) { return { lines: [], cats: billCats }; }
+      var coM = await loadBillCutoff(db); if (coM.error) { return { error: coM.error }; } // v55.83-XN — a line before the cut-off (ON) is not missing a bill
       var out = [];
       for (var mp = 0; mp < 30; mp++) {
         var mr = await db.from('bank_transactions').select(LINE_COLS).eq('wave_business_id', cid).eq('direction', 'out').in('company_category', keys)
@@ -280,7 +323,7 @@ export async function POST(req) {
         if (lkM.error) { return { error: lkM.error }; }
         (lkM.data || []).forEach(function (x) { have[x.source_bank_transaction_id] = true; });
       }
-      return { lines: dropPrivate(out.filter(function (l) { return !have[l.id] && !l.pending; }), scope), cats: billCats };
+      return { lines: dropPrivate(out.filter(function (l) { return !have[l.id] && !l.pending && !beforeCutoff(l, coM); }), scope), cats: billCats };
     }
     if (action === 'missing_bills' || action === 'make_missing_bills') {
       if (comp.key !== 'nextrade') { return fail('Only Nextrade lines make KTC bills.'); }
@@ -388,6 +431,7 @@ export async function POST(req) {
       var onlyRules = Array.isArray(body.rule_ids) && body.rule_ids.length ? body.rule_ids.map(String) : null;
       // (Codex 20:27 P1 / P3) rules never write by themselves: every run is a person's press. preview = count only, NOTHING written.
       var previewA = body.preview === true;
+      var coA = comp.key === 'nextrade' ? await loadBillCutoff(db) : null; if (coA && coA.error) { coA = null; } // v55.83-XN — preview counts no bill for a line before the cut-off
       if (body.automatic === true) { return fail('Rules are applied only when a person presses Apply.'); }
       // (Codex 20:58 / 21:03) EVERY rule write goes through the VK database step, which categorizes a line only if it is STILL
       // waiting when the line is locked. Not installed, or the check cannot be read → refused, for the dated button too:
@@ -405,7 +449,7 @@ export async function POST(req) {
         var rule = bestCompanyRule(rules, String(ln.merchant_name || '') + ' ' + String(ln.name || ''));
         if (!rule || !byKeyA[rule.category_key]) { continue; }
         if (onlyRules && onlyRules.indexOf(String(rule.id)) < 0) { continue; }
-        if (previewA) { would++; if (comp.key === 'nextrade' && wantsBill(ln, byKeyA[rule.category_key])) { wouldBills++; } continue; }
+        if (previewA) { would++; if (comp.key === 'nextrade' && wantsBill(ln, byKeyA[rule.category_key]) && !beforeCutoff(ln, coA)) { wouldBills++; } continue; }
         if (tried >= 300) { moreA = true; break; } // the rest on the next press
         tried++;
         var res = await categorize(ln, byKeyA[rule.category_key], 'rule', nctxA, true);

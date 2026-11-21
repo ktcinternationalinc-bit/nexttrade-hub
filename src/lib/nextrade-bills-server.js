@@ -33,6 +33,18 @@ export function wantsBill(line, cat) {
   return isExpenseKind(cat.kind);
 }
 
+// v55.83-XN (Max, 21 Nov: "JUST ONE BUTTON TO IGNORE ALL OF THEM FROM CREATING KTC BILLS PRIOR TO JUNE 1 2026") — the cut-off date the
+// button sets. While it is ON, a Nextrade line dated before it never makes a KTC bill. The database function is the rule
+// (hub_company_categorize, sql/v55-83-XN-nextrade-june-cutoff.sql); these helpers only keep the screens and previews honest.
+export var NEXTRADE_BILL_CUTOFF = '2026-06-01';
+export function beforeCutoff(line, cutoff) { return !!(cutoff && cutoff.on === true && cutoff.date && line && String(line.date || '').substring(0, 10) < cutoff.date); }
+// { on, date, set_by, set_at, installed } — table missing (SQL not run yet) → installed false, off
+export async function loadBillCutoff(db) {
+  var r = await db.from('company_ktc_bill_cutoff').select('cutoff_date, is_on, set_by, set_at').eq('company_id', NEXTRADE_COMPANY_ID).maybeSingle();
+  if (r.error) { if (/does not exist|schema cache|Could not find the table/i.test(String(r.error.message || ''))) { return { on: false, date: null, installed: false }; } return { error: r.error }; }
+  return { installed: true, on: !!(r.data && r.data.is_on === true), date: r.data ? String(r.data.cutoff_date).substring(0, 10) : null, set_by: r.data ? r.data.set_by : null, set_at: r.data ? r.data.set_at : null };
+}
+
 export function vendorOfLine(line) {
   var v = String((line && (line.merchant_name || line.name)) || '').replace(/\s+/g, ' ').trim();
   return (v || 'Nextrade expense').substring(0, 120);
@@ -81,6 +93,10 @@ export async function prepareCategorize(db, line, cat, ctx) {
   var c = ctx || {};
   var payload = { line_id: line.id, company_id: line.wave_business_id, category_key: cat ? cat.key : null, actor: c.actorId, source: c.source || 'manual' };
   if (line.wave_business_id !== NEXTRADE_COMPANY_ID || !wantsBill(line, cat)) { return { ok: true, payload: payload }; }
+  // v55.83-XN — a line before the cut-off (while ON) makes no KTC bill: no bill proposal and no duplicate check for it. The database
+  // function applies the same rule under its lock, so a failed read here changes nothing (it only skips the shortcut).
+  var co = c.cutoff || await loadBillCutoff(db);
+  if (!co.error && beforeCutoff(line, co)) { return { ok: true, payload: payload }; }
   payload.ktc_category = c.ktcCategory || null; payload.party = c.party || DEFAULT_PARTY;
   // an open KTC bill already there for the same vendor + amount within 10 days → propose attaching it
   var from = addDays(line.date, -ATTACH_DAYS); var to = addDays(line.date, ATTACH_DAYS);

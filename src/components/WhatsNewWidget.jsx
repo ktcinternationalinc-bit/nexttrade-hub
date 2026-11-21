@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XN',
+    date: '2026-11-21',
+    title: 'No KTC bills from Nextrade lines before 1 June 2026',
+    items: [
+      { text: '**One button stops KTC bills from Nextrade lines dated before 1 June 2026.** In Nextrade’s books (Transactions), the super admin sees **⛔ Stop KTC bills from Nextrade lines before 1 June 2026**. After you confirm, the KTC bills made from those earlier lines are voided, so KTC is not asked to pay them. Nothing is deleted. A bill with money recorded on it, or on a wire, is left as it is and named. From then on, an earlier line never makes a KTC bill, even when it is categorized again or by a rule. Lines from 1 June on work as before. The same button turns it off, and exactly the same bills come back.' },
+      { superAdminOnly: true, text: 'Technical: NEEDS SQL sql/v55-83-XN-nextrade-june-cutoff.sql (table company_ktc_bill_cutoff, column company_bill_links.cutoff_voided, function hub_company_bill_cutoff, and hub_company_categorize = the UD function with one change: no KTC bill while the cut-off is on and the line is dated before it). Route company-books: bill_cutoff (status) and set_bill_cutoff (super admin only). Missing-bills list and the rule preview leave pre-cut-off lines out. Live before: 76 active KTC bills from Nextrade lines dated 2024-12-27..2026-05-28, none paid, none on a wire.' },
+    ],
+  },
+  {
     version: 'v55.83-WD',
     date: '2026-11-21',
     title: 'Pending bank copies no longer come back after reconnecting a bank',
