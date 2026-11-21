@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WO',
+    date: '2026-11-21',
+    title: 'Returned checks no longer count as an expense when the deposit is there too',
+    items: [
+      { text: '**Returned checks are now counted net.** When a check is deposited and the bank later returns it, and both bank lines are in the category Returned checks, the two cancel out. Before, the return was counted as a Warehouse / Office expense and the deposit was ignored, which made that month look far worse than it was.' },
+      { text: 'Nothing is hidden. Both bank lines stay as they are. Returned checks is still listed, also when it comes to zero: click it to see the return, the deposit, their dates and that they add up.' },
+      { text: 'Only lines a person put in Returned checks are used. Nothing is paired just because two amounts are equal. A return with no deposit in the same dates is still shown as a cost, and a separate bank fee for the return is still a cost.' },
+      { text: 'If the returned deposit is also matched to an invoice, the line says so. Check that the invoice is not shown as paid. Nothing is changed on the invoice automatically.' },
+      { text: 'The same net figure is used in P&L by period, the Income Statement and the accountant downloads.' },
+      { superAdminOnly: true, text: 'Technical: bills route period_stats nets incoming lines classified returned_checks against the category (total, debits, credits, net flag; the incoming row is listed with a negative amount and money_in); in_categories shows the deposit as not_pnl; spending.returned_checks is the summary. expenseColumns keeps a zero net category; rtmAdjust keeps it too. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-WN',
     date: '2026-11-20',
     title: 'P&L by period: every missing item on a line is a button, and says the real reason',

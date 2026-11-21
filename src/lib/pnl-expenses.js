@@ -69,8 +69,10 @@ export function expenseColumns(cats, uncategorized) {
   var out = {}; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit', 'held'].forEach(function (k) { out[k] = { cents: 0, cats: [] }; });
   (cats || []).forEach(function (c) {
     var l = letterOf(c); if (!out[l]) { return; }
-    var v = cents(c.total); if (!v) { return; }
-    out[l].cents += v; out[l].cats.push({ key: c.key, label: c.label || c.key, cents: v });
+    // v55.83-WO — a NET category (returned checks: returns minus the deposits that were returned) is kept even at exactly 0, so the
+    // pair behind the zero can still be opened and checked
+    var v = cents(c.total); var netCat = c.net === true && (Number(c.credits) > 0 || Number(c.debits) > 0); if (!v && !netCat) { return; }
+    out[l].cents += v; var oc = { key: c.key, label: c.label || c.key, cents: v }; if (netCat) { oc.net = true; oc.debits_cents = cents(c.debits); oc.credits_cents = cents(c.credits); } out[l].cats.push(oc);
   });
   var u = cents(uncategorized);
   if (u) { out.unassigned.cents += u; out.unassigned.cats.push({ key: 'uncategorized', label: 'No category at all', cents: u }); }

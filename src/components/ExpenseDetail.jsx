@@ -37,7 +37,9 @@ export default function ExpenseDetail(props) {
   var b = m.bank || { cents: 0, count: 0, rows: [], listed_cents: 0, unlisted_cents: 0 };
   return <div className="text-[11px]" style={{ color: INK }}>
     <table className="w-full text-[11px]"><tbody>
-      <Row label={'Bank lines paid under this category (' + b.count + ')'} value={money(b.cents)} />
+      {m.net ? <Row label={'Returns taken out by the bank (' + m.net.debit_count + ')'} value={money(m.net.debits_cents)} /> : null}
+      {m.net ? <Row label={'− Deposits that were returned (' + m.net.credit_count + ')'} note="Money that came in and was later taken back by the bank. It is taken off here so the pair is not a cost, and it is not counted as income." value={'−' + money(m.net.credits_cents).replace('−', '')} /> : null}
+      <Row label={m.net ? '= Bank lines under this category, net (' + b.count + ')' : 'Bank lines paid under this category (' + b.count + ')'} value={money(b.cents)} />
       {m.from_advances_cents !== 0 && <Row label="+ Bills paid from an advance, booked here" value={money(m.from_advances_cents)} />}
       {m.taken_out.map(function (t, i) { return <Row key={'t' + i} label={'− Money sent to ' + t.payer + (t.era_note ? ' (' + t.era_note + ')' : '') + ', taken out of here'} note={'It is replaced by the bills ' + t.payer + ' paid, so the same money is not counted twice.'} value={'−' + money(t.cents).replace('−', '')} />; })}
       {m.bills.cents !== 0 && <Row label="+ Bills paid through RTM / NextTrade that belong to this category" value={money(m.bills.cents)} />}
@@ -49,7 +51,7 @@ export default function ExpenseDetail(props) {
       <div className="px-2 py-1 font-extrabold" style={{ background: '#f8fafc', color: INK }}>{'Bank lines (' + b.rows.length + ')'}</div>
       <div className="overflow-auto pl-scroll" style={{ maxHeight: 260 }}><table className="w-full text-[11px]"><tbody>
         {b.rows.map(function (r, i) { return <tr key={r.id || i} style={{ borderTop: '1px solid ' + LINE }}>
-          <td className="px-2 py-1 whitespace-nowrap">{r.date}</td><td className="px-2 py-1 font-semibold">{String(r.who).substring(0, 70)}</td>
+          <td className="px-2 py-1 whitespace-nowrap">{r.date}</td><td className="px-2 py-1 font-semibold">{String(r.who).substring(0, 70)}{r.money_in && <div style={{ color: '#065f46', fontWeight: 800 }}>{'money IN: the deposit that was returned' + (r.matched_invoice ? ' · it is matched to an invoice: check that invoice is not shown as paid' : '')}</div>}</td>
           <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(r.cents)}</td><td className="px-2 py-1 text-right">{picker(r)}</td></tr>; })}
       </tbody></table></div>
       {b.unlisted_cents !== 0 && <div className="px-2 py-1" style={{ color: '#b45309' }}>{'The lines listed add up to ' + money(b.listed_cents) + '; the other ' + money(b.unlisted_cents) + ' is an advance moved in or out of this category, or lines beyond what one list can hold (open a shorter period to see them all).'}</div>}

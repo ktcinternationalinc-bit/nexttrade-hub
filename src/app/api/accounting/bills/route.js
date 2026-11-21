@@ -1852,6 +1852,13 @@ export async function POST(req) {
         var taxKeyP = profKeyP || '__professional_fees_pt';
         var fundingTax = { count: 0, total: 0, recategorized: 0, recategorized_total: 0, by_party: {} };
         var isFundingLine = function (tF) { if (tF.direction !== 'out' || tF.transfer_group_id) { return null; } return fundingIdentity({ direction: 'out', third_party_payer: tF.third_party_payer, name: tF.name, merchant_name: tF.merchant_name }); };
+        // v55.83-WO (Max screenshots via Codex, 21 Nov 00:05, P1) — RETURNED CHECKS are counted NET. A deposit that the bank later
+        // returned is two bank lines in this one category: money IN (the deposit) and money OUT (the return). The category's
+        // expense is the returns MINUS the deposits categorized into it — a matched pair is 0, not a cost and not income. Both bank
+        // lines stay exactly as they are and stay in the gross money-in / money-out totals. Nothing is paired by amount: only a
+        // line a person put in this category counts. A separate bank fee for the return has its own category and stays a cost.
+        var isContraCat = function (kC) { return !!kC && (kC === 'returned_checks' || /returned\s+checks?/i.test(String(catLabels[kC] || ''))); };
+        var contra = { credit_count: 0, credits: 0, debit_count: 0, debits: 0, matched_invoice_credits: 0 };
         var byCat = {}; var trf = { count: 0, total: 0 }; var unc = { count: 0, total: 0 }; var totOut = 0;
         var spRows = [];
         var byCatIn = {}; var trfIn = { count: 0, total: 0 }; var uncIn = { count: 0, total: 0 }; var totIn = 0;
@@ -1865,10 +1872,24 @@ export async function POST(req) {
             // income side: an invoice-matched deposit counts as sales even
             // when nobody also set a classification on it.
             totIn = r2(totIn + amt6);
-            var keyI = isTrf ? 'transfer' : (t6.matched_invoice_id ? 'customer_payment' : (t6.classification || null));
-            if (inRows.length < 500 || (!keyI && inRows.length < 3000)) { inRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: keyI || '', paired: !!t6.transfer_group_id }); } // v55.83-TS — id lets Stats save a category right on the row; uncategorized rows are never cut by the cap
+            // WO — a deposit a person categorized as a returned check is that, also when it is matched to an invoice: the match is
+            // left alone (nothing is un-matched or marked paid here), but the deposit is not counted as a customer payment.
+            var contraIn = !isTrf && isContraCat(t6.classification);
+            var keyI = isTrf ? 'transfer' : (contraIn ? t6.classification : (t6.matched_invoice_id ? 'customer_payment' : (t6.classification || null)));
+            if (inRows.length < 500 || ((!keyI || contraIn) && inRows.length < 3000)) { inRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: keyI || '', paired: !!t6.transfer_group_id, returned_deposit: contraIn ? true : undefined, matched_invoice: contraIn && t6.matched_invoice_id ? true : undefined }); } // v55.83-TS — id lets Stats save a category right on the row; uncategorized rows are never cut by the cap
             if (isTrf) { trfIn.count++; trfIn.total = r2(trfIn.total + amt6); return; }
             if (!keyI) { uncIn.count++; uncIn.total = r2(uncIn.total + amt6); return; }
+            if (contraIn) {
+              // money in, shown on the income side as NOT income; and taken off the same category on the spending side
+              if (!byCatIn[keyI]) { byCatIn[keyI] = { key: keyI, label: (catLabels[keyI] || keyI) + ' — deposits later returned (netted against the return; not income)', kind: 'not_pnl', count: 0, total: 0 }; }
+              byCatIn[keyI].count++; byCatIn[keyI].total = r2(byCatIn[keyI].total + amt6);
+              if (!byCat[keyI]) { byCat[keyI] = { key: keyI, label: catLabels[keyI] || keyI, kind: kindOf(keyI), count: 0, total: 0 }; }
+              byCat[keyI].count++; byCat[keyI].total = r2(byCat[keyI].total - amt6); byCat[keyI].net = true;
+              byCat[keyI].credits = r2((byCat[keyI].credits || 0) + amt6); byCat[keyI].credit_count = (byCat[keyI].credit_count || 0) + 1;
+              contra.credit_count++; contra.credits = r2(contra.credits + amt6); if (t6.matched_invoice_id) { contra.matched_invoice_credits++; }
+              if (spRows.length < 3000) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: r2(0 - amt6), category: keyI, paired: false, money_in: true, matched_invoice: t6.matched_invoice_id ? true : undefined }); }
+              return;
+            }
             if (!byCatIn[keyI]) { byCatIn[keyI] = { key: keyI, label: catLabels[keyI] || keyI, kind: kindOf(keyI), count: 0, total: 0 }; }
             byCatIn[keyI].count++; byCatIn[keyI].total = r2(byCatIn[keyI].total + amt6);
             return;
@@ -1883,11 +1904,13 @@ export async function POST(req) {
             if (was6 !== taxKeyP) { fundingTax.recategorized++; fundingTax.recategorized_total = r2(fundingTax.recategorized_total + amt6); }
             key6 = taxKeyP; isTrf = false;
           }
-          if (spRows.length < 500 || (!key6 && spRows.length < 3000)) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id, funds_sent_to: fund6 ? fund6.payer : undefined, bank_category: fund6 ? (t6.classification || '') : undefined }); } // v55.83-TS
+          var contraOut = !isTrf && !fund6 && isContraCat(key6); // WO — the return itself: listed whatever the cap, so the pair is always inspectable
+          if (spRows.length < 500 || ((!key6 || contraOut) && spRows.length < 3000)) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id, funds_sent_to: fund6 ? fund6.payer : undefined, bank_category: fund6 ? (t6.classification || '') : undefined }); } // v55.83-TS
           if (isTrf) { trf.count++; trf.total = r2(trf.total + amt6); return; }
           if (!key6) { unc.count++; unc.total = r2(unc.total + amt6); return; }
           if (!byCat[key6]) { byCat[key6] = { key: key6, label: catLabels[key6] || (key6 === '__professional_fees_pt' ? 'Professional fees' : key6), kind: key6 === '__professional_fees_pt' ? 'expense' : kindOf(key6), count: 0, total: 0 }; }
           byCat[key6].count++; byCat[key6].total = r2(byCat[key6].total + amt6);
+          if (contraOut) { byCat[key6].net = true; byCat[key6].debits = r2((byCat[key6].debits || 0) + amt6); byCat[key6].debit_count = (byCat[key6].debit_count || 0) + 1; contra.debit_count++; contra.debits = r2(contra.debits + amt6); }
           if (fund6) { byCat[key6].funds_sent = r2((byCat[key6].funds_sent || 0) + amt6); } // how much of this line is transfers to RTM / NextTrade
         });
         // v55.83-TX (Max, Nov 17) — NextTrade / RTM payments split into bills · extra fee · ADVANCE. An advance is NOT spending:
@@ -1988,6 +2011,7 @@ export async function POST(req) {
         } catch (ePf) { partyFunds = null; }
         spend = { rtm: rtmBlk, paid_through: ptBlocks, party_funds: partyFunds, categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,
           real_spending: r2(totOut - trf.total), rows: spRows,
+          returned_checks: contra, // WO — returns (money out) and the deposits netted against them (money in); categories carry the NET
           deductible_spending: deductible, not_pnl_out: notPnlOut,
           in_categories: catRowsIn, in_transfers: trfIn, in_uncategorized: uncIn, total_in: totIn,
           real_income: r2(totIn - trfIn.total), in_rows: inRows,

@@ -32,7 +32,7 @@ export function rtmAdjust(cats0, rtm) {
   // (label fallback kept here: 'RTM service fee (payments − covered bills)'; an affiliate's remainder stays 'not_pnl')
   remainderRows(rtm).forEach(function (rw) { map[rw.key] = rw; });
   return Object.keys(map).map(function (k) { return map[k]; })
-    .filter(function (c) { return Math.abs(c.total) > 0.004 || c.via_rtm || c.rtm_out; })
+    .filter(function (c) { return Math.abs(c.total) > 0.004 || c.via_rtm || c.rtm_out || c.net === true; }) // v55.83-WO — a net category (returned checks) stays listed at 0
     .sort(function (x, y) { return y.total - x.total; });
 }
 // v55.83-TS (Max, Nov 17: "uncategorized -235,000 — what is that") — money sent to a paid-through company (NextTrade, RTM
