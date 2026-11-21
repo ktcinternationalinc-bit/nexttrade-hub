@@ -263,7 +263,7 @@ export async function POST(req) {
       var refsChecked = {}; bl.forEach(function (b) { if (b.other_reference) { refsChecked[b.other_reference] = true; } });
       var payload = { run_by: userId, date_from: from, date_to: f1, filters: { vendor: vq || null, reference: rq || null, warehouse: wq || null, status: sq || null, reviewer: revq || null, unresolved: body.unresolved === true, window_floor: floor },
         source: source, fetch_run_id: rr && rr.run_id ? rr.run_id : (runs.lastGood ? runs.lastGood.id : null), feed_generated_at: runs.lastGood ? runs.lastGood.feed_generated_at : null,
-        bills_checked: bl.map(function (b) { return { id: b.id, vendor: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date }; }), references_checked: Object.keys(refsChecked),
+        bills_checked: bl.map(function (b) { return { id: b.id, vendor: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date, reference: b.other_reference || null }; }), references_checked: Object.keys(refsChecked),
         counts: Object.assign({}, summary, { freshness: fw, recheck: rr ? { ok: rr.ok, complete: rr.complete === true, error: rr.error || null, counts: rr.counts } : null }), status_at_run: status.words, build: WC_BUILD };
       var itemsP = rows.map(function (r) { return { item_key: r.item_key, bill_ids: r.bill_ids || [], bill_dates: (r.bills || []).map(function (b) { return b.bill_date || ''; }), outcome: r.outcome, state: r.state || 'not_applicable', needs_attention: !!r.needs_attention, row: r, comparison_fp: r.comparison_fp || null, evidence_hash: sha(r), decision_id: r.decision ? r.decision.id : null }; });
       var sv = await db.rpc('wc_save_report', { p_report: payload, p_items: itemsP });
@@ -274,19 +274,31 @@ export async function POST(req) {
 
     // ---------------------------------------------------------------- report history
     if (action === 'reports') {
-      var rl = await db.from('wc_reports').select('id, report_no, run_by, run_at, date_from, date_to, filters, source, status_at_run, counts, feed_generated_at').order('run_at', { ascending: false }).limit(300);
+      var rl = await db.from('wc_reports').select('id, report_no, run_by, run_at, date_from, date_to, filters, source, status_at_run, counts, feed_generated_at, fetch_run_id, build, bills_checked, references_checked').order('run_at', { ascending: false }).limit(300);
       if (rl.error) { throw new Error(rl.error.message); }
-      var list = (rl.data || []).filter(function (r) { return !floor || !r.date_to || String(r.date_to) >= floor; });
+      // a report wholly before the viewer's window is not listed at all (same rule as opening it by id)
+      var list = (rl.data || []).filter(function (r) { return !floor || (!!r.date_to && String(r.date_to) >= floor); });
+      // Codex 11:39 — reports partly outside the window: the header is rebuilt from the viewer's own items only
+      var partIds = list.filter(function (r) { return reportPartialFor(r, floor); }).map(function (r) { return r.id; });
+      var frozenBy = {};
+      for (var cp = 0; cp < partIds.length; cp += 50) { (await allRows(function () { return db.from('wc_report_items').select('report_id, bill_dates, outcome, state, needs_attention, row').in('report_id', partIds.slice(cp, cp + 50)); })).forEach(function (it) { (frozenBy[it.report_id] = frozenBy[it.report_id] || []).push(it); }); }
       var nm = await userNames(db, list.map(function (r) { return r.run_by; }));
-      return out({ ok: true, reports: list.map(function (r) { return Object.assign({}, r, { run_by_name: nm[r.run_by] || 'someone', partial: !!(floor && r.date_from && String(r.date_from) < floor) }); }), window_floor: floor, permissions: perms });
+      return out({ ok: true, reports: list.map(function (r) {
+        var vis = (frozenBy[r.id] || []).filter(function (it) { return (it.bill_dates || []).every(function (d) { return billInWindow(d, floor); }); });
+        var v = viewReport(r, floor, vis); delete v.bills_checked; delete v.references_checked; // the list never carries bill identities
+        return Object.assign(v, { run_by_name: nm[r.run_by] || 'someone' });
+      }), window_floor: floor, permissions: perms });
     }
     if (action === 'report') {
       var rp = await db.from('wc_reports').select('*').eq('id', clean(body.id, 60)).maybeSingle();
       if (rp.error || !rp.data) { return bad('Report not found.', 404); }
+      // wholly before the viewer's window = not theirs to open (same answer as a report that does not exist)
+      if (floor && (!rp.data.date_to || String(rp.data.date_to) < floor)) { return bad('Report not found.', 404); }
       var its = await allRows(function () { return db.from('wc_report_items').select('seq, item_key, bill_ids, bill_dates, outcome, state, needs_attention, row, comparison_fp, decision_id').eq('report_id', rp.data.id).order('seq', { ascending: true }); });
       // the viewer sees only items whose bills are all inside their window; anything else makes the view PARTIAL
       var hiddenN = 0;
-      var visIts = its.filter(function (it) { var ok = (it.bill_dates || []).every(function (d) { return !floor || (d && String(d) >= floor); }); if (!ok) { hiddenN++; } return ok; });
+      var visIts = its.filter(function (it) { var ok = (it.bill_dates || []).every(function (d) { return billInWindow(d, floor); }); if (!ok) { hiddenN++; } return ok; });
+      var repView = viewReport(rp.data, floor, visIts);
       var keysR = visIts.map(function (i) { return i.item_key; });
       var decsR = [];
       for (var ck = 0; ck < keysR.length; ck += 200) { decsR = decsR.concat(await allRows(function () { return db.from('wc_decisions').select('id, item_key, kind, reason, actor, at, assignee, ticket_id, evidence').in('item_key', keysR.slice(ck, ck + 200)).gt('at', rp.data.run_at).order('at', { ascending: true }); })); }
@@ -301,7 +313,8 @@ export async function POST(req) {
       var nmR = await userNames(db, decsR.map(function (d) { return d.actor; }).concat(decsR.map(function (d) { return d.assignee; })).concat([rp.data.run_by]));
       var later = {}; decsR.forEach(function (d) { (later[d.item_key] = later[d.item_key] || []).push({ kind: d.kind, reason: d.reason, at: d.at, actor_name: nmR[d.actor] || 'someone', assignee_name: d.assignee ? (nmR[d.assignee] || 'someone') : null, ticket_id: d.ticket_id, evidence: d.evidence || [] }); });
       var curStatus = cur ? reportStatus(visIts.map(function (i) { var c = cur[i.item_key]; return { needs_attention: i.needs_attention, state: c ? c.state : i.state }; })) : null;
-      return out({ ok: true, report: Object.assign({}, rp.data, { run_by_name: nmR[rp.data.run_by] || 'someone' }), partial: hiddenN > 0, partial_words: hiddenN > 0 ? 'PARTIAL — some items of this report are outside your permitted dates and are not shown' : null,
+      var isPart = hiddenN > 0 || repView.partial;
+      return out({ ok: true, report: Object.assign(repView, { run_by_name: nmR[rp.data.run_by] || 'someone' }), partial: isPart, partial_words: isPart ? 'PARTIAL — this report covers bills outside your permitted dates; only your part is shown, and its totals and status count only that part' : null,
         items: visIts.map(function (i) { return { seq: i.seq, item_key: i.item_key, frozen: i.row, frozen_state: i.state, outcome: i.outcome, needs_attention: i.needs_attention, later: later[i.item_key] || [], current: cur ? (cur[i.item_key] || { state: 'not_found_now', state_words: 'Not found in the current check (bill or link changed)' }) : null }; }),
         current_status: curStatus, current_note: runs.lastGood ? 'from the Hub’s stored warehouse copy, last successful read ' + String(runs.lastGood.finished_at || '').substring(0, 16).replace('T', ' ') + ' UTC' : 'the warehouse has not been read successfully yet',
         window_floor: floor, permissions: perms });
@@ -441,6 +454,34 @@ function itemPublic(i, A, names, lookups) {
     needs_decision: !!i.needs_decision, needs_attention: !!i.needs_attention, allowed: i.needs_decision ? allowedDecisions(i.outcome) : [], state: i.state, state_words: i.state_words, outstanding: !!i.outstanding,
     decision: dec(i.decision), issue: dec(i.issue), history: (i.history || []).map(dec), changed: i.changed || null, comparison_fp: i.comparison_fp || null,
     last_verified_at: limited ? null : (i.last_verified_at || null), stale: false
+  };
+}
+// Codex 11:39 — a saved report seen by someone with a narrower date window. The stored report is never changed; the viewer
+// gets a header rebuilt ONLY from what they may see (their bills, their references, their items' counts and status).
+function billInWindow(d, floor) { return !floor || (!!d && String(d) >= floor); }
+function reportPartialFor(r, floor) {
+  if (!floor) { return false; }
+  if (!r.date_from || String(r.date_from) < floor) { return true; }
+  return (r.bills_checked || []).some(function (b) { return !billInWindow(b.bill_date, floor); });
+}
+var FRESH_LEAD = { refresh_failed: 'Refresh failed', refresh_incomplete: 'Refresh incomplete', not_refreshed: 'Saved without refreshing' };
+function viewReport(r, floor, visFrozen) {
+  if (!reportPartialFor(r, floor)) { return Object.assign({}, r, { partial: false }); }
+  var bills = (r.bills_checked || []).filter(function (b) { return billInWindow(b.bill_date, floor); });
+  var refs = {}; bills.forEach(function (b) { if (b.reference) { refs[b.reference] = true; } });
+  var rows = (visFrozen || []).map(function (i) { return Object.assign({}, i.row || {}, { outcome: i.outcome, state: i.state, needs_attention: i.needs_attention }); });
+  var s = summarise(rows);
+  var st = reportStatus(rows.map(function (x) { return { needs_attention: x.needs_attention, state: x.state }; }));
+  var fk = r.counts && r.counts.freshness ? r.counts.freshness.kind : null;
+  var f = r.filters || {};
+  return {
+    id: r.id, report_no: r.report_no, run_by: r.run_by, run_at: r.run_at, date_from: r.date_from, date_to: r.date_to, source: r.source,
+    fetch_run_id: r.fetch_run_id, feed_generated_at: r.feed_generated_at, build: r.build,
+    filters: { status: f.status || null, unresolved: !!f.unresolved, other_filters_hidden: !!(f.vendor || f.reference || f.warehouse || f.reviewer) },
+    bills_checked: bills, references_checked: Object.keys(refs),
+    counts: Object.assign(s, { partial_totals: true, freshness: fk ? { kind: fk } : null }),
+    status_at_run: 'PARTIAL — of the items you may see: ' + (FRESH_LEAD[fk] ? FRESH_LEAD[fk] + ' · ' : '') + st.words,
+    partial: true
   };
 }
 // Codex 11:30 — did THIS report read the warehouse? refreshed / refresh_failed / refresh_incomplete / not_refreshed / stored_copy

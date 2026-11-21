@@ -267,7 +267,22 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   world.floor = '2026-10-07';
   var hist2 = await call({ action: 'report', id: rep1.body.report.id });
   check('a viewer with a narrower window sees the old report labelled PARTIAL, never as the whole report', hist2.body.partial === true && /PARTIAL/.test(hist2.body.partial_words));
+  // Codex 11:39 — the WHOLE response (header + history list), not only the items, must hide bills outside the window
+  var stored1 = tbl('wc_reports').filter(function (r) { return r.id === rep1.body.report.id; })[0];
+  var hidB = (stored1.bills_checked || []).filter(function (b) { return !b.bill_date || b.bill_date < '2026-10-07'; });
+  var visRefs = {}; (stored1.bills_checked || []).forEach(function (b) { if (b.bill_date >= '2026-10-07' && b.reference) { visRefs[b.reference] = true; } });
+  var hidTokens = []; hidB.forEach(function (b) { hidTokens.push('"' + b.id + '"', '"' + b.bill_number + '"'); if (b.reference && !visRefs[b.reference]) { hidTokens.push('"' + b.reference + '"'); } });
+  function leaks(obj) { var s = JSON.stringify(obj); return hidTokens.filter(function (t) { return s.indexOf(t) >= 0; }); }
+  check('(fixture) the October report really holds a bill before the narrower window, with its reference', hidB.length >= 1 && hidTokens.length >= 3, hidB);
+  check('NARROWER VIEW, report by id: the ENTIRE response carries no hidden bill id / number / reference', leaks(hist2.body).length === 0, leaks(hist2.body));
+  check('…its header is rebuilt from the visible part: bills / references only in-window, totals marked partial, status says PARTIAL, other filters hidden', hist2.body.report.partial === true && hist2.body.report.bills_checked.every(function (b) { return b.bill_date >= '2026-10-07'; }) && hist2.body.report.counts.partial_totals === true && hist2.body.report.counts.items === hist2.body.items.length && /^PARTIAL — of the items you may see: /.test(hist2.body.report.status_at_run) && typeof hist2.body.report.filters.other_filters_hidden === 'boolean', hist2.body.report);
+  var list2 = await call({ action: 'reports' });
+  var l1 = list2.body.reports.filter(function (r) { return r.id === rep1.body.report.id; })[0];
+  check('NARROWER VIEW, history list: no hidden bill id / number / reference anywhere; the entry is PARTIAL with partial totals', leaks(list2.body).length === 0 && l1 && l1.partial === true && l1.counts.partial_totals === true && /^PARTIAL/.test(l1.status_at_run), leaks(list2.body));
+  check('…the stored report itself is untouched (still every bill, original status)', tbl('wc_reports').filter(function (r) { return r.id === rep1.body.report.id; })[0].bills_checked.length === stored1.bills_checked.length && stored1.status_at_run === rep1.body.report.status);
   world.floor = null;
+  var hist3 = await call({ action: 'report', id: rep1.body.report.id });
+  check('FULL VIEW control: an unrestricted viewer gets the full original header (hidden-to-others bill, its reference, original status)', leaks(hist3.body).length === hidTokens.length && hist3.body.report.partial === false && hist3.body.report.status_at_run === rep1.body.report.status && hist3.body.report.bills_checked.length === stored1.bills_checked.length, leaks(hist3.body));
   var csv = W.toCsv(prev.body.rows.map(function (r) { return { bill_number: r.bills[0] && r.bills[0].bill_number, outcome: r.outcome_words, state: r.state_words }; }));
   check('export: the filtered rows become CSV', /^report,bill_number/.test(csv));
   var ev = await call({ action: 'evidence_url', decision_id: dec.id, path: dec.evidence[0].path });
@@ -335,6 +350,11 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('RECOVERY: the next successful refresh with nothing changed → "Complete — every item decided" again, WITHOUT a new approval', fok.body.report.status === 'Complete — every item decided' && fok.body.report.complete === true && fok.body.rows.length === 0 && tbl('wc_decisions').filter(function (d) { return d.item_key === cItem.item_key; }).length === decBefore, fok.body.report);
   var hFail = await call({ action: 'report', id: fr.body.report.id });
   check('HISTORY kept: the failed-refresh report still says "Refresh failed …"; the earlier complete report is unchanged; "Now" says what data it is based on', /^Refresh failed/.test(hFail.body.report.status_at_run) && tbl('wc_reports').filter(function (r) { return r.id === cr.body.report.id; })[0].status_at_run === 'Complete — every item decided' && /stored warehouse copy, last successful read/.test(hFail.body.current_note || ''), hFail.body.current_note);
+  world.floor = '2026-10-07';
+  var outW = await call({ action: 'report', id: cr.body.report.id });
+  var outL = await call({ action: 'reports' });
+  world.floor = null;
+  check('a report wholly before the viewer\'s window: opening it by id → "Report not found." (404), and it is not in their history list', outW.status === 404 && !outW.body.report && !outL.body.reports.some(function (r) { return r.id === cr.body.report.id; }), outW.body);
   var html7 = RDS.renderToStaticMarkup(React.createElement(PANEL.default, { bills: [], toast: {}, openDoc: function () {}, onClose: function () {} }));
   check('SCREEN: the report panel carries the refresh-failed banner and the per-row "last verified" note', fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8').indexOf('this report is not complete until a refresh succeeds') >= 0 && fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8').indexOf('Not refreshed now — last verified ') >= 0 && /Bill date from/.test(html7));
 
