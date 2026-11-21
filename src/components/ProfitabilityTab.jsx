@@ -13,6 +13,7 @@ import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from 
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
 import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, addPeriodCell, blankPeriodRow, settlePeriodRow, avgProfitPerUnit } from '../lib/pnl-period';
 import FixChips from './FixChips'; // v55.83-WN — each missing thing on a line is a button that jumps to where it is fixed
+import { needCategoryList, pickerState, pickableCategories } from '../lib/cat-picker-state'; // v55.83-WR — the category menu loads in the pop-up too
 import AvgProfitCell from './AvgProfitCell'; // v55.83-WK — average profit per unit, never from an unknown profit
 import CombinedShippingNote from './CombinedShippingNote'; // v55.83-VS — neutral note: a combined transportation cost is known, nothing to fix
 import InboundTruckingView from './InboundTruckingView'; // v55.83-VR — Kronos freight against pounds received (tracking only)
@@ -144,7 +145,11 @@ export default function ProfitabilityTab(props) {
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
-  useEffect(function () { if (!canPick || catList || !xOpen) { return; } erApi('list').then(function (j) { setCatList(j && j.ok ? (j.categories || []).filter(function (c) { return c.active !== false; }) : []); }); }, [xOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-WR (Max, 21 Nov: "should be able to change category right from here but not working") — the list is fetched when ANY
+  // place with the menu is open: a line of the expense table OR the "How [month] is worked out" pop-up. A failed fetch is said, with a retry.
+  var s29 = useState(''); var catErr = s29[0]; var setCatErr = s29[1]; var catLoading = useRef(false);
+  function loadCats() { if (!canPick || catLoading.current) { return; } catLoading.current = true; setCatErr(''); erApi('list').then(function (j) { if (j && j.ok) { setCatList(pickableCategories(j.categories)); } else { setCatErr((j && j.error) || 'The categories could not be loaded.'); } }).finally(function () { catLoading.current = false; }); }
+  useEffect(function () { if (needCategoryList({ canPick: canPick, loaded: Array.isArray(catList), loading: catLoading.current, xOpen: xOpen, fShow: fShow })) { loadCats(); } }, [xOpen, fShow]); // eslint-disable-line react-hooks/exhaustive-deps
   // the SAME save as Stats → Income Statement (expense-rules bulk_classify, single pick); then every period is asked again
   function pickCat(row, key) {
     if (!key || !row || !row.id) { return; }
@@ -184,9 +189,12 @@ export default function ProfitabilityTab(props) {
   function catPicker(row) {
     if (!canPick || !row.id) { return null; }
     if (catSaving[row.id]) { return <span style={{ color: SUB, fontSize: 10, fontWeight: 700 }}>saving…</span>; }
+    var pst = pickerState(catList, catErr);
+    if (pst === 'error') { return <button type="button" title={catErr} onClick={function (e) { e.stopPropagation(); loadCats(); }} className="text-[10px] font-extrabold rounded px-1.5 py-0.5" style={{ border: '1px solid #fca5a5', background: '#fef2f2', color: '#991b1b' }}>categories not loaded — try again</button>; }
+    if (pst === 'loading') { return <select value="" disabled aria-label="Loading the categories" onClick={function (e) { e.stopPropagation(); }} onFocus={function () { loadCats(); }} className="nt-light text-[11px] font-semibold rounded px-1 py-0.5" style={{ border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b', maxWidth: 180 }}><option value="">loading…</option></select>; }
     return <select value="" aria-label={'Change the category of ' + row.who} onClick={function (e) { e.stopPropagation(); }} onChange={function (e) { pickCat(row, e.target.value); }} className="nt-light text-[11px] font-semibold rounded px-1 py-0.5" style={{ border: '1px solid #fdba74', background: '#ffffff', color: '#0f172a', maxWidth: 180 }}>
-      <option value="">{catList ? 'change category…' : 'loading…'}</option>
-      {(catList || []).filter(function (c) { return c.key !== 'needs_clarification'; }).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
+      <option value="">change category…</option>
+      {pickableCategories(catList).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
     </select>;
   }
   var todayIso = new Date().toISOString().substring(0, 10);

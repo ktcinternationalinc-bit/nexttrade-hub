@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WR',
+    date: '2026-11-21',
+    title: 'P&L by period: change a category right in the pop-up',
+    items: [
+      { text: '**The category menu now works in the “How [month] is worked out” pop-up.** Before, the menus beside the bank lines there stayed on “loading…” and could not be used, unless a line of the expense table had been opened first.' },
+      { text: 'If the categories cannot be loaded, the menu now says so and offers “try again”, instead of showing an empty list.' },
+      { superAdminOnly: true, text: 'Technical: ProfitabilityTab fetched the category list only on xOpen; it now fetches on xOpen or fShow (src/lib/cat-picker-state.js needCategoryList, pickerState, pickableCategories), with a running-fetch guard and an error state. No server change, no SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-WO',
     date: '2026-11-21',
     title: 'Returned checks no longer count as an expense when the deposit is there too',
