@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WD',
+    date: '2026-11-21',
+    title: 'Pending bank copies no longer come back after reconnecting a bank',
+    items: [
+      { text: 'When two bank connections feed the same real bank account, the same pending (not yet cleared) transaction no longer loads twice. Final posted transactions still load normally.' },
+      { text: '**Review pending records** now also finds old copies left behind by reconnecting the bank. Before you confirm, it shows which transaction will be kept. Payments already attached to bills and invoices stay attached.' },
+      { text: 'If both copies are still pending, the clean-up keeps one pending record. It never marks money as paid before the bank confirms it. Unclear matches, and copies that already have saved work on them, stay for a person to review.' },
+      { superAdminOnly: true, text: 'The clean-up uses the existing duplicate archive, so every removed copy can be restored. Nothing new to install in the database. Only the verified super admin can confirm selected records.' }
+    ]
+  },
+  {
     version: 'v55.83-XS',
     date: '2026-11-21',
     title: 'Two releases on one invoice; invoice and trucking from the detail',

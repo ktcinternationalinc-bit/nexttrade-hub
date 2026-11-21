@@ -11,7 +11,7 @@ const U=n=>'00000000-0000-0000-0000-'+String(n).padStart(12,'0');
 const pg=new PGlite();
 let currentDb;
 function stub(file,exports){const id=require.resolve(path.join(root,file));require.cache[id]={id,filename:id,loaded:true,exports};}
-stub('src/app/api/plaid/_auth.js',{authorizePlaidOperation:async()=>({db:currentDb,isVerifiedSuperAdmin:true,profileId:'fixture-admin'}),plaidJson:(b,o)=>Response.json(b,o),plaidError:e=>Response.json({error:e.message},{status:500})});
+stub('src/app/api/plaid/_auth.js',{authorizePlaidOperation:async()=>({db:currentDb,isVerifiedSuperAdmin:true,profileId:U(998)}),plaidJson:(b,o)=>Response.json(b,o),plaidError:e=>Response.json({error:e.message},{status:500})});
 stub('src/lib/bank-visibility.js',{readBankJson:r=>r.json()});
 const route=require('../src/app/api/plaid/pending-repair/route');
 const source=transform(fs.readFileSync(path.join(root,'src/components/PendingBankRepair.jsx'),'utf8'),{transforms:['jsx','imports']}).code;
@@ -30,10 +30,12 @@ const server=http.createServer(async(req,res)=>{
     if(req.url==='/api/plaid/pending-repair'){
       let body='';for await(const chunk of req)body+=chunk;
       currentDb=new FakeDb();
+      currentDb.t.plaid_accounts=[{plaid_account_id:'A',connection_id:U(999),name:'Checking',mask:'6338'},{plaid_account_id:'B',connection_id:U(997),name:'Checking',mask:'6338'}];
+      currentDb.t.bank_connections=[{id:U(999),institution_name:'Chase',status:'archived',created_at:'2026-01-01'},{id:U(997),institution_name:'Chase',status:'active',created_at:'2026-11-01'}];
       currentDb.t.bank_transactions=(await pg.query('select * from bank_transactions')).rows.map(r=>({...r,date:new Date(r.date).toISOString().slice(0,10),posted_date:r.posted_date?new Date(r.posted_date).toISOString().slice(0,10):null}));
       currentDb.rpc=async(name,args)=>{
-        assert.equal(name,'hub_reconcile_pending');
-        try{return {data:(await pg.query('select hub_reconcile_pending($1,$2,$3) as r',[args.p_pending,args.p_posted,args.p_reason])).rows[0].r};}
+        assert.ok(['hub_reconcile_pending','bank_duplicate_remove'].includes(name));
+        try{return {data:name==='bank_duplicate_remove' ? (await pg.query('select bank_duplicate_remove($1,$2,$3,$4) as r',[args.p_dup,args.p_keep,args.p_actor,args.p_reason])).rows[0].r : (await pg.query('select hub_reconcile_pending($1,$2,$3) as r',[args.p_pending,args.p_posted,args.p_reason])).rows[0].r};}
         catch(e){return {error:{message:e.message}};}
       };
       const reply=await route.POST(new Request('http://fixture/api',{method:'POST',body}));
@@ -57,6 +59,11 @@ const server=http.createServer(async(req,res)=>{
     [U(n),n===2?'posted-1':'hold-'+n,ref,U(999),pending?null:'2026-11-19',pending,n===3?'Unconfirmed pending hold':'Fixture fuel payment']);
   }
   await pg.query('insert into vendor_bill_payments values($1,$2,760.26,false)',[U(100),U(1)]);
+  for(const [n,account,pending,name,amount] of [[4,'A',true,'Reconnect vendor payment',100],[5,'B',false,'Reconnect vendor payment',100],[6,'A',true,'Still pending duplicate hold',200],[7,'B',true,'Still pending duplicate hold',200]]){
+    await pg.query(`insert into bank_transactions(id,plaid_transaction_id,account_id,connection_id,wave_business_id,date,posted_date,amount,amount_abs,direction,iso_currency,pending,name,review_status)
+      values($1,$2,$3,$4,'KTC','2026-11-17',$5,$6,$6,'out','USD',$7,$8,'unreviewed')`,[U(n),'reconnect-'+n,account,account==='A'?U(999):U(997),pending?null:'2026-11-18',amount,pending,name]);
+  }
+  await pg.query('insert into vendor_bill_payments values($1,$2,100,false)',[U(101),U(5)]);
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   const url='http://127.0.0.1:'+server.address().port;
   if(process.argv.includes('--serve')){console.log('ISOLATED PENDING REPAIR PREVIEW '+url+' - synthetic data only');return;}
@@ -76,12 +83,23 @@ const server=http.createServer(async(req,res)=>{
     await page.getByRole('button',{name:'Confirm repair (1)'}).click();await page.getByRole('status').filter({hasText:'1 repaired.'}).waitFor();
     const row=(await pg.query('select * from bank_transactions where id=$1',[U(1)])).rows[0];
     assert.equal(row.pending,false);assert.equal(row.plaid_transaction_id,'posted-1');
-    const payment=(await pg.query('select * from vendor_bill_payments')).rows;
+    const payment=(await pg.query('select * from vendor_bill_payments where id=$1',[U(100)])).rows;
     assert.equal(payment.length,1);assert.equal(payment[0].bank_transaction_id,U(1));assert.equal(Number(payment[0].amount),760.26);
     assert.equal(await page.evaluate(()=>window.changed),1);
     await page.getByRole('button',{name:'Refresh preview'}).click();await page.getByRole('checkbox',{name:'Repair Unconfirmed pending hold'}).waitFor();
     assert.equal(await page.getByRole('checkbox',{name:'Repair Fixture fuel payment'}).count(),0);
+    await page.getByRole('checkbox',{name:'Repair Reconnect vendor payment'}).check();
+    await page.getByRole('checkbox',{name:'Repair Still pending duplicate hold'}).first().check();
+    await page.getByRole('button',{name:'Confirm repair (2)'}).click();
+    await page.getByRole('status').filter({hasText:'2 repaired.'}).waitFor();
+    assert.equal((await pg.query('select count(*)::int as n from bank_transactions where id in ($1,$2)',[U(4),U(6)])).rows[0].n,0);
+    assert.equal((await pg.query('select pending from bank_transactions where id=$1',[U(7)])).rows[0].pending,true);
+    const keptPayment=(await pg.query('select * from vendor_bill_payments where id=$1',[U(101)])).rows[0];
+    assert.equal(keptPayment.bank_transaction_id,U(5));assert.equal(Number(keptPayment.amount),100);
+    assert.equal((await pg.query("select count(*)::int as n from bank_transaction_duplicates where status='removed' and id in ($1,$2)",[U(4),U(6)])).rows[0].n,2);
+    await pg.query('select bank_duplicate_restore($1,$2)',[U(4),U(998)]);
+    assert.equal((await pg.query('select pending from bank_transactions where id=$1',[U(4)])).rows[0].pending,true);
     assert.deepEqual(errors,[]);
-    console.log('PASS browser -> actual API -> Postgres: read-only preview, confirmed repair, existing bill payment preserved, unresolved hold excluded, reload, desktop/mobile framing.');
+    console.log('PASS browser -> actual API -> Postgres: preview, exact settlement, reconnect archive/restore, posted bill payment preserved, duplicate pending keeper stays pending, reload, desktop/mobile framing.');
   }finally{await browser.close();server.close();await pg.close();}
 })().catch(async e=>{console.error(e);server.close();if(!pg.closed)await pg.close();process.exitCode=1;});

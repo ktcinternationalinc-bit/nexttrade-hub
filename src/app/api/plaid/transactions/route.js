@@ -183,7 +183,7 @@ export async function POST(req) {
         var asPlaid = {}; var lookIds = [];
         Object.keys(twinsMD).forEach(function (pa) { twinsMD[pa].forEach(function (tw) { asPlaid[tw] = pa; if (lookIds.indexOf(tw) < 0) { lookIds.push(tw); } }); });
         var manQ = await supabase.from('bank_transactions')
-          .select('id, account_id, date, posted_date, amount_abs, direction, pending, review_status')
+          .select('id, account_id, date, posted_date, amount_abs, direction, pending, review_status, name, iso_currency, wave_business_id')
           .like('plaid_transaction_id', 'manual-%')
           .in('account_id', lookIds)
           .gte('date', mdMin).lte('date', mdMax).limit(20000);
@@ -193,7 +193,7 @@ export async function POST(req) {
         try {
           var otherIds = otherTwinAccts.filter(function (x) { return !mdAccts[x]; });
           if (otherIds.length) {
-            var oq = await supabase.from('bank_transactions').select('id, account_id, date, posted_date, amount_abs, direction, plaid_transaction_id, pending, review_status').in('account_id', otherIds).gte('date', mdMin).lte('date', mdMax).limit(20000);
+            var oq = await supabase.from('bank_transactions').select('id, account_id, date, posted_date, amount_abs, direction, plaid_transaction_id, pending, review_status, name, iso_currency, wave_business_id').in('account_id', otherIds).gte('date', mdMin).lte('date', mdMax).limit(20000);
             if (!oq.error && oq.data) { oldRows = oq.data.filter(function (x) { return !/^manual-/.test(String(x.plaid_transaction_id || '')); }); }
           }
         } catch (eOld) { oldRows = []; }
