@@ -219,6 +219,8 @@ export async function POST(req) {
       if (bl.length > MAX_BILLS_PER_REPORT) { return bad(bl.length + ' bills in that range — narrow it (at most ' + MAX_BILLS_PER_REPORT + ' per report).'); }
       var ids = bl.map(function (b) { return b.id; });
       var rr = null;
+      var refreshSince = new Date(Date.now() - 60000).toISOString(); // a receipt read whole from now on counts as refreshed by this report (1 min clock margin)
+      body.__since = refreshSince;
       if (action === 'run_report' && body.recheck !== false && ids.length) {
         var preR = await assemble(db, ids, floor, { source: source, lookups: lookups });
         var vis = ids.map(function (id) { return preR.bills[id]; }).filter(Boolean);
@@ -238,23 +240,36 @@ export async function POST(req) {
       var revq = clean(body.reviewer, 60);
       if (revq) { rows = rows.filter(function (r) { return (r.decision && (r.decision.actor === revq || r.decision.assignee === revq)) || (r.issue && r.issue.assignee === revq); }); }
       if (body.unresolved === true) { rows = rows.filter(function (r) { return r.state === 'issue_open'; }); }
+      // Codex 11:30 — freshness is apart from approval. An item whose receipts were not read whole during THIS report's refresh
+      // keeps its decision and evidence, but is marked stale (with its last verified time) and shown in the default list.
+      var fresh = freshnessOf(action, body, ids.length, rr);
+      rows.forEach(function (r) {
+        var hasRec = (r.receipts || []).length > 0;
+        // a preview is labelled "from the stored copy" as a whole; only receipts never read whole are flagged there
+        r.stale = fresh.kind === 'stored_copy' ? (hasRec && !r.last_verified_at)
+          : fresh.kind !== 'refreshed' ? hasRec : (hasRec && (!r.last_verified_at || String(r.last_verified_at) < fresh.since));
+      });
       var summary = summarise(rows);
+      summary.stale = rows.filter(function (r) { return r.stale && r.needs_attention; }).length;
+      function defaultRows() { return rows.filter(function (r) { return r.outstanding || (r.stale && r.needs_attention); }); }
       if (action === 'report_preview') {
-        var shown = body.all === true ? rows : rows.filter(function (r) { return r.outstanding; });
-        return out({ ok: true, rows: shown, all_count: rows.length, summary: summary, bills_checked: ids.length, from: from, to: f1, window_floor: floor, feed: feedInfo, tolerance: tolPublic(R.tolerance), permissions: perms });
+        var shown = body.all === true ? rows : defaultRows();
+        return out({ ok: true, rows: shown, all_count: rows.length, summary: summary, freshness: freshWords(fresh, rows, runs), bills_checked: ids.length, from: from, to: f1, window_floor: floor, feed: feedInfo, tolerance: tolPublic(R.tolerance), permissions: perms });
       }
       // run_report: save it, numbered, frozen as it stands (every item, not only the outstanding ones)
       var status = reportStatus(rows.map(function (r) { return { needs_attention: r.needs_attention, state: r.state }; }));
+      var fw = freshWords(fresh, rows, runs);
+      if (fw.qualified) { status = { open: status.open, blocked: status.blocked, complete: false, words: fw.words + ' · ' + (status.complete ? 'every item decided on that data — not confirmed current' : status.words) }; }
       var refsChecked = {}; bl.forEach(function (b) { if (b.other_reference) { refsChecked[b.other_reference] = true; } });
       var payload = { run_by: userId, date_from: from, date_to: f1, filters: { vendor: vq || null, reference: rq || null, warehouse: wq || null, status: sq || null, reviewer: revq || null, unresolved: body.unresolved === true, window_floor: floor },
         source: source, fetch_run_id: rr && rr.run_id ? rr.run_id : (runs.lastGood ? runs.lastGood.id : null), feed_generated_at: runs.lastGood ? runs.lastGood.feed_generated_at : null,
         bills_checked: bl.map(function (b) { return { id: b.id, vendor: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date }; }), references_checked: Object.keys(refsChecked),
-        counts: Object.assign({}, summary, { recheck: rr ? { ok: rr.ok, error: rr.error || null, counts: rr.counts } : null }), status_at_run: status.words, build: WC_BUILD };
+        counts: Object.assign({}, summary, { freshness: fw, recheck: rr ? { ok: rr.ok, complete: rr.complete === true, error: rr.error || null, counts: rr.counts } : null }), status_at_run: status.words, build: WC_BUILD };
       var itemsP = rows.map(function (r) { return { item_key: r.item_key, bill_ids: r.bill_ids || [], bill_dates: (r.bills || []).map(function (b) { return b.bill_date || ''; }), outcome: r.outcome, state: r.state || 'not_applicable', needs_attention: !!r.needs_attention, row: r, comparison_fp: r.comparison_fp || null, evidence_hash: sha(r), decision_id: r.decision ? r.decision.id : null }; });
       var sv = await db.rpc('wc_save_report', { p_report: payload, p_items: itemsP });
       if (sv.error) { throw new Error(sv.error.message); }
       await audit(db, userId, 'weight_check_report_run', 'wc_report', sv.data.id, { report_no: sv.data.report_no, from: from, to: f1, items: itemsP.length, status: status.words, recheck_ok: rr ? rr.ok : null });
-      return out({ ok: true, report: { id: sv.data.id, report_no: sv.data.report_no, status: status.words }, rows: rows.filter(function (r) { return r.outstanding; }), all_count: rows.length, summary: summary, recheck: rr, feed: feedInfo, permissions: perms });
+      return out({ ok: true, report: { id: sv.data.id, report_no: sv.data.report_no, status: status.words, complete: status.complete }, rows: body.all === true ? rows : defaultRows(), all_count: rows.length, summary: summary, freshness: fw, recheck: rr, feed: feedInfo, permissions: perms });
     }
 
     // ---------------------------------------------------------------- report history
@@ -288,7 +303,8 @@ export async function POST(req) {
       var curStatus = cur ? reportStatus(visIts.map(function (i) { var c = cur[i.item_key]; return { needs_attention: i.needs_attention, state: c ? c.state : i.state }; })) : null;
       return out({ ok: true, report: Object.assign({}, rp.data, { run_by_name: nmR[rp.data.run_by] || 'someone' }), partial: hiddenN > 0, partial_words: hiddenN > 0 ? 'PARTIAL — some items of this report are outside your permitted dates and are not shown' : null,
         items: visIts.map(function (i) { return { seq: i.seq, item_key: i.item_key, frozen: i.row, frozen_state: i.state, outcome: i.outcome, needs_attention: i.needs_attention, later: later[i.item_key] || [], current: cur ? (cur[i.item_key] || { state: 'not_found_now', state_words: 'Not found in the current check (bill or link changed)' }) : null }; }),
-        current_status: curStatus, window_floor: floor, permissions: perms });
+        current_status: curStatus, current_note: runs.lastGood ? 'from the Hub’s stored warehouse copy, last successful read ' + String(runs.lastGood.finished_at || '').substring(0, 16).replace('T', ' ') + ' UTC' : 'the warehouse has not been read successfully yet',
+        window_floor: floor, permissions: perms });
     }
 
     // ---------------------------------------------------------------- settings (mappings, tolerance), people, evidence
@@ -423,8 +439,26 @@ function itemPublic(i, A, names, lookups) {
     links: limited ? [] : (i.links || []).map(function (l) { return Object.assign({}, l, { actor_name: names[l.actor] || 'someone' }); }),
     candidates: i.candidates || null, needs_link: !!i.needs_link, needs_mapping: !!i.needs_mapping, searched_at: i.searched_at || null,
     needs_decision: !!i.needs_decision, needs_attention: !!i.needs_attention, allowed: i.needs_decision ? allowedDecisions(i.outcome) : [], state: i.state, state_words: i.state_words, outstanding: !!i.outstanding,
-    decision: dec(i.decision), issue: dec(i.issue), history: (i.history || []).map(dec), changed: i.changed || null, comparison_fp: i.comparison_fp || null
+    decision: dec(i.decision), issue: dec(i.issue), history: (i.history || []).map(dec), changed: i.changed || null, comparison_fp: i.comparison_fp || null,
+    last_verified_at: limited ? null : (i.last_verified_at || null), stale: false
   };
+}
+// Codex 11:30 — did THIS report read the warehouse? refreshed / refresh_failed / refresh_incomplete / not_refreshed / stored_copy
+function freshnessOf(action, body, nBills, rr) {
+  if (action === 'report_preview') { return { kind: 'stored_copy', since: body.__since }; }
+  if (body.recheck === false) { return { kind: 'not_refreshed', since: body.__since }; }
+  if (!nBills) { return { kind: 'refreshed', since: body.__since }; }
+  if (!rr || rr.ok !== true) { return { kind: 'refresh_failed', since: body.__since, error: (rr && rr.error) || 'the warehouse was not read' }; }
+  if (rr.complete === false) { return { kind: 'refresh_incomplete', since: body.__since }; }
+  return { kind: 'refreshed', since: body.__since };
+}
+function freshWords(f, rows, runs) {
+  var stale = rows.filter(function (r) { return r.stale && r.needs_attention; });
+  var oldest = stale.map(function (r) { return r.last_verified_at; }).filter(Boolean).sort()[0] || null;
+  var lead = f.kind === 'refresh_failed' ? 'Refresh failed' : f.kind === 'refresh_incomplete' ? 'Refresh incomplete' : f.kind === 'not_refreshed' ? 'Saved without refreshing' : f.kind === 'stored_copy' ? 'From the stored warehouse copy (not refreshed now)' : 'Refreshed now';
+  var qualified = f.kind !== 'refreshed' && f.kind !== 'stored_copy' ? true : stale.length > 0 && f.kind === 'refreshed';
+  var words = lead + (stale.length ? ' — using last verified warehouse data for ' + stale.length + ' item' + (stale.length === 1 ? '' : 's') + (oldest ? ' (oldest read ' + String(oldest).substring(0, 16).replace('T', ' ') + ' UTC)' : ' (some never read whole)') : '');
+  return { kind: f.kind, qualified: qualified, words: words, stale_items: stale.length, oldest_verified_at: oldest, error: f.error || null, last_good_read: runs && runs.lastGood ? runs.lastGood.finished_at : null };
 }
 function summarise(rows) {
   var s = { items: rows.length, outstanding: 0, blocked: 0, by_outcome: {}, by_state: {} };

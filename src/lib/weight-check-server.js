@@ -58,20 +58,23 @@ async function storeAnswer(db, runId, ans) {
   var counts = { stored_new_versions: 0, unchanged: 0, incomplete: 0, removed: 0 };
   var ids = ans.receipts.map(function (r) { return r.id; }).concat(ans.not_found_ids || []);
   var latest = await latestVersions(db, ans.source, ids);
-  var rows = [];
+  var rows = []; var seen = [];
   ans.receipts.forEach(function (rec) {
-    if (!rec.read_complete) { counts.incomplete++; return; } // never stored as evidence
+    if (!rec.read_complete) { counts.incomplete++; return; } // never stored as evidence, never counted as verified
     var h = receiptHash(rec); var old = latest[rec.id];
+    seen.push({ fetch_run_id: runId, source: ans.source, receipt_id: rec.id, content_hash: h }); // read whole now = verified now (Codex 11:30)
     if (old && old.state === 'present' && old.content_hash === h) { counts.unchanged++; return; }
     rows.push({ source: ans.source, receipt_id: rec.id, version_no: old ? old.version_no + 1 : 1, content_hash: h, state: 'present', data: rec, fetch_run_id: runId, refs: rec.refs || [] });
     counts.stored_new_versions++;
   });
   (ans.not_found_ids || []).forEach(function (id) {
+    seen.push({ fetch_run_id: runId, source: ans.source, receipt_id: id, content_hash: 'removed' });
     var old = latest[id]; if (!old || old.state === 'removed') { return; }
     rows.push({ source: ans.source, receipt_id: id, version_no: old.version_no + 1, content_hash: 'removed', state: 'removed', data: { id: id, source: ans.source, state: 'removed' }, fetch_run_id: runId, refs: [] });
     counts.removed++;
   });
   var L_c = chunks(rows, 50); for (var i_c = 0; i_c < L_c.length; i_c++) { var c = L_c[i_c]; var ins = await db.from('wc_receipt_versions').insert(c); if (ins.error) { throw new Error(ins.error.message); } }
+  var L_s = chunks(seen, 200); for (var i_s = 0; i_s < L_s.length; i_s++) { var sIns = await db.from('wc_receipt_seen').insert(L_s[i_s]); if (sIns.error) { throw new Error(sIns.error.message); } }
   return counts;
 }
 
@@ -158,6 +161,10 @@ export async function assemble(db, focusIds, floor, opts) {
   var latest = await latestVersions(db, source, Object.keys(recIds).concat(Object.keys(cand)));
   var receipts = {}; var versions = {};
   Object.keys(latest).forEach(function (id) { var v = latest[id]; var d = Object.assign({}, v.data || {}, { source: source, id: id, state: v.state }); receipts[source + ':' + id] = d; versions[source + ':' + id] = { version_no: v.version_no, content_hash: v.content_hash, fetched_at: v.fetched_at }; });
+  // last time each receipt was read WHOLE and successfully (Codex 11:30: freshness is apart from approval)
+  var seenAt = {}; var seenIds = Object.keys(latest);
+  var L_c8 = chunks(seenIds, 200); for (var i_c8 = 0; i_c8 < L_c8.length; i_c8++) { var c8 = L_c8[i_c8]; (await all(function () { return db.from('wc_receipt_seen').select('receipt_id, at').eq('source', source).in('receipt_id', c8).order('at', { ascending: false }); })).forEach(function (s) { if (!seenAt[s.receipt_id] || s.at > seenAt[s.receipt_id]) { seenAt[s.receipt_id] = s.at; } }); }
+  Object.keys(versions).forEach(function (k) { var id = k.split(':').slice(1).join(':'); versions[k].last_verified_at = seenAt[id] || versions[k].fetched_at || null; });
   var searches = {};
   var L_c6 = chunks(refList, 100); for (var i_c6 = 0; i_c6 < L_c6.length; i_c6++) { var c6 = L_c6[i_c6]; (await all(function () { return db.from('wc_ref_searches').select('ref_norm, found, at').eq('source', source).in('ref_norm', c6).order('at', { ascending: false }); })).forEach(function (s) { if (!searches[s.ref_norm]) { searches[s.ref_norm] = s; } }); }
   var maps = await all(function () { return db.from('wc_product_maps').select('*'); });
@@ -172,6 +179,9 @@ export async function assemble(db, focusIds, floor, opts) {
     if (!g.bill_ids.some(function (id) { return focusIds.indexOf(id) >= 0; }) && !o.allGroups) { return; }
     compareGroup({ group: g, bills: bills, linesByBill: linesByBill, receipts: receipts, maps: maps, tolerance: tolerance, lookups: lookups, hiddenBillIds: hidden }).forEach(function (it) {
       it.receipt_versions = (it.receipt_keys || []).map(function (k) { return Object.assign({ key: k }, versions[k] || {}); });
+      // the oldest "last verified" of its receipts = how fresh this comparison is (null = never read whole)
+      var lv = it.receipt_versions.map(function (v) { return v.last_verified_at || null; });
+      it.last_verified_at = lv.length && lv.every(Boolean) ? lv.slice().sort()[0] : null;
       it.links = g.links.map(linkOut); items.push(it);
     });
   });

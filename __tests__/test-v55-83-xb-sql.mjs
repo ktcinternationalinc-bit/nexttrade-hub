@@ -14,7 +14,7 @@ await db.exec(sql);
 let again = 'ok'; try { await db.exec(sql); } catch (e) { again = e.message; }
 check('the SQL runs, and runs again safely', again === 'ok', again);
 const t = await db.query("select relname, relrowsecurity from pg_class where relname like 'wc\\_%' and relkind='r' order by 1");
-check('9 new tables, RLS on every one', t.rows.length === 9 && t.rows.every(r => r.relrowsecurity === true), t.rows);
+check('10 new tables, RLS on every one', t.rows.length === 10 && t.rows.every(r => r.relrowsecurity === true), t.rows);
 const U = "'00000000-0000-0000-0000-0000000000aa'";
 const B = "'00000000-0000-0000-0000-000000000001'";
 const run = await db.query("insert into wc_fetch_runs (trigger, triggered_by, source) values ('recheck', " + U + ", 'nextrade-staging') returning id");

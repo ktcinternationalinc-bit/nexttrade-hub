@@ -143,7 +143,7 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   var pv0 = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31' });
   check('ENDPOINT MISSING: the default list SHOWS the not-checked bills (rows 2), outstanding 2 — never "nothing outstanding"', pv0.body.rows.length === 2 && pv0.body.summary.outstanding === 2 && pv0.body.summary.blocked === 2 && pv0.body.rows.every(function (r) { return r.outcome === 'warehouse_unavailable' && r.state === 'not_checked' && r.outstanding && r.allowed.length === 0; }), pv0.body);
   var rep0 = await call({ action: 'run_report', date_from: '2026-10-01', date_to: '2026-10-31' });
-  check('…the saved report says "Open — 2 items outstanding (2 not checked or blocked)", NOT Complete, while the recheck says the feed is not installed', rep0.status === 200 && rep0.body.report.status === 'Open — 2 items outstanding (2 not checked or blocked)' && rep0.body.recheck.ok === false && /not installed/.test(rep0.body.recheck.error), rep0.body);
+  check('…the saved report says "Refresh failed · Open — 2 items outstanding (2 not checked or blocked)", NOT Complete, while the recheck says the feed is not installed', rep0.status === 200 && rep0.body.report.status === 'Refresh failed · Open — 2 items outstanding (2 not checked or blocked)' && rep0.body.report.complete === false && rep0.body.recheck.ok === false && /not installed/.test(rep0.body.recheck.error), rep0.body);
   var saved0 = tbl('wc_reports').filter(function (r) { return r.id === rep0.body.report.id; })[0];
   check('…and its history keeps that truthful open state (status and every item as not checked)', saved0.status_at_run === rep0.body.report.status && tbl('wc_report_items').filter(function (i) { return i.report_id === rep0.body.report.id; }).every(function (i) { return i.state === 'not_checked' && i.needs_attention === true; }));
   world.feed = 'down';
@@ -309,11 +309,34 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   var cItem = c0.body.rows.filter(function (r) { return r.outcome === 'equal'; })[0];
   check('CONTROL: bill 3 against receipt 14 is Equal and outstanding until validated', cItem && cItem.outstanding && cItem.allowed.indexOf('validate_match') >= 0, c0.body.rows);
   var cv = await call({ action: 'decide', bill_id: B3, item_key: cItem.item_key, kind: 'validate_match', reason: 'Packing list and scale both show 500 lb', expected_fp: cItem.comparison_fp });
-  var cr = await call({ action: 'run_report', date_from: '2025-01-01', date_to: '2025-01-31', recheck: false });
+  var cr = await call({ action: 'run_report', date_from: '2025-01-01', date_to: '2025-01-31' });
   check('…once validated, that report is "Complete — every item decided" and the default list is empty', cv.status === 200 && cr.body.report.status === 'Complete — every item decided' && cr.body.rows.length === 0, cr.body);
   var notChecked = RDS.renderToStaticMarkup(React.createElement(BOX.ItemCard, { item: pv0.body.rows[0], perms: { validate: true, accept: true, resolve: true }, onDecide: function () {} }));
   check('SCREEN: a not-checked row says so plainly, shows no decision button, and is never shown as done', /Warehouse unavailable \/ not checked/.test(notChecked) && /Not checked — the warehouse could not be read/.test(notChecked) && !/Validate match|Accept discrepancy|Report an issue/.test(notChecked), notChecked.substring(0, 500));
   check('SCREEN: the report table shows the state of not-checked rows (needs attention), not a dash', fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8').indexOf("{r.needs_attention ? r.state_words : '—'}") >= 0);
+
+  // ---- Codex 11:30 — validated earlier, then the warehouse is down when the NEXT report is generated
+  var decBefore = tbl('wc_decisions').filter(function (d) { return d.item_key === cItem.item_key; }).length;
+  var verBefore = tbl('wc_receipt_versions').length;
+  world.feed = 'missing';
+  var fr = await call({ action: 'run_report', date_from: '2025-01-01', date_to: '2025-01-31' });
+  var frRow = (fr.body.rows || []).filter(function (r) { return r.item_key === cItem.item_key; })[0];
+  check('CACHED + OUTAGE: the new report is "Refresh failed — using last verified warehouse data …", never Complete', fr.status === 200 && /^Refresh failed — using last verified warehouse data for 1 item/.test(fr.body.report.status) && fr.body.report.complete === false && !/^Complete/.test(fr.body.report.status), fr.body.report);
+  check('…the affected item is in the DEFAULT list (no “show decided” needed), still validated, marked stale with its last verified time', frRow && frRow.state === 'validated' && frRow.stale === true && !!frRow.last_verified_at && fr.body.freshness.kind === 'refresh_failed' && fr.body.freshness.stale_items === 1, frRow);
+  check('…the approval and the stored receipt copy are kept (no re-approval asked, no evidence erased, missing read ≠ missing goods)', tbl('wc_decisions').filter(function (d) { return d.item_key === cItem.item_key; }).length === decBefore && tbl('wc_receipt_versions').length === verBefore && frRow.outcome === 'equal');
+  check('…and that truthful status is what the saved report keeps', tbl('wc_reports').filter(function (r) { return r.id === fr.body.report.id; })[0].status_at_run === fr.body.report.status);
+  world.feed = 'ok'; world.dropLog = true;
+  var fi = await call({ action: 'run_report', date_from: '2025-01-01', date_to: '2025-01-31' });
+  world.dropLog = false;
+  check('CACHED + INCOMPLETE answer (fewer scan rows than the receipt says): "Refresh incomplete — using last verified …", not Complete, copy not replaced', /^Refresh incomplete — using last verified warehouse data for 1 item/.test(fi.body.report.status) && fi.body.report.complete === false && tbl('wc_receipt_versions').length === verBefore, fi.body.report);
+  var fn = await call({ action: 'run_report', date_from: '2025-01-01', date_to: '2025-01-31', recheck: false });
+  check('a report deliberately saved WITHOUT refreshing is labelled so ("Saved without refreshing …")', /^Saved without refreshing/.test(fn.body.report.status) && fn.body.report.complete === false);
+  var fok = await call({ action: 'run_report', date_from: '2025-01-01', date_to: '2025-01-31' });
+  check('RECOVERY: the next successful refresh with nothing changed → "Complete — every item decided" again, WITHOUT a new approval', fok.body.report.status === 'Complete — every item decided' && fok.body.report.complete === true && fok.body.rows.length === 0 && tbl('wc_decisions').filter(function (d) { return d.item_key === cItem.item_key; }).length === decBefore, fok.body.report);
+  var hFail = await call({ action: 'report', id: fr.body.report.id });
+  check('HISTORY kept: the failed-refresh report still says "Refresh failed …"; the earlier complete report is unchanged; "Now" says what data it is based on', /^Refresh failed/.test(hFail.body.report.status_at_run) && tbl('wc_reports').filter(function (r) { return r.id === cr.body.report.id; })[0].status_at_run === 'Complete — every item decided' && /stored warehouse copy, last successful read/.test(hFail.body.current_note || ''), hFail.body.current_note);
+  var html7 = RDS.renderToStaticMarkup(React.createElement(PANEL.default, { bills: [], toast: {}, openDoc: function () {}, onClose: function () {} }));
+  check('SCREEN: the report panel carries the refresh-failed banner and the per-row "last verified" note', fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8').indexOf('this report is not complete until a refresh succeeds') >= 0 && fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8').indexOf('Not refreshed now — last verified ') >= 0 && /Bill date from/.test(html7));
 
   // ---- tolerance: Max only
   world.perms = Object.assign({}, STAFF, { 'bills.weight_check.settings': 1 });

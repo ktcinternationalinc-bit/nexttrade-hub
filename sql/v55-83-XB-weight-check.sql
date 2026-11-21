@@ -4,6 +4,7 @@
 --   wc_fetch_runs        each read of the warehouse (who, when, ok / failed, complete or not)
 --   wc_receipt_versions  the Hub's own dated copy of each warehouse receipt; a new version only when it changed (never edited)
 --   wc_ref_searches      each reference looked for in the warehouse and how many receipts carried it
+--   wc_receipt_seen      each time a receipt was read whole and successfully (its "last verified" time)
 --   wc_links             bill ↔ receipt links a person confirmed or rejected (never edited; a newer row replaces an older one)
 --   wc_product_maps      approved "this bill product = that warehouse product" rules, versioned (never edited)
 --   wc_tolerances        the tolerance Max approves, versioned (none until he saves one)
@@ -55,6 +56,18 @@ create table if not exists public.wc_ref_searches (
   at timestamptz not null default now()
 );
 create index if not exists wc_ref_searches_ref on public.wc_ref_searches (source, ref_norm, at desc);
+
+-- each time a receipt was read WHOLE and successfully (changed or not) — "last verified" per receipt (Codex 11:30: freshness is
+-- tracked apart from approval; a failed refresh never erases the copy, never needs a new approval, but is never called current)
+create table if not exists public.wc_receipt_seen (
+  id bigserial primary key,
+  fetch_run_id uuid not null references public.wc_fetch_runs (id),
+  source text not null,
+  receipt_id text not null,
+  content_hash text not null,
+  at timestamptz not null default now()
+);
+create index if not exists wc_receipt_seen_lookup on public.wc_receipt_seen (source, receipt_id, at desc);
 
 create table if not exists public.wc_links (
   id uuid primary key default gen_random_uuid(),
@@ -177,7 +190,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['wc_fetch_runs', 'wc_receipt_versions', 'wc_ref_searches', 'wc_links', 'wc_product_maps', 'wc_tolerances', 'wc_decisions', 'wc_reports', 'wc_report_items'] loop
+  foreach t in array array['wc_fetch_runs', 'wc_receipt_versions', 'wc_ref_searches', 'wc_receipt_seen', 'wc_links', 'wc_product_maps', 'wc_tolerances', 'wc_decisions', 'wc_reports', 'wc_report_items'] loop
     execute format('drop trigger if exists %I on public.%I', t || '_no_change', t);
     execute format('create trigger %I before update or delete on public.%I for each row execute function public.%I()', t || '_no_change', t,
       case when t = 'wc_fetch_runs' then 'wc_fetch_run_finish_once' else 'wc_refuse_change' end);
@@ -191,6 +204,7 @@ begin
   execute 'grant usage on sequence public.wc_receipt_versions_id_seq to service_role';
   execute 'grant usage on sequence public.wc_report_items_id_seq to service_role';
   execute 'grant usage on sequence public.wc_ref_searches_id_seq to service_role';
+  execute 'grant usage on sequence public.wc_receipt_seen_id_seq to service_role';
 end $$;
 
 -- save a report and all its items in ONE transaction (all or nothing), with the next number WC-YYYY-NNNN
@@ -219,6 +233,6 @@ end $$;
 revoke all on function public.wc_save_report(jsonb, jsonb) from public, anon, authenticated;
 grant execute on function public.wc_save_report(jsonb, jsonb) to service_role;
 
--- check after running: should list 9 tables, each with RLS on
+-- check after running: should list 10 tables, each with RLS on
 select c.relname as table_name, c.relrowsecurity as rls_on from pg_class c join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = 'public' and c.relname like 'wc\_%' and c.relkind = 'r' order by 1;
