@@ -23,6 +23,7 @@ import WireQuickView from './WireQuickView'; // v55.83-SU — open the wire / re
 import PayablesPanel from './PayablesPanel'; // v55.83-SJ
 import BillReportsPanel from './BillReportsPanel';
 import DuplicateBillsPanel from './DuplicateBillsPanel'; // v55.83-WZ — bills with the same vendor and number, to resolve
+import BillCategoryRulesPanel from './BillCategoryRulesPanel'; // v55.83-WX — vendor (+ amount / words) → category
 import VendorStatementPanel from './VendorStatementPanel'; // v55.83-WT — check a vendor's statement (read-only)
 import BillPeek from './BillPeek'; // v55.83-WT — the bill pop-up, opened from the statement check
 import { statementMoney } from '../lib/vendor-statement'; // v55.83-WT
@@ -286,7 +287,8 @@ export default function BillsTab(props) {
           var pgSt = importPagesState(j, pageCount); // confirmed always starts false: every new file and every re-read asks for the tick again
           setImportPages(pgSt);
           var notes2 = problemsBesidesPages(j, pgSt); // the page sentence has its own box
-          if (!j.draft.category && j.suggested_category) { notes2.push('🧠 Category pre-filled from what you picked for this vendor before — change it if wrong.'); }
+          if (!j.draft.category && j.suggested_category) { notes2.push(j.suggested_category_rule ? '🏷 Category pre-filled by a bill category rule — change it if wrong.' : '🧠 Category pre-filled from what you picked for this vendor before — change it if wrong.'); }
+          if (!j.draft.category && j.suggested_category_conflict) { notes2.push('🏷 No category pre-filled: ' + j.suggested_category_conflict + ' — pick it by hand.'); } // v55.83-WX
           var srt = j.sorted || {};
           notes2.push(srt.bill_type ? 'Type: ' + BILL_TYPE_LABEL[srt.bill_type] + ' (' + SRC_WORDS[srt.bill_type_source] + ').' : 'Type: could not tell from the bill — left blank, it is picked at validation.');
           notes2.push(srt.shipment_direction ? 'Direction: Outbound ➡ (release ' + srt.release_number + ' is on the bill).' : 'Direction: no release # on the bill — left blank, it is marked at validation.');
@@ -295,6 +297,7 @@ export default function BillsTab(props) {
             vendor_name: j.draft.vendor_name || '', bill_number: j.draft.bill_number || '',
             bill_date: j.draft.bill_date || TODAY, due_date: j.draft.due_date || '',
             total_amount: j.draft.total_amount || '', category: j.draft.category || j.suggested_category || '',
+            category_rule_id: !j.draft.category && j.suggested_category_rule ? j.suggested_category_rule.id : null, // v55.83-WX — kept as "set by rule" only if the same rule still gives it
             notes: notesWithReleaseSource(j.draft.notes, j.pages), _imported: true, // VV — where the release came from stays on the bill
             // v55.83-RP — type + release + reference + direction from the import (blank when the bill does not make it clear)
             bill_type: (j.sorted && j.sorted.bill_type) || '', bill_type_source: (j.sorted && j.sorted.bill_type_source) || null,
@@ -520,6 +523,7 @@ export default function BillsTab(props) {
       <button onClick={function () { setPanel(panel === 'repeating' ? null : 'repeating'); }} title="Bills that come back every week / month / 3 months / year — set up once, the Hub makes each bill on its date" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'repeating' ? { background: '#9a3412', color: '#ffffff' } : { background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74' }}>🔁 Repeating bills</button>{/* v55.83-TV */}
       <button onClick={function () { setPanel(panel === 'nextrade' ? null : 'nextrade'); }} title="KTC bills made from Nextrade expenses — owed to Nextrade" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'nextrade' ? { background: '#1e3a8a', color: '#ffffff' } : { background: '#eff6ff', color: '#1e3a8a', border: '1px solid #93c5fd' }}>🟦 Nextrade bills</button>{/* v55.83-TW */}
       <button onClick={function () { setPanel(panel === 'reports' ? null : 'reports'); }} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'reports' ? { background: '#14532d', color: '#ffffff' } : { background: '#f0fdf4', color: '#14532d', border: '1px solid #86efac' }}>📊 Reports</button>
+      {canView && <button onClick={function () { setPanel(panel === 'catrules' ? null : 'catrules'); }} title="Rules that put a category on bills: a vendor, an exact amount or a range, words on the bill → category (e.g. a monthly partner fee)" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'catrules' ? { background: '#312e81', color: '#ffffff' } : { background: '#e0e7ff', color: '#312e81' }}>🏷 Category rules</button>}
       {canView && <button onClick={function () { setPanel(panel === 'duplicates' ? null : 'duplicates'); }} title="Bills with the same vendor and bill number — keep one, void the others" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: panel === 'duplicates' ? '#991b1b' : '#fef2f2', color: panel === 'duplicates' ? '#ffffff' : '#991b1b', border: '1px solid #fca5a5' }}>Duplicates to resolve</button>}
       {canView && <button onClick={function () { setPanel(panel === 'statement' ? null : 'statement'); }} title="Import a vendor's statement (their list of open bills) and check every line against our bills, payments and wires — read-only, nothing is changed" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'statement' ? { background: '#0f766e', color: '#ffffff' } : { background: '#f0fdfa', color: '#134e4a', border: '1px solid #5eead4' }}>🧾 Check a vendor statement</button>}{/* v55.83-WT */}
       {canManage && <button onClick={function () { if (fileInputRef.current) { fileInputRef.current.click(); } }} disabled={busy || reading}
@@ -569,6 +573,7 @@ export default function BillsTab(props) {
     {panel === 'reports' && <PayablesPanel bills={(data && data.bills) || []} userId={userProfile && userProfile.id} />}
     {panel === 'reports' && <BillReportsPanel api={api} onClose={function () { setPanel(null); }} />}
     {/* v55.83-WT — read-only: it is given the list already loaded here and opens bills / wires with the read-only viewers */}
+    {panel === 'catrules' && canView && <BillCategoryRulesPanel userProfile={userProfile} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}
     {panel === 'duplicates' && canView && <DuplicateBillsPanel userProfile={userProfile} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}
     {panel === 'statement' && canView && <VendorStatementPanel bills={bills} payments={payments} enrichWarnings={(data && data.enrich_warnings) || []} userProfile={userProfile} onClose={function () { setPanel(null); }}
       onOpenBill={function (f) { setPeekBill(f); }} onOpenWire={function (w) { setWireQuick(w); }} />}
@@ -732,7 +737,7 @@ export default function BillsTab(props) {
                 <td className="py-1.5 pr-2 text-right">${fmt(b.total_amount)}</td>
                 <td className="py-1.5 pr-2 text-right">${fmt(b.paid)}</td>
                 <td className="py-1.5 pr-2 text-right font-extrabold">${fmt(b.open)}</td>
-                <td className="py-1.5 pr-2">{b.category ? (catLabelOf[b.category] || b.category) : '—'}</td>
+                <td className="py-1.5 pr-2">{b.category ? (catLabelOf[b.category] || b.category) : '—'}{b.category && b.category_source === 'rule' ? <span title="Set by a bill category rule (Bills → 🏷 Category rules). Change it on the bill and it becomes yours." className="ml-1 px-1 rounded text-[9px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81' }}>rule</span> : null}{!b.category && b.category_source === 'rule_conflict' ? <span title="Bill category rules disagree for this bill (or the rule would count it twice) — pick the category by hand" className="ml-1 px-1 rounded text-[9px] font-extrabold" style={{ background: '#fef2f2', color: '#991b1b' }}>rules disagree</span> : null}</td>
                 <td className="py-1.5 pr-2">{b.wire_state && b.status === 'OPEN' && b.wire_state.state !== 'on_wire' ? null : chip(b.status)}{wireChip(b)}{paidByChips(b)}</td>
                 <td className="py-1.5 pr-2">{b.record_status === 'active' ? valChip(b) : '—'}{b.price_check_status === 'flagged' ? <div title={((b.price_check && b.price_check.flags) || []).map(function (f) { return f.text; }).join('\n')} className="mt-0.5 text-[9px] font-extrabold" style={{ color: b.price_resolved_note ? '#065f46' : '#b91c1c' }}>{b.price_resolved_note ? '✓ price issue resolved' : '⚠ price check'}</div> : b.price_check_status === 'ok' ? <div className="mt-0.5 text-[9px] font-extrabold" style={{ color: '#065f46' }}>✅ prices OK</div> : null}</td>
                 <td className="py-1.5 whitespace-nowrap">

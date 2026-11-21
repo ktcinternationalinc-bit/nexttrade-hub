@@ -29,7 +29,7 @@ ok('1b: every queued document becomes a PENDING-VALIDATION bill — never auto-v
 ok('2a: ingest_bill_file is a WRITE action (bills.manage) — extract never guesses, skips are REPORTED with the reason, original stored privately (pv/), vendor memory fills the category',
   /ingest_bill_file: 1/.test(bills) && /if \(action === 'ingest_bill_file'\)/.test(bills) &&
   /ok: true, skipped: true, file: gName, reason: gRead\.error/.test(bills) &&
-  /'pv\/upload-' \+ Date\.now\(\)/.test(bills) && /gCat = await suggestCategory\(db, gD\.vendor_name \|\| ''\)/.test(bills) &&
+  /'pv\/upload-' \+ Date\.now\(\)/.test(bills) && /var gPick = await categoryForNewBill\(db, \{ vendor_name: gD\.vendor_name \|\| ''/.test(bills) && // superseded (v55.83-WX): bill rules, then the vendor memory
   /validation_status: 'pending',\n        attachment_path: gUpErr \? null : gPath,/.test(bills));
 var dupLib = R('src/lib/bill-dup-server.js');
 ok('2b (QH moved the radar into ONE lib): EXACT duplicate (same vendor + bill number, active) is SKIPPED and said — never entered twice; both routes call the same verdict',

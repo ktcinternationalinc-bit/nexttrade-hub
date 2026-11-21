@@ -82,7 +82,7 @@ console.log('RP — bill type + direction on import; both required to validate')
   check('3c: 📷 Import (read, then a person checks the form) gets the same sorting back', ex.ok && ex.sorted && ex.sorted.bill_type === 'bonded_brokerage' && ex.sorted.bill_type_source === 'read_from_bill' && ex.sorted.shipment_direction === null, ex);
   // the other import doors use the same insert
   check('3d: email inbound + email scanner + bulk import all insert through the same sorter', ['src/app/api/accounting/bills/inbound/route.js', 'src/app/api/accounting/bills/email-scan/route.js'].every(function (f) { var t = R(f); return t.indexOf('await insertImportedBill(db, {') > 0 && t.indexOf("}, d); // v55.83-RP") > 0; }) &&
-    R('src/app/api/accounting/bills/route.js').indexOf('var gIns = await insertImportedBill(db, {') > 0);
+    R('src/app/api/accounting/bills/route.js').indexOf('var gIns = await insertImportedBill(db, Object.assign({') > 0 && R('src/app/api/accounting/bills/route.js').indexOf('}, gProv), gD); // v55.83-RP') > 0); // superseded (v55.83-WX): the row also carries where its category came from
   // SQL not run yet → the bill is still created
   var tries = [];
   var fakeDb = { from: function () { return { select: function () { return this; }, ilike: function () { return this; }, eq: function () { return this; }, limit: function () { return Promise.resolve({ data: [] }); },

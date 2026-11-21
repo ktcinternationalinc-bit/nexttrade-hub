@@ -38,8 +38,9 @@ ok('2b: the created bill is prefilled FROM the transaction — vendor, date, amo
 ok('2c: no merchant name → clear refusal (never a nameless vendor bill); bill-created-but-payment-failed is SAID, not hidden',
   /This transaction has no merchant name — add the bill in the Bills tab instead\./.test(at) &&
   /but the payment link failed/.test(at));
-ok('2d: server-side save_bill still fills the vendor\'s REMEMBERED category when none given (PJ memory, unchanged)',
-  /autoCat = await suggestCategory\(db, vendor\);/.test(R('src/app/api/accounting/bills/route.js')));
+// superseded (v55.83-WX): bill rules first, then the same vendor memory (bill-rules-server categoryForNewBill → suggestCategory)
+ok('2d: server-side save_bill still fills the vendor\'s REMEMBERED category when none given and no bill rule fits (PJ memory)',
+  /wxPick = await categoryForNewBill\(db, wxBill, \[\]\)/.test(R('src/app/api/accounting/bills/route.js')) && /mem = await suggestCategory\(db, bill && bill\.vendor_name\)/.test(R('src/lib/bill-rules-server.js')));
 
 console.log('');
 console.log('QA: ' + pass + ' passed, ' + fail + ' failed');

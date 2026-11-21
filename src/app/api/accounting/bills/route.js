@@ -41,7 +41,8 @@ import { maskCashflow, maskPeriodStats, maskForecast } from '../../../../lib/acc
 // happened") — the AI read of a multi-page PDF outlives Vercel's DEFAULT
 // 10s function limit, which killed the request mid-read. 60s fixes it.
 export const maxDuration = 60;
-import { learnRule, suggestCategory } from '../../../../lib/expense-rules-server'; // v55.83-PJ — bills remember vendor categories
+import { learnRule } from '../../../../lib/expense-rules-server'; // v55.83-PJ — bills remember vendor categories
+import { categoryForNewBill, loadBillRules, provenanceFields } from '../../../../lib/bill-rules-server'; // v55.83-WX — bill category rules first, then the vendor memory
 
 var API_BUILD_MARKER = 'v55.83-PB-bills';
 var PAGE = 1000; var MAX_ROWS = 20000;
@@ -81,11 +82,19 @@ async function loadBills(db) {
     // v55.83-RL — + the other reference and inbound / outbound (falls back to the RK set until the RL SQL is run)
     try {
       try { // v55.83-RP — + bill type and where the type / direction came from
-        bills = await fetchAll(function () {
-          return db.from('vendor_bills')
-            .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via, release_number, other_reference, shipment_direction, bill_type, bill_type_source, direction_source')
-            .order('due_date', { ascending: true, nullsFirst: false });
-        });
+        try { // v55.83-WX — + where the category came from (a person, a bill rule, the vendor memory)
+          bills = await fetchAll(function () {
+            return db.from('vendor_bills')
+              .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via, release_number, other_reference, shipment_direction, bill_type, bill_type_source, direction_source, category_source, category_rule_id, category_rule_version')
+              .order('due_date', { ascending: true, nullsFirst: false });
+          });
+        } catch (eWX) {
+          bills = await fetchAll(function () {
+            return db.from('vendor_bills')
+              .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via, release_number, other_reference, shipment_direction, bill_type, bill_type_source, direction_source')
+              .order('due_date', { ascending: true, nullsFirst: false });
+          });
+        }
       } catch (eRP) {
         bills = await fetchAll(function () {
           return db.from('vendor_bills')
@@ -502,6 +511,9 @@ export async function POST(req) {
         var payR = await db.from('vendor_bill_payments').select('id, bill_id, amount, voided').eq('bill_id', bl.id);
         var paidSoFar = 0; (payR.data || []).forEach(function (p) { if (p.voided !== true) { paidSoFar += Number(p.amount) || 0; } });
         if (amt + 0.005 < paidSoFar) { return NextResponse.json({ error: 'Amount cannot be below what is already paid (' + r2(paidSoFar).toFixed(2) + '). Void the payments first.' }, { status: 409 }); }
+        // v55.83-WX — a person who changes the category on the bill makes it THEIRS: no rule ever overwrites it afterwards
+        var wxReadyU = (await loadBillRules(db)).ready;
+        if (wxReadyU && String(cur.data.category || '') !== String(fields.category || '')) { fields.category_source = fields.category ? 'manual' : null; fields.category_rule_id = null; fields.category_rule_version = null; }
         var up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle();
         var qbWarnU = null;
         if (up.error && /bill_type|direction_source/.test(up.error.message || '')) { delete fields.bill_type; delete fields.bill_type_source; delete fields.direction_source; up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle(); if (!up.error) { qbWarnU = 'Saved WITHOUT the bill type — run sql/v55-83-RP-bill-type.sql to store it.'; } } // RP SQL not run yet
@@ -522,10 +534,21 @@ export async function POST(req) {
       // v55.83-PJ (Max): "remember and categorize later on with new bills
       // automatically when imported" — no category given? use the vendor's
       // remembered one. Category given? remember it for next time. Fail-soft.
-      var autoCat = null;
+      // v55.83-WX — bill category rules first (exact amount, range, words; company + currency), then the vendor memory. A tie between
+      // rules, or a rule that would deduct a bill already counted in goods / transport profit, leaves the category EMPTY for a person.
+      // A category the screen pre-filled from a rule stays "set by rule" only if the same rule still gives it; anything else typed or
+      // kept by the person is theirs (manual).
+      var autoCat = null; var wxPick = null;
+      var wxBill = { vendor_name: vendor, total_amount: amt, currency: fields.currency, wave_business_id: fields.wave_business_id, bill_number: fields.bill_number, notes: fields.notes,
+        bill_type: fields.bill_type || bl.bill_type || null, release_number: Object.prototype.hasOwnProperty.call(fields, 'release_number') ? fields.release_number : (bl.release_number || null), other_reference: fields.other_reference || null };
+      if (!fields.category || bl.category_rule_id) { wxPick = await categoryForNewBill(db, wxBill, []); }
       if (!fields.category) {
-        autoCat = await suggestCategory(db, vendor);
-        if (autoCat) { fields.category = autoCat; }
+        if (wxPick && wxPick.category) { autoCat = wxPick.category; fields.category = autoCat; }
+        Object.assign(fields, provenanceFields(wxPick, wxPick && wxPick.ready));
+      } else {
+        var wxSame = wxPick && wxPick.source === 'rule' && wxPick.category === fields.category && String(wxPick.rule_id) === String(bl.category_rule_id);
+        Object.assign(fields, wxSame ? provenanceFields(wxPick, true) : provenanceFields({ source: 'manual' }, wxPick ? wxPick.ready : (await loadBillRules(db)).ready));
+        if (wxSame) { autoCat = fields.category; }
       }
       fields.created_by = userId;
       var ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle();
@@ -550,7 +573,7 @@ export async function POST(req) {
       if (fields.category && !autoCat) { learnedB = await learnRule(db, vendor, fields.category, userId); }
       await audit(db, userId, 'bill_created', 'vendor_bill', ins.data && ins.data.id, { vendor: vendor, amount: amt, category: fields.category || null, paid_via: fields.paid_via || null }); // v55.83-QI
       var lnC = ins.data && ins.data.id ? await linesAfterSave(ins.data.id, bl) : {};
-      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_category: autoCat, rule_learned: learnedB, warning: lnC.warning || undefined, duplicate_warning: dupWarn || undefined, price_check: lnC.check || undefined });
+      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_category: autoCat, category_source: fields.category_source || null, category_conflict: wxPick && wxPick.source === 'rule_conflict' ? (wxPick.blocked || ('rules disagree: ' + (wxPick.conflict || []).map(function (r) { return r.name; }).join(' / '))) : undefined, rule_learned: learnedB, warning: lnC.warning || undefined, duplicate_warning: dupWarn || undefined, price_check: lnC.check || undefined });
     }
 
     // ── void_bill (reversible record_status; nothing is deleted)
@@ -1091,15 +1114,21 @@ export async function POST(req) {
       var gVerdict = await billDupVerdict(db, { vendor_name: gD.vendor_name, bill_number: gD.bill_number, bill_date: gD.bill_date, total_amount: gD.total_amount, notes: gD.notes || '' });
       if (gVerdict.skip) { return NextResponse.json({ ok: true, skipped: true, file: gName, reason: gVerdict.skip }); }
       var gWarn = gVerdict.warn;
-      var gCat = gD.category || null;
-      if (!gCat) { try { gCat = await suggestCategory(db, gD.vendor_name || ''); } catch (eGC) { gCat = null; } }
+      var gCat = gD.category || null; var gProv = {};
+      if (!gCat) { // v55.83-WX — the bill rules first (with the lines read from the file), then the vendor memory
+        try {
+          var gPick = await categoryForNewBill(db, { vendor_name: gD.vendor_name || '', total_amount: gD.total_amount, currency: 'USD', wave_business_id: US_WAVE_BUSINESS_ID, bill_number: gD.bill_number, notes: gD.notes || '',
+            bill_type: gD.bill_type || null, release_number: gD.release_number || null }, gD.lines || []);
+          gCat = gPick.category || null; gProv = provenanceFields(gPick, gPick.ready);
+        } catch (eGC) { gCat = null; gProv = {}; }
+      }
       var gPath = 'pv/upload-' + Date.now() + '-' + Math.floor(Math.random() * 1e6) + '-' + gName;
       var gUpErr = null;
       try {
         var gUp = await db.storage.from('bills-private').upload(gPath, Buffer.from(gB64, 'base64'), { contentType: gType, upsert: false });
         if (gUp.error) { gUpErr = gUp.error.message; }
       } catch (eGU) { gUpErr = (eGU && eGU.message) || 'upload failed'; }
-      var gIns = await insertImportedBill(db, {
+      var gIns = await insertImportedBill(db, Object.assign({
         vendor_name: gD.vendor_name || ('UNREAD VENDOR (file ' + gName + ')'),
         bill_number: gD.bill_number, bill_date: gD.bill_date || new Date().toISOString().substring(0, 10),
         due_date: gD.due_date, total_amount: gD.total_amount || 0.01,
@@ -1110,7 +1139,7 @@ export async function POST(req) {
         validation_status: 'pending',
         attachment_path: gUpErr ? null : gPath,
         created_by: userId,
-      }, gD); // v55.83-RP — type / release / direction sorted on import
+      }, gProv), gD); // v55.83-RP — type / release / direction sorted on import; WX — where the category came from
       if (gIns.error) { return NextResponse.json({ ok: true, skipped: true, file: gName, reason: gIns.error.message }); }
       try { await db.from('vendor_bill_events').insert({ bill_id: gIns.data.id, kind: 'file_ingested', actor_id: userId, details: { file: gName, reader_flags: gRead.problems, duplicate_warning: gWarn, attachment_stored: !gUpErr, pages: gRead.pages || null, pages_need_review: gRead.needs_review === true, sorted: gIns.sorted || null, price_check: gIns.price_check || null, price_flags: gIns.price_flags || [] } }); } catch (eGE) {}
       await audit(db, userId, 'bill_imported_from_file', 'vendor_bill', gIns.data.id, { file: gName, duplicate_warning: gWarn }); // v55.83-QI
@@ -1279,8 +1308,14 @@ export async function POST(req) {
       if (rd.error) { return NextResponse.json({ error: rd.error }, { status: rd.status || 500 }); }
       // v55.83-PJ — the document rarely names a category; the vendor's
       // REMEMBERED one is suggested (clearly marked, human still confirms).
-      var sugg = null;
-      if (rd.draft && rd.draft.vendor_name && !rd.draft.category) { sugg = await suggestCategory(db, rd.draft.vendor_name); }
+      var sugg = null; var suggRule = null; var suggWhy = null;
+      if (rd.draft && rd.draft.vendor_name && !rd.draft.category) { // v55.83-WX — a bill rule first, then the vendor memory
+        var sPick = await categoryForNewBill(db, { vendor_name: rd.draft.vendor_name, total_amount: rd.draft.total_amount, currency: 'USD', wave_business_id: US_WAVE_BUSINESS_ID, bill_number: rd.draft.bill_number, notes: rd.draft.notes || '',
+          bill_type: rd.draft.bill_type || null, release_number: rd.draft.release_number || null }, rd.draft.lines || []);
+        sugg = sPick.category || null;
+        if (sPick.source === 'rule') { suggRule = { id: sPick.rule_id, version: sPick.rule_version }; }
+        if (sPick.source === 'rule_conflict') { suggWhy = sPick.blocked || ('bill rules disagree: ' + (sPick.conflict || []).map(function (r) { return r.name; }).join(' / ')); }
+      }
       // v55.83-RP — the bill TYPE (read from the bill, else this vendor's validated history) and direction (release # → outbound)
       var sortX = importSort(rd.draft, rd.draft && !rd.draft.bill_type ? await vendorBillType(db, rd.draft.vendor_name) : null, defaultDirectionFor(await loadCommissionRules(db), rd.draft && rd.draft.vendor_name)); // RW
       var pv = null;
@@ -1290,7 +1325,7 @@ export async function POST(req) {
         var pvC = priceCheckPure({ vendor_name: rd.draft && rd.draft.vendor_name, total_amount: rd.draft && rd.draft.total_amount, bill_type: sortX.bill_type }, pvLines, pvRules, pvCR);
         pv = { status: pvC.status, flags: pvC.flags, notes: pvC.notes, checked: pvC.checked, commission_rule: pvCR ? { vendor: pvCR.vendor_match, rate: Number(pvCR.rate) } : null };
       } catch (ePV) { pv = null; }
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, draft: rd.draft, problems: rd.problems, pages: rd.pages || null, pages_need_review: rd.needs_review === true, suggested_category: sugg, sorted: sortX, price_preview: pv });
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, draft: rd.draft, problems: rd.problems, pages: rd.pages || null, pages_need_review: rd.needs_review === true, suggested_category: sugg, suggested_category_rule: suggRule, suggested_category_conflict: suggWhy, sorted: sortX, price_preview: pv });
     }
 
     // ── match_reference (PF): the underlying hook for the future warehouse

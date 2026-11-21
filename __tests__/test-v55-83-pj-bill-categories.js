@@ -21,14 +21,17 @@ ok('1a: suggestCategory exists — active rules only, most-specific match, null 
   /export async function suggestCategory\(db, text\)/.test(srv) &&
   /eq\('active', true\)/.test(srv) && /return r \? r\.classification : null;/.test(srv));
 var br = R('src/app/api/accounting/bills/route.js');
-ok('1b: save_bill with NO category auto-fills from the vendor\'s remembered rule (create path), reported as auto_category',
-  /autoCat = await suggestCategory\(db, vendor\)/.test(br) && /if \(autoCat\) \{ fields\.category = autoCat; \}/.test(br) &&
-  /auto_category: autoCat/.test(br));
+// superseded (v55.83-WX, Max 21 Nov "create rules for bills ... to place categories"): the bill rules come first; when no bill rule
+// fits, categoryForNewBill falls back to the SAME vendor memory (suggestCategory) — the auto-fill is unchanged for such bills
+var wxSrv = R('src/lib/bill-rules-server.js');
+ok('1b: save_bill with NO category auto-fills (bill rules, then the vendor\'s remembered rule), reported as auto_category',
+  /wxPick = await categoryForNewBill\(db, wxBill, \[\]\)/.test(br) && /if \(wxPick && wxPick\.category\) \{ autoCat = wxPick\.category; fields\.category = autoCat; \}/.test(br) &&
+  /mem = await suggestCategory\(db, bill && bill\.vendor_name\)/.test(wxSrv) && /auto_category: autoCat/.test(br));
 ok('1c: save_bill WITH a category LEARNS it (create + edit) — a changed pick updates the rule; auto-filled picks are NOT re-learned',
   /if \(fields\.category && !autoCat\) \{ learnedB = await learnRule\(db, vendor, fields\.category, userId\); \}/.test(br) &&
   /learnedU = await learnRule\(db, vendor, fields\.category, userId\)/.test(br));
 ok('1d: extract_bill suggests the remembered category ONLY when the document itself names none',
-  /if \(rd\.draft && rd\.draft\.vendor_name && !rd\.draft\.category\) \{ sugg = await suggestCategory\(db, rd\.draft\.vendor_name\); \}/.test(br) &&
+  /if \(rd\.draft && rd\.draft\.vendor_name && !rd\.draft\.category\) \{ \/\/ v55\.83-WX/.test(br) && /sugg = sPick\.category \|\| null;/.test(br) && // superseded (WX): bill rules, then the vendor memory
   /suggested_category: sugg/.test(br));
 
 // ── 2. Permission: Bills people can list + add categories, nothing more ──

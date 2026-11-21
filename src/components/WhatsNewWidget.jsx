@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WX',
+    date: '2026-11-21',
+    title: 'Category rules for bills',
+    items: [
+      { text: '**Bills → 🏷 Category rules.** A rule says: bills from this vendor (and, if you want, with exactly this total, or a total between two amounts, or certain words on the bill) get this category. Example: a vendor\'s monthly bill of one fixed amount always goes to Partner Fees.' },
+      { text: 'New bills (typed, imported from a file or the mailbox, and repeating bills) get the category from the rule automatically. The bill list shows a small **rule** tag next to a category a rule set. If no rule fits, the Hub still uses what you picked for that vendor before.' },
+      { text: '**Bills already in the Hub:** click **Preview bills on file** on a rule to see, bill by bill, what it would change and why not. Tick the bills and click **Apply**. A paid bill is marked, because changing its category can change an earlier month\'s P&L. Every change is on the audit trail.' },
+      { text: 'A category a person picked is never changed by a rule, and neither is one set before rules existed: change it on the bill. Change a rule-set category on the bill and it becomes yours.' },
+      { text: 'When two rules fit a bill equally well and say different things, the bill gets no category and is marked **rules disagree**, for a person to pick. A more exact rule wins over a looser one (exact amount, then a range, then words); the weight decides between equally exact rules.' },
+      { text: 'A bill that is already counted inside goods or transport profit (a trucking or shipping bill with a release #, a bonded / brokerage bill, a supplier line linked to a product) is never moved into an expense column by a rule, so it is never taken off twice.' },
+      { text: 'Rules are never deleted, only switched off. Only KTC USA bills in US dollars. **Needs a one-time database step;** until then the panel says so and new bills work as before.' },
+      { superAdminOnly: true, text: 'Technical: NEW sql/v55-83-WX-bill-category-rules.sql (table bill_category_rules: vendor_match, amount_exact XOR amount_min / amount_max in numeric(14,2), words, currency, wave_business_id, category, priority, active, version; RLS on, browser roles revoked, service_role SELECT / INSERT / UPDATE only, BEFORE DELETE trigger refuses; vendor_bills + category_source (manual / rule / rule_conflict / vendor_memory), category_rule_id, category_rule_version). src/lib/bill-rules.js (pure: ruleFits all-conditions incl. company + currency + cents, specificity exact 4 / range 2 / words +1 then priority, tie with different categories = conflict, countedInProfit, categoryForNew, previewRule, cleanRule). src/lib/bill-rules-server.js categoryForNewBill (rules first; conflict / profit-guard = no category and NO vendor-memory fall-through; else suggestCategory) used by save_bill create, ingest_bill_file, extract_bill suggestion and repeating bills; save_bill edit marks a changed category manual. NEW route /api/accounting/bill-rules (list / save / set_active / preview / apply; verifiedCaller; accounting.view + bills.view to read, bills.manage to change; apply recomputes and guards each update on the previewed category + source; audit per bill). BillCategoryRulesPanel; bills list selects the new columns (falls back without them). Tests: test-v55-83-wx-bill-rules.js (real routes), PGlite wx-sql-check 17.' }
+    ]
+  },
+  {
     version: 'v55.83-XN',
     date: '2026-11-21',
     title: 'No KTC bills from Nextrade lines before 1 June 2026',

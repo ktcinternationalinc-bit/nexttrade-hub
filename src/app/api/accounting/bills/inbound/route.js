@@ -16,6 +16,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { readBillFromBase64, insertImportedBill } from '../../../../../lib/bill-extract-server';
+import { categoryForNewBill, provenanceFields } from '../../../../../lib/bill-rules-server'; // v55.83-WX
 import { billDupVerdict } from '../../../../../lib/bill-dup-server'; // v55.83-QH — one duplicate radar everywhere
 import { US_WAVE_BUSINESS_ID } from '../../../../../lib/business-of';
 
@@ -99,11 +100,15 @@ export async function POST(req) {
       var up = await db.storage.from('bills-private').upload(path, Buffer.from(file.b64, 'base64'), { contentType: file.content_type, upsert: false });
       if (up.error) { upErr = up.error.message; }
     } catch (eU) { upErr = (eU && eU.message) || 'upload failed'; }
+    // v55.83-WX — no category on the bill itself → the bill category rules (only the rules: this path never used the vendor memory)
+    var wxM = d.category ? null : await categoryForNewBill(db, { vendor_name: d.vendor_name || '', total_amount: d.total_amount, currency: 'USD', wave_business_id: US_WAVE_BUSINESS_ID, bill_number: d.bill_number, notes: d.notes || '', bill_type: d.bill_type || null, release_number: d.release_number || null }, d.lines || [], { noMemory: true });
+    var wxF = wxM && wxM.source ? provenanceFields(wxM, wxM.ready) : {};
     var ins = await insertImportedBill(db, {
       vendor_name: d.vendor_name || ('UNREAD VENDOR (email from ' + (from || '?') + ')'),
       bill_number: d.bill_number, bill_date: d.bill_date || new Date().toISOString().substring(0, 10),
       due_date: d.due_date, total_amount: d.total_amount || 0.01,
-      category: d.category, currency: 'USD', wave_business_id: US_WAVE_BUSINESS_ID,
+      category: d.category || (wxM && wxM.category) || null, currency: 'USD', wave_business_id: US_WAVE_BUSINESS_ID,
+      category_source: wxF.category_source, category_rule_id: wxF.category_rule_id, category_rule_version: wxF.category_rule_version,
       notes: ((warn2 ? warn2 + ' · ' : '') + 'Received by email' + (from ? ' from ' + from : '') + (subject ? ' — "' + subject + '"' : '') +
               (rd.problems.length ? ' · READER FLAGS: ' + rd.problems.join(' ') : '')).substring(0, 900),
       validation_status: 'pending',

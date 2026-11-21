@@ -12,7 +12,7 @@
 import { dueDates, autoBillNumber, scheduleWords, MAX_PER_RUN } from './repeating-bills';
 import { checkOne } from './bill-dup-scan';
 import { audit } from './audit-server';
-import { suggestCategory } from './expense-rules-server';
+import { categoryForNewBill, loadBillRules, provenanceFields } from './bill-rules-server'; // v55.83-WX — bill rules, then the vendor memory
 
 var PAGE = 1000;
 var STALE_PENDING_MS = 10 * 60 * 1000; // a claim left 'pending' this long (a run that crashed) may be taken again
@@ -92,8 +92,11 @@ export function billRowFor(rb, date, category) {
 
 async function makeBill(db, rb, date, runId, bills, actorId, forced, reasons) {
   var cat = rb.category || null; var autoCat = false;
-  if (!cat) { cat = await suggestCategory(db, rb.vendor_name); autoCat = !!cat; }
+  // v55.83-WX — a category set on the repeating bill is the person's; otherwise the bill rules first, then the vendor memory
+  var pick = null;
+  if (!cat) { pick = await categoryForNewBill(db, { vendor_name: rb.vendor_name, total_amount: rb.amount, currency: 'USD', wave_business_id: rb.wave_business_id, bill_number: autoBillNumber(rb.vendor_name, date), notes: rb.notes || '', release_number: rb.release_number || null }, []); cat = pick.category || null; autoCat = !!cat; }
   var row = billRowFor(rb, date, cat);
+  Object.assign(row, pick ? provenanceFields(pick, pick.ready) : provenanceFields({ source: 'manual' }, (await loadBillRules(db)).ready));
   var ins = await db.from('vendor_bills').insert(row).select('id').maybeSingle();
   if (ins.error && ins.error.code === '23505') {
     // the bill for this date already exists (made a moment ago by another run) — point the run at it, make nothing
