@@ -127,7 +127,7 @@ export function linesToFix(cells, forceHidden) {
   var list = cells || [];
   if (forceHidden === true || list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; })) { return { hidden: true, rows: [], reasons: [], total: list.length }; }
   var count = {}; var rows = [];
-  list.forEach(function (c) {
+  list.forEach(function (c, ci) {
     var miss = [];
     if (!known(c.pounds)) { miss.push('pounds'); } else if (!known(c.base_cost)) { miss.push('base_cost'); }
     if (!known(c.transport_revenue)) { miss.push('transport_revenue'); }
@@ -137,7 +137,7 @@ export function linesToFix(cells, forceHidden) {
     if (!miss.length && (!known(c.goods_profit) || !known(c.transport_profit))) { miss.push('other'); }
     if (!miss.length) { return; }
     miss.forEach(function (k) { count[k] = (count[k] || 0) + 1; });
-    rows.push({ invoice_id: c.invoice_id || null, invoice: c.invoice || '', invoice_date: c.invoice_date || '', customer: c.customer || '', product: c.product || c.description || '', release: c.release_raw || c.release || '',
+    rows.push({ idx: ci, invoice_id: c.invoice_id || null, invoice: c.invoice || '', invoice_date: c.invoice_date || '', customer: c.customer || '', product: c.product || c.description || '', release: c.release_raw || c.release || '',
       sold_for: known(c.goods_revenue) ? Number(c.goods_revenue) : null, missing: miss, missing_text: miss.map(function (k) { return FIX.filter(function (f) { return f.key === k; })[0].title; }).join(' · ') });
   });
   rows.sort(function (a, b) { return (b.sold_for || 0) - (a.sold_for || 0); });
@@ -149,6 +149,7 @@ export function linesToFix(cells, forceHidden) {
 // figures as linesToFix, but as a short list of THINGS TO DO: one row per release (shipping), per product (weight / supplier cost)
 // or per invoice (no release number, terms). A shipping figure that exists — a bill, a typed figure or an estimate, also 0 — is
 // known and is never listed; only a part with nothing at all is open.
+var FIX_LABEL = { trucking: 'No trucking cost for the release', freight: 'No freight cost for the release', not_shared: 'Shipping cost is there, but not shared yet: a product on the release has no unit', no_release: 'No release number on the invoice', release_split: 'Pounds not divided between the releases', pounds: 'No weight: unit not set', base_cost: 'No supplier cost', transport_revenue: 'Shipping charged cannot be worked out', other: 'Not complete' };
 export function openTasks(cells, forceHidden) {
   var list = cells || [];
   if (forceHidden === true || list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; })) { return { hidden: true, tasks: [], lines: 0, combined: [] }; }
@@ -163,7 +164,7 @@ export function openTasks(cells, forceHidden) {
   list.forEach(function (c, i) {
     var rel = String(c.release_raw || c.release || ''); var prod = String(c.product || c.description || '(no product name)'); var inv = String(c.invoice || '');
     if (!known(c.pounds)) { add('pounds:' + prod, { kind: 'pounds', action: 'unit', product: prod, names: [String(c.description || prod)], title: prod + ' — no weight', how: 'The Hub does not know what “' + String(c.description || prod) + '” is sold in, so nothing can be worked out per pound. Pick its unit here.' }, c, i); if (map['pounds:' + prod].names.indexOf(String(c.description || prod)) < 0) { map['pounds:' + prod].names.push(String(c.description || prod)); } }
-    else if (!known(c.base_cost)) { add('base_cost:' + prod, { kind: 'base_cost', action: c.group_id ? 'cost' : 'setup', product: prod, group_id: c.group_id || null, title: prod + ' — no supplier cost', how: c.group_id ? 'No supplier bill is linked to this product and no cost is typed for it. Type what it costs us per POUND here (used until a supplier bill is linked to it).' : 'This description is not under a product yet, so it has no cost. In Set-up, tick it and put it under a product; then its cost can be typed.' }, c, i); }
+    else if (!known(c.base_cost)) { add('base_cost:' + prod, { kind: 'base_cost', action: c.group_id ? 'cost' : 'setup', product: prod, group_id: c.group_id || null, title: prod + ' — no supplier cost', how: c.group_id ? 'No supplier bill is linked to this product and no cost is typed for it. Type what it costs us per POUND here (used until a supplier bill is linked to it).' : 'This description is not under a product yet, so it has no cost. In Set-up, tick it and put it under a product; then its cost can be typed.' }, c, i); var bt = map['base_cost:' + prod]; if (c.keep_unit === true) { bt.yd_lines = (bt.yd_lines || 0) + 1; } else { bt.lb_lines = (bt.lb_lines || 0) + 1; } }
     if (!known(c.transport_revenue)) { add('terms:' + inv, { kind: 'transport_revenue', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — the shipping charged cannot be worked out', how: 'Either the shipping terms of the invoice are not set (for example a CNF price with no shipping amount), or a goods line on it has no weight to share the shipping by. Open its row in By invoice: set the terms, and check every line has a unit.' }, c, i); }
     var noT = !known(c.trucking_cost); var noF = !known(c.freight_cost);
     // Codex 07:00 — a null share is NOT proof that the money is missing. The source decides what the row says and whether typing
@@ -185,8 +186,16 @@ export function openTasks(cells, forceHidden) {
     if (!lineSet[i] && (!known(c.goods_profit) || !known(c.transport_profit))) { add('other:' + inv, { kind: 'other', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — not complete', how: 'Something else on this invoice is missing. Open it to see what.' }, c, i); }
   });
   var RANK = { trucking: 1, freight: 1, no_release: 2, release_split: 2, not_shared: 3, base_cost: 3, pounds: 3, transport_revenue: 4, unsplit_total: 5, other: 6 };
-  var tasks = order.map(function (k) { var t = map[k]; delete t._inv; delete t._seen; return t; }).sort(function (a, b) { return (RANK[a.kind] - RANK[b.kind]) || (b.sold_for - a.sold_for) || (a.key < b.key ? -1 : 1); });
-  return { hidden: false, tasks: tasks, lines: Object.keys(lineSet).length, combined: combinedList };
+  var tasks = order.map(function (k) { return map[k]; }).sort(function (a, b) { return (RANK[a.kind] - RANK[b.kind]) || (b.sold_for - a.sold_for) || (a.key < b.key ? -1 : 1); });
+  // v55.83-WN (Max, Nov 20: "it says it's missing shipping, but ... it's not missing ... something I click on and it takes me where
+  // I'm supposed to go") — for every sale line, the numbered things above that it is waiting for, in the SAME words: by_line[cell
+  // index] = [{ n (its number in the list), key, kind, label }]. A shipping cost that is there but not shared is never "not known".
+  // WN — a product whose open lines are ALL kept in yards is costed per YARD, never asked per pound
+  tasks.forEach(function (t) { if (t.kind !== 'base_cost') { return; } var allYd = t.yd_lines > 0 && !(t.lb_lines > 0); delete t.yd_lines; delete t.lb_lines;
+    if (allYd && t.group_id) { t.cost_unit = 'sold_unit'; t.how = 'No supplier bill is linked to this product and no cost is typed for it. These goods are kept in YARDS, so type what it costs us per YARD here (used until a supplier bill is linked to it).'; } else { t.cost_unit = 'lb'; } });
+  var byLine = {};
+  tasks.forEach(function (t, n) { Object.keys(t._seen).forEach(function (i) { (byLine[i] || (byLine[i] = [])).push({ n: n + 1, key: t.key, kind: t.kind, label: FIX_LABEL[t.kind] || 'Not complete' }); }); delete t._inv; delete t._seen; });
+  return { hidden: false, tasks: tasks, lines: Object.keys(lineSet).length, combined: combinedList, by_line: byLine };
 }
 
 // v55.83-VQ (Codex 22:20) — EVERY period between two dates, also the ones with no sales (a month with rent and payroll but no

@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WN',
+    date: '2026-11-20',
+    title: 'P&L by period: every missing item on a line is a button, and says the real reason',
+    items: [
+      { text: '**Lines to fix now tells the truth about shipping.** When a release already has its trucking and freight figure but it cannot be shared between the sale lines (because one product on the release has no unit), the line no longer says the cost is not known. It says the cost is there but not shared yet.' },
+      { text: '**Click what is missing.** Each missing item on a sale line is now a button. Click it and the page moves to its number in the list above, marks that row, and puts the cursor in the box or menu where you fix it.' },
+      { text: '**Goods kept in yards:** when a product with no supplier cost is kept in yards, its row now asks for the cost per yard, not per pound.' },
+      { superAdminOnly: true, text: 'Technical: pnl-period.js openTasks returns by_line (cell index to numbered tasks) and cost_unit on base_cost tasks; linesToFix rows carry idx; new FixChips.jsx; task rows have id nt-open-task-n. No server change, no SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-WM',
     date: '2026-11-20',
     title: 'Sales Report: the top box average matches the rows',
