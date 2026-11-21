@@ -82,5 +82,13 @@ function check(name, fn) { fn(); passed++; console.log('PASS ' + name); }
   state.reply = await call();
   summary = await scheduled.GET(new Request('http://fixture/api/plaid/sync')).then(r => r.json());
   check('Healthy retry clears connection warning and scheduled result', () => { assert.equal(summary.ok, true); assert.equal(db.t.bank_connections[0].last_sync_error, null); });
+  db = fresh();
+  state.raw=[{transaction_id:'hold-new',account_id:'new',date:'2026-11-19',amount:-4321,pending:true,name:'Wire TRN: FIXTURE0001AB',iso_currency_code:'USD'}];
+  db.t.bank_transactions.push({id:'hold-old',plaid_transaction_id:'hold-old',account_id:'old',date:'2026-11-19',amount_abs:4321,direction:'in',pending:true,name:'Wire TRN: FIXTURE0001AB',iso_currency:'USD',wave_business_id:'biz'});
+  result=await call();
+  check('actual route suppresses duplicate pending from second active connection',()=>{assert.equal(result.synced,0);assert.equal(result.manual_deduped,1);assert.equal(db.t.bank_transactions.length,1);});
+  state.raw[0].pending=false;
+  result=await call();
+  check('actual route imports final posted money despite pending twin',()=>{assert.equal(result.synced,1);assert(db.t.bank_transactions.some(t=>t.plaid_transaction_id==='hold-new'&&t.pending===false));});
   console.log(passed + ' passed, 0 failed');
 })().catch(e => { console.error(e); process.exitCode = 1; });

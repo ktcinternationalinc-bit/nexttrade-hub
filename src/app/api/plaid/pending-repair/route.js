@@ -1,6 +1,7 @@
 import { authorizePlaidOperation, plaidJson, plaidError } from '../_auth';
 import { readBankJson } from '../../../../lib/bank-visibility';
 import { storedPendingReplacements, pendingRepairRow } from '../../../../lib/pending-repair-server';
+import { loadReconnectContext, reconnectPlan } from '../../../../lib/pending-twins-server';
 
 export var maxDuration = 60;
 // Repair is deliberately super-admin-only. Cron and a generic admin role cannot invoke it.
@@ -24,15 +25,33 @@ export async function POST(req) {
     if (pending.error) { return plaidJson({ error: 'Could not read pending records. Nothing repaired.' }, { status: 503 }); }
     var rows = (pending.data || []).slice(0, 500);
     var replacements = await storedPendingReplacements(access.db, rows);
-    var plan = rows.map(function (p) { return pendingRepairRow(p, replacements[p.plaid_transaction_id]); });
+    var context = await loadReconnectContext(access.db, rows);
+    var plan = rows.map(function (p) {
+      var base = pendingRepairRow(p, replacements[p.plaid_transaction_id]);
+      if (base.status !== 'no_replacement') { return base; }
+      return Object.assign(base, reconnectPlan(p, context.rows, context.accounts) || {});
+    });
     if (body.action === 'preview') { return plaidJson({ ok: true, records: plan, truncated: (pending.data || []).length > 500 }); }
     var results = [];
     for (var i = 0; i < ids.length; i++) {
       var candidate = plan.find(function (p) { return p.pending_id === ids[i]; });
       if (!candidate) { results.push({ pending_id: ids[i], ok: false, reason: 'No longer pending. Refresh the preview; no changes made by this request.' }); continue; }
-      if (candidate.status !== 'replacement_found') { results.push({ pending_id: ids[i], ok: false, reason: candidate.explanation }); continue; }
-      var r = await access.db.rpc('hub_reconcile_pending', { p_pending: candidate.pending_id, p_posted: candidate.posted_id,
-        p_reason: 'Super-admin confirmed repair of existing pending record; exact bank replacement reference. Actor: ' + access.profileId });
+      if (candidate.status !== 'replacement_found' && candidate.status !== 'reconnect_copy') { results.push({ pending_id: ids[i], ok: false, reason: candidate.explanation }); continue; }
+      var r;
+      if (candidate.status === 'reconnect_copy') {
+        if (!body.keep_ids || body.keep_ids[candidate.pending_id] !== candidate.keep_id) {
+          results.push({ pending_id: ids[i], ok: false, reason: 'Refresh the preview and confirm the transaction to keep. Nothing changed.' }); continue;
+        }
+        var funds = await access.db.from('wire_packages').select('id').eq('funding_txn_id', candidate.pending_id).limit(1);
+        if (funds.error || (funds.data || []).length) {
+          results.push({ pending_id: ids[i], ok: false, reason: 'Cannot remove a pending record that funds a wire request, or whose funding links cannot be checked.' }); continue;
+        }
+        r = await access.db.rpc('bank_duplicate_remove', { p_dup: candidate.pending_id, p_keep: candidate.keep_id, p_actor: access.profileId,
+          p_reason: 'Super-admin confirmed reconnect cleanup. Keep ' + candidate.keep_id + (candidate.kept_pending ? ' (still pending; no payment created).' : ' (posted; preserve existing payments).') });
+      } else {
+        r = await access.db.rpc('hub_reconcile_pending', { p_pending: candidate.pending_id, p_posted: candidate.posted_id,
+          p_reason: 'Super-admin confirmed repair of existing pending record; exact bank replacement reference. Actor: ' + access.profileId });
+      }
       if (r.error) {
         results.push({ pending_id: ids[i], ok: false, reason: /PGRST202|does not exist|schema cache/i.test(String(r.error.code || '') + ' ' + r.error.message) ?
           'The WC pending-identity database update is not installed. Nothing repaired for this record.' : 'Database repair failed; this record was not changed.' });

@@ -29,7 +29,8 @@ export default function PendingBankRepair({ onChanged }) {
     if (!ids.length || busy) { return; }
     setBusy(true); setError('');
     try {
-      var j = await request({ action: 'repair', pending_ids: ids, confirm: true });
+      var keepIds = {}; records.forEach(function (r) { if (selected[r.pending_id] && r.keep_id) { keepIds[r.pending_id] = r.keep_id; } });
+      var j = await request({ action: 'repair', pending_ids: ids, keep_ids: keepIds, confirm: true });
       setResults(j); setSelected({});
       var done = {}; (j.results || []).forEach(function (r) { if (r.ok) { done[r.pending_id] = true; } });
       setRecords(function (rs) { return rs.filter(function (r) { return !done[r.pending_id]; }); });
@@ -59,10 +60,10 @@ export default function PendingBankRepair({ onChanged }) {
           {records.length > 0 && <table className="w-full text-sm" style={{ minWidth: 690 }}>
             <thead><tr className="border-b text-left"><th className="p-2">Select</th><th className="p-2">Bank record</th><th className="p-2 text-right">Amount</th><th className="p-2">Posted date</th><th className="p-2">Finding</th></tr></thead>
             <tbody>{records.map(function (r) { return <tr key={r.pending_id} className="border-b">
-              <td className="p-2"><input type="checkbox" aria-label={'Repair ' + r.description} disabled={busy || r.status !== 'replacement_found' || (!selected[r.pending_id] && count >= 25)} checked={!!selected[r.pending_id]} onChange={function (e) { var value = e.target.checked; setSelected(function (s) { return Object.assign({}, s, { [r.pending_id]: value }); }); }} /></td>
-              <td className="p-2" style={{ maxWidth: 280, overflowWrap: 'anywhere' }}><b>{r.description}</b><div>{r.date}</div></td>
+              <td className="p-2"><input type="checkbox" aria-label={'Repair ' + r.description} disabled={busy || (r.status !== 'replacement_found' && r.status !== 'reconnect_copy') || (!selected[r.pending_id] && count >= 25)} checked={!!selected[r.pending_id]} onChange={function (e) { var value = e.target.checked; setSelected(function (s) { return Object.assign({}, s, { [r.pending_id]: value }); }); }} /></td>
+              <td className="p-2" style={{ maxWidth: 280, overflowWrap: 'anywhere' }}><b>{r.description}</b><div>{r.date}</div>{r.account_label && <div>{r.account_label}</div>}</td>
               <td className="p-2 text-right" style={{ whiteSpace: 'nowrap' }}>{r.currency} {Number(r.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-              <td className="p-2">{r.posted_date || '-'}</td><td className="p-2" style={{ minWidth: 220 }}>{r.explanation}</td>
+              <td className="p-2">{r.posted_date || (r.kept_pending ? 'Still pending' : '-')}</td><td className="p-2" style={{ minWidth: 220, overflowWrap: 'anywhere' }}>{r.explanation}{r.keep_id && <div className="mt-2"><b>Keep:</b> {r.kept_date} {r.kept_description}</div>}</td>
             </tr>; })}</tbody>
           </table>}
         </div>
