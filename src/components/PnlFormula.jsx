@@ -38,6 +38,8 @@ export default function PnlFormula(props) {
       <td className="pl-3 pr-1 py-1">{x.cats || x.funding ? <details open={props.openAll === true ? true : undefined}><summary style={{ cursor: 'pointer', color: '#1d4ed8', fontWeight: 800 }}>{x.label + ' — click to see what is in it'}</summary>{x.cats ? catList(x.cats) : companies()}</details> : <span>{x.label}</span>}
         <div style={{ color: SUB, fontSize: 10 }}>{x.why}</div>{x.open_list && props.onShowOpen ? <button onClick={function (ev) { ev.stopPropagation(); props.onShowOpen(); }} className="mt-0.5 px-2 py-0.5 rounded font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>Show these lines and fix them →</button> : null}{can ? null : null}</td>
       <td className="pl-1 pr-3 py-1 text-right tabular-nums whitespace-nowrap" style={{ verticalAlign: 'top' }}>{money(x.cents)}</td></tr>; })}</tbody></table>}
+    {/* v55.83-WY — customer balances today: noted here, never part of this figure or of the tax P&L */}
+    {props.balancesBlock ? <div style={{ borderTop: '1px solid #e2e8f0' }}>{props.balancesBlock}</div> : null}
     <div className="px-3 py-2 text-[10px]" style={{ color: SUB }}>{f.notes.map(function (t, i) { return <div key={i}>{t}</div>; })}</div>
   </div>;
 }

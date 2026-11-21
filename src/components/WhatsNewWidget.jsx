@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WY',
+    date: '2026-11-21',
+    title: 'Customer balances: money held for each customer, and what each still owes',
+    items: [
+      { text: '**New: customer balances.** In Profitability → By customer, a box at the top and a column “Held · owed today” show, for every customer: money they paid beyond their invoices that we hold for them, and invoice balances they still owe (part paid, or not paid at all).' },
+      { text: 'The two amounts are always shown apart. Money held is never subtracted from what is owed until a person decides to apply it.' },
+      { text: 'A deposit that is not yet tied to a customer is listed on its own, never added to any customer. An invoice that shows more paid than its total is listed as “to check”, not added to either amount.' },
+      { text: 'These are today’s balances. They are not part of the profit and not part of the tax P&L. The “How [month] is worked out” pop-up shows them too, as a note.' },
+      { text: 'Click a customer to see the invoices and credits behind the amounts; click an invoice to open it.' },
+      { superAdminOnly: true, text: 'Technical: new read-only profitability action customer_balances (pnl.view; history window, private bank accounts, KTC USA only, dollars only); src/lib/customer-balances.js; CustomerBalances.jsx. Step 1 of the overpaid / underpaid plan: no write, no SQL. Returning or applying credits and write-offs come later.' }
+    ]
+  },
+  {
     version: 'v55.83-WT',
     date: '2026-11-21',
     title: 'Check a vendor statement against our bills, payments and wires',

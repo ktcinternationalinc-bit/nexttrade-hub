@@ -24,6 +24,9 @@ import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibilit
 import { nameKey, relKey, PRICING_BASES, DEFAULT_UNIT_FACTORS, unitKey } from '../../../../lib/profitability';
 import { buildInboundTrucking } from '../../../../lib/inbound-trucking'; // v55.83-VR — tracking only
 import { assembleProfitability } from '../../../../lib/profitability-assemble';
+import { customerBalances } from '../../../../lib/customer-balances'; // v55.83-WY — held for / still owed by each customer, today
+import { privateScope } from '../../../../lib/private-accounts-server'; // v55.83-WY — private bank accounts stay private
+import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { keepYardsPreview } from '../../../../lib/keep-yards-preview'; // v55.83-VX — keep in yards: before / after
 import { loadProfitabilityInput } from '../../../../lib/profitability-load-server'; // v55.83-UD — shared with the P&L
 
@@ -81,6 +84,25 @@ export async function POST(req) {
     // received on the same load number. Nothing is written and goods profit is not touched (it keeps the standard allowance).
     // Employees get only bills dated inside their permitted window (date_from was clamped above).
     // v55.83-WH — READ ONLY: what is typed for the shipping parts of these releases (the invoice form shows it under the shipping terms)
+    // v55.83-WY (Max, 21 Nov: "a running report for each customer stating overpaid invoices and underpaid invoices ... not in the
+    // pnl calculation") — READ ONLY. Today's balances: money held for each customer (open customer credits, open deposits with a
+    // customer) and what each still owes (every live invoice with an open balance). Not part of any profit figure. Same P&L
+    // permission; the person's history window and private bank accounts apply; another company's records are left out.
+    if (action === 'customer_balances') {
+      var cbInv = await fetchAll(function () { return db.from('accounting_invoices').select('id, invoice_number, accounting_customer_id, invoice_date, total_amount, amount_paid, balance_due, record_status, currency, wave_business_id').order('id', { ascending: true }); });
+      var cbCs = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name, business_tag').order('id', { ascending: true }); });
+      var cbNames = {}; var cbTag = {}; cbCs.forEach(function (c) { cbNames[c.id] = c.company_name || c.contact_name || ''; if (c.business_tag) { cbTag[c.id] = c.business_tag; } });
+      var cbCr = await db.from('customer_credits').select('id, accounting_customer_id, amount, status, source_transaction_id, created_at, wave_business_id').eq('status', 'open').limit(5000);
+      if (cbCr.error) { return bad('The customer credits could not be read (' + cbCr.error.message + ').', 503); }
+      var cbUn = await db.from('unapplied_deposits').select('id, accounting_customer_id, amount, status, bank_transaction_id, created_at, wave_business_id').eq('status', 'open').limit(5000);
+      if (cbUn.error) { return bad('The unapplied deposits could not be read (' + cbUn.error.message + ').', 503); }
+      var cbPriv = await privateScope(db, userId); if (cbPriv && cbPriv.error) { return bad(cbPriv.error + ' — nothing shown.', 503); }
+      var cbTx = []; (cbCr.data || []).forEach(function (r) { if (r.source_transaction_id) { cbTx.push(r.source_transaction_id); } }); (cbUn.data || []).forEach(function (r) { if (r.bank_transaction_id) { cbTx.push(r.bank_transaction_id); } });
+      var cbAcc = {};
+      for (var cbi = 0; cbi < cbTx.length; cbi += 200) { var cbB = await db.from('bank_transactions').select('id, account_id').in('id', cbTx.slice(cbi, cbi + 200)); if (cbB.error) { return bad('The bank lines behind the credits could not be read (' + cbB.error.message + ') — nothing shown.', 503); } (cbB.data || []).forEach(function (t) { cbAcc[t.id] = t.account_id; }); }
+      var cbOut = customerBalances({ invoices: cbInv.map(function (i) { return Object.assign({}, i, { business: businessOfInvoice(i, cbTag) }); }), credits: cbCr.data || [], unapplied: cbUn.data || [], customerNames: cbNames, business: US_WAVE_BUSINESS_ID, floor: vwin.floor || null, priv: cbPriv || { all: true, hidden: {} }, accountOf: cbAcc });
+      return NextResponse.json(Object.assign({ ok: true, window_floor: vwin.floor || null, api_build_marker: API_BUILD_MARKER }, cbOut));
+    }
     if (action === 'release_parts') {
       var keysRP = (Array.isArray(body.releases) ? body.releases : [body.release]).map(function (r0) { return relKey(r0); }).filter(function (k0) { return !!k0; }).slice(0, 20);
       if (!keysRP.length) { return NextResponse.json({ ok: true, parts: {}, api_build_marker: API_BUILD_MARKER }); }
