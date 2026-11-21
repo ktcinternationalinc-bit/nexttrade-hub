@@ -243,12 +243,21 @@ export function compareGroup(inp) {
     byProduct[pk].lines.push(ln); byProduct[pk].maps[ln.fm.map.id] = ln.fm.map;
   });
 
+  // Codex 11:12 P1 — resolve scan → product BEFORE any total: a scan that fits two DIFFERENT mapped products of this group (e.g. a
+  // broad "product 7, any grade" and a specific "product 7, grade 2") is never counted for both; EVERY product it fits is blocked
+  // (Cannot compare — mapping conflict) until the mappings are fixed. Whatever the order of the bill lines.
+  var coversOf = {}; // log id → [product keys whose mapping covers it]
+  logs.forEach(function (l) { coversOf[l.id] = order.filter(function (pk) { return mapCovers(byProduct[pk].map, l.p); }); });
+  var conflictWith = {}; // product key → { other product key: [log ids] }
+  logs.forEach(function (l) { var cs = coversOf[l.id]; if (cs.length < 2) { return; } cs.forEach(function (a) { cs.forEach(function (b) { if (a !== b) { var m = conflictWith[a] || (conflictWith[a] = {}); (m[b] = m[b] || []).push(l.id); } }); }); });
   order.forEach(function (pk) {
     var P = byProduct[pk];
     var mapsUsed = Object.keys(P.maps).sort().map(function (id) { var m = P.maps[id]; return { id: m.id, version: m.version, lb_per_yd: m.lb_factor_approved ? Number(m.lb_per_yd) : null }; });
-    var mine = logs.filter(function (l) { return mapCovers(P.map, l.p); });
+    var mine = logs.filter(function (l) { return coversOf[l.id].indexOf(pk) >= 0; });
     var reasons = []; var flags = [];
-    mine.forEach(function (l) { if (used[l.id] && used[l.id] !== pk) { flags.push('scan ' + l.id + ' also fits another product of this group'); } used[l.id] = pk; });
+    mine.forEach(function (l) { used[l.id] = pk; });
+    var conflict = conflictWith[pk] ? Object.keys(conflictWith[pk]).sort().map(function (other) { return { product: byProduct[other].map.wh_label || other, scans: conflictWith[pk][other] }; }) : null;
+    if (conflict) { reasons.push('mapping conflict: ' + conflict.map(function (c) { return 'scan(s) ' + c.scans.join(', ') + ' also fit “' + c.product + '”'; }).join('; ') + ' — the same goods would be counted twice; fix the product mappings (Mappings & tolerance) before this can be compared'); }
     var kinds = {}; P.lines.forEach(function (ln) { kinds[ln.u.kind] = true; });
     var unknownLines = P.lines.filter(function (ln) { return ln.u.kind === 'unknown' || ln.qty == null; });
     var billedLb = 0; var billedYd = 0;
@@ -281,6 +290,7 @@ export function compareGroup(inp) {
     var outcome; var words;
     if (removed.length) { outcome = 'cannot_compare'; reasons.unshift('receipt ' + removed.map(function (r) { return r.key; }).join(', ') + ' was not found in the warehouse any more (confirmed by an id lookup)'); }
     else if (incompleteRead.length) { outcome = 'cannot_compare'; reasons.unshift('the warehouse answer for ' + incompleteRead.map(function (r) { return r.key; }).join(', ') + ' was incomplete — recheck'); }
+    else if (conflict) { outcome = 'mapping_conflict'; }
     else if (!mine.length) { outcome = 'product_missing'; }
     else if (reasons.length || basis === null || diff === null) { outcome = 'cannot_compare'; }
     else if (drafts.length) { outcome = 'incomplete'; }
@@ -294,7 +304,8 @@ export function compareGroup(inp) {
       logs: mine.map(function (l) { return [l.id, l.receipt_key, l.lb, l.yd, l.rolls, canonical(l.p)]; }).sort(cmpArr),
       bill_lines: P.lines.map(function (ln) { return [ln.bill_id, vendorKey(ln.vendor), String(ln.description || '').toLowerCase().replace(/\s+/g, ' ').trim(), ln.qty, String(ln.unit || '').toUpperCase().trim()]; }).sort(cmpArr),
       links: linkIn, maps: mapsUsed, basis: basis,
-      tolerance: tol ? { id: tol.id, version: tol.version } : null
+      tolerance: tol ? { id: tol.id, version: tol.version } : null,
+      conflict: conflict ? conflict.map(function (c) { return [c.product, c.scans.slice().sort()]; }) : null
     };
     items.push(Object.assign({}, base, {
       item_key: inputs.item_key, kind: 'product', product_key: pk, product_label: P.map.wh_label || pk, outcome: outcome, reasons: reasons,
@@ -350,6 +361,7 @@ export var OUTCOME_WORDS = {
   matched: 'Matched (within the approved tolerance)', equal: 'Equal', discrepancy: 'Weight / quantity discrepancy', no_receipt: 'No receipt found',
   product_missing: 'Billed product missing from the receipt', incomplete: 'Receipt incomplete — scan-in still a draft (provisional)',
   cannot_compare: 'Cannot compare', warehouse_unavailable: 'Warehouse unavailable / not checked', limited_access: 'Limited access — part of this group is hidden',
+  mapping_conflict: 'Cannot compare — two product mappings fit the same scans',
   warehouse_only: 'In the warehouse, not on the linked bill(s)'
 };
 export var COMPARABLE_OUTCOMES = { matched: 1, equal: 1, discrepancy: 1, product_missing: 1, no_receipt: 1, incomplete: 1 };
@@ -359,14 +371,22 @@ export var DECISION_KINDS = ['validate_match', 'accept_discrepancy', 'report_iss
 export var DECISION_PERM = { validate_match: 'bills.weight_check.validate', accept_discrepancy: 'bills.weight_check.accept', report_issue: 'bills.weight_check.validate', resolve: 'bills.weight_check.resolve' };
 export var STATE_WORDS = {
   unreviewed: 'Not reviewed', validated: 'Reviewed — match validated', accepted: 'Reviewed — discrepancy accepted', issue_open: 'Issue reported — open',
-  resolved: 'Issue resolved', needs_revalidation: 'Needs revalidation — the figures changed since the decision', reopened: 'Reopened — not reviewed'
+  resolved: 'Issue resolved', needs_revalidation: 'Needs revalidation — the figures changed since the decision', reopened: 'Reopened — not reviewed',
+  // Codex 11:12 P1 — not decidable right now, but NOT done: they stay outstanding and keep a report open
+  not_checked: 'Not checked — the warehouse could not be read', limited: 'Blocked — part of this group is outside your access', blocked: 'Blocked — fix the product mappings first'
 };
 // which decisions an outcome allows
 export function allowedDecisions(outcome) {
   if (outcome === 'matched' || outcome === 'equal') { return ['validate_match', 'report_issue']; }
-  if (outcome === 'warehouse_only' || outcome === 'warehouse_unavailable' || outcome === 'limited_access') { return []; }
+  if (outcome === 'warehouse_only' || outcome === 'warehouse_unavailable' || outcome === 'limited_access' || outcome === 'mapping_conflict') { return []; }
   return ['accept_discrepancy', 'report_issue'];
 }
+// Codex 11:12 P1 — "needs attention" (counts toward a report being complete) is apart from "can be decided now". Only an
+// information row (warehouse goods not on the linked bill) needs nothing. Unread, unavailable, limited and blocked items stay
+// outstanding until they can be compared and decided.
+export function needsAttention(item) { return item.outcome !== 'warehouse_only'; }
+export function blockedState(outcome) { return outcome === 'warehouse_unavailable' ? 'not_checked' : outcome === 'limited_access' ? 'limited' : outcome === 'mapping_conflict' ? 'blocked' : null; }
+export var BLOCKED_STATES = { not_checked: 1, limited: 1, blocked: 1 };
 // decisions (this item, any order) + the CURRENT fingerprint → { state, decision, issue, changed }
 export function decisionState(decisions, currentFp) {
   var ds = (decisions || []).slice().sort(function (a, b) { return String(a.at || '').localeCompare(String(b.at || '')) || String(a.id || '').localeCompare(String(b.id || '')); });
@@ -408,12 +428,17 @@ export function diffInputs(a, b) {
 function fmt(v) { return v == null ? '—' : String(v); }
 
 // ---------------------------------------------------------------- reports
+// itemStates: [{ needs_attention, state }] — a report is Complete only when every item that needs attention is decided
+// (validated / accepted / resolved). Not checked, limited and blocked items keep it open and are counted apart.
 export function reportStatus(itemStates) {
-  var open = (itemStates || []).filter(function (s) { return s.needs_decision && isOutstanding(s.state); }).length;
-  return { open: open, complete: open === 0, words: open === 0 ? 'Complete — every item decided' : 'Open — ' + open + ' item' + (open === 1 ? '' : 's') + ' outstanding' };
+  var list = (itemStates || []).filter(function (s) { return s.needs_attention && isOutstanding(s.state); });
+  var open = list.length; var blocked = list.filter(function (s) { return BLOCKED_STATES[s.state]; }).length;
+  var words = open === 0 ? 'Complete — every item decided'
+    : 'Open — ' + open + ' item' + (open === 1 ? '' : 's') + ' outstanding' + (blocked ? ' (' + blocked + ' not checked or blocked)' : '');
+  return { open: open, blocked: blocked, complete: open === 0, words: words };
 }
-// the default list: unreviewed, unresolved and needs-revalidation items only
-export function defaultFilter(row) { return row.needs_decision && isOutstanding(row.state); }
+// the default list: unreviewed, unresolved, needs-revalidation AND not-checked / blocked items
+export function defaultFilter(row) { return row.needs_attention && isOutstanding(row.state); }
 
 export var CSV_COLUMNS = ['report', 'bill_number', 'vendor', 'bill_date', 'reference', 'receipts', 'warehouse', 'product', 'billed', 'received', 'unit', 'diff', 'diff_pct', 'conversion', 'outcome', 'state', 'reviewer', 'decided_at', 'reason', 'source'];
 export function csvCell(v) { var s = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(s)) { s = "'" + s; } return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }

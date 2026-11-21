@@ -105,7 +105,7 @@ export default function WeightCheckPanel(props) {
                 <td className="px-1 text-right">{f.basis ? num(f.received) + ' ' + f.unit : '—'}</td>
                 <td className="px-1 text-right font-bold" style={{ color: f.diff ? '#991b1b' : INK }}>{f.diff != null ? (f.diff > 0 ? '+' : '') + num(f.diff) + (f.pct != null ? ' (' + num(f.pct, 2) + '%)' : '') : '—'}</td>
                 <td className="px-1"><Chip outcome={r.outcome}>{r.outcome_words}</Chip></td>
-                <td className="px-1"><span style={{ color: STATE_STYLE[r.state] || SUB, fontWeight: 800 }}>{r.needs_decision ? r.state_words : '—'}</span> <button onClick={function () { setOpenKey(openRow ? null : r.item_key); }} className="ml-1 underline text-[11px] font-bold" style={{ color: '#1d4ed8' }}>{openRow ? 'close' : 'details / decide'}</button></td>
+                <td className="px-1"><span style={{ color: STATE_STYLE[r.state] || SUB, fontWeight: 800 }}>{r.needs_attention ? r.state_words : '—'}</span> <button onClick={function () { setOpenKey(openRow ? null : r.item_key); }} className="ml-1 underline text-[11px] font-bold" style={{ color: '#1d4ed8' }}>{openRow ? 'close' : 'details / decide'}</button></td>
               </tr>
               {openRow && <tr><td colSpan={8} className="p-1"><ItemCard item={r} perms={perms} onDecide={function (item, k) { setAsk({ item: item, kind: k, billId: (item.bill_ids || [])[0] }); }} /></td></tr>}
             </React.Fragment>;
@@ -144,7 +144,7 @@ function ReportHistory(props) {
             <td className="px-1 align-top">{i.seq}</td>
             <td className="px-1 align-top">{(fz.bills || []).map(function (b) { return <div key={b.id}><button onClick={function () { props.openBill(b); }} className="underline font-bold" style={{ color: '#1d4ed8' }}>{(b.vendor || '') + ' ' + (b.bill_number || '')}</button></div>; })}</td>
             <td className="px-1 align-top">{fz.product_label || '—'}{f.basis ? <div style={{ color: SUB }}>{num(f.billed) + ' billed / ' + num(f.received) + ' scanned ' + f.unit + ' (' + (f.diff > 0 ? '+' : '') + num(f.diff) + ')'}</div> : null}</td>
-            <td className="px-1 align-top"><Chip outcome={i.outcome}>{OUTCOME_WORDS[i.outcome] || i.outcome}</Chip><div style={{ color: STATE_STYLE[i.frozen_state] || SUB, fontWeight: 700 }}>{i.needs_decision ? (STATE_WORDS[i.frozen_state] || i.frozen_state) : ''}</div></td>
+            <td className="px-1 align-top"><Chip outcome={i.outcome}>{OUTCOME_WORDS[i.outcome] || i.outcome}</Chip><div style={{ color: STATE_STYLE[i.frozen_state] || SUB, fontWeight: 700 }}>{i.needs_attention ? (STATE_WORDS[i.frozen_state] || i.frozen_state) : ''}</div></td>
             <td className="px-1 align-top">{i.later.length ? i.later.map(function (d, k) { return <div key={k}>{when(d.at) + ' · ' + d.actor_name + ' · ' + (DECISION_LABEL[d.kind] || d.kind) + ' — “' + d.reason + '”'}</div>; }) : <span style={{ color: SUB }}>—</span>}</td>
             <td className="px-1 align-top">{i.current ? <span style={{ color: STATE_STYLE[i.current.state] || SUB, fontWeight: 800 }}>{i.current.state_words || i.current.state}</span> : '—'}{i.current && i.current.changed && i.current.changed.length ? <div style={{ color: '#9a3412' }}>{i.current.changed.join(' · ')}</div> : null}</td>
           </tr>;

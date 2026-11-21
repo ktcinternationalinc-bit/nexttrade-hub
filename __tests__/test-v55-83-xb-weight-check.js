@@ -164,9 +164,27 @@ var un1 = W.unlinkedBillItem(bill('9'), W.proposeLinks(bill('9'), [receipt('91',
 var un2 = W.unlinkedBillItem(bill('9'), W.proposeLinks(bill('9'), [receipt('91', [], { reference_number: '90000009' }), receipt('92', [], { info: { cgt_reference: '90000009' } })]), true);
 check('a bill waiting for its link has a fingerprint; a new candidate receipt changes it', un1.inputs && fp(un1.inputs) !== fp(un2.inputs) && W.unlinkedBillItem(bill('8', { other_reference: null, bill_number: null }), { candidates: [] }, true).inputs.searched === 'no_reference');
 
-// ---------- 10 report status
-check('a report with open items never looks approved: "Open — 2 items outstanding"', W.reportStatus([{ needs_decision: true, state: 'unreviewed' }, { needs_decision: true, state: 'accepted' }, { needs_decision: true, state: 'issue_open' }, { needs_decision: false, state: 'unreviewed' }]).words === 'Open — 2 items outstanding');
-check('…all decided → "Complete — every item decided"', W.reportStatus([{ needs_decision: true, state: 'accepted' }]).complete === true);
+// ---------- 9c Codex 11:12 P1 — overlapping product mappings never count the same scan twice
+var MAP_BROAD = { id: 'mb', version: 1, state: 'active', vendor_key: W.vendorKey(NEX), item_key: 'vinyl', bill_unit: 'LBS', wh_product_type: '7', wh_label: 'Vinyl (any grade)' };
+var R9c = receipt('51', [log(501)]); // ONE 1,000 lb scan: product 7, grade 2
+var Lbs = [line(1, 'Vinyl (LBS)', 1000, 'LBS'), line(2, 'Cambridge Seconds (LBS)', 1000, 'LBS')];
+var ov1 = prod(run({ bills: [B1], lines: { '1': Lbs }, maps: [MAP_BROAD, MAP_SEC], receipts: [R9c], links: [link('1', '51')] }));
+var ov2 = prod(run({ bills: [B1], lines: { '1': Lbs.slice().reverse() }, maps: [MAP_BROAD, MAP_SEC], receipts: [R9c], links: [link('1', '51')] }));
+check('MAPPING OVERLAP (Codex probe): broad "product 7 any grade" + specific "product 7 grade 2", ONE 1,000 lb scan, 2,000 lb billed → NEITHER is Equal; both blocked as a mapping conflict',
+  ov1.length === 2 && ov1.every(function (i) { return i.outcome === 'mapping_conflict' && /counted twice/.test(i.reasons.join(' ')); }), ov1.map(function (i) { return [i.product_label, i.outcome, i.figures.received]; }));
+check('…the same with the bill lines in reverse order', ov2.length === 2 && ov2.every(function (i) { return i.outcome === 'mapping_conflict'; }));
+check('…a mapping conflict allows no decision at all (no Validate match, no Accept) and keeps the item outstanding', W.allowedDecisions('mapping_conflict').length === 0 && W.blockedState('mapping_conflict') === 'blocked' && W.isOutstanding('blocked'));
+var MAP_OTHER = { id: 'mo', version: 1, state: 'active', vendor_key: W.vendorKey(NEX), item_key: 'vinyl', bill_unit: 'LBS', wh_product_type: '7', wh_cgt: '5', wh_label: 'Vinyl · grade 5' };
+var ctl = prod(run({ bills: [B1], lines: { '1': Lbs }, maps: [MAP_OTHER, MAP_SEC], receipts: [receipt('52', [log(521), log(522, { cgt: '5' })])], links: [link('1', '52')] }));
+check('CONTROL: two DISTINCT mappings (grade 2 / grade 5), one scan each → both Equal, each scan counted once', ctl.length === 2 && ctl.every(function (i) { return i.outcome === 'equal' && i.figures.received === 1000 && i.figures.scans === 1; }), ctl.map(function (i) { return [i.product_label, i.outcome]; }));
+var agg = prod(run({ bills: [B1], lines: { '1': [line(1, 'Cambridge Seconds (LBS)', 600, 'LBS'), line(2, 'Cambridge Seconds (LBS)', 1400, 'LBS')] }, receipts: [R1], links: [link('1', '11')] }));
+check('CONTROL: two lines of the SAME mapped product still add up (1 item, 2,000 lb)', agg.length === 1 && agg[0].figures.billed === 2000 && agg[0].outcome === 'equal');
+
+// ---------- 10 report status (Codex 11:12 P1: completeness is apart from "can be decided now")
+check('a report with open items never looks approved: "Open — 2 items outstanding"', W.reportStatus([{ needs_attention: true, state: 'unreviewed' }, { needs_attention: true, state: 'accepted' }, { needs_attention: true, state: 'issue_open' }, { needs_attention: false, state: 'unreviewed' }]).words === 'Open — 2 items outstanding');
+check('…all decided → "Complete — every item decided"', W.reportStatus([{ needs_attention: true, state: 'accepted' }, { needs_attention: false, state: 'not_applicable' }]).complete === true);
+check('UNAVAILABLE / LIMITED / BLOCKED keep a report OPEN and are counted apart: "Open — 3 items outstanding (3 not checked or blocked)"', W.reportStatus([{ needs_attention: true, state: 'not_checked' }, { needs_attention: true, state: 'limited' }, { needs_attention: true, state: 'blocked' }]).words === 'Open — 3 items outstanding (3 not checked or blocked)');
+check('…every outcome except the information row needs attention; unavailable / limited cannot be decided now but are not done', W.needsAttention({ outcome: 'warehouse_unavailable' }) && W.needsAttention({ outcome: 'limited_access' }) && !W.needsAttention({ outcome: 'warehouse_only' }) && W.blockedState('warehouse_unavailable') === 'not_checked' && W.blockedState('limited_access') === 'limited' && W.defaultFilter({ needs_attention: true, state: 'not_checked' }));
 check('CSV: a cell starting with = + - @ is defused; commas quoted', W.csvCell('=SUM(A1)') === "'=SUM(A1)" && W.csvCell('a,b') === '"a,b"');
 
 console.log('\nXB: ' + pass + ' passed, ' + failN + ' failed');

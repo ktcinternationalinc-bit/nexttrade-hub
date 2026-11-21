@@ -9,10 +9,10 @@ var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 export var OUTCOME_STYLE = {
   matched: { bg: '#dcfce7', fg: '#14532d', bd: '#86efac' }, equal: { bg: '#dcfce7', fg: '#14532d', bd: '#86efac' },
   discrepancy: { bg: '#fee2e2', fg: '#991b1b', bd: '#fca5a5' }, no_receipt: { bg: '#fee2e2', fg: '#991b1b', bd: '#fca5a5' }, product_missing: { bg: '#fee2e2', fg: '#991b1b', bd: '#fca5a5' },
-  incomplete: { bg: '#fef9c3', fg: '#854d0e', bd: '#fde047' }, cannot_compare: { bg: '#ffedd5', fg: '#9a3412', bd: '#fdba74' },
+  incomplete: { bg: '#fef9c3', fg: '#854d0e', bd: '#fde047' }, cannot_compare: { bg: '#ffedd5', fg: '#9a3412', bd: '#fdba74' }, mapping_conflict: { bg: '#ffedd5', fg: '#9a3412', bd: '#fdba74' },
   warehouse_unavailable: { bg: '#e2e8f0', fg: '#334155', bd: '#94a3b8' }, limited_access: { bg: '#e2e8f0', fg: '#334155', bd: '#94a3b8' }, warehouse_only: { bg: '#f1f5f9', fg: '#334155', bd: '#cbd5e1' }
 };
-export var STATE_STYLE = { validated: '#14532d', accepted: '#1d4ed8', resolved: '#0f766e', issue_open: '#b91c1c', needs_revalidation: '#c2410c', reopened: '#7c2d12', unreviewed: '#475569' };
+export var STATE_STYLE = { not_checked: '#b91c1c', limited: '#b91c1c', blocked: '#b91c1c', validated: '#14532d', accepted: '#1d4ed8', resolved: '#0f766e', issue_open: '#b91c1c', needs_revalidation: '#c2410c', reopened: '#7c2d12', unreviewed: '#475569' };
 export var DECISION_LABEL = { validate_match: '✓ Validate match', accept_discrepancy: 'Accept discrepancy', report_issue: '⚑ Report an issue', resolve: 'Resolve the issue', reopen: '↺ Reopen' };
 
 // the Bills screen passes toast as { success, error }; other places may pass a function
@@ -109,7 +109,7 @@ export function DecisionButtons(props) {
 
 export function StateLine(props) {
   var it = props.item;
-  if (!it.needs_decision) { return null; }
+  if (!it.needs_attention && !it.needs_decision) { return null; }
   var d = it.decision;
   return <div className="text-[11px]" style={{ color: STATE_STYLE[it.state] || SUB, fontWeight: 800 }}>
     {it.state_words}{d ? ' · ' + d.actor_name + ', ' + when(d.at) + ' — “' + d.reason + '”' : ''}{it.issue && it.state === 'issue_open' ? ' · assigned to ' + (it.issue.assignee_name || it.issue.actor_name) : ''}

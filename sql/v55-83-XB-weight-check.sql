@@ -151,7 +151,7 @@ create table if not exists public.wc_report_items (
   bill_dates date[] not null default '{}',
   outcome text not null,
   state text not null,
-  needs_decision boolean not null,
+  needs_attention boolean not null,   -- counts toward the report being complete (not checked / blocked items count too)
   row jsonb not null,
   comparison_fp text,
   evidence_hash text,
@@ -208,11 +208,11 @@ begin
   returning id into v_id;
   for it in select * from jsonb_array_elements(p_items) loop
     v_n := v_n + 1;
-    insert into public.wc_report_items (report_id, seq, item_key, bill_ids, bill_dates, outcome, state, needs_decision, row, comparison_fp, evidence_hash, decision_id)
+    insert into public.wc_report_items (report_id, seq, item_key, bill_ids, bill_dates, outcome, state, needs_attention, row, comparison_fp, evidence_hash, decision_id)
     values (v_id, v_n, it->>'item_key',
             coalesce((select array_agg(x::uuid) from jsonb_array_elements_text(coalesce(it->'bill_ids', '[]'::jsonb)) x), '{}'),
             coalesce((select array_agg(x::date) from jsonb_array_elements_text(coalesce(it->'bill_dates', '[]'::jsonb)) x where x <> ''), '{}'),
-            it->>'outcome', it->>'state', coalesce((it->>'needs_decision')::boolean, false), it->'row', it->>'comparison_fp', it->>'evidence_hash', nullif(it->>'decision_id', '')::uuid);
+            it->>'outcome', it->>'state', coalesce((it->>'needs_attention')::boolean, false), it->'row', it->>'comparison_fp', it->>'evidence_hash', nullif(it->>'decision_id', '')::uuid);
   end loop;
   return jsonb_build_object('id', v_id, 'report_no', v_no, 'items', v_n);
 end $$;

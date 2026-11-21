@@ -139,6 +139,17 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('…the receipts feed not installed on the warehouse yet (404) → the same, with that reason', r1b.body.recheck.ok === false && /not installed/.test(r1b.body.recheck.error) && r1b.body.items[0].outcome === 'warehouse_unavailable');
   var failedRuns = tbl('wc_fetch_runs').filter(function (r) { return r.ok === false; }).length;
   check('…each failed read is recorded as a failed run (nothing of it kept as receipts)', failedRuns === 2 && tbl('wc_receipt_versions').length === 0);
+  // Codex 11:12 P1 — the expected first state (no receipts feed on the warehouse yet) must never give a "Complete" report
+  var pv0 = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31' });
+  check('ENDPOINT MISSING: the default list SHOWS the not-checked bills (rows 2), outstanding 2 — never "nothing outstanding"', pv0.body.rows.length === 2 && pv0.body.summary.outstanding === 2 && pv0.body.summary.blocked === 2 && pv0.body.rows.every(function (r) { return r.outcome === 'warehouse_unavailable' && r.state === 'not_checked' && r.outstanding && r.allowed.length === 0; }), pv0.body);
+  var rep0 = await call({ action: 'run_report', date_from: '2026-10-01', date_to: '2026-10-31' });
+  check('…the saved report says "Open — 2 items outstanding (2 not checked or blocked)", NOT Complete, while the recheck says the feed is not installed', rep0.status === 200 && rep0.body.report.status === 'Open — 2 items outstanding (2 not checked or blocked)' && rep0.body.recheck.ok === false && /not installed/.test(rep0.body.recheck.error), rep0.body);
+  var saved0 = tbl('wc_reports').filter(function (r) { return r.id === rep0.body.report.id; })[0];
+  check('…and its history keeps that truthful open state (status and every item as not checked)', saved0.status_at_run === rep0.body.report.status && tbl('wc_report_items').filter(function (i) { return i.report_id === rep0.body.report.id; }).every(function (i) { return i.state === 'not_checked' && i.needs_attention === true; }));
+  world.feed = 'down';
+  var rep0b = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31' });
+  check('OUTAGE: the same — the not-checked bills stay in the default list', rep0b.body.rows.length === 2 && rep0b.body.rows.every(function (r) { return r.state === 'not_checked'; }));
+  var reportsBefore = tbl('wc_reports').length; // the numbering checks below count from here
 
   // ---- recheck works, proposal, confirm
   world.feed = 'ok';
@@ -231,12 +242,14 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('LIMITED ACCESS: with a history window that hides bill 1, bill 2’s group shows "limited access" — no figures, no hidden bill', p9.outcome === 'limited_access' && p9.figures === null && JSON.stringify(r9.body).indexOf('N001') < 0 && JSON.stringify(r9.body.items).indexOf(B1) < 0, r9.body.items);
   var r9b = await call({ action: 'bill', bill_id: B3 });
   check('a bill dated before the window cannot be opened at all', r9b.status === 403);
+  var pv9 = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31' });
+  check('LIMITED GROUP in the report: shown in the default list as "Blocked — part of this group is outside your access" (outstanding, no decision possible)', pv9.body.rows.some(function (r) { return r.outcome === 'limited_access' && r.state === 'limited' && r.outstanding && r.allowed.length === 0; }) && !/^Complete/.test(W.reportStatus(pv9.body.rows).words), pv9.body.rows.map(function (r) { return [r.outcome, r.state]; }));
   world.floor = null;
 
   // ---- reports and history (Max's example in small)
   world.perms = Object.assign({}, STAFF, { 'bills.weight_check.accept': 1 });
   var rep1 = await call({ action: 'run_report', date_from: '2026-10-01', date_to: '2026-10-31' });
-  check('RUN REPORT: saved with a number WC-YYYY-0001 and an honest status (open items → "Open — N outstanding")', rep1.status === 200 && /^WC-\d{4}-0001$/.test(rep1.body.report.report_no) && /^Open/.test(rep1.body.report.status), rep1.body);
+  check('RUN REPORT: saved with the next number (WC-YYYY-0002, after the not-checked report 0001) and an honest status (open items → "Open — N outstanding")', rep1.status === 200 && reportsBefore === 1 && /^WC-\d{4}-0002$/.test(rep1.body.report.report_no) && /^Open/.test(rep1.body.report.status), rep1.body);
   var savedItems1 = tbl('wc_report_items').filter(function (i) { return i.report_id === rep1.body.report.id; });
   check('…every item of the range is saved (not only the outstanding ones), frozen with figures and state', savedItems1.length >= 1 && savedItems1.every(function (i) { return i.row && i.state; }));
   var open = rep1.body.rows.filter(function (r) { return r.outstanding && r.allowed.indexOf('accept_discrepancy') >= 0; })[0];
@@ -248,9 +261,9 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   var hi = hist.body.items.filter(function (i) { return i.item_key === open.item_key; })[0];
   check('HISTORY: the old report still shows the item as it stood (frozen), PLUS the later acceptance, PLUS the current state — kept apart', hi && hi.frozen_state !== 'accepted' && hi.later.length === 1 && hi.later[0].kind === 'accept_discrepancy' && hi.current.state === 'accepted', hi);
   var rep2 = await call({ action: 'run_report', date_from: '2026-10-01', date_to: '2026-10-31' });
-  check('a second run gets the next number; the first report is never overwritten', /0002$/.test(rep2.body.report.report_no) && tbl('wc_reports').length === 2 && tbl('wc_report_items').filter(function (i) { return i.report_id === rep1.body.report.id; }).length === savedItems1.length);
+  check('a second run gets the next number; the first report is never overwritten', /0003$/.test(rep2.body.report.report_no) && tbl('wc_reports').length === 3 && tbl('wc_report_items').filter(function (i) { return i.report_id === rep1.body.report.id; }).length === savedItems1.length);
   var list = await call({ action: 'reports' });
-  check('Report History lists both reports with who ran them', list.body.reports.length === 2 && list.body.reports[0].run_by_name === 'Staff One');
+  check('Report History lists every report (the not-checked one too) with who ran them', list.body.reports.length === 3 && list.body.reports[0].run_by_name === 'Staff One');
   world.floor = '2026-10-07';
   var hist2 = await call({ action: 'report', id: rep1.body.report.id });
   check('a viewer with a narrower window sees the old report labelled PARTIAL, never as the whole report', hist2.body.partial === true && /PARTIAL/.test(hist2.body.partial_words));
@@ -290,6 +303,18 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('SCREEN: the report panel renders with its filters, Exceptions / Report history / Mappings tabs and the save button', /Bill date from/.test(html6) && /Report history/.test(html6) && /Mappings &amp; tolerance/.test(html6) && /numbered report/.test(html6) && /Unresolved issues only/.test(html6));
   var bt = fs.readFileSync(path.join(root, 'src/components/BillsTab.jsx'), 'utf8');
   check('Bills wiring: the box sits under the bill lines, the panel opens from a Bills button, both behind the view switch', /<WarehouseCheckBox bill={b}/.test(bt) && /panel === 'weightcheck' && canWeightCheck && <WeightCheckPanel/.test(bt) && bt.indexOf("modulePerms['bills.weight_check.view']") >= 0);
+  // ---- a genuinely all-approved report (control): bill 3 (Jan 2025) is linked to receipt 14 — 500 lb billed, 500 lb scanned
+  world.perms = STAFF;
+  var c0 = await call({ action: 'report_preview', date_from: '2025-01-01', date_to: '2025-01-31' });
+  var cItem = c0.body.rows.filter(function (r) { return r.outcome === 'equal'; })[0];
+  check('CONTROL: bill 3 against receipt 14 is Equal and outstanding until validated', cItem && cItem.outstanding && cItem.allowed.indexOf('validate_match') >= 0, c0.body.rows);
+  var cv = await call({ action: 'decide', bill_id: B3, item_key: cItem.item_key, kind: 'validate_match', reason: 'Packing list and scale both show 500 lb', expected_fp: cItem.comparison_fp });
+  var cr = await call({ action: 'run_report', date_from: '2025-01-01', date_to: '2025-01-31', recheck: false });
+  check('…once validated, that report is "Complete — every item decided" and the default list is empty', cv.status === 200 && cr.body.report.status === 'Complete — every item decided' && cr.body.rows.length === 0, cr.body);
+  var notChecked = RDS.renderToStaticMarkup(React.createElement(BOX.ItemCard, { item: pv0.body.rows[0], perms: { validate: true, accept: true, resolve: true }, onDecide: function () {} }));
+  check('SCREEN: a not-checked row says so plainly, shows no decision button, and is never shown as done', /Warehouse unavailable \/ not checked/.test(notChecked) && /Not checked — the warehouse could not be read/.test(notChecked) && !/Validate match|Accept discrepancy|Report an issue/.test(notChecked), notChecked.substring(0, 500));
+  check('SCREEN: the report table shows the state of not-checked rows (needs attention), not a dash', fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8').indexOf("{r.needs_attention ? r.state_words : '—'}") >= 0);
+
   // ---- tolerance: Max only
   world.perms = Object.assign({}, STAFF, { 'bills.weight_check.settings': 1 });
   var tl = await call({ action: 'tolerance_save', pct: 1, lb: 50 });

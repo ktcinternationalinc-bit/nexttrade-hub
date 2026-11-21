@@ -3,7 +3,7 @@
 // SWC-safe: var + string concatenation.
 import crypto from 'crypto';
 import { canonical, normRef, billReferences, proposeLinks, currentLinks, buildGroups, compareGroup, unlinkedBillItem, decisionState, isOutstanding,
-  needsDecision, diffInputs, receiptKey, WC_BUILD, OUTCOME_WORDS, STATE_WORDS, BASIS_LABEL } from './weight-check';
+  needsDecision, needsAttention, blockedState, diffInputs, receiptKey, WC_BUILD, OUTCOME_WORDS, STATE_WORDS, BASIS_LABEL } from './weight-check';
 import { fetchReceipts, MAX_IDS, MAX_REFS } from './weight-check-feed-server';
 import { US_WAVE_BUSINESS_ID } from './business-of';
 
@@ -194,14 +194,16 @@ export async function assemble(db, focusIds, floor, opts) {
   var byKey = {}; decs.forEach(function (d) { (byKey[d.item_key] = byKey[d.item_key] || []).push(d); });
   items.forEach(function (it) {
     it.comparison_fp = it.inputs ? sha(it.inputs) : null;
-    it.needs_decision = needsDecision(it);
+    it.needs_decision = needsDecision(it);       // can a person decide it NOW
+    it.needs_attention = needsAttention(it);     // does it keep a report open until it is decided (Codex 11:12 P1)
     var st = decisionState(byKey[it.item_key] || [], it.comparison_fp);
-    it.state = it.needs_decision ? st.state : 'not_applicable';
+    // not checked / limited / mapping conflict: never "done", whatever was decided before (the old decision stays in the history)
+    it.state = blockedState(it.outcome) || (it.needs_decision ? st.state : 'not_applicable');
     it.decision = st.decision ? publicDecision(st.decision) : null;
     it.issue = st.issue ? publicDecision(st.issue) : null;
     it.history = st.history.map(publicDecision);
     it.changed = st.changed ? diffInputs(st.decision && st.decision.snapshot && st.decision.snapshot.inputs, it.inputs) : null;
-    it.outstanding = it.needs_decision && isOutstanding(it.state);
+    it.outstanding = it.needs_attention && isOutstanding(it.state);
     it.outcome_words = OUTCOME_WORDS[it.outcome] || it.outcome;
     it.state_words = STATE_WORDS[it.state] || '';
   });

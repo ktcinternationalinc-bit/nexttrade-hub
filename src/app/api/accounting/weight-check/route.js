@@ -244,13 +244,13 @@ export async function POST(req) {
         return out({ ok: true, rows: shown, all_count: rows.length, summary: summary, bills_checked: ids.length, from: from, to: f1, window_floor: floor, feed: feedInfo, tolerance: tolPublic(R.tolerance), permissions: perms });
       }
       // run_report: save it, numbered, frozen as it stands (every item, not only the outstanding ones)
-      var status = reportStatus(rows.map(function (r) { return { needs_decision: r.needs_decision, state: r.state }; }));
+      var status = reportStatus(rows.map(function (r) { return { needs_attention: r.needs_attention, state: r.state }; }));
       var refsChecked = {}; bl.forEach(function (b) { if (b.other_reference) { refsChecked[b.other_reference] = true; } });
       var payload = { run_by: userId, date_from: from, date_to: f1, filters: { vendor: vq || null, reference: rq || null, warehouse: wq || null, status: sq || null, reviewer: revq || null, unresolved: body.unresolved === true, window_floor: floor },
         source: source, fetch_run_id: rr && rr.run_id ? rr.run_id : (runs.lastGood ? runs.lastGood.id : null), feed_generated_at: runs.lastGood ? runs.lastGood.feed_generated_at : null,
         bills_checked: bl.map(function (b) { return { id: b.id, vendor: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date }; }), references_checked: Object.keys(refsChecked),
         counts: Object.assign({}, summary, { recheck: rr ? { ok: rr.ok, error: rr.error || null, counts: rr.counts } : null }), status_at_run: status.words, build: WC_BUILD };
-      var itemsP = rows.map(function (r) { return { item_key: r.item_key, bill_ids: r.bill_ids || [], bill_dates: (r.bills || []).map(function (b) { return b.bill_date || ''; }), outcome: r.outcome, state: r.state || 'not_applicable', needs_decision: !!r.needs_decision, row: r, comparison_fp: r.comparison_fp || null, evidence_hash: sha(r), decision_id: r.decision ? r.decision.id : null }; });
+      var itemsP = rows.map(function (r) { return { item_key: r.item_key, bill_ids: r.bill_ids || [], bill_dates: (r.bills || []).map(function (b) { return b.bill_date || ''; }), outcome: r.outcome, state: r.state || 'not_applicable', needs_attention: !!r.needs_attention, row: r, comparison_fp: r.comparison_fp || null, evidence_hash: sha(r), decision_id: r.decision ? r.decision.id : null }; });
       var sv = await db.rpc('wc_save_report', { p_report: payload, p_items: itemsP });
       if (sv.error) { throw new Error(sv.error.message); }
       await audit(db, userId, 'weight_check_report_run', 'wc_report', sv.data.id, { report_no: sv.data.report_no, from: from, to: f1, items: itemsP.length, status: status.words, recheck_ok: rr ? rr.ok : null });
@@ -268,7 +268,7 @@ export async function POST(req) {
     if (action === 'report') {
       var rp = await db.from('wc_reports').select('*').eq('id', clean(body.id, 60)).maybeSingle();
       if (rp.error || !rp.data) { return bad('Report not found.', 404); }
-      var its = await allRows(function () { return db.from('wc_report_items').select('seq, item_key, bill_ids, bill_dates, outcome, state, needs_decision, row, comparison_fp, decision_id').eq('report_id', rp.data.id).order('seq', { ascending: true }); });
+      var its = await allRows(function () { return db.from('wc_report_items').select('seq, item_key, bill_ids, bill_dates, outcome, state, needs_attention, row, comparison_fp, decision_id').eq('report_id', rp.data.id).order('seq', { ascending: true }); });
       // the viewer sees only items whose bills are all inside their window; anything else makes the view PARTIAL
       var hiddenN = 0;
       var visIts = its.filter(function (it) { var ok = (it.bill_dates || []).every(function (d) { return !floor || (d && String(d) >= floor); }); if (!ok) { hiddenN++; } return ok; });
@@ -285,9 +285,9 @@ export async function POST(req) {
       }
       var nmR = await userNames(db, decsR.map(function (d) { return d.actor; }).concat(decsR.map(function (d) { return d.assignee; })).concat([rp.data.run_by]));
       var later = {}; decsR.forEach(function (d) { (later[d.item_key] = later[d.item_key] || []).push({ kind: d.kind, reason: d.reason, at: d.at, actor_name: nmR[d.actor] || 'someone', assignee_name: d.assignee ? (nmR[d.assignee] || 'someone') : null, ticket_id: d.ticket_id, evidence: d.evidence || [] }); });
-      var curStatus = cur ? reportStatus(visIts.map(function (i) { var c = cur[i.item_key]; return { needs_decision: i.needs_decision, state: c ? c.state : i.state }; })) : null;
+      var curStatus = cur ? reportStatus(visIts.map(function (i) { var c = cur[i.item_key]; return { needs_attention: i.needs_attention, state: c ? c.state : i.state }; })) : null;
       return out({ ok: true, report: Object.assign({}, rp.data, { run_by_name: nmR[rp.data.run_by] || 'someone' }), partial: hiddenN > 0, partial_words: hiddenN > 0 ? 'PARTIAL — some items of this report are outside your permitted dates and are not shown' : null,
-        items: visIts.map(function (i) { return { seq: i.seq, item_key: i.item_key, frozen: i.row, frozen_state: i.state, outcome: i.outcome, needs_decision: i.needs_decision, later: later[i.item_key] || [], current: cur ? (cur[i.item_key] || { state: 'not_found_now', state_words: 'Not found in the current check (bill or link changed)' }) : null }; }),
+        items: visIts.map(function (i) { return { seq: i.seq, item_key: i.item_key, frozen: i.row, frozen_state: i.state, outcome: i.outcome, needs_attention: i.needs_attention, later: later[i.item_key] || [], current: cur ? (cur[i.item_key] || { state: 'not_found_now', state_words: 'Not found in the current check (bill or link changed)' }) : null }; }),
         current_status: curStatus, window_floor: floor, permissions: perms });
     }
 
@@ -422,12 +422,12 @@ function itemPublic(i, A, names, lookups) {
     scan_rows: limited ? null : (i.scan_rows || []).map(function (s) { return { id: s.id, receipt_key: s.receipt_key, skew: s.skew, pallet: s.pallet, lb: s.lb, yd: s.yd, rolls: s.rolls, pl_kg: s.pl_kg, scanned_out: s.scanned_out, sold_by: s.sold_by }; }),
     links: limited ? [] : (i.links || []).map(function (l) { return Object.assign({}, l, { actor_name: names[l.actor] || 'someone' }); }),
     candidates: i.candidates || null, needs_link: !!i.needs_link, needs_mapping: !!i.needs_mapping, searched_at: i.searched_at || null,
-    needs_decision: !!i.needs_decision, allowed: i.needs_decision ? allowedDecisions(i.outcome) : [], state: i.state, state_words: i.state_words, outstanding: !!i.outstanding,
+    needs_decision: !!i.needs_decision, needs_attention: !!i.needs_attention, allowed: i.needs_decision ? allowedDecisions(i.outcome) : [], state: i.state, state_words: i.state_words, outstanding: !!i.outstanding,
     decision: dec(i.decision), issue: dec(i.issue), history: (i.history || []).map(dec), changed: i.changed || null, comparison_fp: i.comparison_fp || null
   };
 }
 function summarise(rows) {
-  var s = { items: rows.length, outstanding: 0, by_outcome: {}, by_state: {} };
-  rows.forEach(function (r) { if (r.outstanding) { s.outstanding++; } s.by_outcome[r.outcome] = (s.by_outcome[r.outcome] || 0) + 1; if (r.needs_decision) { s.by_state[r.state] = (s.by_state[r.state] || 0) + 1; } });
+  var s = { items: rows.length, outstanding: 0, blocked: 0, by_outcome: {}, by_state: {} };
+  rows.forEach(function (r) { if (r.outstanding) { s.outstanding++; } s.by_outcome[r.outcome] = (s.by_outcome[r.outcome] || 0) + 1; if (r.needs_attention) { s.by_state[r.state] = (s.by_state[r.state] || 0) + 1; } if (r.outstanding && (r.state === 'not_checked' || r.state === 'limited' || r.state === 'blocked')) { s.blocked++; } });
   return s;
 }
