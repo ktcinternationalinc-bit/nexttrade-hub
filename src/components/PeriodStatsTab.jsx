@@ -7,6 +7,7 @@ import { spendingByCategoryCsv, spendingDetailCsv, incomeStatementCsv } from '..
 import React, { useState, useEffect } from 'react';
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expense', other_income: 'Other income', other_expense: 'Other expense', transfer: 'Transfer', not_pnl: 'Not P&L (loan/owner)' }; // v55.83-PW
 
@@ -91,7 +92,7 @@ export default function PeriodStatsTab(props) {
   var sCl = useState(null); var catList = sCl[0]; var setCatList = sCl[1];
   var sSv = useState({}); var saving = sSv[0]; var setSaving = sSv[1];
   function erApi(action, payload) {
-    return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
@@ -135,7 +136,7 @@ export default function PeriodStatsTab(props) {
 
   function load(f, t) {
     setBusy(true);
-    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'period_stats', from: f, to: t, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (j && j.ok) { setData(j); } else { toast.error((j && j.error) || 'Could not load stats.'); setData({ denied: true, error: (j && j.error) || '' }); } })

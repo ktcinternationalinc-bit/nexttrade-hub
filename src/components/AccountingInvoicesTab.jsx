@@ -335,7 +335,7 @@ export default function AccountingInvoicesTab(props) {
       var b64 = String(rd.result || '').split(',')[1] || '';
       setBusy(true);
       toast.success('Reading the invoice…');
-      fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'extract_invoice', invoice_id: 'n/a', file_base64: b64, media_type: file.type, user_id: userProfile && userProfile.id }) })
         .then(function (r) { return r.json(); })
         .then(function (j) {
@@ -395,7 +395,7 @@ export default function AccountingInvoicesTab(props) {
   // v55.83-TG — the invoice's shipping terms live in pl_invoice_terms (server route; the browser cannot read that table)
   function loadShippingTerms(invId, cb) {
     if (!invId) { return; }
-    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_shipping_terms', invoice_id: invId, user_id: userProfile && userProfile.id }) })
+    hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_shipping_terms', invoice_id: invId, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (j && j.ok) { cb({ shipping_terms: j.shipping_terms || '', shipping_cost_estimate: j.shipping_cost_estimate === null || j.shipping_cost_estimate === undefined ? '' : String(j.shipping_cost_estimate) }); } })
       .catch(function () {});
@@ -495,7 +495,7 @@ export default function AccountingInvoicesTab(props) {
     setLineWaveProduct(i, productId);
     if (locked(editing) && existing && existing.id && editing && editing.id) {
       var prod = null; waveProducts.forEach(function (p) { if (p.wave_product_id === productId) { prod = p; } });
-      fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_line_product', invoice_id: editing.id, item_id: existing.id, wave_product_id: productId || null, wave_product_name: prod ? (prod.name || '') : null, user_id: (userProfile && userProfile.id) || null }) })
+      hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_line_product', invoice_id: editing.id, item_id: existing.id, wave_product_id: productId || null, wave_product_name: prod ? (prod.name || '') : null, user_id: (userProfile && userProfile.id) || null }) })
         .then(function (r) { return r.json(); })
         .then(function (d) { if (d && d.ok) { toast.success('Wave product mapped to this line (no financial change).'); } else { toast.error('Mapping failed: ' + ((d && d.error) || 'unknown') + ' — reverted.'); setLineWaveProduct(i, prevProductId); } })
         // v55.83-MS (Codex caution) — the dropdown is optimistic; on a failed/blocked server write, REVERT the
@@ -574,7 +574,7 @@ export default function AccountingInvoicesTab(props) {
       });
     }).then(function (docId) {
       if (!shipCheck) { return docId; }
-      return fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_shipping_terms', invoice_id: docId, shipping_terms: shipCheck.value.shipping_terms, shipping_cost_estimate: shipCheck.value.shipping_cost_estimate, user_id: userProfile && userProfile.id }) })
+      return hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_shipping_terms', invoice_id: docId, shipping_terms: shipCheck.value.shipping_terms, shipping_cost_estimate: shipCheck.value.shipping_cost_estimate, user_id: userProfile && userProfile.id }) })
         .then(function (r) { return r.json(); })
         .then(function (j) { if (!(j && j.ok)) { throw { termsFailed: true, docId: docId, msg: (j && j.error) || 'unknown error' }; } return docId; }, function () { throw { termsFailed: true, docId: docId, msg: 'network' }; });
     }).then(function (docId) {
@@ -600,7 +600,7 @@ export default function AccountingInvoicesTab(props) {
     if (status === 'approved' && !mayApprove) { toast.error('Only an Owner/Admin or Accounting Manager can approve invoices.'); return; }
     if (!mayEdit && status !== 'approved') { toast.error('No permission.'); return; }
     setBusy(true);
-    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: row.id, status: status, user_id: userProfile && userProfile.id }) })
+    hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: row.id, status: status, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (!j || !j.ok) { throw new Error((j && j.error) || 'approval did not save'); }
@@ -639,7 +639,7 @@ export default function AccountingInvoicesTab(props) {
     if (!sure) { return; }
     setBusy(true);
     var uid = (userProfile && userProfile.id) || null;
-    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: row.id, status: 'approved', user_id: uid }) })
+    hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: row.id, status: 'approved', user_id: uid }) })
       .then(function (r) { return r.json(); })
       .then(function (aj) {
         if (!aj || !aj.ok) { throw new Error('Could not approve the amended invoice: ' + ((aj && aj.error) || 'unknown error')); }
@@ -673,7 +673,7 @@ export default function AccountingInvoicesTab(props) {
     if (!reason.trim()) { toast.error('Reason required.'); return; }
     setBusy(true);
     var waveTouch = (row.source === 'wave_import' || row.wave_sync_status === 'synced');
-    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reopen', invoice_id: row.id, wave_touch: waveTouch, user_id: userProfile && userProfile.id }) })
+    hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reopen', invoice_id: row.id, wave_touch: waveTouch, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (!j || !j.ok) { throw new Error((j && j.error) || 'reopen did not save'); } return j; })
       .then(function () { return logActivity(userProfile && userProfile.id, 'Reopened invoice ' + (row.invoice_number || row.id) + ' (' + reason.trim() + ')' + (waveTouch ? ' [marked pending Wave re-sync]' : ''), 'accounting_invoices'); })
@@ -841,7 +841,7 @@ export default function AccountingInvoicesTab(props) {
                             var cur = row.release_number || '';
                             setRelEditId(null); setRelErr('');
                             if (v === cur) { return; }
-                            fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            hubFetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ action: 'set_release', user_id: userProfile && userProfile.id, system: 'accounting', id: row.id, release_number: v }) })
                               .then(function (r) { return r.json(); })
                               .then(function (j) {

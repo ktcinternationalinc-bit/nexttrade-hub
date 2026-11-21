@@ -11,6 +11,7 @@ import { ToastContext } from '../lib/toast-context';
 import { WIRE_STATUS_LABEL } from '../lib/wire-audit';
 import WirePackagesPanel from './WirePackagesPanel'; // v55.83-RH
 import WireQuickView from './WireQuickView'; // v55.83-RM
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 var STATUS_STYLE = {
@@ -43,7 +44,7 @@ function BankWiresView(props) {
   var s11 = useState(null); var quick = s11[0]; var setQuick = s11[1]; // v55.83-RM — a line that IS an approved wire opens that wire
 
   function api(payload) {
-    return fetch('/api/accounting/wires', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/accounting/wires', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) }).then(function (r) { return r.json(); });
   }
   function load() {

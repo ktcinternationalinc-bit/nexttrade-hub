@@ -2,6 +2,7 @@
 // v55.83-OJ — Accounting > Open Balances: who owes what, period-scoped,
 // overdue rows highlighted light orange (Max's spec).
 import React, { useState, useEffect } from 'react';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 export default function OpenBalancesTab(props) {
   var userProfile = props.userProfile;
@@ -32,7 +33,7 @@ export default function OpenBalancesTab(props) {
 
   function load(f, t, b) {
     setBusy(true);
-    fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'open_balances', user_id: userProfile && userProfile.id, date_from: f || null, date_to: t || null, business: b || biz }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (!j || j.ok !== true) { toast.error((j && j.error) || 'Load failed'); return; } setData(j); })

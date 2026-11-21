@@ -6,6 +6,7 @@
 // invoice stays DRAFT and can never be pushed to Wave. This endpoint does the SAME writes with the
 // SERVICE-ROLE key (bypasses RLS) + assertPermission + readback + 0-row = explicit error.
 // SWC-safe: var + string concat, no template literals/arrows/optional-chaining.
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -30,7 +31,9 @@ export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
-    var by = body.user_id || null;
+    var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
+    if (whoWQ.error) { return NextResponse.json({ ok: false, error: whoWQ.error, api_build_marker: API_BUILD_MARKER }, { status: whoWQ.status || 401 }); }
+    var by = whoWQ.userId;
     var action = body.action || 'set_approval';
     // v55.83-PQ (Max, 05:13): "upload invoices and from invoices it will
     // create the invoice based on data and show on both systems" — the reader

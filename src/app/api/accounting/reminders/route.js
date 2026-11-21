@@ -7,6 +7,7 @@
 // from the user's own WhatsApp — no cold-template infrastructure needed).
 // Every reminder is LOGGED on the invoice: who, when, channel, tone, exact text.
 // Permissions: suggest = ar.view_invoice_balances · send = ar.send_reminders.
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
@@ -89,7 +90,10 @@ export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
-    var action = body.action; var userId = body.user_id;
+    var action = body.action;
+    var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
+    if (whoWQ.error) { return NextResponse.json({ error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+    var userId = whoWQ.userId;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
     var permKey = action === 'send' ? 'ar.send_reminders' : 'ar.view_invoice_balances';
     var gate = await assertPermission(db, userId, permKey, req);

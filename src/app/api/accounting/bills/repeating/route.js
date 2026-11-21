@@ -43,13 +43,10 @@ export async function POST(req) {
     var action = String(body.action || '');
     var WRITES = { save: 1, pause: 1, resume: 1, stop: 1, run_now: 1, make_anyway: 1 };
     if (action !== 'list' && !WRITES[action]) { return NextResponse.json({ error: 'Unknown action.' }, { status: 400 }); }
-    var userId = body.user_id;
-    if (WRITES[action]) {
-      var who = await verifiedCaller(req, body, createClient);
-      if (who.error) { return NextResponse.json({ error: who.error }, { status: who.status || 401 }); }
-      userId = who.userId;
-    }
-    if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
+    // v55.83-WQ (Codex 21 Nov, F3) — the list too acts only for the verified signed-in person
+    var who = await verifiedCaller(req, body, createClient);
+    if (who.error) { return NextResponse.json({ error: who.error }, { status: who.status || 401 }); }
+    var userId = who.userId;
     var g1 = await assertPermission(db, userId, 'accounting.view', req);
     if (!g1 || g1.ok !== true) { return NextResponse.json({ error: 'This needs "Accounting Access" (P1) — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: (g1 && g1.status) || 403 }); }
     var g2 = await assertPermission(db, userId, 'bills.manage', req);

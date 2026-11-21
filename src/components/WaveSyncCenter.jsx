@@ -5,6 +5,7 @@ import { isPaymentVoid } from '../lib/payment-matching';
 import { getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered, isPlaceholderWaveBusiness } from '../lib/wave-business';
 import { dryRunRecord } from '../lib/wave-sync-eligibility';
 import SiloBanner from './SiloBanner';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 // v55.83-EM — pull the human-readable Wave error out of a response payload.
 function waveErrText(rp) {
@@ -452,7 +453,7 @@ export default function WaveSyncCenter(props) {
   }
   function connectToWave() {
     setConnecting(true); setConnectChoices(null); setConnectMsg('Checking what your Wave token can access…');
-    fetch('/api/wave/check').then(function (r) { return r.json(); })
+    hubFetch('/api/wave/check').then(function (r) { return r.json(); })
       .then(function (chk) {
         if (!chk || chk.connected === false) { setConnecting(false); setConnectMsg('✕ ' + ((chk && chk.error) || 'Your Wave token is not connected. Add WAVE_ACCESS_TOKEN in Vercel, then redeploy.')); return; }
         var bizs = (chk.businesses || []).filter(function (b) { return b && !b.isPersonal; });
@@ -838,7 +839,7 @@ export default function WaveSyncCenter(props) {
     if (isProd && !productionUnlocked) { toast.error('Production push is locked. A super admin must enable real production push in Settings first.'); return; }
     if (!canPushInvoice) { toast.error('You do not have the Wave: Invoice push permission.'); return; }
     setBusy(true);
-    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: invoiceId, status: 'approved', user_id: (userProfile && userProfile.id) || null }) })
+    hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: invoiceId, status: 'approved', user_id: (userProfile && userProfile.id) || null }) })
       .then(function (r) { return r.json(); })
       .then(function (aj) {
         if (!aj || !aj.ok) { throw new Error('Could not approve the invoice: ' + ((aj && aj.error) || 'unknown error')); }

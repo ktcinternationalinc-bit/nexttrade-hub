@@ -39,6 +39,7 @@ stub(path.join(root, 'node_modules/next/server.js'), { NextResponse: { json: fun
 stub('@supabase/supabase-js', { createClient: function () { return { from: chain }; } });
 stub(path.join(root, 'src/lib/server-permissions.js'), { assertPermission: async function () { return { ok: true, ctx: {} }; } });
 stub(path.join(root, 'src/lib/visibility-window-server.js'), { windowFloorFor: async function () { return { floor: null }; }, clampFrom: function (d0) { return d0; } });
+stub(path.join(root, 'src/lib/verified-caller.js'), require('./helpers/stub-verified-caller.js')); // v55.83-WQ
 stub(path.join(root, 'src/lib/business-of.js'), { businessOfInvoice: function () { return 'US'; } });
 var ROUTE = require(path.join(root, 'src/app/api/accounting/sales-report/route.js'));
 function post() { return ROUTE.POST({ json: async function () { return { user_id: 'u1', date_from: '2026-06-01' }; }, headers: { get: function () { return 'Bearer x'; } } }); }

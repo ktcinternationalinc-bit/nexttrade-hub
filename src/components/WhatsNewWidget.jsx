@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WQ',
+    date: '2026-11-21',
+    title: 'More accounting screens check who is signed in',
+    items: [
+      { text: '**These accounting screens now act only for the person who is signed in:** Bills, wires, categories, duplicates, the audit trail, payables, the sales report, reminders, statement import, invoices, NextTrade reconciliation, AI reports and the history window setting. The server checks your sign-in. Before, these trusted a name sent along with the request. This is one step of the permissions work, not all of it.' },
+      { text: 'Nothing changes in how you work. If a screen says "Sign in again", sign out and back in once.' },
+      { text: 'Wires: two different people still have to sign. One person can no longer sign twice by pretending to be someone else.' },
+      { text: 'The assistant (Nadia, new version) and the Wave connection checks now answer only signed-in people. The assistant gives cash in / cash out totals only to people with Bank & Financial Summary.' },
+      { superAdminOnly: true, text: 'Technical (permissions step A, Codex 21 Nov F3): verifiedCaller (bearer -> auth.getUser -> bank_visibility_profile_for_identity) now sets the acting user on accounting/bills (all actions, not only the 4 money actions), bills/repeating list, bills/email-scan manual path (cron secret path unchanged), wire-packages, wires, expense-rules, duplicates, audit, payables, sales-report, reminders, statement-import, invoice-write, ai/reports, reconcile/nexttrade POST, admin/visibility POST; a body user_id that is not the verified profile is 403. accountant, ask-v2, wave/audit, wave/check, wave/import-preview, wave/invoice-diagnostic now require a verified sign-in; ask-v2 query_treasury needs accounting.view_totals. Screens calling these routes use hubFetch (bearer). No SQL. Test: __tests__/test-v55-83-wq-verified-identity.js (real routes, real identity + permission resolver, in-memory DB); RE suite repaired (UG role rule, alias pin, CRLF).' },
+    ],
+  },
+  {
     version: 'v55.83-XA',
     date: '2026-11-21',
     title: 'Vendor statement check: the total line is a total, not an invoice',

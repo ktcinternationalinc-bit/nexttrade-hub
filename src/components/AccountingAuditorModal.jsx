@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { runAccountingAudit } from '../lib/accounting-auditor';
 import { fmtET } from '../lib/et-time';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — the server checks the sign-in
 
 // ============================================================
 // AI ACCOUNTANT MODAL
@@ -63,7 +64,7 @@ export default function AccountingAuditorModal(props) {
     setAiError(null);
     setAiResult(null);
     try {
-      var res = await fetch('/api/accountant', {
+      var res = await hubFetch('/api/accountant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ audit: audit })

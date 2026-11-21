@@ -1,9 +1,14 @@
 // v55.83-AJ — Wave capability audit (read-only, live). Queries the connected
 // account for how many customers / invoices / products exist per business, so we
 // know exactly what historical data is importable. Token stays server-side.
+import { createClient } from '@supabase/supabase-js';
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ
 function cnt(c) { return c && c.pageInfo && typeof c.pageInfo.totalCount === 'number' ? c.pageInfo.totalCount : null; }
 
-export async function GET() {
+export async function GET(req) {
+  // v55.83-WQ (Codex 21 Nov, F3) — answers only a verified, signed-in Hub user (this route had no sign-in check)
+  var whoWQ = await verifiedCaller(req, null, createClient);
+  if (whoWQ.error) { return Response.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
   var token = process.env.WAVE_ACCESS_TOKEN;
   if (!token) {
     return Response.json({ ok: false, configured: false, error: 'No Wave token configured. Add WAVE_ACCESS_TOKEN in Vercel and redeploy.' });

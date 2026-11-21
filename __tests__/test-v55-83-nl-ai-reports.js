@@ -105,7 +105,7 @@ ok('D3: the route is read-only',
   route.indexOf('.insert(') === -1 && route.indexOf('.update(') === -1 && route.indexOf('.delete(') === -1);
 ok('D4: UI has a Chat / Reports mode toggle and reports mode calls the new engine',
   /aiMode, setAiMode/.test(ui) && /aiMode === 'reports'/.test(ui) &&
-  /fetch\('\/api\/ai\/reports'/.test(ui));
+  /(?:hubF|f)etch\('\/api\/ai\/reports'/.test(ui));
 ok('D5: history roles are mapped for the API (ai -> assistant)',
   /m\.role === 'ai' \? 'assistant' : 'user'/.test(ui));
 ok('D6: tables render with per-table CSV download (BOM for Arabic Excel)',

@@ -4,6 +4,7 @@
 // Service-role (bypasses RLS); degrades gracefully to {window:'all'} if the app_settings table has
 // not been created yet (tells the admin to run sql/v55-83-JE-visibility-window.sql).
 // SWC-safe: var + string concat, no template literals/arrows/optional-chaining.
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { isValidWindowKey } from '../../../../lib/visibility-window';
@@ -51,7 +52,9 @@ export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
-    var by = body.user_id || null;
+    var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
+    if (whoWQ.error) { return NextResponse.json({ ok: false, error: whoWQ.error, api_build_marker: API_BUILD_MARKER }, { status: whoWQ.status || 401 }); }
+    var by = whoWQ.userId;
 
     // Super-admin only (real role check, not a client flag).
     var isSuper = false;

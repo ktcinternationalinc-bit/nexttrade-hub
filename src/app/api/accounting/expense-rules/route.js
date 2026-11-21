@@ -12,6 +12,7 @@
 // • Categories/rules are deactivated, never deleted (accountability).
 // • Permission: bank.classify (same permission that categorizes in Bank
 //   Review); super admin always.
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { visibleSyncWarning } from '../../../../lib/bank-sync-health';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
@@ -53,7 +54,9 @@ export async function POST(req) {
     var body = await req.json();
     var action = body.action;
     var db = admin();
-    var userId = body.user_id || null;
+    var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
+    if (whoWQ.error) { return NextResponse.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+    var userId = whoWQ.userId;
 
     // v55.83-RE — Accounting Access (P1) first: no other accounting permission takes effect without it
     var gateP1 = await assertPermission(db, userId, 'accounting.view', req);
@@ -434,7 +437,7 @@ export async function POST(req) {
       // v55.83-QI (Max 12:35): moving the window beyond the default needs
       // accounting.change_dates (super admins always pass).
       var atLocked = false;
-      var visDA = await assertPermission(db, body.user_id, 'accounting.change_dates', req);
+      var visDA = await assertPermission(db, userId, 'accounting.change_dates', req);
       if (!visDA.ok) {
         var atTod = new Date().toISOString().substring(0, 10);
         if (fA < '2026-01-01') { fA = '2026-01-01'; atLocked = true; }

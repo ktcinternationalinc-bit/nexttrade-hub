@@ -28,6 +28,7 @@
 // chosen team member, listing every order without an invoice.
 //
 // SWC-safe: var + string concatenation only.
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { businessOfInvoice } from '../../../../lib/business-of';
@@ -145,7 +146,9 @@ export async function POST(req) {
   try {
     var body = await req.json();
     var action = body.action;
-    var userId = body.user_id;
+    var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
+    if (whoWQ.error) { return NextResponse.json({ error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+    var userId = whoWQ.userId;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
     // v55.83-OI (Max): entering a release number is quick data entry — ANY team
     // member does it. Only the heavier actions stay Owner/Admin.

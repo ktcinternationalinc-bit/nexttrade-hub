@@ -40,6 +40,7 @@ check('11: nothing waiting → an empty list (the screen says "You are all caugh
 check('12: bad input never throws', W.waitingFor().total === 0 && W.waitingFor({ bills: [{}], wires: [{}], perms: { bills: true, send: true, prepare: true, signoff: true } }).total >= 0);
 // the screen
 var React = require(path.join(root, 'node_modules/react')); var RS = require(path.join(root, 'node_modules/react-dom/server'));
+process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co'; process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'x'; // v55.83-WQ — the screen now loads the signed-in fetch helper
 var Tab = require(path.join(root, 'src/components/WaitingTab.jsx')).default;
 var html = '';
 try { html = RS.renderToString(React.createElement(Tab, { userProfile: { id: 'me', role: 'staff' }, modulePerms: { 'bills.view': true } })); } catch (e) { html = 'CRASH ' + e.message; }

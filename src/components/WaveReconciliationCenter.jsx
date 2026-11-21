@@ -96,13 +96,13 @@ export default function WaveReconciliationCenter(props) {
       setRowResult(k, 'running', act.label);
       try {
         if (act.kind === 'push') {
-          var ap = await fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: d.hub_id, status: 'approved', user_id: uid }) }).then(function (r) { return r.json(); });
+          var ap = await hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: d.hub_id, status: 'approved', user_id: uid }) }).then(function (r) { return r.json(); });
           if (!ap || !ap.ok) { throw new Error('approve failed: ' + ((ap && ap.error) || '?')); }
           var pj = await fetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
           if (pj && (pj.success === true || pj.ok === true) && pj.currency_mismatch !== true) { setRowResult(k, 'done', 'Pushed to Wave' + (pj.needs_approval ? ' (still DRAFT in Wave — approve it in the Sync Center)' : '')); }
           else { throw new Error((pj && pj.error) || 'push refused'); }
         } else if (act.kind === 'replace_push') {
-          var ap2 = await fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: d.hub_id, status: 'approved', user_id: uid }) }).then(function (r) { return r.json(); });
+          var ap2 = await hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: d.hub_id, status: 'approved', user_id: uid }) }).then(function (r) { return r.json(); });
           if (!ap2 || !ap2.ok) { throw new Error('approve failed: ' + ((ap2 && ap2.error) || '?')); }
           var rj = await fetch('/api/wave/replace-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, confirm_replace: true, user_id: uid }) }).then(function (r) { return r.json(); });
           if (!rj || rj.ok !== true) { throw new Error((rj && rj.error) || 'Wave refused the replace — nothing changed on this line'); }

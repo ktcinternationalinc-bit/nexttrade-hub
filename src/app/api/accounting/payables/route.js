@@ -3,6 +3,7 @@
 //   status    — is it switched on, since when, what the ledger says we owe (anyone who can see bills)
 //   set_start — switch it on from a date / off (SUPER ADMIN only; audited in the ledger's own event log)
 // The posting itself is done by the 15-minute ledger job (sql/v55-83-SJ-bills-payable.sql). Var + concat only.
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -17,7 +18,10 @@ function notInstalled(e) { return /clickbooks_us_payables|does not exist|schema 
 export async function POST(req) {
   try {
     var body = await req.json();
-    var db = admin(); var userId = body.user_id || null; var action = body.action;
+    var db = admin(); var action = body.action;
+    var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
+    if (whoWQ.error) { return NextResponse.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+    var userId = whoWQ.userId;
     var g1 = await assertPermission(db, userId, 'accounting.clickbooks.access', req);
     if (!g1.ok) { return fail('This needs "P1a · ClickBooks (KTC Hub) Access" — Settings → 🏦 Banking & Accounting Access.', g1.status || 403); }
     var gB = await assertPermission(db, userId, 'bills.view', req);

@@ -75,7 +75,7 @@ export default function AllTransactionsTab(props) {
   // v55.83-RN (Max, Nov 9 20:18: "I tried selecting a category ... and nothing updated") — every call answers: a timeout or
   // non-JSON reply becomes a message on screen instead of a silent nothing
   function api(action, payload) {
-    return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ') — try again in a moment.' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });

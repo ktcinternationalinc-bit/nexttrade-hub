@@ -24,6 +24,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { getToolsForAPI, validateToolCall } from '../../../lib/nadia-tools';
 import { sanitizeErr } from '../../../lib/sanitize-error';
+import { verifiedCaller } from '../../../lib/verified-caller'; // v55.83-WQ
+import { assertPermission } from '../../../lib/server-permissions'; // v55.83-WQ
 
 var supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -81,7 +83,9 @@ async function toolQueryChecks(input) {
   return { checks: r.data || [], count: (r.data || []).length };
 }
 
-async function toolQueryTreasury(input) {
+async function toolQueryTreasury(input, ctx) {
+  // v55.83-WQ — cash in / cash out / net are money totals: only with "Bank & Financial Summary" (or the super admin)
+  if (!ctx || ctx.canTotals !== true) return { error: 'Cash totals need the "Bank & Financial Summary" permission.' };
   if (!input.date_from || !input.date_to) return { error: 'date_from and date_to required' };
   var q = supabase.from('treasury')
     .select('id, transaction_date, cash_in, cash_out, description, category, linked_invoice_id')
@@ -333,7 +337,11 @@ export async function POST(request) {
     var body = await request.json();
     var question = body.question || '';
     var history = Array.isArray(body.history) ? body.history : [];
-    var userId = body.userId;
+    // v55.83-WQ (Codex 21 Nov, F3) — the assistant acts only for the verified signed-in person (this route had no sign-in check)
+    var whoWQ = await verifiedCaller(request, { user_id: body.userId || null }, createClient);
+    if (whoWQ.error) return Response.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 });
+    var userId = whoWQ.userId;
+    var totWQ = await assertPermission(supabase, userId, 'accounting.view_totals', request);
 
     if (!question) return Response.json({ ok: false, error: 'missing question' });
     var apiKey = process.env.ANTHROPIC_API_KEY;
@@ -369,7 +377,7 @@ export async function POST(request) {
       "When drafting emails, call draft_email — don't write the email out as prose. " +
       "For decision-oriented questions, reason step by step, then give a clear recommendation.";
 
-    var result = await runToolLoop(apiKey, system, messages, { userId: userId });
+    var result = await runToolLoop(apiKey, system, messages, { userId: userId, canTotals: !!(totWQ && totWQ.ok) });
     return Response.json({ ok: true, answer: result.answer, iterations: result.iterations, tool_calls: result.tool_calls, drafts: result.drafts, hit_ceiling: !!result.hit_ceiling });
   } catch (e) {
     console.error('[ask-v2] error:', e);

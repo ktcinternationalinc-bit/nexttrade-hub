@@ -13,6 +13,7 @@
 //
 // Permission: ar.view_invoice_balances via the proven assertPermission ladder
 // (super admin passes everything automatically).
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server'; // v55.83-UD: employees see only their history window
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -52,7 +53,9 @@ export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
-    var userId = body.user_id;
+    var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
+    if (whoWQ.error) { return NextResponse.json({ error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+    var userId = whoWQ.userId;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
     var perm = await assertPermission(db, userId, 'ar.view_invoice_balances', req);
     if (!perm || perm.ok !== true) {

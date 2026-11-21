@@ -3,6 +3,7 @@
 // real customer/invoice records. NOTHING is written to the Hub yet.
 import { useState, useEffect } from 'react';
 import RestrictedNotice from './RestrictedNotice';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — the server checks the sign-in
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { supabase } from '../lib/supabase';
 import { getActiveWaveBusiness, setActiveWaveBusiness, canWriteToWaveBusiness } from '../lib/wave-business';
@@ -63,7 +64,7 @@ export default function WaveImportTab(props) {
 
   function loadBusinesses() {
     setLoadingBiz(true);
-    fetch('/api/wave/check').then(function (r) { return r.json(); }).then(function (d) {
+    hubFetch('/api/wave/check').then(function (r) { return r.json(); }).then(function (d) {
       setConn(d || { connected: false, error: 'Empty response from server.' });
       setBusinesses(d && d.connected && d.businesses ? d.businesses : []);
     }).catch(function (e) {
@@ -111,7 +112,7 @@ export default function WaveImportTab(props) {
   function preview(t, p) {
     if (!bizId) return;
     setBusy(true); setType(t); setPage(p);
-    fetch('/api/wave/import-preview?businessId=' + encodeURIComponent(bizId) + '&type=' + t + '&page=' + p)
+    hubFetch('/api/wave/import-preview?businessId=' + encodeURIComponent(bizId) + '&type=' + t + '&page=' + p)
       .then(function (r) { return r.json(); })
       .then(function (d) { setData(d); })
       .catch(function (e) { setData({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
@@ -121,7 +122,7 @@ export default function WaveImportTab(props) {
   function runDiagnostic() {
     if (!bizId) return;
     setDiagBusy(true); setDiag(null);
-    fetch('/api/wave/invoice-diagnostic', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId }) })
+    hubFetch('/api/wave/invoice-diagnostic', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId }) })
       .then(function (r) { return r.json(); })
       .then(function (d) { setDiag(d); })
       .catch(function (e) { setDiag({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })

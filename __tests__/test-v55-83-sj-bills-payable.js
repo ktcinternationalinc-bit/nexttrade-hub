@@ -41,7 +41,7 @@ console.log('SJ — bills on the books before they are paid; what we owe by age'
   var mockPath = path.join(__dirname, 'helpers', 'mock-supabase-js.js');
   fs.writeFileSync(mockPath, 'module.exports={createClient:function(){return global.__db;}};');
   var orig = Module._resolveFilename;
-  Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } return orig.apply(this, arguments); };
+  Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } if (/lib[\/]verified-caller(.js)?$/.test(req)) { return path.join(__dirname, 'helpers', 'stub-verified-caller.js'); } return orig.apply(this, arguments); };
   global.__db = db;
   var route = require(path.join(root, 'src/app/api/accounting/payables/route.js'));
   async function call(user, body) { var res = await route.POST({ json: function () { return Promise.resolve(Object.assign({ user_id: user }, body)); }, headers: new Map() }); return res.json(); }

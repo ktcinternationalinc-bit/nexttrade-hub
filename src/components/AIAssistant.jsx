@@ -1,6 +1,7 @@
 'use client';
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { fmtET, todayET } from '../lib/et-time';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 export default function AIAssistant({ user, userProfile, users, customers }) {
   const myId = userProfile?.id || user?.id;
@@ -604,7 +605,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         // v55.83-NL — Reports mode. History passes only role+content text so the
         // model keeps conversational context ("now only the unpaid ones").
         const hist = [...messages, newMsg].slice(-8).map(m => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.text || '' }));
-        const res = await fetch('/api/ai/reports', {
+        const res = await hubFetch('/api/ai/reports', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ question, history: hist.slice(0, -1), user_id: myId }),
         });

@@ -6,6 +6,7 @@
 // Nothing is removed until a person presses a button that says what it will remove.
 // White panels, explicit dark text (readable in the dark skin). No browser pop-ups.
 import React, { useState } from 'react';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 function money(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 var KIND_STYLE = {
@@ -44,7 +45,7 @@ export default function DuplicateCheckPanel(props) {
   var s8 = useState(false); var askParked = s8[0]; var setAskParked = s8[1];
 
   function api(payload) {
-    return fetch('/api/accounting/duplicates', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/accounting/duplicates', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ user_id: userId }, payload)) }).then(function (r) { return r.json(); });
   }
   function scan() {

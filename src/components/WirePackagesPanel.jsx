@@ -17,6 +17,7 @@ import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function d16(x) { return String(x || '').substring(0, 16).replace('T', ' '); }
@@ -127,7 +128,7 @@ function ValidateInline(p) {
   var s10 = useState(''); var savedTxt = s10[0]; var setSavedTxt = s10[1];
   var tRef = useRef(null);
   function post(body) {
-    return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: p.userId }, body)) })
+    return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: p.userId }, body)) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
@@ -212,7 +213,7 @@ function BillReviewModal(p) {
     return function () { alive = false; };
   }, [b.attachment_path]); // eslint-disable-line
   function billsApi(payload) {
-    return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: p.userId }, payload)) })
+    return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: p.userId }, payload)) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
@@ -333,7 +334,7 @@ export default function WirePackagesPanel(props) {
 
   // v55.83-RJ (review gap 9) — every call returns an answer object; a timeout / non-JSON reply becomes a readable error, never a frozen screen
   function api(payload) {
-    return fetch('/api/accounting/wire-packages', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/accounting/wire-packages', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + '). Reload and check the wire list before trying again.' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });

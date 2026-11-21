@@ -8,6 +8,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL, WIRE_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPE_LABEL } from '../lib/bill-extract';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 var INK = '#0f172a'; var SUB = '#334155'; var MUTED = '#64748b';
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -28,7 +29,7 @@ export default function WireQuickView(props) {
     var alive = true; setD(null); setErr('');
     var url = w.kind === 'package' ? '/api/accounting/wire-packages' : '/api/accounting/wires';
     var body = w.kind === 'package' ? { action: 'get', id: w.id } : { action: 'detail', bank_transaction_id: w.id };
-    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, body)) })
+    hubFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, body)) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer (HTTP ' + r.status + ').' }; }); })
       .then(function (j) { if (!alive) { return; } if (j && j.ok) { setD(j); } else { setErr((j && j.error) || 'Could not open the wire.'); } })
       .catch(function (e) { if (alive) { setErr('Could not reach the server (' + ((e && e.message) || 'network') + ').'); } });

@@ -26,6 +26,7 @@ import ExpenseDetail from './ExpenseDetail'; // v55.83-VT — what is behind one
 import PnlFormula from './PnlFormula'; // v55.83-VT — the formula of a row, with its numbers
 import { pnlFormula, periodInvoices } from '../lib/pnl-expense-detail';
 import { rtmAdjust, foldUnc } from './PeriodStatsTab'; // v55.83-VQ — the Income Statement's own real-cost rule (one copy) // v55.83-VL — P&L by period: periods and the breakdown of one period
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 // v55.83-TC (Max, Nov 16: "you need a bottom and side scroll bar to move within the square") — the Hub's dark theme draws 6 px white
@@ -143,7 +144,7 @@ export default function ProfitabilityTab(props) {
   var s24 = useState(null); var catList = s24[0]; var setCatList = s24[1]; var s25 = useState({}); var catSaving = s25[0]; var setCatSaving = s25[1];
   var canPick = (userProfile && userProfile.role === 'super_admin') || props.isSuperAdmin === true || (props.modulePerms || {})['bank.classify'] === true; // the same switch as Stats → Income Statement
   function erApi(action, payload) {
-    return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
+    return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
@@ -166,7 +167,7 @@ export default function ProfitabilityTab(props) {
   // permission, KTC account, settled and private-line checks, audit entry). Then the expenses are loaded again.
   function confirmFunds(line, payer) {
     if (!line || !line.id || !payer) { return; }
-    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'rtm_flag', bank_transaction_id: line.id, payer: payer, user_id: userProfile && userProfile.id }) })
+    hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'rtm_flag', bank_transaction_id: line.id, payer: payer, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json().catch(function () { return { error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; })
       .then(function (j) { if (j && j.ok) { toast.success('Confirmed: sent to ' + payer + '. The expenses are loaded again.'); startExpenses({ ignoreCache: true }); } else { toast.error((j && j.error) || 'Not saved.'); } });
@@ -217,7 +218,7 @@ export default function ProfitabilityTab(props) {
     loadExpensePeriods({ requests: reqs, adjust: rtmAdjust, fold: foldUnc,
       isCurrent: function () { return expGen.current === gen; },
       put: function (k, res) { if (expGen.current !== gen) { return; } setPExp(function (prev) { var nx = Object.assign({}, prev); nx[scope + '|' + k] = res; return nx; }); },
-      fetchOne: function (q) { return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'period_stats', from: q.from, to: q.to, user_id: userProfile && userProfile.id }) }).then(function (r) { return r.json(); }); } });
+      fetchOne: function (q) { return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'period_stats', from: q.from, to: q.to, user_id: userProfile && userProfile.id }) }).then(function (r) { return r.json(); }); } });
   }
   // a new report, another grouping or another person: the answers kept so far no longer apply
   useEffect(function () { expGen.current += 1; setPExp({}); }, [data, pGran, userProfile && userProfile.id]); // eslint-disable-line react-hooks/exhaustive-deps

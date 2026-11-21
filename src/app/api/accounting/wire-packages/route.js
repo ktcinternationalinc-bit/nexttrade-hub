@@ -14,6 +14,7 @@
 // confirmation attached (Wires: Send) → ATTACH to the bank line when it posts
 // (bills are recorded paid THEN) → RTM's proof per bill (RTM / NextTrade).
 // Every step: append-only audit trail. The locks are also in the database.
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -113,7 +114,9 @@ export async function POST(req) {
     var body = await req.json();
     var action = body.action;
     var db = admin();
-    var userId = body.user_id || null;
+    var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
+    if (whoWQ.error) { return NextResponse.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+    var userId = whoWQ.userId;
     var g1 = await assertPermission(db, userId, 'accounting.clickbooks.access', req);
     if (!g1.ok) { return fail('This needs "P1a · ClickBooks (KTC Hub) Access" — Settings → 🏦 Banking & Accounting Access.', g1.status || 403); }
     var gView = await perm(db, userId, ['wires.view', 'wires.prepare', 'wires.signoff', 'wires.send'], req);

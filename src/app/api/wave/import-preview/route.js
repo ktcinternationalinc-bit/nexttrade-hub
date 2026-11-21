@@ -1,7 +1,12 @@
 // v55.83-AK — Wave import PREVIEW (read-only, paginated). Pulls actual customer
 // or invoice records for a chosen business so we can see exactly what would be
 // imported. Writes NOTHING. Token stays server-side.
+import { createClient } from '@supabase/supabase-js';
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ
 export async function GET(request) {
+  // v55.83-WQ (Codex 21 Nov, F3) — answers only a verified, signed-in Hub user (this route had no sign-in check)
+  var whoWQ = await verifiedCaller(request, null, createClient);
+  if (whoWQ.error) { return Response.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
   var token = process.env.WAVE_ACCESS_TOKEN;
   if (!token) {
     return Response.json({ ok: false, configured: false, error: 'No Wave token configured. Add WAVE_ACCESS_TOKEN in Vercel and redeploy.' });

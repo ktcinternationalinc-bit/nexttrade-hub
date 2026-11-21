@@ -11,6 +11,7 @@
 // re-importing the same file adds nothing, overlap with Plaid is skipped.
 import { COMPANIES } from '../lib/companies'; // v55.83-TW
 import React, { useState } from 'react';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -94,7 +95,7 @@ export default function StatementImport(props) {
   var s9 = useState(null); var newAcct = s9[0]; var setNewAcct = s9[1]; // v55.83-QS — {institution, name, mask} while adding a manual account
 
   function api(payload) {
-    return fetch('/api/accounting/statement-import', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/accounting/statement-import', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
       .then(function (r) { return r.json(); });
   }

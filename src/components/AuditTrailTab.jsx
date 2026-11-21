@@ -5,6 +5,7 @@
 // Read-only by construction: there is no edit or delete, for anyone.
 import React, { useState, useEffect } from 'react';
 import { describeAudit, niceWhen } from '../lib/audit-words'; // v55.83-TH — plain sentences (Max, Nov 16)
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 var ACTION_LABELS = {
   bank_classify: '🏷 categorized a transaction', bulk_categorized: '🏷 bulk-categorized',
@@ -38,7 +39,7 @@ export default function AuditTrailTab(props) {
 
   function load(sc) {
     setBusy(true); setErr(null);
-    fetch('/api/accounting/audit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/audit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'list', q: q, limit: 500, scope: sc || scope, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (j && j.ok) { setData(j); } else { setErr((j && j.error) || 'Could not load the audit trail.'); } })

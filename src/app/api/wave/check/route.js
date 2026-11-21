@@ -1,7 +1,12 @@
 // v55.83-AI — Wave connection check (read-only). Server-side only: the token
 // lives in the WAVE_ACCESS_TOKEN env var and is NEVER sent to the browser.
 // Reads businesses + isClassicInvoicing so we can confirm API compatibility.
-export async function GET() {
+import { createClient } from '@supabase/supabase-js';
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ
+export async function GET(req) {
+  // v55.83-WQ (Codex 21 Nov, F3) — answers only a verified, signed-in Hub user (this route had no sign-in check)
+  var whoWQ = await verifiedCaller(req, null, createClient);
+  if (whoWQ.error) { return Response.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
   var token = process.env.WAVE_ACCESS_TOKEN;
   if (!token) {
     return Response.json({

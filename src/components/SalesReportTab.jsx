@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { SalesQtyCell, SalesAvgCell } from './SalesUnitCells'; // v55.83-WL — yard goods stay in yards
 import { qtyAvgText, totalsText } from '../lib/sales-units';
 import InvoicePeek from './InvoicePeek'; // v55.83-UD — click an invoice (shipment) of a customer to see it
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -35,7 +36,7 @@ export default function SalesReportTab(props) {
 
   function load(f, t) {
     setBusy(true); setOpenCust(null);
-    fetch('/api/accounting/sales-report', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/sales-report', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userProfile && userProfile.id, date_from: f || null, date_to: t || null }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (!j || j.ok !== true) { toast.error((j && j.error) || 'Report failed'); return; } setData(j); })

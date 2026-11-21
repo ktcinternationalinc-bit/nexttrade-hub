@@ -237,16 +237,13 @@ export async function POST(req) {
   try {
     var body = await req.json();
     var action = body.action;
-    var userId = body.user_id;
-    if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
+    // v55.83-WQ (Codex 21 Nov, F3) — EVERY action acts only for the verified signed-in person (bearer token), never for a user_id in the request.
+    var whoWQ = await verifiedCaller(req, body, createClient);
+    if (whoWQ.error) { return NextResponse.json({ error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+    var userId = whoWQ.userId;
     // v55.83-TO (Codex QA 16 Nov, P1) — the actions that MOVE MONEY act only for the verified signed-in person (bearer token);
     // a user_id in the request that is not that person is refused.
     var MONEY_ACTIONS = { record_payment: 1, void_payment: 1, pay_bills_from_bank: 1, bank_lines_for_bills: 1 };
-    if (MONEY_ACTIONS[action]) {
-      var whoM = await verifiedCaller(req, body, createClient);
-      if (whoM.error) { return NextResponse.json({ error: whoM.error }, { status: whoM.status || 401 }); }
-      userId = whoM.userId;
-    }
     // the database guards (sql/v55-83-TO-payment-guards.sql) lock the bank line and the bill and refuse any over-payment, for every
     // writer at once. Until they are installed, no bill payment is written here.
     async function guardsReady() { try { var gR0 = await db.rpc('hub_payment_guards_installed'); return !gR0.error && gR0.data === true; } catch (eG0) { return false; } }

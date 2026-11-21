@@ -13,7 +13,7 @@ function ok(name, cond) {
 console.log('QJ — scan mailbox now');
 var bt = R('src/components/BillsTab.jsx');
 ok('1: 📧 Scan mailbox now button in Bills (manage-only) → POSTs the scanner as the signed-in user (server re-checks bills.manage)',
-  /📧 Scan mailbox now/.test(bt) && /fetch\('\/api\/accounting\/bills\/email-scan'/.test(bt) &&
+  /📧 Scan mailbox now/.test(bt) && /(?:hubF|f)etch\('\/api\/accounting\/bills\/email-scan'/.test(bt) &&
   /canManage && <button onClick=\{scanMailbox\}/.test(bt));
 ok('2: the result is SHOWN line by line — mailbox, keywords, matched/new/created counts, each bill (with ⚠ duplicate note), each skip with its reason',
   /matching email\(s\) in the last ' \+ \(j\.days \|\| scanDays\) \+ ' days/.test(bt) && /PENDING VALIDATION/.test(bt) && // (QK made the window selectable)

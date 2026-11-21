@@ -9,6 +9,7 @@
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 import React, { useState, useEffect } from 'react';
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { if (n == null) { return '•••'; } return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-QI — masked totals render as •••
@@ -32,7 +33,7 @@ export default function CashForecastTab(props) {
 
   function load() {
     setBusy(true);
-    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'forecast', user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (j && j.ok) { setData(j); } else { toast.error((j && j.error) || 'Could not load the forecast.'); } })

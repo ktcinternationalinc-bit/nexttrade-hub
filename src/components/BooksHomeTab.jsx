@@ -121,7 +121,7 @@ export default function BooksHomeTab(props) {
     }).catch(function () { setProposals([]); });
   }
   function loadLate() {
-    fetch('/api/accounting/reminders', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/reminders', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'suggest', min_days: 30, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); }).then(function (j) {
         if (j && j.ok) { setLate(j); }
@@ -141,7 +141,7 @@ export default function BooksHomeTab(props) {
   function remind(r, channel) {
     var key = r.invoice_id + channel;
     var tone = remTone[r.invoice_id] || 'gentle';
-    fetch('/api/accounting/reminders', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/reminders', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'send', invoice_id: r.invoice_id, channel: channel, tone: tone, lang: 'en', user_id: userProfile && userProfile.id }) })
       .then(function (x) { return x.json(); }).then(function (j) {
         if (j && j.ok && j.channel === 'email') { toast.success('Reminder emailed to ' + j.to + ' — logged on the invoice.'); loadLate(); }

@@ -7,10 +7,15 @@
 // ============================================================
 
 import { sanitizeErr } from '../../../lib/sanitize-error';
+import { createClient } from '@supabase/supabase-js';
+import { verifiedCaller } from '../../../lib/verified-caller'; // v55.83-WQ
 
 export async function POST(req) {
   try {
     var body = await req.json();
+    // v55.83-WQ (Codex 21 Nov, F3) — answers only a verified, signed-in Hub user (this route had no sign-in check)
+    var whoWQ = await verifiedCaller(req, body, createClient);
+    if (whoWQ.error) { return Response.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
     var audit = body.audit || {};
 
     var apiKey = process.env.ANTHROPIC_API_KEY;

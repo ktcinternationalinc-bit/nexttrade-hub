@@ -38,7 +38,7 @@ ok('4: the full Settings (toggles/readiness/setup) only render when NOT a placeh
   /Connect this silo to Wave first/.test(sync));
 ok('5: one-click connectToWave asks the token what it can access, matches by name, then binds via bind-business',
   /function connectToWave\(\)/.test(sync) &&
-  /fetch\('\/api\/wave\/check'\)/.test(sync) &&
+  /(?:hubF|f)etch\('\/api\/wave\/check'\)/.test(sync) &&
   /labelCore = normName\(\(reg && reg\.label\) \|\| active\)/.test(sync) &&
   /function doBind\(toId, toName\)/.test(sync) &&
   /\/api\/wave\/bind-business/.test(sync));

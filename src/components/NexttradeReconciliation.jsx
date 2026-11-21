@@ -11,6 +11,7 @@ import React, { useState, useContext, useEffect } from 'react';
 import { ToastContext } from '../lib/toast-context';
 import { supabase } from '../lib/supabase';
 import { RECON_STATUS_LABEL } from '../lib/order-recon'; // v55.83-RG
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 // v55.83-RG (Max 15:32): "for order reconciliation needs to keep record of each
 // one completed.. save it and it needs to be manually reconciled and approved."
@@ -26,7 +27,7 @@ export function SavedReconciliations(props) {
   var a5 = useState(''); var signNote = a5[0]; var setSignNote = a5[1];
   var a6 = useState(false); var onlyOpen = a6[0]; var setOnlyOpen = a6[1];
   function api(payload) {
-    return fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) }).then(function (r) { return r.json(); });
   }
   function loadRuns() { api({ action: 'list_runs' }).then(function (j) { if (j && j.ok) { setRuns(j.runs || []); } else { setRuns([]); if (j && j.error) { toast.error(j.error); } } }).catch(function () { setRuns([]); }); }
@@ -244,7 +245,7 @@ export default function NexttradeReconciliation(props) {
   function doImport() {
     if (!preview || !preview.rows.length) { return; }
     setBusy(true);
-    fetch('/api/reconcile/nexttrade', {
+    hubFetch('/api/reconcile/nexttrade', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'import', rows: preview.rows, user_id: userProfile && userProfile.id })
     }).then(function (r) { return r.json(); })
@@ -258,7 +259,7 @@ export default function NexttradeReconciliation(props) {
   }
   function runReport() {
     setBusy(true); setReport(null);
-    fetch('/api/reconcile/nexttrade', {
+    hubFetch('/api/reconcile/nexttrade', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'report', user_id: userProfile && userProfile.id, date_from: from || null, date_to: to || null })
     }).then(function (r) { return r.json(); })
@@ -334,7 +335,7 @@ export default function NexttradeReconciliation(props) {
             className="px-2 py-1 rounded border border-slate-300 text-xs" style={{ minWidth: 220 }} />
           <button disabled={busy} onClick={function () {
             setBusy(true);
-            fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            hubFetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ action: 'list_missing', user_id: userProfile && userProfile.id, search: msearch || null }) })
               .then(function (r) { return r.json(); })
               .then(function (j) { if (!j || j.ok !== true) { toast.error((j && j.error) || 'Load failed'); return; } setMissing(j); setDraft({}); })
@@ -364,7 +365,7 @@ export default function NexttradeReconciliation(props) {
                         onKeyDown={function (e) { if (e.key === 'Enter') { e.target.nextSibling && e.target.nextSibling.click(); } }}
                         className="px-2 py-0.5 rounded border border-slate-300 text-[11px] font-mono" style={{ width: 110 }} />
                       <button disabled={busy || !(draft[k] || '').trim()} onClick={function () {
-                        fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        hubFetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ action: 'set_release', user_id: userProfile && userProfile.id, system: r.system, id: r.id, release_number: draft[k] }) })
                           .then(function (rr) { return rr.json(); })
                           .then(function (j) {
@@ -438,7 +439,7 @@ export default function NexttradeReconciliation(props) {
                 </select>
                 <button disabled={busy || !flagTo} onClick={function () {
                   setBusy(true);
-                  fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  hubFetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'flag', user_id: userProfile && userProfile.id, assignee_id: flagTo, date_from: from || null, date_to: to || null }) })
                     .then(function (r) { return r.json(); })
                     .then(function (j) {

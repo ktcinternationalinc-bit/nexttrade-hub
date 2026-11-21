@@ -15,7 +15,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 var fs = require('fs');
 var path = require('path');
-var R = function (p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); };
+var R = function (p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8').replace(/\r\n/g, '\n'); }; // v55.83-WQ — CRLF-safe pins
 var pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ FAIL: ' + name); } }
 function loadEsm(src) {
@@ -38,8 +38,8 @@ var u3only = A.acctAccess(false, { 'accounting.view_invoicing': true, 'accountin
 var sup = A.acctAccess(true, {}, 'super_admin');
 ok('1a: P1 + P3 user → access yes, invoicing yes, bank/financial NO, operational yes', u13.access && u13.inv && !u13.fin && u13.ops);
 ok('1b: P2/P3 WITHOUT P1 take no effect at all (P1 is required first)', !u3only.access && !u3only.inv && !u3only.fin);
-ok('1c: super admin (and owner/admin roles) see everything', sup.access && sup.fin && sup.inv &&
-  A.acctAccess(false, {}, 'owner').fin && A.acctAccess(false, {}, 'admin').inv);
+ok('1c (UG): the super admin sees everything; an owner / admin role by itself opens nothing (only their switches)', sup.access && sup.fin && sup.inv &&
+  !A.acctAccess(false, {}, 'owner').access && !A.acctAccess(false, {}, 'owner').fin && !A.acctAccess(false, {}, 'admin').inv);
 ok('1d: card groups exactly as written — P2: bank balance, came in, went out, sales, net moved, projected net · P3: invoiced, paid, still open, collected · P1: expected, bills due, late, total overdue',
   ['bank_balance', 'came_in', 'went_out', 'sales', 'net_moved', 'projected_net'].every(function (k) { return A.CARD_GROUP[k] === 'fin'; }) &&
   ['invoiced', 'paid', 'still_open', 'collected'].every(function (k) { return A.CARD_GROUP[k] === 'inv'; }) &&
@@ -145,7 +145,7 @@ ok('8d (RF): every accounting screen belongs to exactly one hub (audit serves bo
   A.screenHub('review') === 'wave' && A.screenHub('invoices') === 'wave' && A.screenHub('wavehub') === 'wave' && A.screenHub('audit') === 'both' &&
   /if \(!hubAllows\(sub\)\) \{ sub = acctV\.ktc \? 'books_home' : 'dashboard'; \}/.test(at) &&
   /tabs\.filter\(function \(t\) \{ return hubAllows\(t\[0\]\) &&/.test(at));
-var sp = R('src/lib/server-permissions.js');
+var sp = R('src/lib/permission-aliases.js'); // v55.83-UG moved the alias table here
 ok('8e (RF): server — "accounting.view" now means EITHER hub switch, so every P1 gate (Books, Stats, Forecast, categories, audit) accepts both',
   /'accounting\.view': \['accounting\.view', 'accounting\.clickbooks\.access', 'accounting\.wavehub\.access'\]/.test(sp));
 ok('8f (RF): ClickBooks screens ask for the ClickBooks hub, Wave Hub screens for the Wave Hub',

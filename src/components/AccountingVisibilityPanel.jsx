@@ -6,6 +6,7 @@
 // after every save) and tells the admin exactly what to do if the backing table isn't set up yet.
 import { useState, useEffect } from 'react';
 import { WINDOW_OPTIONS, labelForWindow, floorDateFor } from '../lib/visibility-window';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 export default function AccountingVisibilityPanel({ userProfile, toast }) {
   var [win, setWin] = useState('all');
@@ -47,7 +48,7 @@ export default function AccountingVisibilityPanel({ userProfile, toast }) {
       if (customFrom) { body.customFrom = customFrom; }
       else { body.customDays = parseInt(customDays, 10); }
     }
-    fetch('/api/admin/visibility', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    hubFetch('/api/admin/visibility', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (!j || !j.ok) {

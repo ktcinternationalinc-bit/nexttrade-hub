@@ -3,6 +3,7 @@
 // White panel, dark text, explicit colours: reads the same in the light and the dark skin.
 import React, { useEffect, useState } from 'react';
 import { payablesAging, AGING_COLS } from '../lib/payables-aging';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 function fmt(n) { return (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -13,7 +14,7 @@ export default function PayablesPanel(p) {
   var s3 = useState(false); var busy = s3[0]; var setBusy = s3[1];
   var ag = payablesAging(p.bills || []);
   function post(payload) {
-    return fetch('/api/accounting/payables', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: p.userId }, payload)) })
+    return hubFetch('/api/accounting/payables', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: p.userId }, payload)) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }

@@ -138,7 +138,7 @@ export default function BillsTab(props) {
     var label = newCatB.trim();
     if (label.length < 2) { return; }
     setBusy(true);
-    fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'save_category', payload: { label: label }, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); }).then(function (j) {
         if (j && j.ok) {
@@ -174,7 +174,7 @@ export default function BillsTab(props) {
   // working?" always gets a named answer.
   function diagnoseMailbox() {
     setReading(true); setImportNotes(['🩺 Testing the mailbox connection, step by step…']);
-    fetch('/api/accounting/bills/email-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/bills/email-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userProfile && userProfile.id, diagnose: true, days: Number(scanDays) }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
@@ -186,7 +186,7 @@ export default function BillsTab(props) {
   }
   function scanMailbox() {
     setReading(true); setImportNotes(['📧 Scanning the bills mailbox (last ' + scanDays + ' days)…']);
-    fetch('/api/accounting/bills/email-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/bills/email-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userProfile && userProfile.id, days: Number(scanDays) }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {

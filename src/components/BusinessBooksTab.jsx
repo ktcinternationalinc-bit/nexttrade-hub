@@ -14,6 +14,7 @@ import { canViewArInvoiceBalances } from '../lib/bank-permissions'; // eslint-di
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { businessOfInvoice } from '../lib/business-of';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -149,7 +150,7 @@ export default function BusinessBooksTab(props) {
   // guarded path as everywhere else.
   function openInvMatch(r) {
     setMBusy(true); setMErr2('');
-    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'invoice_match_candidates', invoice_id: r.id, user_id: userProfile && userProfile.id }) })
       .then(function (x) { return x.json(); })
       .then(function (j) {

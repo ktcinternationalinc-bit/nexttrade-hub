@@ -30,11 +30,11 @@ ok('5: reopen action is gated on invoices.approve and writes internal_review',
   /action === 'reopen'/.test(route) && /approval_status: 'internal_review'/.test(route) && /assertPermission\(db, by, 'invoices\.approve', req\)/.test(route));
 
 ok('6: AccountingInvoicesTab.setApproval calls the service route (no direct dbUpdate on approval)',
-  /fetch\('\/api\/accounting\/invoice-write'[\s\S]{0,200}action: 'set_approval'/.test(tab));
+  /(?:hubF|f)etch\('\/api\/accounting\/invoice-write'[\s\S]{0,200}action: 'set_approval'/.test(tab));
 ok('7: setApproval throws on !j.ok so a silent 0-row no longer reads as success',
   /if \(!j \|\| !j\.ok\) \{ throw new Error\(\(j && j\.error\) \|\| 'approval did not save'\)/.test(tab));
 ok('8: reopenInvoice also routes through the service route',
-  /fetch\('\/api\/accounting\/invoice-write'[\s\S]{0,200}action: 'reopen'/.test(tab));
+  /(?:hubF|f)etch\('\/api\/accounting\/invoice-write'[\s\S]{0,200}action: 'reopen'/.test(tab));
 ok('9: approval no longer uses the RLS-trapped browser dbUpdate on accounting_invoices',
   !/dbUpdate\('accounting_invoices', row\.id, patch/.test(tab) && !/dbUpdate\('accounting_invoices', row\.id, rpatch/.test(tab));
 

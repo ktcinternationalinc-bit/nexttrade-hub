@@ -3,6 +3,7 @@
 // and which businesses are API-invoice compatible (isClassicInvoicing === false).
 import { useState, useEffect } from 'react';
 import RestrictedNotice from './RestrictedNotice';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — the server checks the sign-in
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { isPlaceholderWaveBusiness, setActiveWaveBusiness, getActiveWaveBusiness } from '../lib/wave-business';
 
@@ -75,7 +76,7 @@ export default function WaveConnectionTab(props) {
 
   function runAudit() {
     setAuditing(true); setAudit(null);
-    fetch('/api/wave/audit').then(function (r) { return r.json(); })
+    hubFetch('/api/wave/audit').then(function (r) { return r.json(); })
       .then(function (d) { setAudit(d); })
       .catch(function (e) { setAudit({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
       .finally(function () { setAuditing(false); });
@@ -83,7 +84,7 @@ export default function WaveConnectionTab(props) {
 
   function test() {
     setLoading(true); setState(null);
-    fetch('/api/wave/check').then(function (r) { return r.json(); })
+    hubFetch('/api/wave/check').then(function (r) { return r.json(); })
       .then(function (d) { setState(d); })
       .catch(function (e) { setState({ connected: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
       .finally(function () { setLoading(false); });

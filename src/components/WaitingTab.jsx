@@ -5,6 +5,7 @@
 // panels and dark text with explicit colours, so it reads the same in the light and the dark skin.
 import React, { useEffect, useState } from 'react';
 import { waitingFor } from '../lib/waiting-list';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 
@@ -21,7 +22,7 @@ export default function WaitingTab(props) {
   var s4 = useState(''); var at = s4[0]; var setAt = s4[1];
 
   function post(url, payload) {
-    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
+    return hubFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'the server did not answer properly (HTTP ' + r.status + ')' }; }); })
       .catch(function (e) { return { ok: false, error: 'could not reach the server (' + ((e && e.message) || 'network') + ')' }; });
   }

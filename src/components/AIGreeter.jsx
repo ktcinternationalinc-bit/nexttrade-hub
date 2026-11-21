@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — the assistant route checks the sign-in
 import { todayET, etGreetingWord, cmpETDays } from '../lib/et-time';
 import NadiaFace from './NadiaFace';
 import PortraitAvatar from './PortraitAvatar';
@@ -2137,7 +2138,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, closedTic
       var askAbort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
       currentAskAbortRef.current = askAbort;
 
-      var res = await fetch(endpoint, {
+      var res = await hubFetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         signal: askAbort ? askAbort.signal : undefined,

@@ -13,6 +13,7 @@ import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of'; // v55.83-PQ — Wave link
 import DuplicateCheckPanel from './DuplicateCheckPanel'; // v55.83-SO
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 var KINDS = ['income', 'cogs', 'expense', 'other_income', 'other_expense', 'transfer', 'not_pnl']; // v55.83-PW — QuickBooks-style types
 var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expense', other_income: 'Other income', other_expense: 'Other expense', transfer: 'Transfer', not_pnl: 'Not P&L (loan/owner)' };
@@ -58,7 +59,7 @@ export default function ExpenseRulesTab(props) {
   var sTt = useState(new Date().toISOString().substring(0, 10)); var trTo = sTt[0]; var setTrTo = sTt[1];
 
   function api(action, payload) {
-    return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); });
   }

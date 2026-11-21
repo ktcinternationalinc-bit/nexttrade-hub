@@ -54,7 +54,7 @@ console.log('SC — build a wire for an amount; a service fee on RTM or NextTrad
   var mockPath = path.join(__dirname, 'helpers', 'mock-supabase-js.js');
   fs.writeFileSync(mockPath, 'module.exports={createClient:function(){return global.__db;}};');
   var orig = Module._resolveFilename;
-  Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } return orig.apply(this, arguments); };
+  Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } if (/lib[\/]verified-caller(.js)?$/.test(req)) { return path.join(__dirname, 'helpers', 'stub-verified-caller.js'); } return orig.apply(this, arguments); };
   global.__db = db;
   var wires = require(path.join(root, 'src/app/api/accounting/wire-packages/route.js'));
   async function call(body) { var res = await wires.POST({ json: function () { return Promise.resolve(Object.assign({ user_id: 'u1' }, body)); }, headers: new Map() }); return res.json(); }

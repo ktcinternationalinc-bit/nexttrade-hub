@@ -3,6 +3,7 @@
 // (total, subtotal, taxTotal, amountPaid, amountDue) + what num() maps + the
 // current DB row, so we can see exactly which Wave field holds the real total.
 import { createClient } from '@supabase/supabase-js';
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ
 
 function num(m) { if (!m || m.value == null) { return null; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? null : v; }
 
@@ -14,6 +15,9 @@ export async function POST(request) {
 
   var body = null;
   try { body = await request.json(); } catch (e) { body = {}; }
+  // v55.83-WQ (Codex 21 Nov, F3) — answers only a verified, signed-in Hub user (this route had no sign-in check)
+  var whoWQ = await verifiedCaller(request, body, createClient);
+  if (whoWQ.error) { return Response.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
   var businessId = body && body.businessId;
   if (!businessId) { return Response.json({ ok: false, error: 'Missing businessId.' }); }
 

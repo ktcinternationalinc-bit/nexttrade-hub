@@ -12,6 +12,7 @@
 // • Removal MOVES the row out of bank_transactions (whole, into bank_transaction_duplicates) so every
 //   total, screen, export, report and the ledger stop counting it. Restore puts it back exactly.
 // • Permission: Accounting Access + bank.classify; restore and batch removal the same.
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -40,7 +41,9 @@ export async function POST(req) {
     var body = await req.json();
     var action = body.action;
     var db = admin();
-    var userId = body.user_id || null;
+    var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
+    if (whoWQ.error) { return NextResponse.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+    var userId = whoWQ.userId;
     var gate1 = await assertPermission(db, userId, 'accounting.view', req);
     if (!gate1.ok) { return NextResponse.json({ ok: false, error: 'This needs "Accounting Access" — grant it in Settings → Banking & Accounting Access.', denied: true, api_build_marker: API_BUILD_MARKER }, { status: gate1.status || 403 }); }
     var gate = await assertPermission(db, userId, 'bank.classify', req);
