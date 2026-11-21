@@ -194,6 +194,7 @@ check('no example amount is hard-coded in the application code', !/66000|52000|1
 check('the helper is pure: no database, no fetch, no supabase import', !/supabase|fetch\(|\.from\(|rpc\(/.test(src));
 check('it never claims where a cost is recognized: no "counted_in", no "accounted for in" field', src.indexOf('counted_in') < 0 && src.indexOf("recognition: 'unverified'") > 0);
 
+check('RTM second account (Max 21 Nov): "Online Transfer to CHK ...0225" is money sent to RTM by bank text; a transfer FROM it or a longer number is not', (F.fundingIdentity({ name: 'Online Transfer to CHK ...0225 transaction#: 1', direction: 'out' }) || {}).payer === 'RTM Capital' && F.fundingIdentity({ name: 'Online Transfer from CHK ...0225', direction: 'out' }) === null && F.fundingIdentity({ name: 'Online Transfer to CHK ...02251', direction: 'out' }) === null);
 console.log('which lines of a bill a portion covers (for counting goods through bill lines)');
 var L3 = [{ id: 'l1', bill_id: 'g', amount: 600 }, { id: 'l2', bill_id: 'g', amount: 300 }, { id: 'l3', bill_id: 'g', amount: 100.5 }];
 var s1 = F.billLineSplit(1000.5, 1000.5, L3);

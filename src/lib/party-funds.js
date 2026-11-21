@@ -22,7 +22,9 @@ function sum(rows, f) { var s = 0; (rows || []).forEach(function (r) { s += Numb
 //   'bank_text' — nobody stamped it, but the bank's own text says it is a transfer TO one of the destination accounts Max named
 //                 (RTM ending 9909, NextTrade ending 2061: "Online Transfer to CHK ...9909"). Treated as money sent to that company —
 //                 so it is never a fee by default — and FLAGGED until a person confirms it. A category never identifies a company.
-export var FUNDING_DESTINATIONS = [{ suffix: '9909', payer: 'RTM Capital' }, { suffix: '2061', payer: 'NextTrade Industries' }];
+// v55.83-WF (Max 21 Nov, relayed by the simple-fixes session: "o225 is a rtm account so a transfer to rtm..we should probably connect that too"):
+// RTM has a second account ending 0225.
+export var FUNDING_DESTINATIONS = [{ suffix: '9909', payer: 'RTM Capital' }, { suffix: '0225', payer: 'RTM Capital' }, { suffix: '2061', payer: 'NextTrade Industries' }];
 export function fundingPayerOfText(text) {
   var t = String(text || '');
   for (var i = 0; i < FUNDING_DESTINATIONS.length; i++) {
