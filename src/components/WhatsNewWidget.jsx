@@ -44,7 +44,6 @@ export const BUILD_HISTORY = [
       { text: 'Nothing changes until the super admin runs the database step for this version. Until then the screen only shows what is recorded.' },
       { superAdminOnly: true, text: 'Technical: sql/v55-83-WF-party-funds.sql (re-runnable, deletes nothing): party_funding_transfers (confirmed / needs_reconciliation), party_money_entries kinds fee_from_transfer / fee_back_to_transfer / refund, hub_party_transfer_state = wire_funding_summary (one calculation), hub_party_fee, hub_party_record_paid + party_reconciliations (history: method historical_reconciliation, paid date, reference, audit), hub_party_transfer_set_state, guards on every writer, hub_party_payment_route (deferred: a payment on a company transfer must be a wire line payment or a record_paid payment of that click), hub_party_refund (whole money-in line only) + hub_refund_line_only — Money back held in the Hub (REFUNDS_ON false) until Max decides the tax report; retired advance moves; allocate hidden. Route /api/accounting/party-funds; bills route companyFundsBlock; wire-funding-server fundingLines reads the database figure with p_except.' }
     ]
-    ]
   },
   {
     version: 'v55.83-WW',
