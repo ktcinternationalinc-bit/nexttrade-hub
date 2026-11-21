@@ -43,10 +43,11 @@ export var STATUS = {
   voided: { label: 'VOIDED IN THE HUB', bg: '#e2e8f0', fg: '#334155' },
   different: { label: 'DIFFERENT AMOUNT', bg: '#ffedd5', fg: '#7c2d12' },
   open_match: { label: 'OPEN — MATCHES', bg: '#dbeafe', fg: '#1e3a8a' },
+  currency: { label: 'CURRENCY DIFFERS — CHECK BY HAND', bg: '#fae8ff', fg: '#701a75' },
   missing: { label: 'MISSING FROM THE HUB', bg: '#fee2e2', fg: '#7f1d1d' },
   not_bill: { label: 'CREDIT / PAYMENT / BALANCE LINE', bg: '#f1f5f9', fg: '#334155' },
 };
-export var STATUS_KEYS = ['paid_twice', 'ambiguous', 'paid', 'voided', 'different', 'open_match', 'missing', 'not_bill'];
+export var STATUS_KEYS = ['paid_twice', 'ambiguous', 'currency', 'paid', 'voided', 'different', 'open_match', 'missing', 'not_bill'];
 
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function cents(x) { return Math.round((Number(x) || 0) * 100); }
@@ -319,14 +320,21 @@ export function checkStatement(opts) {
   var asOf = o.asOf === 'statement' && stDate ? stDate : null;
   var LP = livePayments(o.payments, asOf); var pays = LP.list;
   var keys = {}; (o.vendorNames || []).forEach(function (nm) { var k = normVendor(nm); if (k) { keys[k] = true; } });
-  var mine = bills.filter(function (b) { return b && keys[normVendor(b.vendor_name)] === true; });
+  var cur = upperCur(o.statementCurrency);
+  var allMine = bills.filter(function (b) { return b && keys[normVendor(b.vendor_name)] === true; });
+  // Codex 09:12 P2 — AS OF the statement date, a bill of ours dated AFTER it is not part of that comparison: it is left out of the
+  // matching and of every total and listed apart. A bill with no date cannot be placed: it is kept and marked "date unknown".
+  // CURRENT keeps every bill (and the totals say how much of our open is dated after their statement).
+  var excludedAfter = asOf ? allMine.filter(function (b) { var d = String(b.bill_date || '').substring(0, 10); return !!d && d > asOf; }) : [];
+  var mine = asOf ? allMine.filter(function (b) { return excludedAfter.indexOf(b) < 0; }) : allMine;
   var others = bills.filter(function (b) { return b && keys[normVendor(b.vendor_name)] !== true; });
+  function sameCur(b) { return billCur(b) === cur; }
   var openCol = hasOpenColumn(lines);
   var refCount = {}; lines.forEach(function (l) { var k = normNum(l.ref); if (k && l.kind === 'invoice') { refCount[k] = (refCount[k] || 0) + 1; } });
   var claimed = {}; var suggestedFor = {};
   var rows = lines.map(function (l) {
     var notes = []; var ow = owedOf(l, openCol);
-    var row = { line: l, owed: ow.owed, counted: ow.counted, status: null, how: null, bills: [], suggestions: [], other_vendor: [], notes: notes, evidence: [] };
+    var row = { line: l, owed: ow.owed, counted: ow.counted, status: null, how: null, bills: [], suggestions: [], other_vendor: [], other_currency: [], notes: notes, evidence: [] };
     if (ow.why) { notes.push(ow.why); }
     if (l.kind !== 'invoice') {
       row.status = 'not_bill';
@@ -336,7 +344,7 @@ export function checkStatement(opts) {
         var want = Math.abs(cents(l.amount)); var groups = {}; var cands = [];
         pays.forEach(function (p) { // one wire / bank line can pay several bills: its payments are added together
           var bb = null; for (var bi = 0; bi < mine.length; bi++) { if (mine[bi].id === p.bill_id) { bb = mine[bi]; break; } }
-          if (!bb) { return; }
+          if (!bb || !sameCur(bb)) { return; } // never across currencies
           var gk = p.bank_transaction_id ? 'bank:' + p.bank_transaction_id : 'pay:' + p.id;
           var g = groups[gk] || (groups[gk] = { cents: 0, date: p.paid_date || null, bills: [] });
           g.cents += cents(p.amount); g.bills.push(bb.bill_number || '(no #)');
@@ -356,19 +364,35 @@ export function checkStatement(opts) {
     if (!hit.length && nk) { hit = mine.filter(function (b) { return similarNumber(b.bill_number, l.ref); }); if (hit.length) { row.how = 'number_written_differently'; } }
     if (!hit.length) {
       row.status = 'missing';
+      if (nk && asOf) {
+        var later = excludedAfter.filter(function (b) { return normNum(b.bill_number) === nk || similarNumber(b.bill_number, l.ref); });
+        if (later.length) { row.other_vendor = []; notes.push('Our bill ' + later.map(function (b) { return '#' + (b.bill_number || '') + ' dated ' + b.bill_date; }).join(', ') + ' has this number but is dated AFTER their statement date, so it is left out of this as-of comparison — check the dates.'); }
+      }
       if (nk) {
         row.other_vendor = others.filter(function (b) { return normNum(b.bill_number) === nk; }).slice(0, 5).map(function (b) { return billFacts(b, pays); });
         if (row.other_vendor.length) { notes.push('A bill with this number is in the Hub under ' + row.other_vendor.map(function (x) { return '“' + x.vendor_name + '”'; }).join(', ') + ' — if that is the same vendor, tick that name too and check again.'); }
       }
       if (l.amount !== null && l.date) {
-        row.suggestions = mine.filter(function (b) { return b.record_status !== 'void' && cents(b.total_amount) === cents(l.amount) && String(b.bill_date || '').substring(0, 10) === l.date; }).slice(0, 5).map(function (b) { return billFacts(b, pays); });
+        row.suggestions = mine.filter(function (b) { return b.record_status !== 'void' && sameCur(b) && cents(b.total_amount) === cents(l.amount) && String(b.bill_date || '').substring(0, 10) === l.date; }).slice(0, 5).map(function (b) { return billFacts(b, pays); });
         if (row.suggestions.length) { notes.push('SUGGESTION only: our bill ' + row.suggestions.map(function (x) { return '#' + (x.bill_number || '(no #)'); }).join(', ') + ' has the same amount and date but another number. A person must confirm it is the same bill; it is not counted as matched.'); row.suggestions.forEach(function (x) { (suggestedFor[x.id] = suggestedFor[x.id] || []).push(l.n); }); }
       }
       return row;
     }
-    row.bills = hit.map(function (b) { return billFacts(b, pays); });
     if (row.how === 'number_written_differently') { notes.push('Our bill number is written differently: theirs ' + l.ref + ' · ours ' + hit.map(function (b) { return b.bill_number || '(no #)'; }).join(', ') + '.'); }
-    row.bills.forEach(function (f) { if (f.currency !== upperCur(o.statementCurrency)) { notes.push('Our bill #' + (f.bill_number || '') + ' is in ' + f.currency + ' — not compared in one total with ' + upperCur(o.statementCurrency) + '.'); } });
+    // Codex 09:12 P2 — amounts are only ever compared in ONE currency. Our bills with this number in another currency are shown,
+    // never compared and never added to a payment total; when ALL of them are in another currency the line needs a person.
+    var hitOther = hit.filter(function (b) { return !sameCur(b); });
+    hit = hit.filter(sameCur);
+    row.other_currency = hitOther.map(function (b) { return billFacts(b, pays); });
+    if (!hit.length) {
+      hitOther.forEach(function (b) { (claimed[b.id] = claimed[b.id] || []).push(l.n); });
+      row.status = 'currency';
+      notes.push('Our bill' + (hitOther.length > 1 ? 's' : '') + ' with this number ' + (hitOther.length > 1 ? 'are' : 'is') + ' in ' + row.other_currency.map(function (f) { return f.currency; }).join(' / ') + ', their statement in ' + cur + ' — the amounts are NOT compared (no exchange rate is assumed). Check by hand, or correct the statement currency if it was read wrong.');
+      return row;
+    }
+    if (hitOther.length) { notes.push('Also our bill ' + row.other_currency.map(function (f) { return '#' + (f.bill_number || '') + ' in ' + f.currency; }).join(', ') + ' with this number — not compared (another currency).'); }
+    row.bills = hit.map(function (b) { return billFacts(b, pays); });
+    row.bills.forEach(function (f) { if (!f.bill_date) { notes.push('Our bill #' + (f.bill_number || '') + ' has no bill date — whether it was due by their statement date is not known.'); } });
     var live = row.bills.filter(function (x) { return x.status !== 'VOID'; });
     if (!live.length) { hit.forEach(function (b) { (claimed[b.id] = claimed[b.id] || []).push(l.n); }); row.status = 'voided'; notes.push('We voided this bill in the Hub' + (row.bills.length > 1 ? ' (all ' + row.bills.length + ' copies)' : '') + ', but they still list it.'); return row; }
     // POSSIBLY PAID TWICE — only with evidence: one bill paid more than its total, or two of our bills for this ONE line both paid
@@ -419,15 +443,25 @@ export function checkStatement(opts) {
   });
   // ours, open, not on their statement (a suggested bill is still listed: a suggestion is not a match)
   var ours = mine.filter(function (b) { return isOpenBill(b, pays) && !claimed[b.id]; })
-    .map(function (b) { var f = billFacts(b, pays); f.after_statement = !!(stDate && f.bill_date && f.bill_date > stDate); f.suggested_for = suggestedFor[b.id] || []; return f; })
+    .map(function (b) { var f = billFacts(b, pays); f.after_statement = !!(stDate && f.bill_date && f.bill_date > stDate); f.date_unknown = !f.bill_date; f.suggested_for = suggestedFor[b.id] || []; return f; })
+    .sort(function (x, y) { return String(x.bill_date || '') < String(y.bill_date || '') ? -1 : 1; });
+  // as of: our bills dated after their statement date — listed apart, in no total
+  var after = excludedAfter.filter(function (b) { return isOpenBill(b, pays); }).map(function (b) { var f = billFacts(b, pays); f.after_statement = true; return f; })
     .sort(function (x, y) { return String(x.bill_date || '') < String(y.bill_date || '') ? -1 : 1; });
   Object.keys(claimed).forEach(function (id) {
     if (claimed[id].length < 2) { return; }
     rows.forEach(function (r) { if (r.bills.some(function (x) { return String(x.id) === String(id); })) { r.notes.push('Our bill is matched by ' + claimed[id].length + ' of their lines (lines ' + claimed[id].join(', ') + ').'); } });
   });
   var mode = { as_of: asOf, statement_date: stDate, payments_left_out_after: LP.left_out_after, undated_payments: LP.undated,
-    words: asOf ? 'As of their statement date ' + asOf + ': our payments made after it are left out (' + LP.left_out_after + ').' : 'Current: compared with our bills and payments as they are today.' };
-  return { rows: rows, ours_not_on_statement: ours, totals: statementCheckTotals(rows, ours, mine, pays, o.statementCurrency), mode: mode };
+    bills_left_out_after: excludedAfter.length,
+    words: asOf ? 'As of their statement date ' + asOf + ': our payments made after it are left out (' + LP.left_out_after + '), and so are our bills dated after it (' + excludedAfter.length + ', listed apart). Each bill\'s paid / open is otherwise as recorded today.' : 'Current: compared with our bills and payments as they are today.' };
+  var totals = statementCheckTotals(rows, ours, mine, pays, o.statementCurrency);
+  var afterC = 0; after.forEach(function (f) { if (f.currency === cur) { afterC += cents(f.open); } });
+  totals.excluded_after_statement = { count: after.length, open: afterC / 100 };
+  // current: how much of our open is dated after their statement (they could not have billed it yet)
+  var laterC = 0; if (!asOf && stDate) { mine.forEach(function (b) { var d = String(b.bill_date || '').substring(0, 10); if (d && d > stDate && sameCur(b) && isOpenBill(b, pays)) { laterC += Math.round(openOf(b, pays) * 100); } }); }
+  totals.our_open_dated_after_statement = laterC / 100;
+  return { rows: rows, ours_not_on_statement: ours, excluded_after_statement: after, totals: totals, mode: mode };
 }
 
 export function statementCheckTotals(rows, ours, mine, pays, statementCurrency) {
@@ -457,15 +491,21 @@ export function statementCsv(res, meta) {
   (res.rows || []).forEach(function (r) {
     var l = r.line; var b = null; for (var i = 0; i < r.bills.length; i++) { if (r.primary_id && r.bills[i].id === r.primary_id) { b = r.bills[i]; } } if (!b && r.bills.length === 1) { b = r.bills[0]; }
     out.push(csvRow([l.n, l.src || (l.page ? 'page ' + l.page : ''), l.ref, l.date, l.due_date, l.amount, l.open, l.kind, l.po, r.counted ? 'yes' : 'no', STATUS[r.status].label, r.how || '',
-      r.bills.map(function (x) { return x.bill_number || '(no #)'; }).join(' + '), b ? b.bill_date : '', b ? b.total : '', b ? b.paid : '', b ? b.open : '', r.bills.map(function (x) { return x.status; }).join(' + '),
+      r.bills.concat(r.other_currency || []).map(function (x) { return (x.bill_number || '(no #)') + (x.currency && x.currency !== (res.totals && res.totals.currency) ? ' (' + x.currency + ', not compared)' : ''); }).join(' + '), b ? b.bill_date : '', b ? b.total : '', b ? b.paid : '', b ? b.open : '', r.bills.map(function (x) { return x.status; }).join(' + '),
       r.bills.map(payWords).filter(Boolean).join(' || '), r.evidence.join(' '), r.notes.join(' ')]));
   });
   out.push('');
   out.push(csvRow(['Our open bills NOT on their statement']));
   out.push(csvRow(['Our bill #', 'Bill date', 'Due date', 'Currency', 'Total', 'Paid', 'Open', 'Status', 'Wire', 'Notes']));
   (res.ours_not_on_statement || []).forEach(function (b) {
-    out.push(csvRow([b.bill_number, b.bill_date, b.due_date, b.currency, b.total, b.paid, b.open, b.status, b.wire_state_words || '', [b.after_statement ? 'dated after their statement' : '', b.suggested_for && b.suggested_for.length ? 'possibly their line ' + b.suggested_for.join(', ') + ' (same amount and date, other number)' : '', b.disputed ? 'disputed' : '', b.paid_via ? 'paid through ' + b.paid_via : ''].filter(Boolean).join('; ')]));
+    out.push(csvRow([b.bill_number, b.bill_date, b.due_date, b.currency, b.total, b.paid, b.open, b.status, b.wire_state_words || '', [b.after_statement ? 'dated after their statement' : '', b.date_unknown ? 'no bill date' : '', b.suggested_for && b.suggested_for.length ? 'possibly their line ' + b.suggested_for.join(', ') + ' (same amount and date, other number)' : '', b.disputed ? 'disputed' : '', b.paid_via ? 'paid through ' + b.paid_via : ''].filter(Boolean).join('; ')]));
   });
+  if ((res.excluded_after_statement || []).length) {
+    out.push('');
+    out.push(csvRow(['Our open bills dated AFTER their statement date — left out of this as-of comparison and of every total']));
+    out.push(csvRow(['Our bill #', 'Bill date', 'Due date', 'Currency', 'Total', 'Paid', 'Open', 'Status']));
+    res.excluded_after_statement.forEach(function (b) { out.push(csvRow([b.bill_number, b.bill_date, b.due_date, b.currency, b.total, b.paid, b.open, b.status])); });
+  }
   out.push('');
   var t = res.totals || {};
   out.push(csvRow(['Totals (' + (t.currency || 'USD') + ')']));
@@ -473,6 +513,8 @@ export function statementCsv(res, meta) {
   out.push(csvRow(['We show open for this vendor', t.our_open]));
   out.push(csvRow(['Difference', t.difference]));
   Object.keys(t.our_open_other_currency || {}).forEach(function (c) { out.push(csvRow(['Also open in ' + c + ' (not added)', t.our_open_other_currency[c]])); });
+  if (t.our_open_dated_after_statement) { out.push(csvRow(['Of our open: dated after their statement date', t.our_open_dated_after_statement])); }
+  if (t.excluded_after_statement && t.excluded_after_statement.count) { out.push(csvRow(['Left out (dated after their statement date)', t.excluded_after_statement.count, t.excluded_after_statement.open])); }
   if (m.adds_up && m.adds_up.printed_total !== null) { out.push(csvRow(['Total printed on their statement', m.adds_up.printed_total, m.adds_up.agrees ? 'agrees with their lines' : 'does NOT agree with their lines (' + m.adds_up.lines_total + ')'])); }
   STATUS_KEYS.forEach(function (k) { var e = (t.by_status || {})[k] || { count: 0, owed: 0 }; out.push(csvRow([STATUS[k].label, e.count, e.owed])); });
   out.push(csvRow(['Our open bills not on their statement', (t.ours_not_on_statement || {}).count, (t.ours_not_on_statement || {}).open]));

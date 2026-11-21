@@ -136,7 +136,8 @@ export default function VendorStatementPanel(props) {
   var res = useMemo(function () { return checked && vendorNames.length ? checkStatement({ lines: clean, vendorNames: vendorNames, bills: bills, payments: payments, statementDate: stDate, asOf: asOf, picks: picks, statementCurrency: cur }) : null; }, [checked, vendorNames.join('|'), clean, bills, payments, stDate, asOf, picks, cur]); // eslint-disable-line
   var incomplete = read && read.incomplete && read.incomplete.length ? read.incomplete.join('; ') : '';
   var warnings = [].concat(enrichWarnings.map(function (w) { return 'Wire details are incomplete: ' + w + '. A payment without its wire is not proof of anything — the status comes from the payments only.'; }),
-    cur !== 'USD' ? ['The statement is in ' + cur + '. Only our bills in ' + cur + ' are added up against it; bills in other currencies are shown apart, never added in.'] : []);
+    cur !== 'USD' ? ['The statement is in ' + cur + '. Only our bills in ' + cur + ' are compared and added up against it; bills in other currencies are shown apart, never compared or added in (no exchange rate is assumed).'] : [],
+    read && read.source === 'reader' && !(read.statement && read.statement.currency) ? ['The statement does not say its currency — USD is assumed. Change it above if that is wrong.'] : []);
 
   function setLine(i, patch) { setLines(lines.map(function (l, j) { return j === i ? Object.assign({}, l, patch) : l; })); }
   function exportCsv() {
@@ -269,6 +270,8 @@ export default function VendorStatementPanel(props) {
           <span style={{ color: Math.abs(res.totals.difference) > 0.005 ? '#9a3412' : '#065f46' }}>{'Difference: ' + money(res.totals.difference)}</span>
           {Object.keys(res.totals.our_open_other_currency).map(function (c) { return <span key={c} style={{ color: '#9a3412' }}>{'Also open in ' + c + ': ' + money(res.totals.our_open_other_currency[c]) + ' (not added)'}</span>; })}
           {res.totals.unread_amounts > 0 && <span style={{ color: '#9a3412' }}>{res.totals.unread_amounts + ' line(s) without an amount'}</span>}
+          {res.totals.our_open_dated_after_statement > 0 && <span style={{ color: '#9a3412' }}>{'of our open, ' + money(res.totals.our_open_dated_after_statement) + ' is dated after their statement (they could not bill it yet)'}</span>}
+          {res.totals.excluded_after_statement.count > 0 && <span style={{ color: '#9a3412' }}>{res.totals.excluded_after_statement.count + ' bill(s) of ours dated after their statement left out (' + money(res.totals.excluded_after_statement.open) + ') — listed at the bottom'}</span>}
         </div>
         <div className="flex gap-1 flex-wrap mt-1">
           <button onClick={function () { setShowOnly(''); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={!showOnly ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{'All ' + res.totals.lines}</button>
@@ -287,7 +290,7 @@ export default function VendorStatementPanel(props) {
             <td className="pr-2">{l.date || '—'}</td>
             <td className="pr-2 text-right font-bold">{r.owed === null ? '—' : money(r.owed)}{!r.counted && r.owed !== null ? <div className="text-[9px] font-normal" style={{ color: SUB }}>not added</div> : null}</td>
             <td className="pr-2"><span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={{ background: st.bg, color: st.fg, whiteSpace: 'nowrap' }}>{st.label}</span></td>
-            <td className="pr-2">{r.bills.map(function (f) { return billBtn(f); })}{r.suggestions.map(function (f) { return billBtn(f, 'possibly '); })}{r.other_vendor.map(function (f) { return billBtn(f, f.vendor_name + ' '); })}
+            <td className="pr-2">{r.bills.map(function (f) { return billBtn(f); })}{r.suggestions.map(function (f) { return billBtn(f, 'possibly '); })}{r.other_vendor.map(function (f) { return billBtn(f, f.vendor_name + ' '); })}{(r.other_currency || []).map(function (f) { return billBtn(f, f.currency + ', not compared · '); })}
               {r.status === 'ambiguous' || (r.primary_id && r.bills.length > 1) ? <div><select value={picks[l.n] || ''} onChange={function (e) { var p2 = Object.assign({}, picks); if (e.target.value) { p2[l.n] = e.target.value; } else { delete p2[l.n]; } setPicks(p2); }} className={inp} aria-label={'Which of our bills is line ' + l.n}>
                 <option value="">— pick which of our bills this is —</option>{r.bills.filter(function (f) { return f.status !== 'VOID'; }).map(function (f) { return <option key={f.id} value={String(f.id)}>{'#' + (f.bill_number || '') + ' · ' + (f.bill_date || '?') + ' · ' + money(f.total) + ' · ' + f.status}</option>; })}</select></div> : null}</td>
             <td className="pr-2 text-right">{r.bills.length ? r.bills.map(function (f) { return <div key={f.id}>{money(f.open) + ' · ' + f.status}</div>; }) : '—'}</td>
@@ -300,10 +303,14 @@ export default function VendorStatementPanel(props) {
       {res.ours_not_on_statement.length === 0 ? <div className="text-[11px]" style={{ color: SUB }}>None — every open bill of ours is on their statement.</div> :
         <table className="w-full text-[11px]"><thead><tr style={{ color: SUB }}><th className="text-left pr-2">Our bill</th><th className="text-left pr-2">Bill date</th><th className="text-left pr-2">Due</th><th className="text-right pr-2">Total</th><th className="text-right pr-2">Open</th><th className="text-left">Notes</th></tr></thead><tbody>
           {res.ours_not_on_statement.map(function (f) {
-            var nt = [f.currency !== res.totals.currency ? 'in ' + f.currency + ' (not added)' : '', f.status === 'PARTIAL' ? 'partly paid ' + money(f.paid) : '', f.after_statement ? 'dated after their statement' : '', f.suggested_for.length ? 'possibly their line ' + f.suggested_for.join(', ') + ' (same amount and date, other number)' : '', f.wire_state_words || '', f.disputed ? 'disputed' : '', f.paid_via ? 'paid through ' + f.paid_via : '', f.validation_status !== 'validated' ? 'not validated' : ''].filter(Boolean).join(' · ');
+            var nt = [f.currency !== res.totals.currency ? 'in ' + f.currency + ' (not added)' : '', f.status === 'PARTIAL' ? 'partly paid ' + money(f.paid) : '', f.after_statement ? 'dated after their statement' : '', f.date_unknown ? 'no bill date — cannot tell whether it was due by their statement' : '', f.suggested_for.length ? 'possibly their line ' + f.suggested_for.join(', ') + ' (same amount and date, other number)' : '', f.wire_state_words || '', f.disputed ? 'disputed' : '', f.paid_via ? 'paid through ' + f.paid_via : '', f.validation_status !== 'validated' ? 'not validated' : ''].filter(Boolean).join(' · ');
             return <tr key={f.id} style={{ borderTop: '1px solid ' + LINE }}><td className="py-1 pr-2">{billBtn(f)}</td><td className="pr-2">{f.bill_date || '—'}</td><td className="pr-2">{f.due_date || '—'}</td><td className="pr-2 text-right">{money(f.total)}</td><td className="pr-2 text-right font-bold">{money(f.open)}</td><td>{nt}</td></tr>;
           })}
         </tbody></table>}
+      {res.excluded_after_statement.length > 0 && <div className="mt-3">
+        <div className="text-[12px] font-extrabold">{'Our open bills dated AFTER their statement date (' + res.excluded_after_statement.length + ') — left out of this as-of comparison and of every total'}</div>
+        <table className="w-full text-[11px]"><tbody>{res.excluded_after_statement.map(function (f) { return <tr key={f.id} style={{ borderTop: '1px solid ' + LINE }}><td className="py-1 pr-2">{billBtn(f)}</td><td className="pr-2">{f.bill_date}</td><td className="pr-2 text-right">{money(f.total)}</td><td className="pr-2 text-right font-bold">{money(f.open)}</td><td>{f.currency + ' · ' + f.status}</td></tr>; })}</tbody></table>
+      </div>}
       <div className="mt-2 text-[10px]" style={{ color: SUB }}>Matched by the same bill number (also written another way, like INV-14481 / 14481). A bill with only the same amount and date is a SUGGESTION, never a match. A wire that is prepared, approved or sent is not a payment — only a recorded payment is. Deleted bills are not counted. This check changes nothing — to fix a bill, open it in the Bills list.</div>
     </div>}
   </div>;
