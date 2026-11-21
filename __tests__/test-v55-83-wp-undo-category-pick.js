@@ -13,7 +13,8 @@ function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } con
 var mockPath = path.join(__dirname, 'helpers', 'mock-supabase-js.js');
 fs.writeFileSync(mockPath, 'module.exports={createClient:function(){return global.__db;}};');
 var orig = Module._resolveFilename;
-Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } return orig.apply(this, arguments); };
+// v55.83-WQ (rebase): the route now acts only for the verified signed-in person — the in-memory test uses the shared stand-in
+Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } if (/lib[\/]verified-caller(.js)?$/.test(req)) { return path.join(__dirname, 'helpers', 'stub-verified-caller.js'); } return orig.apply(this, arguments); };
 var US = require(path.join(root, 'src/lib/business-of.js')).US_WAVE_BUSINESS_ID;
 function tx(id, name, o) { return Object.assign({ id: id, name: name, merchant_name: null, direction: 'out', classification: null, category_source: null, category_verified: false, review_status: 'unreviewed', reviewed_by: null, reviewed_at: null, wave_business_id: US, transfer_group_id: null, pending: false, account_id: 'A1', date: '2026-11-05', amount_abs: 10, amount: -10, wave_account_id: null, wave_account_name: null, category_status: 'local_only', wave_sync_status: 'not_synced', sync_status: 'not_synced' }, o || {}); }
 var posted = {}; var rpcOn = true;
