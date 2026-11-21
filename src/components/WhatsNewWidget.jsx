@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WF',
+    date: '2026-11-21',
+    title: 'Funds with RTM / NextTrade: each transfer shows what it still holds',
+    items: [
+      { text: '**Bills → 💰 Funds with RTM / NextTrade** lists every transfer we sent to the company: what went to bills, what was marked as services rendered, what came back, what is reserved on requests not sent yet, and what is still held. Money not used yet is never counted as an expense.' },
+      { text: '**A transfer is “needs reconciliation” until someone confirms it.** While it is, the bills it already paid can be linked to it (🔒 Advances: Manage). Once it is confirmed, its money is used for new bills only through a request to the company (Wires → New), with the same two signatures as every wire.' },
+      { text: '**Services rendered** and **↩ Money back** are recorded on the transfer itself, each with a reason, and can be reversed. Only people with the 🔒 Advances: Manage switch can do this; a closed month needs the accountant switch too.' },
+      { text: 'Nothing changes until the super admin runs the database step for this version. Until then the screen only shows what is recorded.' },
+      { superAdminOnly: true, text: 'Technical: sql/v55-83-WF-party-funds.sql (re-runnable, deletes nothing): party_funding_transfers (confirmed / needs_reconciliation), party_money_entries kinds fee_from_transfer / fee_back_to_transfer / refund, hub_party_transfer_state = wire_funding_summary (one calculation), hub_party_fee, hub_party_refund, hub_party_transfer_set_state, guards on every writer, hub_party_payment_route (deferred: a payment on a confirmed transfer must be a wire line payment), hub_refund_line_only, retired advance moves. Route /api/accounting/party-funds; bills route companyFundsBlock; wire-funding-server fundingLines reads the database figure with p_except.' }
+    ]
+    ]
+  },
+  {
     version: 'v55.83-WW',
     date: '2026-11-21',
     title: 'Only the super admin changes permission switches and roles',
