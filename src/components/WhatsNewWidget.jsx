@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WS',
+    date: '2026-11-21',
+    title: 'Undo a category you just picked',
+    items: [
+      { text: '**Undo for a category pick.** Right after you pick a category for a bank line, a bar at the bottom left of the screen offers **Undo**. It works the same in P&L by period, in Stats, Income Statement, and in All Transactions.' },
+      { text: 'Undo puts back everything that one pick changed: the line itself (also back to no category), the look-alike lines it filled in, the rule it created or changed, the Wave category it set and the reviewed mark it caused. Each look-alike goes back to the category it had before, not to blank.' },
+      { text: 'It never overwrites newer work. If someone changed, verified, reviewed or paired a line after your pick, or changed the rule, that is left as it is and the message tells you.' },
+      { text: 'A line already in the ClickBooks ledger, or already sent to Wave, is not undone here. Nothing is changed and the message says where to correct it.' },
+      { text: 'Undo is for the person who made the pick, for 24 hours, one line at a time, within the bank accounts and history that person may see. Picking a category for many lines at once has no undo yet.' },
+      { text: '**Needs a one-time database step before it works.** Until then the bar says so instead of showing the Undo button.' },
+      { superAdminOnly: true, text: 'Technical: replaces the withdrawn WP build (Codex FAIL). expense-rules bulk_classify single_pick writes an undo point (format 2: before and after incl. verification, review stamp, pairing, Wave sync state) to hub_audit_log; undo_category_pick re-checks private accounts, company and history window, refuses anything synced to Wave or posted to ClickBooks, and refuses everything while rpc hub_bank_ledger_posted (sql/v55-83-WS-ledger-posted-check.sql) is not installed. Guarded conditional updates (src/lib/category-undo-server.js).' }
+    ]
+  },
+  {
     version: 'v55.83-WZ',
     date: '2026-11-21',
     title: 'No duplicate bills',

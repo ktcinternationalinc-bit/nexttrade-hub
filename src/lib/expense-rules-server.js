@@ -197,6 +197,9 @@ export async function applyRuleToAll(db, rule, opts) {
     var a1 = await batchSet(db, ids(pv.buckets.blank), rule.classification, 'blank', res.ids);
     var a2 = await batchSet(db, ids(pv.buckets.rule), rule.classification, 'rule', res.ids);
     var a3 = o.overwrite_people === true ? await batchSet(db, ids(pv.buckets.human), rule.classification, 'any') : 0;
+    // v55.83-WP — what each filled line was BEFORE (its own category and where that came from), so an undo can put back exactly that
+    var byIdP = {}; pv.hits.forEach(function (t) { byIdP[t.id] = t; });
+    res.before = res.ids.map(function (idP) { var tP = byIdP[idP] || {}; return { id: idP, c: tP.classification || null, s: tP.category_source || null }; });
     res.applied = a1 + a2 + a3; res.filled_blank = a1; res.retargeted = a2; res.overwrote_people = a3; res.matches = pv.hits.length;
     res.already_right = pv.buckets.same.length; res.left_people = o.overwrite_people === true ? 0 : pv.buckets.human.length;
     res.verified_untouched = pv.buckets.verified.length; res.scanned = pv.scanned;
@@ -238,14 +241,18 @@ export async function applyLookAlikes(db, ruleId, cls, by) {
   var ap = await applyRuleToAll(db, rr.data, { overwrite_people: false, by: by, lookAlike: true });
   if (!ap || ap.error) { out.error = (ap && ap.error) || 'not applied'; return out; }
   out.applied = ap.applied || 0; out.left_people = ap.left_people || 0; out.matches = ap.matches || 0; out.skipped_protected = ap.skipped_protected || 0;
+  out.ids = ap.ids || []; out.before = ap.before || []; // v55.83-WP — for the undo of a single pick
   if (ap.ids && ap.ids.length) {
     try {
       var wl = await waveAccountForCategory(db, cls);
       if (wl && wl.wave_account_id) {
+        out.wave = { id: wl.wave_account_id, name: wl.wave_account_name, rows: [] }; // WP — the lines whose Wave category this fill set, with their status before
         for (var i = 0; i < ap.ids.length; i += 200) {
+          var stB = {}; var wb = await db.from('bank_transactions').select('id, category_status').in('id', ap.ids.slice(i, i + 200)).is('wave_account_id', null);
+          ((wb && wb.data) || []).forEach(function (x) { stB[x.id] = x.category_status === undefined ? null : x.category_status; });
           var w = await db.from('bank_transactions').update({ wave_account_id: wl.wave_account_id, wave_account_name: wl.wave_account_name, category_status: 'pending_wave_sync' })
             .in('id', ap.ids.slice(i, i + 200)).is('wave_account_id', null).is('wave_transaction_id', null).neq('category_status', 'synced').select('id');
-          if (!w.error) { out.wave_set += (w.data || []).length; }
+          if (!w.error) { out.wave_set += (w.data || []).length; (w.data || []).forEach(function (x) { out.wave.rows.push({ id: x.id, st: stB[x.id] === undefined ? null : stB[x.id] }); }); }
         }
       }
     } catch (eW) { /* Wave stays empty — never blocks the save */ }

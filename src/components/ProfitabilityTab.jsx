@@ -17,6 +17,7 @@ import { needCategoryList, pickerState, pickableCategories } from '../lib/cat-pi
 import AvgProfitCell from './AvgProfitCell'; // v55.83-WK — average profit per unit, never from an unknown profit
 import CustomerBalances, { BalanceCell } from './CustomerBalances'; // v55.83-WY — held for / still owed by each customer, today, not in profit
 import { balanceOfCustomer } from '../lib/customer-balances';
+import UndoPickBar from './UndoPickBar'; // v55.83-WS — undo the last category pick
 import CombinedShippingNote from './CombinedShippingNote'; // v55.83-VS — neutral note: a combined transportation cost is known, nothing to fix
 import InboundTruckingView from './InboundTruckingView'; // v55.83-VR — Kronos freight against pounds received (tracking only)
 import { expenseScope, expenseRequests, pendingRequests, loadExpensePeriods, totalExpenses, finalPnl, expensesOffReason } from '../lib/pnl-expenses'; // v55.83-VQ — expense columns and the final P&L per period
@@ -143,6 +144,9 @@ export default function ProfitabilityTab(props) {
   var s23 = useState(null); var fShow = s23[0]; var setFShow = s23[1]; // the formula panel: { key, pinned }
   var s24 = useState(null); var catList = s24[0]; var setCatList = s24[1]; var s25 = useState({}); var catSaving = s25[0]; var setCatSaving = s25[1];
   var canPick = (userProfile && userProfile.role === 'super_admin') || props.isSuperAdmin === true || (props.modulePerms || {})['bank.classify'] === true; // the same switch as Stats → Income Statement
+  // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
+  var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
+  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); startExpenses({ ignoreCache: true }); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (j && j.error && !/try again|reach the server|did not answer/i.test(j.error)) { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
   function erApi(action, payload) {
     return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
@@ -158,7 +162,7 @@ export default function ProfitabilityTab(props) {
     if (!key || !row || !row.id) { return; }
     setCatSaving(function (m) { var n = Object.assign({}, m); n[row.id] = true; return n; });
     erApi('bulk_classify', { ids: [row.id], classification: key, single_pick: true }).then(function (j) {
-      if (j && j.ok && j.updated > 0) { var more = Number(j.look_alikes_updated) || 0; toast.success('Category saved' + (more ? ' — ' + more + ' more line(s) with the same description filled in' : '') + '. The expenses are loaded again.'); startExpenses({ ignoreCache: true }); }
+      if (j && j.ok && j.updated > 0) { setUndoPt(j.undo_id ? { id: j.undo_id, who: row.who, label: ((catList || []).filter(function (cU) { return cU.key === key; })[0] || {}).label || key, hours: j.undo_hours, ready: j.undo_ready !== false } : null); var more = Number(j.look_alikes_updated) || 0; toast.success('Category saved' + (more ? ' — ' + more + ' more line(s) with the same description filled in' : '') + '. The expenses are loaded again.'); startExpenses({ ignoreCache: true }); }
       else { toast.error((j && j.error) || 'Nothing was saved — reload the page and try again.'); }
     }).finally(function () { setCatSaving(function (m) { var n = Object.assign({}, m); delete n[row.id]; return n; }); });
   }
@@ -1069,6 +1073,7 @@ export default function ProfitabilityTab(props) {
       </div>
     </div>}
     {!data && busy && <div className="text-[12px] p-2" style={{ color: SUB }}>Building the report…</div>}
+    <UndoPickBar point={undoPt} busy={undoBusy} onUndo={undoPick} onClose={function () { setUndoPt(null); }} />
     {/* v55.83-VQ (Max, Nov 19: "clicking on view invoice from here is not working" — in FULL SCREEN the invoice opened BEHIND the table: the full-screen layer is above the viewer's own layer. The viewer is now mounted on the page body, above full screen.) */}
     {billPeek && typeof document !== 'undefined' && createPortal(<div onClick={function () { setBillPeek(null); }} style={{ position: 'fixed', inset: 0, zIndex: 330, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}><div onClick={function (e) { e.stopPropagation(); }}><BillPeek row={billPeek.row} payer={billPeek.payer} onOpenDoc={openBillDoc} onGoBills={function () { setBillPeek(null); setFull(false); onGo('bills'); }} onClose={function () { setBillPeek(null); }} /></div></div>, document.body)}
     {keepAsk && typeof document !== 'undefined' && createPortal(<div onClick={function () { setKeepAsk(null); }} style={{ position: 'fixed', inset: 0, zIndex: 320, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}><div onClick={function (e) { e.stopPropagation(); }}><KeepYardsPreview ask={keepAsk} busy={busy} onConfirm={confirmKeep} onCancel={function () { setKeepAsk(null); }} /></div></div>, document.body)}

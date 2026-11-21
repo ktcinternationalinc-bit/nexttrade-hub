@@ -9,6 +9,7 @@
 // to all of them (learns rules like single picks) · deposits jump straight
 // into Bank Review matching.
 import React, { useState, useEffect } from 'react';
+import UndoPickBar from './UndoPickBar'; // v55.83-WP — undo the last category pick
 import DuplicateCheckPanel from './DuplicateCheckPanel'; // v55.83-SO
 import { supabase } from '../lib/supabase';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
@@ -74,6 +75,9 @@ export default function AllTransactionsTab(props) {
 
   // v55.83-RN (Max, Nov 9 20:18: "I tried selecting a category ... and nothing updated") — every call answers: a timeout or
   // non-JSON reply becomes a message on screen instead of a silent nothing
+  // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
+  var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
+  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); api('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); quietReload(); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (j && j.error && !/try again|reach the server|did not answer/i.test(j.error)) { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
   function api(action, payload) {
     return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
@@ -246,6 +250,7 @@ export default function AllTransactionsTab(props) {
     api('bulk_classify', { ids: [t.id], classification: key, single_pick: true }).then(function (j) { // QZ2: one person-picked row is finished like Bank Review (reviewed when fully accounted for)
       if (j && j.ok && !(j.updated > 0)) { j = { ok: false, error: 'Nothing was saved — this transaction was not found (it may have been merged or removed). Reload the page.' }; }
       if (j && j.ok) {
+        setUndoPt(j.undo_id ? { id: j.undo_id, who: t.merchant_name || t.name, label: key, hours: j.undo_hours, ready: j.undo_ready !== false } : null);
         patchRow(t.id, { classification: key, _saving: false, _saved: true });
         if (key === 'transfer') { toast.success('Marked as a TRANSFER — never income, never spending in any report.'); openTransfer(t); }
         else { toast.success('Category saved' + ((j.rules_learned || 0) > 0 ? ' · rule learned for next time' : '') + (j.look_alikes_updated ? ' · ' + j.look_alikes_updated + ' similar transaction(s) updated too' : '') + (j.look_alikes_left_people ? ' · ' + j.look_alikes_left_people + ' set by hand left as they are' : '') + (j.wave_updated ? ' · Wave category set (queued to sync)' : ' · no compatible Wave account — Wave left empty') + ((j.reviewed || 0) > 0 ? ' · marked reviewed → reaches the ClickBooks ledger within 15 min' : '') + '.'); }
@@ -439,6 +444,7 @@ export default function AllTransactionsTab(props) {
   }
 
   return <div className="flex flex-col gap-2">
+    <UndoPickBar point={undoPt} busy={undoBusy} onUndo={undoPick} onClose={function () { setUndoPt(null); }} />
     {canAddTx && !addF && <div className="flex justify-end"><button type="button" onClick={openAdd} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }} title="Add one bank transaction by hand (when the bank or a statement does not have it)">➕ Add transaction</button></div>}
     {canAddTx && addF && <div className="rounded-xl p-3 grid gap-2" style={{ background: '#f0fdf4', border: '1px solid #86efac', color: '#14532d' }}>
       <div className="flex items-center gap-2"><b className="text-[13px]">➕ Add a transaction by hand</b><div className="flex-1" /><button type="button" onClick={function () { setAddF(null); }} className="text-[12px] underline">cancel</button></div>

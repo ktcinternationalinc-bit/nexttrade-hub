@@ -5,6 +5,7 @@
 import { remainderRows } from '../lib/paid-through-blocks'; // v55.83-SR
 import { spendingByCategoryCsv, spendingDetailCsv, incomeStatementCsv } from '../lib/tax-pack'; // v55.83-WF step C — the accountant pack's spending files
 import React, { useState, useEffect } from 'react';
+import UndoPickBar from './UndoPickBar'; // v55.83-WP — undo the last category pick
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
@@ -91,6 +92,9 @@ export default function PeriodStatsTab(props) {
   var canPick = isSuperAdmin || modulePerms['bank.classify'] === true; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   var sCl = useState(null); var catList = sCl[0]; var setCatList = sCl[1];
   var sSv = useState({}); var saving = sSv[0]; var setSaving = sSv[1];
+  // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
+  var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
+  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); load(from, to); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (j && j.error && !/try again|reach the server|did not answer/i.test(j.error)) { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
   function erApi(action, payload) {
     return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
@@ -116,6 +120,7 @@ export default function PeriodStatsTab(props) {
     setSaving(function (m) { var n = Object.assign({}, m); n[r.id] = true; return n; });
     erApi('bulk_classify', { ids: [r.id], classification: key, single_pick: true }).then(function (j) {
       if (j && j.ok && j.updated > 0) {
+        setUndoPt(j.undo_id ? { id: j.undo_id, who: r.who, label: key, hours: j.undo_hours, ready: j.undo_ready !== false } : null);
         var more = Number(j.look_alikes_updated) || 0; var left = Number(j.look_alikes_left_people) || 0;
         toast.success('Saved' + (j.rules_learned ? ' — rule learned' : '') + (more ? ' — ' + more + ' more with the same description filled in' : '') +
           (left ? ' (' + left + ' a person already categorized were left as they are)' : '') + '.' + (j.look_alikes_error ? ' ⚠ ' + j.look_alikes_error : ''));
@@ -245,7 +250,7 @@ export default function PeriodStatsTab(props) {
   var inv = (data && data.invoices) || null;
   var bl = (data && data.bills) || null;
   var dV = (data && data.vis) || VS; // v55.83-RE — the server's decision wins
-  return <div className="rounded-xl p-3" style={{ background: '#ffffff', color: '#0f172a', border: '1px solid #e2e8f0' }}>{/* v55.83-SX (Max, Nov 16: "the font under month can't be seen") — the dark theme repaints the bg-white class (with !important), so that class is gone and the white panel is set inline so dark text is never on a dark background */}
+  return <div className="rounded-xl p-3" style={{ background: '#ffffff', color: '#0f172a', border: '1px solid #e2e8f0' }}><UndoPickBar point={undoPt} busy={undoBusy} onUndo={undoPick} onClose={function () { setUndoPt(null); }} />{/* v55.83-SX (Max, Nov 16: "the font under month can't be seen") — the dark theme repaints the bg-white class (with !important), so that class is gone and the white panel is set inline so dark text is never on a dark background */}
     <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); onGo('invoices'); }} />
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900">📉 Stats — invoices & bills</div>

@@ -12,7 +12,8 @@ function FakeDb(uniques) {
   Q.prototype.is = function (k, v) { this.filters.push(function (r) { return (r[k] == null) === (v == null); }); return this; };
   Q.prototype.gte = function (k, v) { this.filters.push(function (r) { return String(r[k]) >= String(v); }); return this; };
   Q.prototype.lte = function (k, v) { this.filters.push(function (r) { return String(r[k]) <= String(v); }); return this; };
-  Q.prototype.not = function () { return this; };
+  Q.prototype.not = function (k, op, v) { if (op === 'is' && (v === true || v === false)) { this.filters.push(function (r) { return r[k] !== v; }); } else if (op === 'is' && v === null) { this.filters.push(function (r) { return r[k] != null; }); } return this; }; // v55.83-WP — real meaning for not(col, 'is', true/false/null); other forms stay a no-op as before
+  Q.prototype.ilike = function (k, v) { var pat = String(v).toLowerCase(); this.filters.push(function (r) { return String(r[k] == null ? '' : r[k]).toLowerCase() === pat; }); return this; }; // v55.83-WP — exact match without case (no wildcard is used by the code under test)
   Q.prototype.or = function () { return this; };
   Q.prototype.limit = function (n) { this.lim = n; return this; };
   Q.prototype.order = function (col, o) { (this.sorts = this.sorts || []).push({ col: col, asc: !(o && o.ascending === false) }); return this; };

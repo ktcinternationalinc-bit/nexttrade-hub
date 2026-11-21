@@ -22,6 +22,8 @@ import { readRulesLastRun } from '../../../../lib/expense-rules-server'; // v55.
 import { applyExpenseRules, waveAccountForCategory, previewRule, applyRuleToAll, applyLookAlikes, rowText, ruleBucket, learnRule, partyFlagRows } from '../../../../lib/expense-rules-server'; // v55.83-RC (+ learnRule: v55.83-RN — its import was lost in RC, so every pick in All Transactions failed after saving)
 import { ruleMatches } from '../../../../lib/expense-rules'; // v55.83-QV — the SAME matcher the 15-minute job uses
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
+import { readLine, readRuleFor, readRule, writeUndoPoint, undoCategoryPick, undoWords, ledgerPosted, UNDO_HOURS } from '../../../../lib/category-undo-server'; // v55.83-WS — undo a single category pick
+import { windowFloorFor } from '../../../../lib/visibility-window-server'; // v55.83-WS — the undo re-checks the person's history window
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { realAccounts, realKeyOf, dupText, dupCents, dupDate } from '../../../../lib/duplicate-detect'; // v55.83-SO — the same REAL account can be in the Hub twice (reconnected bank)
@@ -356,6 +358,22 @@ export async function POST(req) {
     //    deliberate human action, so it may overwrite earlier categories;
     //    it NEVER touches review/verified status or invoice matches, and it
     //    learns a rule per distinct merchant (capped) like single picks do. ──
+    // ── undo_category_pick (v55.83-WP, Max 21 Nov: "need to be able to undo a category selection") — puts back exactly what ONE
+    //    single pick changed (the line, the look-alike lines it filled, the rule it made, the Wave category it set, the review
+    //    mark it caused), only while each of them is still as that pick left it. Same permission as the pick itself. ──
+    if (action === 'undo_category_pick') {
+      // WS (Codex FAIL of WP) — what this person may change is checked again NOW, on the current lines: private accounts, the
+      // company, and the person's history window. A check that cannot be made refuses the undo (fail closed).
+      var privU = await privateScope(db, by);
+      if (privU && privU.error) { return NextResponse.json({ ok: false, error: privU.error + ' — nothing was changed.', api_build_marker: API_BUILD_MARKER }, { status: 503 }); }
+      var winU = await windowFloorFor(db, gate.ctx);
+      if (winU && winU.error) { return NextResponse.json({ ok: false, error: winU.error, api_build_marker: API_BUILD_MARKER }, { status: 503 }); }
+      var urU = await undoCategoryPick(db, by, body.payload && body.payload.undo_id, null, { priv: privU, floor: (winU && winU.floor) || null, business: US_WAVE_BUSINESS_ID });
+      if (!urU.ok) { return NextResponse.json({ ok: false, error: urU.error, needs_sql: urU.needs_sql === true, api_build_marker: API_BUILD_MARKER }, { status: urU.status || 400 }); }
+      var labU = {}; try { var lcU = await db.from('expense_categories').select('key, label'); ((lcU && lcU.data) || []).forEach(function (cU) { labU[cU.key] = cU.label; }); } catch (eLU) {}
+      await audit(db, by, 'category_pick_undo', 'bank_transaction', urU.line_id, { to: urU.to, look: urU.look, rule: urU.rule });
+      return NextResponse.json(Object.assign({}, urU, { message: undoWords(urU, function (kU) { return labU[kU]; }), api_build_marker: API_BUILD_MARKER }));
+    }
     if (action === 'bulk_classify') {
       var idsB = (body.payload && body.payload.ids) || [];
       var clsB = body.payload && body.payload.classification;
@@ -373,6 +391,9 @@ export async function POST(req) {
           return NextResponse.json({ ok: false, error: (prB.data.length === 1 && idsB.length === 1 ? 'This transaction is' : prB.data.length + ' of these are') + ' one side of a PAIRED transfer between your own accounts. Unpair it first (↔ Transfer → Unpair), then pick the category — otherwise the books would still count it as a transfer.', paired_ids: prB.data.map(function (r) { return r.id; }), api_build_marker: API_BUILD_MARKER }, { status: 409 });
         }
       }
+      // WP — one line picked by a person: its exact state and its rule's state BEFORE the pick are read first
+      var undoOn = idsB.length === 1 && !!(body.payload && body.payload.single_pick === true);
+      var uBefore = undoOn ? await readLine(db, idsB[0]) : null; var uRuleBefore = uBefore ? await readRuleFor(db, uBefore) : null; var uLr = null; var uLook = []; var uWave = null;
       var updB = await db.from('bank_transactions')
         .update({ classification: clsB, category_source: 'classification' })
         .in('id', idsB).select('id, direction, merchant_name, name');
@@ -386,6 +407,7 @@ export async function POST(req) {
         if (seenKeys[textB]) { continue; }
         seenKeys[textB] = true;
         var lr = await learnRule(db, textB, clsB, by);
+        if (undoOn) { uLr = lr; }
         if (lr && (lr.learned || lr.updated)) { learnedB2++; }
         var lrId = lr && (lr.learned || lr.updated || lr.kept);
         if (lrId && lrId !== true && ruleIdsB.indexOf(lrId) < 0) { ruleIdsB.push(lrId); }
@@ -398,6 +420,7 @@ export async function POST(req) {
         for (var ri = 0; ri < ruleIdsB.length && ri < 10; ri++) {
           try {
             var apB = await applyLookAlikes(db, ruleIdsB[ri], clsB, by); // Codex QA 17 Nov: auto_apply, protected lines, Wave mapping
+            if (undoOn && apB && !apB.error) { (apB.before || []).forEach(function (xB) { if (String(xB.id) !== String(idsB[0])) { uLook.push(xB); } }); if (apB.wave && apB.wave.rows && apB.wave.rows.length) { uWave = apB.wave; } }
             if (apB && !apB.error) { lookB += apB.applied || 0; leftPeopleB += apB.left_people || 0; } else if (apB && apB.error && !lookErrB) { lookErrB = apB.error; } // Codex recheck: a refused spread is SAID
           } catch (eAB) { /* the save itself already succeeded */ }
         }
@@ -425,8 +448,19 @@ export async function POST(req) {
       // it reaches the ClickBooks ledger. Bulk picks never change review status.
       var reviewedB = [];
       if (idsB.length === 1 && body.payload && body.payload.single_pick === true) { reviewedB = await autoReviewIfComplete(db, idsB, by); }
+      // WP — the undo point: before and after of everything this pick changed. No point → no Undo is offered.
+      var undoId = null;
+      if (undoOn && uBefore && rowsB.length === 1) {
+        var uAfter = await readLine(db, idsB[0]);
+        var uHow = uLr ? (uLr.learned ? 'learned' : (uLr.updated ? 'updated' : (uLr.kept ? 'kept' : (uLr.kept_manual ? 'kept_manual' : null)))) : null;
+        var uRid = uLr ? (uLr.learned || uLr.updated || uLr.kept || uLr.kept_manual) : null;
+        var uRuleAfter = uRid && uRid !== true ? await readRule(db, uRid) : null;
+        undoId = await writeUndoPoint(db, by, { before: uBefore, after: uAfter, cls: clsB, rule: uHow ? { how: uHow, before: uRuleBefore, after: uRuleAfter } : null, look: uLook, wave: uWave });
+      }
+      // WS — the undo can only run once the ledger check is installed: the screen is told so instead of offering a button that fails
+      var undoReady = false; if (undoId) { undoReady = (await ledgerPosted(db, [idsB[0]])).known === true; }
       await audit(db, by, 'bulk_categorized', 'bank_transactions', String(rowsB.length) + ' rows', { classification: clsB, rules_learned: learnedB2, look_alikes_updated: lookB, wave_updated: waveSet, reviewed: reviewedB.length }); // v55.83-QI
-      return NextResponse.json({ ok: true, updated: rowsB.length, rules_learned: learnedB2, look_alikes_updated: lookB, look_alikes_left_people: leftPeopleB, look_alikes_error: lookErrB, wave_updated: waveSet, wave_how: waveHow, reviewed: reviewedB.length, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, updated: rowsB.length, rules_learned: learnedB2, look_alikes_updated: lookB, look_alikes_left_people: leftPeopleB, look_alikes_error: lookErrB, wave_updated: waveSet, wave_how: waveHow, reviewed: reviewedB.length, undo_id: undoId, undo_hours: undoId ? UNDO_HOURS : undefined, undo_ready: undoId ? undoReady : undefined, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── all_transactions: every account, one table — sort/filter server-side
