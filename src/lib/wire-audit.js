@@ -59,6 +59,15 @@ export function billIdentity(b) {
   if (!v || !n) { return null; }
   return String(b.wave_business_id || '') + '#' + v + '|' + n;
 }
+// v55.83-WZ (Codex 10:37 P2) — two documents can only be the SAME bill when both are payable bills (not a credit memo / credit note)
+// of the SAME company. Applied to every number / reference duplicate check, old and new, so a legitimate credit memo or another
+// company's document is never called a duplicate (nobody is told to void it). Unknown company on an old candidate = not proven different.
+export function sameDocKind(x, y) {
+  var cx = /^credit/i.test(String((x && x.bill_type) || '')); var cy = /^credit/i.test(String((y && y.bill_type) || ''));
+  if (cx || cy) { return false; }
+  var bx = x && x.wave_business_id; var by = y && y.wave_business_id;
+  return !(bx && by && String(bx) !== String(by));
+}
 export function auditWire(input) {
   var wire = (input && input.wire) || {};
   var lines = (input && input.lines) || [];
@@ -161,14 +170,17 @@ export function auditWire(input) {
     if (!num) { if (!dirRules) { add('warn', 'REF_MISSING', (b.vendor_name || '?') + ' bill has no reference / bill number.'); } }
     else {
       var seenN = numSeen[num];
-      if (seenN) {
+      if (seenN && !sameDocKind(seenN.bill, b)) {
+        add('info', 'SAME_REF_OTHER_KIND', 'Reference ' + num + ' is on ' + seenN.who + ' and ' + who + ' on this wire, but one is a credit or belongs to another company — not a duplicate.');
+      } else if (seenN) {
         var sd2 = sameDay(seenN.date, b.bill_date);
         if (sd2 !== false) { add(seenN.vendor === normRef(b.vendor_name) ? 'block' : 'warn', 'DUP_REF_IN_WIRE', 'Reference ' + num + (sd2 === true ? ' and date ' + day(b.bill_date) : '') + ' appear on TWO bills of this wire (' + seenN.who + ' and ' + who + ')' + (sd2 === null ? ' — one has no date' : '') + '.'); }
         else { add('info', 'SAME_REF_OTHER_DATE', 'Reference ' + num + ' is on two bills of this wire with different dates (' + day(seenN.date) + ', ' + day(b.bill_date) + ').'); }
       }
-      numSeen[num] = { who: who, date: b.bill_date, vendor: normRef(b.vendor_name) };
+      numSeen[num] = { who: who, date: b.bill_date, vendor: normRef(b.vendor_name), bill: b };
       (sameNum[num] || []).forEach(function (o) {
         if (o.bill_id === l.bill_id || lines.some(function (x) { return x.bill_id === o.bill_id; })) { return; }
+        if (!sameDocKind(o, b)) { return; } // a credit memo or another company's document is not a copy of this bill
         var sameV = normRef(o.vendor_name) === normRef(b.vendor_name);
         var sd3 = sameDay(o.bill_date, b.bill_date);
         var paidTxt2 = o.paid_total > 0.005 ? ' — it was ALREADY PAID ($' + r2(o.paid_total).toFixed(2) + ')' : '';
@@ -208,14 +220,15 @@ export function auditWire(input) {
     if (oref) {
       var okey = normRef(b.vendor_name) + '|' + oref;
       var seenO = oSeen[okey];
-      if (seenO) {
+      if (seenO && sameDocKind(seenO.bill, b)) {
         var sdO = sameDay(seenO.date, b.bill_date);
         if (sdO === true) { add('block', 'DUP_OTHER_REF_IN_WIRE', who + ' and ' + seenO.who + ' have the same vendor, same reference ' + oref + ' and same date ' + day(b.bill_date) + ' on this wire — a duplicate.'); }
         else if (sdO === null) { add('warn', 'DUP_OTHER_REF_IN_WIRE', who + ' and ' + seenO.who + ' share reference ' + oref + ' and one has no date — check.'); }
       }
-      oSeen[okey] = { who: who, date: b.bill_date };
+      oSeen[okey] = { who: who, date: b.bill_date, bill: b };
       (sameOther[oref] || []).forEach(function (o) {
         if (o.bill_id === l.bill_id || lines.some(function (x) { return x.bill_id === o.bill_id; })) { return; }
+        if (!sameDocKind(o, b)) { return; }
         if (normRef(o.vendor_name) !== normRef(b.vendor_name)) { return; }
         var sdP = sameDay(o.bill_date, b.bill_date);
         var pt = o.paid_total > 0.005 ? ' — it was ALREADY PAID ($' + r2(o.paid_total).toFixed(2) + ')' : '';

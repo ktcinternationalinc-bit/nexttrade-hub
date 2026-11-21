@@ -73,8 +73,8 @@ async function gather(db, txIds) {
     rb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.release_number); (sameRelease[k] = sameRelease[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date || null }); });
   }
   if (nums.length) {
-    var nb = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status, bill_date', 'bill_number', nums); // RK: + date
-    nb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.bill_number); (sameNumber[k] = sameNumber[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_date: b.bill_date || null }); });
+    var nb = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status, bill_date, wave_business_id, bill_type', 'bill_number', nums); // RK: + date; WZ: + company, type
+    nb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.bill_number); (sameNumber[k] = sameNumber[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_date: b.bill_date || null, wave_business_id: b.wave_business_id || null, bill_type: b.bill_type || null }); });
   }
   var sameIdentity = await sameIdentityFor(db, bills); // v55.83-WZ — the same bill by vendor + number, any date / amount / spelling
   // releases known to the business (warehouse orders + invoices)
