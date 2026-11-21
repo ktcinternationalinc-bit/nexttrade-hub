@@ -58,8 +58,9 @@ try {
   var entriesBefore = (await db.query('SELECT md5(string_agg(e::text, \'|\' ORDER BY e.id)) AS h, count(*)::int AS n FROM (SELECT id, party, bucket, amount, kind, bank_transaction_id, bill_id, entry_date, reason FROM public.party_money_entries) e')).rows[0];
 
   var wf = fs.readFileSync(path.join(root, 'sql/v55-83-WF-party-funds.sql'), 'utf8');
+  await q(db, "ALTER TABLE public.bank_transactions ADD COLUMN IF NOT EXISTS matched_invoice_id uuid, ADD COLUMN IF NOT EXISTS transfer_group_id uuid"); // live columns the WF B2 guards read
   var run1 = await q(db, wf); var run2 = await q(db, wf);
-  check('the WF script runs, and runs again; its check says OK on every line (5)', !run1.error && !run2.error && run2.rows.length === 5 && run2.rows.every(function (r) { return r.result === 'OK'; }), [run1.error, run2.error, run2.rows]);
+  check('the WF script runs, and runs again; its check says OK on every line (7)', !run1.error && !run2.error && run2.rows.length === 7 && run2.rows.every(function (r) { return r.result === 'OK'; }), [run1.error, run2.error, run2.rows]);
   var defsAfter = (await db.query("SELECT p.proname, md5(pg_get_functiondef(p.oid)) AS d FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('hub_party_allocate', 'hub_party_money', 'hub_party_opening', 'hub_wire_line_pay', 'hub_bill_payment_cap', 'hub_bill_payment_final', 'wpkg_lock') ORDER BY 1")).rows;
   check('existing money functions are NOT redefined (allocate, money, opening, line pay, the bill caps, the wire lock: same definitions)', JSON.stringify(defsBefore) === JSON.stringify(defsAfter) && defsBefore.length === 7, [defsBefore, defsAfter]);
   var entriesAfter = (await db.query('SELECT md5(string_agg(e::text, \'|\' ORDER BY e.id)) AS h, count(*)::int AS n FROM (SELECT id, party, bucket, amount, kind, bank_transaction_id, bill_id, entry_date, reason FROM public.party_money_entries) e')).rows[0];
@@ -294,9 +295,42 @@ try {
   var XB = await bill(300, RTM); var XB2 = await bill(300, RTM);
   var r2 = await race(function (c) { return q(c, "INSERT INTO public.wire_packages (payee_kind, payee_name, fee_amount, status, funding_txn_id, created_by) VALUES ('service_provider', $1, 300, 'draft', $2, $3) RETURNING id", [RTM, X, ACTOR]); }, function (c) { return feeCall(c, { action: 'mark', party: RTM, bank_transaction_id: X, amount: 300, entry_date: '2026-11-13' }); });
   check('a draft request reserving the last 300 while someone marks a 300 fee: one waits, only ONE succeeds, the transfer never goes below zero', r2.waited && ((!r2.a.error && !r2.commitError && /is free/.test(r2.b.error || '')) || (!!(r2.a.error || r2.commitError) && !r2.b.error)) && Number((await st(X)).held) - Number((await st(X)).reserved) >= 0, [r2, await st(X)]);
-  var Y = await transfer(1000, RTM, '2026-11-14'); await confirm(db, Y, RTM); var YB = await bill(800, RTM); var YB2 = await bill(800, RTM);
+  var Y = await transfer(1000, RTM, '2026-11-14'); var YB = await bill(800, RTM); var YB2 = await bill(800, RTM);
   var r3 = await race(function (c) { return pay(c, YB, 800, Y, '2026-11-15'); }, function (c) { return pay(c, YB2, 800, Y, '2026-11-15'); });
-  check('two bill payments of 800 written onto one 1,000 transfer at once: the second waits and is refused; 800 to bills', !r3.a.error && r3.waited && !!r3.b.error && Number((await st(Y)).bills) === 800, [r3, await st(Y)]);
+  check('two bill payments of 800 linked onto one 1,000 transfer (not confirmed yet: reconciling) at once: the second waits and is refused; 800 to bills', !r3.a.error && r3.waited && !!r3.b.error && Number((await st(Y)).bills) === 800, [r3, await st(Y)]);
+  // ── (WF B2) a CONFIRMED transfer pays bills only through a request; reconciling before confirmation still works ──
+  var Z = await transfer(600, RTM, '2026-11-16'); var ZB = await bill(200, RTM); var ZB2 = await bill(100, RTM);
+  var zp1 = await pay(db, ZB, 200, Z, '2026-11-16');
+  check('before confirmation: linking a bill the transfer already paid is allowed (reconciling)', !zp1.error, zp1);
+  await confirm(db, Z, RTM);
+  var zp2 = await pay(db, ZB2, 100, Z, '2026-11-17');
+  check('after confirmation: a direct bill payment on the transfer is REFUSED — only a request (two signatures) can use it; bills stay 200', /confirmed as funds held/.test(zp2.error || '') && Number((await st(Z)).bills) === 200, [zp2, await st(Z)]);
+  var zv = await q(db, 'UPDATE public.vendor_bill_payments SET voided = true WHERE id = $1 RETURNING id', [zp1.rows[0].id]);
+  check('after confirmation: voiding an existing payment is still allowed (money goes back to the transfer: bills 0)', !zv.error && Number((await st(Z)).bills) === 0, [zv, await st(Z)]);
+  var zu = await q(db, 'UPDATE public.vendor_bill_payments SET voided = false WHERE id = $1 RETURNING id', [zp1.rows[0].id]);
+  check('after confirmation: un-voiding that payment is refused the same way (it would be a new direct use)', /confirmed as funds held/.test(zu.error || ''), zu);
+  var ZO = await transfer(100, null, '2026-11-16'); var ZOB = await bill(100, null);
+  check('an ordinary bank line (not a company transfer) is untouched: a direct payment works', !(await pay(db, ZOB, 100, ZO, '2026-11-16')).error);
+  // ── (WF B2) a money-back line is used for that only ──
+  var mi1 = await q(db, 'UPDATE public.bank_transactions SET matched_invoice_id = gen_random_uuid() WHERE id = $1', [IN1]);
+  check('a money-back line cannot later be matched to an invoice', /money back from a company/.test(mi1.error || ''), mi1);
+  var mi2 = await q(db, 'INSERT INTO public.accounting_invoice_payments (bank_transaction_id, amount) VALUES ($1, 300)', [IN1]);
+  check('a money-back line cannot later receive a customer payment', /money back from a company/.test(mi2.error || ''), mi2);
+  var mi3 = await q(db, 'UPDATE public.bank_transactions SET transfer_group_id = gen_random_uuid() WHERE id = $1', [IN1]);
+  check('a money-back line cannot later be paired as a transfer between our own accounts', /money back from a company/.test(mi3.error || ''), mi3);
+  var mi4 = await q(db, 'UPDATE public.bank_transactions SET name = name WHERE id = $1', [IN1]);
+  check('an ordinary edit of that line (no matching) still works', !mi4.error, mi4);
+  // ── (WF B2) two refunds at the same moment, and a refund rolled back ──
+  var RQ = await transfer(500, RTM, '2026-11-16'); await confirm(db, RQ, RTM);
+  var RQ1 = await incoming(300, '2026-11-17'); var RQ2 = await incoming(300, '2026-11-17');
+  var r4 = await race(function (c) { return refund(c, { party: RTM, bank_transaction_id: RQ, incoming_bank_transaction_id: RQ1, amount: 300 }); }, function (c) { return refund(c, { party: RTM, bank_transaction_id: RQ, incoming_bank_transaction_id: RQ2, amount: 300 }); });
+  check('two refunds of 300 on one 500 transfer at the same moment: the second WAITS, then is refused; refunds 300, never 600', !r4.a.error && !r4.commitError && r4.waited && /more than this transfer still holds/.test(r4.b.error || '') && Number((await st(RQ)).refunds) === 300 && Number((await st(RQ)).held) === 200, [r4, await st(RQ)]);
+  var RQ3 = await incoming(100, '2026-11-18');
+  await db.query('BEGIN'); var rb1 = await refund(db, { party: RTM, bank_transaction_id: RQ, incoming_bank_transaction_id: RQ3, amount: 100 }); await db.query('ROLLBACK');
+  var rbN = (await db.query("SELECT count(*)::int AS n FROM public.party_money_entries WHERE kind = 'refund' AND bank_transaction_id = $1", [RQ3])).rows[0].n;
+  check('a refund whose step is rolled back leaves nothing: no entry, held still 200, the line can be used again', !rb1.error && rbN === 0 && Number((await st(RQ)).held) === 200, [rb1, rbN, await st(RQ)]);
+  var rb2 = await refund(db, { party: RTM, bank_transaction_id: RQ, incoming_bank_transaction_id: RQ3, amount: 100 });
+  check('… and recording it again afterwards works once (held 100)', !rb2.error && Number((await st(RQ)).held) === 100, [rb2, await st(RQ)]);
 } catch (e) { failN++; console.log('CRASHED: ' + (e && e.stack || e)); }
 finally { try { await db.end(); } catch (e) {} try { await db2.end(); } catch (e) {} try { await server.stop(); } catch (e) {} try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (e) {} }
 console.log('\n' + pass + ' passed, ' + failN + ' failed');

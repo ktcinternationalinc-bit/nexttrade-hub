@@ -63,6 +63,7 @@ export default function AdvancesPanel(props) {
   }
   var parties = (data && data.parties) || [];
   var canMove = !!(data && data.can_move);
+  var retired = !!(data && data.wf); // v55.83-WF B2: once Funds-with-company is in the database, the old pool moves are retired (the database refuses them too)
   return <div className="mb-2">
     <div className="flex items-center gap-2 flex-wrap rounded-lg px-2 py-1" style={{ background: '#fefce8', color: '#713f12', border: '1px solid #fde68a' }}>
       <span className="text-[11px] font-extrabold">💼 Advances held:</span>
@@ -82,15 +83,15 @@ export default function AdvancesPanel(props) {
             <span className="text-[13px] font-extrabold">{p.name}</span>
             <span className="text-[11px]">{p.advance == null ? 'Balance hidden — ' + p.balance_hidden : <span>Advance <b>${fmt(p.advance)}</b> · extra fees on record <b>${fmt(p.fee)}</b></span>}</span>
             <div className="flex-1" />
-            {canMove && p.can_move_pool !== false && <button disabled={!(p.advance > 0)} onClick={function () { start(p.name, 'to_fee'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fef3c7', color: '#92400e', opacity: p.advance > 0 ? 1 : 0.4 }}>Advance → fee</button>}
+            {canMove && p.can_move_pool !== false && !retired && <button disabled={!(p.advance > 0)} onClick={function () { start(p.name, 'to_fee'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fef3c7', color: '#92400e', opacity: p.advance > 0 ? 1 : 0.4 }}>Advance → fee</button>}
             {data && data.can_opening && p.can_move_pool !== false && <button onClick={function () { start(p.name, 'opening', { as_of: '', vis: '', corrects: '' }); }} title="Money they already hold for KTC, with no KTC transfer in the Hub (super admin)" className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0' }}>Starting balance</button>}
-            {canMove && p.can_move_pool !== false && <button disabled={!(p.fee > 0)} onClick={function () { start(p.name, 'to_advance'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fef3c7', color: '#92400e', opacity: p.fee > 0 ? 1 : 0.4 }}>Fee → advance</button>}
+            {canMove && p.can_move_pool !== false && !retired && <button disabled={!(p.fee > 0)} onClick={function () { start(p.name, 'to_advance'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fef3c7', color: '#92400e', opacity: p.fee > 0 ? 1 : 0.4 }}>Fee → advance</button>}
           </div>
           <div className="text-[11px] font-bold mt-1">Payments sent to {p.name} (last ~6 months)</div>
           {(p.payments || []).slice(0, 15).map(function (l) { return <div key={l.id} className="flex items-center gap-2 text-[11px] py-0.5" style={{ borderTop: '1px solid #f1f5f9' }}>
             <span>{l.date}</span><span>${fmt(l.amount)}</span><span style={{ color: '#64748b' }}>bills / fees / advance so far ${fmt(l.used)} · not split ${fmt(l.left)}</span><div className="flex-1" />
             {canMove && l.left > 0.005 && data && data.ud_ready && <button onClick={function () { startAllocate(p, l); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: want && want.party === p.name ? '#1d4ed8' : '#dbeafe', color: want && want.party === p.name ? '#ffffff' : '#1e3a8a' }}>Pay bills / fee / advance</button>}
-            {canMove && p.can_move_pool !== false && l.left > 0.005 && <button onClick={function () { start(p.name, 'split', { bank_transaction_id: l.id, line: l }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#eff6ff', color: '#1d4ed8' }}>Split → fee / advance</button>}
+            {canMove && p.can_move_pool !== false && !retired && l.left > 0.005 && <button onClick={function () { start(p.name, 'split', { bank_transaction_id: l.id, line: l }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#eff6ff', color: '#1d4ed8' }}>Split → fee / advance</button>}
           </div>; })}
           {!(p.payments || []).length && <div className="text-[10px]" style={{ color: '#64748b' }}>No payments marked as sent to {p.name} yet (All Transactions → 🏢 flag the bank line, or below).</div>}
           {canMove && (p.possible_payments || []).length > 0 && <div className="mt-1 p-1 rounded" style={{ background: '#f8fafc', border: '1px dashed #cbd5e1' }}>
@@ -100,7 +101,7 @@ export default function AdvancesPanel(props) {
           <div className="text-[11px] font-bold mt-2">Their open bills</div>
           {(p.open_bills || []).slice(0, 25).map(function (b) { return <div key={b.id} className="flex items-center gap-2 text-[11px] py-0.5" style={{ borderTop: '1px solid #f1f5f9' }}>
             <span>{b.bill_number}</span><span>{b.vendor_name}</span><span>due {b.due_date || '—'}</span><span>open <b>${fmt(b.open)}</b></span><div className="flex-1" />
-            {canMove && p.can_move_pool !== false && p.advance > 0.005 && <button onClick={function () { start(p.name, 'apply', { bill_id: b.id, bill: b, amount: String(Math.min(b.open, p.advance)) }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#dcfce7', color: '#166534' }}>Pay from the advance</button>}
+            {canMove && p.can_move_pool !== false && !retired && p.advance > 0.005 && <button onClick={function () { start(p.name, 'apply', { bill_id: b.id, bill: b, amount: String(Math.min(b.open, p.advance)) }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#dcfce7', color: '#166534' }}>Pay from the advance</button>}
           </div>; })}
           {!(p.open_bills || []).length && <div className="text-[10px]" style={{ color: '#64748b' }}>No open bills paid via {p.name}.</div>}
           {form && form.party === p.name && <div className="mt-2 p-2 rounded flex gap-2 items-center flex-wrap" style={{ background: '#f8fafc', border: '1px solid #cbd5e1' }}>

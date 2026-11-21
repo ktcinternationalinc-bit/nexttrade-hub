@@ -246,6 +246,30 @@ export async function POST(req) {
     var MONEY_ACTIONS = { record_payment: 1, void_payment: 1, pay_bills_from_bank: 1, bank_lines_for_bills: 1 };
     // the database guards (sql/v55-83-TO-payment-guards.sql) lock the bank line and the bill and refuse any over-payment, for every
     // writer at once. Until they are installed, no bill payment is written here.
+    // v55.83-WF B2 (Max: "follow the same protocol as other wires"; Codex 21 Nov: on the server, by the ONE identity rule — a stamped
+    // transfer AND one recognised only from its bank text). Once Funds-with-company is in the database:
+    //   • a transfer CONFIRMED as funds held pays bills only through a request to that company (two signatures) — refused here;
+    //     the database refuses it too (hub_party_payment_route), whichever screen tries;
+    //   • a transfer NOT confirmed yet: linking the bills it already paid is how it is reconciled (Max, 20 Nov: "we will select the
+    //     bills associated to those transfers") — allowed only to a person with the 🔒 Advances: Manage switch.
+    // Direct payments from our bank to a vendor are unchanged. Before the database step: unchanged.
+    async function companyFundsBlock(line) {
+      if (!line || line.direction !== 'out' || line.transfer_group_id) { return null; }
+      var who = fundingIdentity({ direction: 'out', third_party_payer: line.third_party_payer, name: line.name, merchant_name: line.merchant_name });
+      if (!who) { return null; }
+      var on = false; try { var wfI = await db.rpc('hub_party_funds_installed'); on = !wfI.error && wfI.data === true; } catch (eWf) { on = false; }
+      if (!on) { return null; }
+      var stR = await db.from('party_funding_transfers').select('state').eq('bank_transaction_id', line.id).maybeSingle();
+      if (stR.error) { return readFail('whether that transfer is confirmed', stR.error); }
+      if (stR.data && stR.data.state === 'confirmed') {
+        return NextResponse.json({ error: 'This bank line is a transfer confirmed as funds held by ' + who.payer + '. Bills are paid from it only through a request to ' + who.payer + ', with the same two signatures as every wire: Wires → New → ' + who.payer + ', pick this transfer. Nothing was recorded.', blocked_by: 'company funds' }, { status: 409 });
+      }
+      var gA = await assertPermission(db, userId, 'advances.manage', req);
+      if (!gA || gA.ok !== true) {
+        return NextResponse.json({ error: 'This bank line is money sent to ' + who.payer + (who.basis === 'bank_text' ? ' (recognised from its bank text)' : '') + ' and is not confirmed yet. Linking the bills it paid is part of reconciling it, which needs the 🔒 "Advances: Manage" permission. To use money held by ' + who.payer + ' for new bills: confirm the transfer (Bills → Funds with ' + who.payer + '), then Wires → New → ' + who.payer + '. Nothing was recorded.', blocked_by: 'company funds' }, { status: 403 });
+      }
+      return null;
+    }
     async function guardsReady() { try { var gR0 = await db.rpc('hub_payment_guards_installed'); return !gR0.error && gR0.data === true; } catch (eG0) { return false; } }
     var GUARD_OFF = 'Paying bills is switched off until the payment safety update is installed: run sql/v55-83-TO-payment-guards.sql in Supabase (SQL Editor). It makes sure a bank line or a bill can never be paid twice, even when two people click at the same moment.';
     function guardErr(e) {
@@ -619,9 +643,10 @@ export async function POST(req) {
       // recorded here must name the real money-out bank line. (Wire payments are written by the wire itself, not here.)
       if (!bankId) { return NextResponse.json({ error: 'Pick the bank transaction that paid this bill. A payment cannot be recorded without its bank line.' }, { status: 400 }); }
       if (bankId) {
-        var tx = await db.from('bank_transactions').select('id, direction, pending, amount_abs, iso_currency, wave_business_id').eq('id', bankId).maybeSingle();
+        var tx = await db.from('bank_transactions').select('id, direction, pending, amount_abs, iso_currency, wave_business_id, third_party_payer, name, merchant_name, transfer_group_id').eq('id', bankId).maybeSingle();
         if (tx.error) { return readFail('the bank transaction', tx.error); }
         if (!tx.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
+        var cfR = await companyFundsBlock(tx.data); if (cfR) { return cfR; } // v55.83-WF B2
         if (tx.data.direction !== 'out') { return NextResponse.json({ error: 'A bill is paid by MONEY OUT — that bank transaction is money in.' }, { status: 409 }); }
         if (tx.data.pending === true) { return NextResponse.json({ error: 'That bank transaction is still pending — link it once it settles.' }, { status: 409 }); }
         if (pAmt > (Number(tx.data.amount_abs) || 0) + 0.005) { return NextResponse.json({ error: 'Payment is larger than the bank transaction (' + r2(tx.data.amount_abs).toFixed(2) + ').' }, { status: 409 }); }
@@ -723,9 +748,10 @@ export async function POST(req) {
       if (!(await guardsReady())) { return NextResponse.json({ error: GUARD_OFF }, { status: 503 }); }
       var reqIdP = reqIdOf(body);
       if (reqIdP) { var dupP = await db.from('vendor_bill_payments').select('id, bill_id, amount').eq('request_id', reqIdP); if (dupP.error) { return readFail('earlier payments', dupP.error); } if (dupP.data && dupP.data.length) { return NextResponse.json({ ok: true, paid: dupP.data.length, already_recorded: true }); } }
-      var bk = await db.from('bank_transactions').select('id, date, posted_date, direction, pending, amount_abs, name, merchant_name, wave_business_id').eq('id', bkId).maybeSingle();
+      var bk = await db.from('bank_transactions').select('id, date, posted_date, direction, pending, amount_abs, name, merchant_name, wave_business_id, third_party_payer, transfer_group_id').eq('id', bkId).maybeSingle();
       if (bk.error) { return readFail('the bank transaction', bk.error); }
       if (!bk.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
+      var cfP = await companyFundsBlock(bk.data); if (cfP) { return cfP; } // v55.83-WF B2
       var bkPays = await db.from('vendor_bill_payments').select('id, amount, voided').eq('bank_transaction_id', bkId);
       if (bkPays.error) { return readFail('what is already paid from that bank line', bkPays.error); } // TO — fail closed (Codex P1)
       var bkRem = bankLineRemaining(bk.data.amount_abs, (bkPays && bkPays.data) || []);

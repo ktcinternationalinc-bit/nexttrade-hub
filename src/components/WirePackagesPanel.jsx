@@ -400,6 +400,7 @@ export default function WirePackagesPanel(props) {
       });
     });
   }
+  function fundWaiting(x) { return !!x && x.status !== undefined && x.status !== null && x.confirmed !== true; } // v55.83-WF
   function fundLine() { return (ed && ed.fundId && (ed.fund || []).filter(function (x) { return x.id === ed.fundId; })[0]) || null; }
   function fillToLeft() {
     var fl = fundLine(); if (!fl) { return; }
@@ -657,13 +658,17 @@ export default function WirePackagesPanel(props) {
           {ed.fund.length === 0 && <div className="text-[12px] mb-1" style={{ color: SUB }}>{'No transfer to ' + ed.payee + ' has money left on it. To use one, mark the bank line “sent to ' + ed.payee + '” in All Transactions — or continue below with a new wire.'}</div>}
           {ed.fund.length > 0 && <div className="text-[12px] mb-2 font-bold" style={{ color: '#92400e' }}>{'💰 ' + ed.fund.length + ' transfer(s) to ' + ed.payee + ' still have money waiting for bills. Pick one: the bills you tick are then paid OUT OF that transfer (the Hub calls this a request to ' + ed.payee + '). Nothing new leaves our bank.'}</div>}
           <div className="flex flex-col gap-1.5">
-            {ed.fund.map(function (x) { var on = ed.fundId === x.id;
+            {ed.fund.map(function (x) { var on = ed.fundId === x.id; var waitC = fundWaiting(x); // v55.83-WF: not confirmed = shown, not usable
+              if (waitC) { return <div key={x.id} className="rounded-lg px-3 py-2 text-left" style={{ background: '#f1f5f9', color: MUTED, border: '2px dashed #cbd5e1' }}>
+                <div className="flex gap-3 items-center flex-wrap text-[12px]"><span className="font-extrabold">{'○ ' + x.date + ' · transfer $' + fmt(x.amount)}</span>
+                  <span className="font-extrabold" style={{ color: '#b45309' }}>{'⏳ not confirmed as funds held by ' + ed.payee + ' yet — confirm it in Bills → Funds with ' + ed.payee + ' before using it'}</span></div>
+                <div className="text-[11px]">{String(x.name || '').substring(0, 90)}</div></div>; }
               return <button key={x.id} onClick={function () { setEd(Object.assign({}, ed, { fundId: on ? null : x.id, fillMsg: null })); }} className="rounded-lg px-3 py-2 text-left" style={{ background: on ? '#ecfdf5' : '#f8fafc', color: INK, border: '2px solid ' + (on ? '#0f766e' : '#e2e8f0') }}>
                 <div className="flex gap-3 items-center flex-wrap text-[12px]">
                   <span className="font-extrabold">{(on ? '◉ ' : '○ ') + x.date + ' · transfer $' + fmt(x.amount)}</span>
                   <span style={{ color: SUB }}>{'already used $' + fmt(x.used) + (x.requests.length ? ' (' + x.requests.map(function (r) { return r.label; }).join(', ') + ')' : '')}</span>
                   <span className="font-extrabold" style={{ color: '#065f46' }}>{'left $' + fmt(x.remaining)}</span>
-                  {x.planned > 0 && <span style={{ color: '#92400e' }}>{'· $' + fmt(x.planned) + ' on requests not sent yet'}</span>}
+                  {x.planned > 0 && <span style={{ color: '#92400e' }}>{x.reserved !== undefined ? '· $' + fmt(x.reserved) + ' reserved on other requests not sent yet (already taken off “left”)' : '· $' + fmt(x.planned) + ' on requests not sent yet'}</span>}
                 </div>
                 <div className="text-[11px]" style={{ color: MUTED }}>{String(x.name || '').substring(0, 90)}</div></button>; })}
             <button onClick={function () { setEd(Object.assign({}, ed, { fundId: null, fillMsg: null })); }} className="rounded-lg px-3 py-2 text-left text-[12px] font-extrabold" style={{ background: !ed.fundId ? '#eff6ff' : '#f8fafc', color: INK, border: '2px solid ' + (!ed.fundId ? '#1d4ed8' : '#e2e8f0') }}>{(!ed.fundId ? '◉ ' : '○ ') + 'A new wire from our bank (not sent yet) — works as before'}</button>

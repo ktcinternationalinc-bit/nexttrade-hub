@@ -265,7 +265,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
 DECLARE f record; undone numeric;
 BEGIN
   IF NEW.kind IN ('advance_to_fee', 'fee_to_advance', 'apply_to_bill') OR (NEW.kind = 'payment_split' AND NEW.bucket = 'advance') THEN
-    RAISE EXCEPTION 'HUB_GUARD: this kind of advance entry is no longer used. Money sent to % that is not used yet is simply still held on its transfer — use it on a bill from "Use funds already with %", or mark services rendered on the transfer.', NEW.party, NEW.party;
+    RAISE EXCEPTION 'HUB_GUARD: this kind of advance entry is no longer used. Money sent to % that is not used yet is simply still held on its transfer — use it for bills through a request (Wires → New → %, pick the transfer), or mark services rendered on the transfer.', NEW.party, NEW.party;
   END IF;
   IF NEW.kind IN ('fee_from_transfer', 'fee_back_to_transfer', 'refund') AND NEW.source_bank_transaction_id IS NULL THEN
     RAISE EXCEPTION 'HUB_GUARD: say which transfer this belongs to.';
@@ -456,6 +456,53 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.hub_party_refund(jsonb) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.hub_party_refund(jsonb) TO service_role;
 
+-- 10. A CONFIRMED TRANSFER PAYS BILLS ONLY THROUGH A REQUEST (Max: "follow the same protocol as other wires"; Codex 21 Nov: on
+--     the server, not a screen). Once a transfer to RTM / NextTrade is CONFIRMED as funds held, a NEW bill payment on it must, by
+--     the end of its database step, be the payment of a wire line (wire_request_send and hub_wire_line_pay both write the payment
+--     and close the line in one step) — the two signatures of every wire. While a transfer is NOT confirmed, linking the bills it
+--     already paid stays possible: that is how a transfer is reconciled before it is confirmed (Max, 20 Nov: "we will select the
+--     bills associated to those transfers"); the Hub server allows that only to a person with the Advances: Manage switch, and the
+--     transfer guard still caps it at what was sent. Direct payments from our bank to a vendor, voids and existing rows: untouched.
+CREATE OR REPLACE FUNCTION public.hub_party_payment_route() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+BEGIN
+  IF NEW.voided IS TRUE OR NEW.bank_transaction_id IS NULL THEN RETURN NULL; END IF;
+  IF TG_OP = 'UPDATE' AND OLD.bank_transaction_id IS NOT DISTINCT FROM NEW.bank_transaction_id AND OLD.voided IS NOT DISTINCT FROM NEW.voided THEN RETURN NULL; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.party_funding_transfers f WHERE f.bank_transaction_id = NEW.bank_transaction_id AND f.state = 'confirmed') THEN RETURN NULL; END IF;
+  IF EXISTS (SELECT 1 FROM public.wire_package_lines l WHERE l.payment_id = NEW.id) THEN RETURN NULL; END IF;
+  RAISE EXCEPTION 'HUB_GUARD: that bank line is a transfer confirmed as funds held by RTM / NextTrade. Bills are paid from it only through a request to that company (Wires → New, pick the transfer — the same two signatures as every wire). Nothing was recorded.';
+END $fn$;
+DROP TRIGGER IF EXISTS hub_party_payment_route ON public.vendor_bill_payments;
+CREATE CONSTRAINT TRIGGER hub_party_payment_route AFTER INSERT OR UPDATE OF bank_transaction_id, voided ON public.vendor_bill_payments
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.hub_party_payment_route();
+
+-- 11. A BANK LINE RECORDED AS MONEY BACK FROM A COMPANY IS USED FOR THAT ONLY (Codex 21 Nov): it cannot later be matched to an
+--     invoice, receive a customer payment, or be paired as a transfer between our own accounts. (The refund itself already
+--     refuses a line used in any of those ways.) To use the line differently, reverse the refund first.
+CREATE OR REPLACE FUNCTION public.hub_refund_line_only() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+DECLARE v_line uuid;
+BEGIN
+  IF TG_TABLE_NAME = 'bank_transactions' THEN
+    IF (NEW.matched_invoice_id IS NOT NULL AND OLD.matched_invoice_id IS DISTINCT FROM NEW.matched_invoice_id)
+       OR (NEW.transfer_group_id IS NOT NULL AND OLD.transfer_group_id IS DISTINCT FROM NEW.transfer_group_id) THEN v_line := NEW.id; END IF;
+  ELSE
+    IF NEW.voided IS NOT TRUE THEN v_line := NEW.bank_transaction_id; END IF;
+  END IF;
+  IF v_line IS NOT NULL AND EXISTS (SELECT 1 FROM public.party_money_entries e WHERE e.kind = 'refund' AND e.bank_transaction_id = v_line) THEN
+    RAISE EXCEPTION 'HUB_GUARD: that bank line is recorded as money back from a company (Bills → Funds with the company). It cannot also be matched to an invoice, a customer payment or a transfer between our accounts. Nothing was changed.';
+  END IF;
+  RETURN NEW;
+END $fn$;
+DROP TRIGGER IF EXISTS hub_refund_line_only ON public.bank_transactions;
+CREATE TRIGGER hub_refund_line_only BEFORE UPDATE OF matched_invoice_id, transfer_group_id ON public.bank_transactions
+  FOR EACH ROW EXECUTE FUNCTION public.hub_refund_line_only();
+DROP TRIGGER IF EXISTS hub_refund_line_only ON public.accounting_invoice_payments;
+CREATE TRIGGER hub_refund_line_only BEFORE INSERT OR UPDATE OF bank_transaction_id, voided ON public.accounting_invoice_payments
+  FOR EACH ROW EXECUTE FUNCTION public.hub_refund_line_only();
+REVOKE ALL ON FUNCTION public.hub_party_payment_route() FROM public, anon, authenticated;
+REVOKE ALL ON FUNCTION public.hub_refund_line_only() FROM public, anon, authenticated;
+
 REVOKE ALL ON FUNCTION public.hub_party_transfer_state(uuid, uuid) FROM public, anon, authenticated;
 REVOKE ALL ON FUNCTION public.wire_funding_summary(uuid, uuid) FROM public, anon, authenticated;
 REVOKE ALL ON FUNCTION public.wire_request_send(uuid, uuid, date) FROM public, anon, authenticated;
@@ -475,7 +522,9 @@ CREATE OR REPLACE FUNCTION public.hub_party_funds_installed() RETURNS boolean LA
      AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'hub_party_fee')
      AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'hub_party_refund')
      AND to_regclass('public.party_funding_transfers') IS NOT NULL
-     AND (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_party_transfer_guard' AND t.tgenabled <> 'D') = 4;
+     AND (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_party_transfer_guard' AND t.tgenabled <> 'D') = 4
+     AND EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_party_payment_route' AND t.tgenabled <> 'D')
+     AND (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_refund_line_only' AND t.tgenabled <> 'D') = 2;
 $fn$;
 REVOKE ALL ON FUNCTION public.hub_party_funds_installed() FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.hub_party_funds_installed() TO service_role;
@@ -485,5 +534,7 @@ SELECT 'one calculation of what a transfer holds' AS check_item, CASE WHEN posit
 UNION ALL SELECT 'no writer can take a transfer below zero (4 guards on)', CASE WHEN public.hub_party_funds_installed() THEN 'OK' ELSE 'PROBLEM' END
 UNION ALL SELECT 'a request leaves its own reservation out when it is sent', CASE WHEN position('wire_funding_summary(w.funding_txn_id, w.id)' in pg_get_functiondef('public.wire_request_send(uuid,uuid,date)'::regprocedure)) > 0 THEN 'OK' ELSE 'PROBLEM' END
 UNION ALL SELECT 'old advance moves are retired for new entries', CASE WHEN EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_b_entry_rules' AND t.tgenabled <> 'D') THEN 'OK' ELSE 'PROBLEM' END
+UNION ALL SELECT 'a confirmed company transfer pays bills only through a request (two signatures)', CASE WHEN EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_party_payment_route' AND t.tgenabled <> 'D') THEN 'OK' ELSE 'PROBLEM' END
+UNION ALL SELECT 'a money-back line cannot also be an invoice, customer payment or own transfer', CASE WHEN (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_refund_line_only' AND t.tgenabled <> 'D') = 2 THEN 'OK' ELSE 'PROBLEM' END
 UNION ALL SELECT 'only the Hub server can mark services rendered, record a refund or confirm a transfer', CASE WHEN NOT has_function_privilege('authenticated', 'public.hub_party_fee(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_transfer_set_state(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_refund(jsonb)', 'EXECUTE')
         AND has_function_privilege('service_role', 'public.hub_party_fee(jsonb)', 'EXECUTE') THEN 'OK' ELSE 'PROBLEM' END;

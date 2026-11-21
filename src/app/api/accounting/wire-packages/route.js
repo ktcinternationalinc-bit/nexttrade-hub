@@ -136,8 +136,9 @@ export async function POST(req) {
       var fl = await fundingLines(db, { payee: String(body.payee_name || '').trim() || null, limit: 300 });
       if (fl.error) { return fail(fl.error, 500); }
       var onlyOpen = body.include_used !== true;
-      var flOut = fl.lines.filter(function (x) { return !onlyOpen || x.remaining > 0.005; });
-      return NextResponse.json({ ok: true, lines: flOut.slice(0, 100), unused_total: r2(fl.lines.reduce(function (a, x) { return a + Math.max(0, x.remaining); }, 0)) });
+      // v55.83-WF — a transfer still holding money but not confirmed yet is SHOWN (greyed: confirm it first), never usable
+      var flOut = fl.lines.filter(function (x) { return !onlyOpen || x.remaining > 0.005 || (fl.wf && !x.confirmed && x.held > 0.005); });
+      return NextResponse.json({ ok: true, wf: fl.wf === true, lines: flOut.slice(0, 100), unused_total: r2(fl.lines.reduce(function (a, x) { return a + Math.max(0, x.remaining); }, 0)) });
     }
     if (action === 'open_bills') {
       var kindO = String(body.payee_kind || ''); var payeeO = normRef(body.payee_name);
@@ -288,11 +289,12 @@ export async function POST(req) {
       if (fundS) {
         if (kindS === 'vendor') { return fail('A wire straight to a vendor leaves from our own bank — it does not draw from a transfer.'); }
         if (!isUuid(fundS)) { return fail('Pick the transfer this request draws from.'); }
-        var flS = await fundingLines(db, { ids: [fundS] });
+        var flS = await fundingLines(db, { ids: [fundS], except: body.id || null }); // v55.83-WF: this draft's own reservation is left out
         if (flS.error) { return fail(flS.error, 500); }
         fundInfo = flS.lines[0] || null;
         if (!fundInfo) { return fail('That transfer was not found among the money sent to a paid-through company. Mark it "sent to ' + payeeS + '" first (All Transactions).', 404); }
         if (payeeKey(fundInfo.payee) !== payeeKey(payeeS)) { return fail('That transfer went to ' + fundInfo.payee + ', not ' + payeeS + '.', 409); }
+        if (flS.wf && !fundInfo.confirmed) { return fail('The transfer of ' + fundInfo.date + ' is not confirmed as funds held by ' + fundInfo.payee + ' yet. Confirm it first (Bills → Funds with ' + fundInfo.payee + '), then use it — nothing was saved.', 409); } // v55.83-WF
         var billsSumS = r2(clean.reduce(function (a, c) { return a + c.amount; }, 0));
         var fitS = requestFit(fundInfo.remaining, billsSumS, feeS);
         if (!fitS.fits) { return fail('This request is $' + fitS.total.toFixed(2) + ' (bills $' + fitS.bills.toFixed(2) + ' + service fee $' + fitS.fee.toFixed(2) + ') but only $' + r2(fundInfo.remaining).toFixed(2) + ' is left on the $' + r2(fundInfo.amount).toFixed(2) + ' transfer of ' + fundInfo.date + ' — $' + fitS.over_by.toFixed(2) + ' too much. Lower or split a bill, or lower the fee.', 409); }
@@ -539,11 +541,12 @@ export async function POST(req) {
       var fundG = null;
       if (pkg.funding_txn_id) {
         try {
-          var flG = await fundingLines(db, { ids: [pkg.funding_txn_id] });
+          var flG = await fundingLines(db, { ids: [pkg.funding_txn_id], except: pkg.status === 'draft' ? pkg.id : null }); // v55.83-WF: a draft's own reservation is not counted against itself
           var fx = flG.lines && flG.lines[0];
           if (fx) {
             var mine = pkg.status === 'attached' ? t.total : 0;
             fundG = { id: fx.id, date: fx.date, name: fx.name, payee: fx.payee, currency: fx.currency, amount: fx.amount, used: fx.used, bills: fx.bills, fees: fx.fees, remaining: fx.remaining,
+              status: fx.status || null, confirmed: fx.confirmed === true, held: fx.held, reserved: fx.reserved, refunds: fx.refunds, wf: flG.wf === true, // v55.83-WF
               other_requests: fx.requests.filter(function (r) { return r.id !== pkg.id; }), this_request: mine,
               fit: pkg.status === 'draft' ? requestFit(fx.remaining, t.bills, t.fee) : null };
             fundG.currency_mismatch = await currencyMismatch(db, fx.currency, P.rawLines.map(function (l) { return l.bill_id; }));

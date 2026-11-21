@@ -146,7 +146,8 @@ export async function POST(req) {
       if (uids.length) { var uq = await db.from('users').select('id, name, email').in('id', uids.slice(0, 200)); ((uq && uq.data) || []).forEach(function (u) { names[u.id] = u.name || u.email || 'someone'; }); }
       out.forEach(function (o) { o.entries = o.entries.map(function (e) { return Object.assign({}, e, { by_name: names[e.created_by] || '' }); }); });
       var udI = await db.rpc('hub_party_ud_installed');
-      return NextResponse.json({ ok: true, parties: out, can_move: canMove, can_opening: OPENING_ENABLED && canMove && isSuper, ud_ready: !udI.error && udI.data === true, ud_missing: !udI.error && udI.data === true ? null : SQL_MISSING_UD, api_build_marker: API_BUILD_MARKER });
+      var wfA = false; try { var wfR = await db.rpc('hub_party_funds_installed'); wfA = !wfR.error && wfR.data === true; } catch (eWfA) { wfA = false; } // v55.83-WF B2
+      return NextResponse.json({ ok: true, parties: out, wf: wfA, can_move: canMove, can_opening: OPENING_ENABLED && canMove && isSuper, ud_ready: !udI.error && udI.data === true, ud_missing: !udI.error && udI.data === true ? null : SQL_MISSING_UD, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── money actions: only through the database function, which re-checks the private-money rule over the WHOLE ledger,

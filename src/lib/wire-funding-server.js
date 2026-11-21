@@ -26,22 +26,40 @@ export async function fundingLines(db, opts) {
   var drafts = [];
   try { drafts = await inChunks(db, 'wire_packages', 'id, seq, status, fee_amount, funding_txn_id, payee_name', 'funding_txn_id', ids); } catch (e) { drafts = []; }
   var draftIds = drafts.filter(function (d) { return d.status === 'draft'; }).map(function (d) { return d.id; });
-  var dLines = draftIds.length ? await inChunks(db, 'wire_package_lines', 'package_id, amount', 'package_id', draftIds) : [];
-  return { lines: rows.map(function (t) {
+  var dLines = draftIds.length ? await inChunks(db, 'wire_package_lines', 'package_id, amount, is_open', 'package_id', draftIds) : [];
+  var lines = rows.map(function (t) {
     var bills = 0; pays.forEach(function (p) { if (p.bank_transaction_id === t.id && p.voided !== true) { bills += Number(p.amount) || 0; } });
     var fees = 0; var reqs = [];
     wires.forEach(function (w) { if (w.bank_transaction_id === t.id && w.status === 'attached') { fees += Number(w.fee_amount) || 0; reqs.push({ id: w.id, label: packageLabel(w), total: r2(w.approved_total), fee: r2(w.fee_amount) }); } });
     var planned = 0; var plans = [];
     drafts.forEach(function (d) {
       if (d.funding_txn_id !== t.id || d.status !== 'draft') { return; }
-      var tot = Number(d.fee_amount) || 0; dLines.forEach(function (l) { if (l.package_id === d.id) { tot += Number(l.amount) || 0; } });
+      var tot = Number(d.fee_amount) || 0; dLines.forEach(function (l) { if (l.package_id === d.id && l.is_open !== false) { tot += Number(l.amount) || 0; } });
       planned += tot; plans.push({ id: d.id, label: packageLabel(d), total: r2(tot) });
     });
     var f = fundingLeft(t.amount_abs, bills, fees);
     return { id: t.id, date: t.posted_date || t.date, name: t.merchant_name || t.name || '', payee: t.third_party_payer, category: t.classification || null, currency: String(t.iso_currency || 'USD').toUpperCase(),
       amount: f.amount, bills: f.bills, fees: f.fees, used: f.used, remaining: f.remaining, fully_used: f.fully_used,
       requests: reqs, planned: r2(planned), planned_requests: plans };
-  }) };
+  });
+  // v55.83-WF — once the Funds-with-company step is in the database, what a transfer can still pay is the DATABASE's figure
+  // (wire_funding_summary = hub_party_transfer_state): refunds and explicit fees come off, other drafts' reservations come off,
+  // and a transfer not confirmed as funds held has nothing available. o.except = the draft being edited (its own reservation is left out).
+  // Only lines that could still have money are asked (a line already used up stays used up). Before the step: exactly as before.
+  var wf = false;
+  try { var ins = await db.rpc('hub_party_funds_installed'); wf = !ins.error && ins.data === true; } catch (eI) { wf = false; }
+  if (wf) {
+    var asked = lines.filter(function (x) { return x.remaining > 0.005 || (o.ids && o.ids.length); });
+    var res = await Promise.all(asked.map(function (x) { return db.rpc('wire_funding_summary', { p_txn: x.id, p_except: o.except || null }); }));
+    for (var i = 0; i < asked.length; i++) {
+      var rr = res[i]; if (rr.error || !rr.data || rr.data.found !== true) { return { error: 'Could not read what is left on the transfer of ' + asked[i].date + (rr.error ? ': ' + rr.error.message : '') + ' — nothing was changed.', lines: [] }; }
+      var sd = rr.data; var x = asked[i];
+      x.status = sd.status || null; x.refunds = r2(sd.refunds); x.fees = r2(sd.fees); x.used = r2(sd.used); x.held = r2(sd.held); x.reserved = r2(sd.reserved);
+      x.available = r2(sd.available); x.remaining = r2(sd.available); x.fully_used = x.held <= 0.005; x.confirmed = sd.status === 'confirmed';
+    }
+    lines.forEach(function (x) { if (x.status === undefined) { x.status = null; x.held = r2(x.remaining); x.reserved = 0; x.available = r2(x.remaining); } });
+  }
+  return { lines: lines, wf: wf };
 }
 
 // v55.83-SQ — bills whose currency is not the transfer's currency (a bill with no currency on file counts as USD,
