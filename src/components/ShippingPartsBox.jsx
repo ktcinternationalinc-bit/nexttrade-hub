@@ -19,7 +19,14 @@ export function typedParts(parts) {
   var t = num(p.trucking); var f = num(p.freight); var o = num(p.other);
   return { typed: Math.round(((t || 0) + (f || 0) + (o || 0)) * 100) / 100, known: [t, f, o].filter(function (v) { return v !== null; }).length, bond: num(p.bond) };
 }
-export function releasesOfText(text) { return String(text || '').split(/[\/,;]+/).map(function (x) { return x.trim(); }).filter(function (x) { return !!x; }).slice(0, 6); }
+// v55.83-XS (Max, Nov 21: AMERICA 1771 "1002-1176 & 1002-1177" — "why is it not being read?") — the SAME split as Profitability,
+// Orders and the customer overview (splitReleases / releasesOf): , ; / & + and the word "and". Before, "&" made ONE made-up release
+// here, so figures typed in the box went to a release no other screen reads. Same release written twice = one row.
+export function releasesOfText(text) {
+  var out = []; var seen = {};
+  String(text || '').split(/\s*(?:[,;&\/+]|\band\b)\s*/i).forEach(function (part) { var raw = part.trim(); var k = relKey(raw); if (k && !seen[k]) { seen[k] = true; out.push(raw); } });
+  return out.slice(0, 6);
+}
 function relKey(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XS',
+    date: '2026-11-21',
+    title: 'Two releases on one invoice; invoice and trucking from the detail',
+    items: [
+      { text: '**An invoice for two releases now shows both in the shipping breakdown.** When the Release # box says “1002-1176 & 1002-1177” (or uses “and” or “+”), the internal shipping breakdown on the invoice now gives each release its own row, the same way Profitability, Orders and the customer overview already read it. Before, “&” made one made-up release there, so anything typed went nowhere. Commas, slashes and semicolons work as before. Nothing is printed or sent to the customer.' }, { text: '**From the Profitability detail you can now open the invoice and type trucking or freight.** Each line in the detail has **view invoice** (Edit invoice is inside it). Under Trucking and Freight there is a box to type that release’s cost — the WHOLE release, shared over its lines by pounds — with the same save as Containers. When the bill for it is in the Hub, the box is not shown: the bill is final. A line with no release yet (for example an invoice on two releases whose pounds per release are not entered) gets no box until that is set.' },
+      { superAdminOnly: true, text: 'Technical: ShippingPartsBox releasesOfText now uses the same split as splitReleases / releasesOf ( , ; / & + and the word and; same release once). No SQL. Live check before the fix: AMERICA 1771 and 1787 had & in the Release # and no figures were saved under a merged key. Test: test-v55-83-wh-shipping-parts.js (box and Profitability read the same releases).' },
+    ],
+  },
+  {
     version: 'v55.83-WS',
     date: '2026-11-21',
     title: 'Undo a category you just picked',

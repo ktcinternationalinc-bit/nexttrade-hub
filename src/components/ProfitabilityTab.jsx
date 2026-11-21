@@ -352,6 +352,19 @@ export default function ProfitabilityTab(props) {
   }
   function Btn(p) { return <button onClick={p.onClick} disabled={p.disabled || busy} title={p.title} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={Object.assign({ background: p.bg || '#f1f5f9', color: p.color || '#334155', opacity: (p.disabled || busy) ? 0.5 : 1 }, p.style || {})}>{p.children}</button>; }
 
+  // v55.83-XS (Max, Nov 21: "I would like to open the invoice from here as well and update trucking from here as well") — in the
+  // drill-down, type the trucking / freight of THIS line's release (the whole release, shared over its lines by pounds) with the
+  // same save as Containers. Not offered when a bill for that part is in the Hub (the bill is final) or the line has no release yet.
+  function cellPartInput(c, partName) {
+    if (!canEdit || !c.release || (partName === 'trucking' ? c.trucking_kind : c.freight_kind) === 'bill') { return null; }
+    if (!data.part_estimates_ready) { return null; }
+    var k = 'cp:' + c.release + ':' + partName; var rel = c.release_raw || c.release;
+    return <div className="mt-0.5 flex gap-1 items-center justify-end flex-wrap" onClick={function (e) { e.stopPropagation(); }}>
+      <span style={{ fontSize: 9 }}>$</span>
+      <input value={draft[k] === undefined ? '' : draft[k]} onChange={function (e) { d(k, e.target.value); }} placeholder="release total" aria-label={partName + ' cost for release ' + rel} title={'The ' + partName + ' cost for the WHOLE release ' + rel + ' (shared over its lines by pounds). Used until its bill is in the Hub.'} className="nt-light px-1 py-0.5 rounded text-[10px]" style={Object.assign({ width: 72 }, inp)} />
+      <button type="button" disabled={busy || draft[k] === undefined || String(draft[k]).trim() === ''} onClick={function (e) { e.stopPropagation(); act({ action: 'set_part_estimate', release: rel, part: partName, amount: draft[k] }, (partName === 'trucking' ? 'Trucking' : 'Freight') + ' saved for release ' + rel + '. The bill replaces it when it arrives.').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[k]; setDraft(o); } }); }} className="px-1.5 py-0.5 rounded font-extrabold text-[10px]" style={{ background: '#b45309', color: '#ffffff' }}>save</button>
+    </div>;
+  }
   // ── drill-down: the cells behind a row ──
   function cellsTable(cells, invoiceRow, nested) {
     // nested (inside a report table): no scroll box of its own, so its header sticks against the report's scroll box, under the main header
@@ -360,7 +373,7 @@ export default function ProfitabilityTab(props) {
         <thead style={{ top: nested ? headH : 0, zIndex: 4 }}><tr>{['Invoice', 'Customer', 'Release', 'Original description', 'Original qty', 'Pounds', 'Goods revenue', '$ / lb', 'Transport charged', 'Goods cost', 'Cost from', 'Commission', 'Inbound', 'Bonded / brokerage', 'Goods profit', 'Trucking (our cost)', 'Freight / shipping (our cost)', 'Transport profit', 'Total profit', 'Needs attention'].map(function (h) { return <th key={h} className="px-1.5 py-1 text-left font-bold nt-th-sub" style={th}>{h}</th>; })}</tr></thead>
         <tbody>{cells.map(function (c, i) {
           return <tr key={c.invoice_id + ':' + c.line_id + ':' + c.release + ':' + i} style={{ background: i % 2 ? '#f8fafc' : '#ffffff', color: INK, borderTop: '1px solid ' + LINE }}>
-            <td className="px-1.5 py-1 font-bold">{c.invoice}<div style={{ color: SUB }}>{c.invoice_date}</div></td>
+            <td className="px-1.5 py-1 font-bold">{c.invoice}<div style={{ color: SUB }}>{c.invoice_date}</div>{c.invoice_id && <button type="button" onClick={function (e) { e.stopPropagation(); setPeekId(c.invoice_id); }} className="mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold" title={'See invoice ' + c.invoice + ' — Edit invoice is inside'} style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #93c5fd' }}>view invoice</button>}</td>
             <td className="px-1.5 py-1">{c.customer}</td>
             <td className="px-1.5 py-1">{c.release_raw || <span style={{ color: '#b45309' }}>none</span>}<div style={{ color: c.origin ? SUB : '#b45309' }}>{c.origin || 'origin unknown'}</div></td>
             <td className="px-1.5 py-1">{c.description}</td>
@@ -383,8 +396,8 @@ export default function ProfitabilityTab(props) {
             <td className="px-1.5 py-1 text-right">{cellMoney(c.inbound_allowance)}</td>
             <td className="px-1.5 py-1 text-right">{cellMoney(c.bonded)}{c.bonded_from && <div style={{ color: SUB, fontSize: 9 }}>{c.bonded_from}</div>}</td>
             <td className="px-1.5 py-1 text-right font-extrabold">{c.goods_profit === null ? <span style={{ color: "#b45309" }}>unknown</span> : pf(c.goods_profit)}</td>
-            <td className="px-1.5 py-1 text-right">{c.trucking_cost === null ? <span style={{ color: '#b45309' }}>none yet</span> : '$' + fmt(c.trucking_cost)}<div style={{ color: c.trucking_kind === 'bill' ? SUB : '#b45309', fontSize: 9 }}>{c.trucking_from || ''}</div>{c.shipping_other ? <div style={{ color: '#7c2d12', fontSize: 9, fontWeight: 700 }}>{'+ other $' + fmt(c.shipping_other) + (c.shipping_other_label ? ' (' + c.shipping_other_label + ')' : '')}</div> : null}{c.bond_inside_shipping !== null && c.bond_inside_shipping !== undefined ? <div style={{ color: SUB, fontSize: 9 }}>{'bond inside the charge: $' + fmt(c.bond_inside_shipping) + ' (already in goods cost)'}</div> : null}</td>
-            <td className="px-1.5 py-1 text-right">{c.freight_cost === null ? <span style={{ color: '#b45309' }}>none yet</span> : '$' + fmt(c.freight_cost)}<div style={{ color: c.freight_kind === 'bill' ? SUB : '#b45309', fontSize: 9 }}>{c.freight_from || ''}</div></td>
+            <td className="px-1.5 py-1 text-right">{c.trucking_cost === null ? <span style={{ color: '#b45309' }}>none yet</span> : '$' + fmt(c.trucking_cost)}<div style={{ color: c.trucking_kind === 'bill' ? SUB : '#b45309', fontSize: 9 }}>{c.trucking_from || ''}</div>{cellPartInput(c, 'trucking')}{c.shipping_other ? <div style={{ color: '#7c2d12', fontSize: 9, fontWeight: 700 }}>{'+ other $' + fmt(c.shipping_other) + (c.shipping_other_label ? ' (' + c.shipping_other_label + ')' : '')}</div> : null}{c.bond_inside_shipping !== null && c.bond_inside_shipping !== undefined ? <div style={{ color: SUB, fontSize: 9 }}>{'bond inside the charge: $' + fmt(c.bond_inside_shipping) + ' (already in goods cost)'}</div> : null}</td>
+            <td className="px-1.5 py-1 text-right">{c.freight_cost === null ? <span style={{ color: '#b45309' }}>none yet</span> : '$' + fmt(c.freight_cost)}<div style={{ color: c.freight_kind === 'bill' ? SUB : '#b45309', fontSize: 9 }}>{c.freight_from || ''}</div>{cellPartInput(c, 'freight')}</td>
             <td className="px-1.5 py-1 text-right">{c.transport_profit === undefined ? "🔒" : c.transport_profit === null ? <span style={{ color: "#b45309" }}>unknown</span> : "$" + fmt(c.transport_profit)}</td>
             <td className="px-1.5 py-1 text-right font-extrabold" style={{ color: c.complete ? (c.profit >= 0 ? '#065f46' : '#7f1d1d') : '#78350f' }}>{pf(c.profit)}<div className="font-bold">{c.complete ? 'complete' : 'known part only'}</div></td>
             <td className="px-1.5 py-1" style={{ color: '#92400e' }}>{(c.flags || []).filter(function (f, ix, arr) { return arr.indexOf(f) === ix; }).map(function (f) { return <div key={f}>{'• ' + (FLAG_WORDS[f] || f)}</div>; })}
