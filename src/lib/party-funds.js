@@ -45,8 +45,26 @@ var CLOSED = { attached: 1, cancelled: 1, reversed: 1, complete: 1 }; // a funde
 // o: { parties: [{ name }], bankLines: [{ id, date, amount_abs, third_party_payer, name, direction }], pays: [vendor_bill_payments],
 //      bills: [vendor_bills] | { id: bill }, requests: [{ id, status, funding_txn_id, fee_amount, sent_date, lines: [{ bill_id, amount, is_open }] }],
 //      entries: [party_money_entries], from, to }   (from / to: YYYY-MM-DD, both optional)
+// v55.83-WF (simple-fixes session, 21 Nov): WHICH LINES of a supplier bill an allocated portion covers — goods are counted through
+// bill lines (a product's cost per pound comes from linked lines), so each allocated row says it, in cents, never guessed:
+//   whole_bill  — the portion is the whole bill and its lines add up to it: every line with its own amount
+//   from_lines  — a part of a bill that has ONE line: that line, for the portion
+//   unresolved  — a part of a bill with several lines (no record says which), lines that do not add up to the bill, or lines not read
+//   no_lines    — the bill has no lines (transport and other bills counted from the whole bill)
+// billLines: [{ id, bill_id, amount }] or null when they could not be read.
+export function billLineSplit(portion, billTotal, billLines) {
+  if (billLines === null || billLines === undefined) { return { line_split: 'unresolved', lines: [], why: 'bill lines not read' }; }
+  var pc = Math.round((Number(portion) || 0) * 100); var tc = billTotal == null ? null : Math.round((Number(billTotal) || 0) * 100);
+  if (!billLines.length) { return { line_split: 'no_lines', lines: [] }; }
+  var ls = billLines.map(function (l) { return { bill_line_id: l.id, amount_cents: Math.round((Number(l.amount) || 0) * 100) }; });
+  var sum = ls.reduce(function (a, l) { return a + l.amount_cents; }, 0);
+  if (tc !== null && pc === tc && sum === tc) { return { line_split: 'whole_bill', lines: ls }; }
+  if (ls.length === 1 && pc > 0 && pc <= ls[0].amount_cents) { return { line_split: 'from_lines', lines: [{ bill_line_id: ls[0].bill_line_id, amount_cents: pc }] }; }
+  return { line_split: 'unresolved', lines: [], why: sum !== tc ? 'the lines do not add up to the bill' : 'part of a bill with several lines — no record says which lines' };
+}
 export function partyFundsBreakdown(o) {
   o = o || {}; var from = o.from || null; var to = o.to || null;
+  var linesOfBill = null; if (Array.isArray(o.billLines)) { linesOfBill = {}; o.billLines.forEach(function (l) { (linesOfBill[l.bill_id] = linesOfBill[l.bill_id] || []).push(l); }); }
   var billById = {}; if (Array.isArray(o.bills)) { o.bills.forEach(function (b) { billById[b.id] = b; }); } else { billById = o.bills || {}; }
   return (o.parties || []).map(function (party) {
     var pk = key(party.name);
@@ -75,7 +93,9 @@ export function partyFundsBreakdown(o) {
     (o.pays || []).forEach(function (p) {
       var t = tById[p.bank_transaction_id]; if (!t || p.voided === true) { return; }
       var b = billById[p.bill_id] || {};
+      var spl = billLineSplit(p.amount, b.total_amount, linesOfBill ? (linesOfBill[p.bill_id] || []) : null);
       t.lifetime_rows.push({ transfer_id: t.id, transfer_date: t.date, payment_id: p.id || null, paid_date: day(p.paid_date || t.date), portion: r2(p.amount), bill_id: p.bill_id,
+        line_split: spl.line_split, lines: spl.lines, line_split_why: spl.why || null,
         vendor: b.vendor_name || '(bill)', bill_number: b.bill_number || null, bill_total: b.total_amount != null ? r2(b.total_amount) : null, release_number: b.release_number || null,
         // facts ABOUT the bill only. Where and when the report recognizes this cost is NOT decided here — the report must resolve it.
         source_bill: { category: b.category || 'uncategorized', bill_date: day(b.bill_date) || null, recognition: 'unverified' } });

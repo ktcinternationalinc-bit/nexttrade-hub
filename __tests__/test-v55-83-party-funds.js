@@ -194,5 +194,22 @@ check('no example amount is hard-coded in the application code', !/66000|52000|1
 check('the helper is pure: no database, no fetch, no supabase import', !/supabase|fetch\(|\.from\(|rpc\(/.test(src));
 check('it never claims where a cost is recognized: no "counted_in", no "accounted for in" field', src.indexOf('counted_in') < 0 && src.indexOf("recognition: 'unverified'") > 0);
 
+console.log('which lines of a bill a portion covers (for counting goods through bill lines)');
+var L3 = [{ id: 'l1', bill_id: 'g', amount: 600 }, { id: 'l2', bill_id: 'g', amount: 300 }, { id: 'l3', bill_id: 'g', amount: 100.5 }];
+var s1 = F.billLineSplit(1000.5, 1000.5, L3);
+check('the whole bill: whole_bill with every line in cents (60000 + 30000 + 10050 = the portion)', s1.line_split === 'whole_bill' && s1.lines.length === 3 && s1.lines[2].amount_cents === 10050 && s1.lines.reduce(function (x, l) { return x + l.amount_cents; }, 0) === 100050, s1);
+var s2 = F.billLineSplit(400, 1000.5, L3);
+check('part of a bill with several lines: unresolved, no lines guessed', s2.line_split === 'unresolved' && s2.lines.length === 0 && /several lines/.test(s2.why), s2);
+var s3 = F.billLineSplit(250, 900, [{ id: 'one', bill_id: 'h', amount: 900 }]);
+check('part of a bill with ONE line: from_lines, that line for the portion (25000 cents)', s3.line_split === 'from_lines' && s3.lines.length === 1 && s3.lines[0].bill_line_id === 'one' && s3.lines[0].amount_cents === 25000, s3);
+check('a bill with no lines: no_lines', F.billLineSplit(500, 500, []).line_split === 'no_lines');
+var s5 = F.billLineSplit(1000, 1000, [{ id: 'x', bill_id: 'k', amount: 700 }, { id: 'y', bill_id: 'k', amount: 200 }]);
+check('lines that do not add up to the bill: unresolved, said so', s5.line_split === 'unresolved' && /do not add up/.test(s5.why), s5);
+check('lines that could not be read: unresolved, said so (never treated as no lines)', F.billLineSplit(500, 500, null).line_split === 'unresolved');
+var brL = F.partyFundsBreakdown({ parties: [{ name: 'RTM Capital' }], bankLines: [{ id: 'T', date: '2026-10-01', amount_abs: 2000, third_party_payer: 'RTM Capital', direction: 'out' }],
+  pays: [{ id: 'p1', bill_id: 'g', bank_transaction_id: 'T', amount: 1000.5, paid_date: '2026-10-02' }, { id: 'p2', bill_id: 'h', bank_transaction_id: 'T', amount: 250, paid_date: '2026-10-03' }],
+  bills: [{ id: 'g', vendor_name: 'Foam supplier', total_amount: 1000.5 }, { id: 'h', vendor_name: 'Trucker', total_amount: 900 }], billLines: L3.concat([{ id: 'one', bill_id: 'h', amount: 900 }]) });
+var rowsL = brL[0].transfers[0].lifetime_rows;
+check('each allocated row of a transfer carries line_split and lines (bill g whole_bill, bill h from_lines)', rowsL.length === 2 && rowsL[0].line_split === 'whole_bill' && rowsL[0].lines.length === 3 && rowsL[1].line_split === 'from_lines' && rowsL[1].lines[0].amount_cents === 25000, rowsL);
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

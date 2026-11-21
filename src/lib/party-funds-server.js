@@ -49,6 +49,12 @@ export async function loadPartyFunds(db, o) {
     if (!source) { return; } // an ordinary wire that is not sent yet reserves nothing; a package of another line is not ours
     requests.push({ id: w.id, status: w.status, funding_txn_id: source, bank_transaction_id: w.bank_transaction_id || null, fee_amount: w.fee_amount, sent_date: w.sent_date || w.sent_at || w.attached_at || null, lines: pkLines.filter(function (x) { return String(x.package_id) === String(w.id); }) });
   });
-  var funds = partyFundsBreakdown({ parties: o.parties, bankLines: lines, pays: o.pays || [], bills: o.bills || {}, requests: requests, entries: o.entries || [], from: o.from, to: o.to });
+  // v55.83-WF — the lines of the bills these transfers paid (which lines a portion covers). A failed read is said, never guessed.
+  var billIds = []; (o.pays || []).forEach(function (p) { if (isLine[p.bank_transaction_id] && p.bill_id && billIds.indexOf(p.bill_id) < 0) { billIds.push(p.bill_id); } });
+  var billLines = []; for (var k = 0; k < billIds.length && billLines !== null; k += 200) {
+    var bl = await db.from('vendor_bill_lines').select('id, bill_id, amount').in('bill_id', billIds.slice(k, k + 200));
+    if (bl.error) { billLines = null; } else { billLines = billLines.concat(bl.data || []); }
+  }
+  var funds = partyFundsBreakdown({ parties: o.parties, bankLines: lines, pays: o.pays || [], bills: o.bills || {}, requests: requests, entries: o.entries || [], billLines: billLines, from: o.from, to: o.to });
   return { funds: funds, lines: lines, requests: requests };
 }
