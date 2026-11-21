@@ -15,7 +15,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { askBillReader } from '../../../../lib/bill-reader-call';
 import { BILL_MEDIA_TYPES } from '../../../../lib/bill-extract';
-import { STATEMENT_PROMPT, parseStatementReading, statementAddsUp } from '../../../../lib/vendor-statement';
+import { STATEMENT_PROMPT, parseStatementReading, statementAddsUp, statementMoney } from '../../../../lib/vendor-statement';
 
 // a long statement takes the reader a while (every row is written out)
 export const maxDuration = 300;
@@ -73,6 +73,9 @@ export async function POST(req) {
     if (!parsed.statement) { return NextResponse.json({ ok: false, error: (truncated ? 'The statement is too long to read in one go — the answer was cut off. Split the file into parts and check each part. ' : '') + parsed.problems.join(' ') }, { status: 422 }); }
     if (!parsed.lines.length) { parsed.problems.push('No lines were read from this statement.'); }
     var incomplete = [];
+    // v55.83-XA — a total row on the statement that does not equal the lines read above it means a line is missing or misread
+    (parsed.totals || []).forEach(function (t) { if (!t.equals) { incomplete.push('their total row ' + statementMoney(t.value) + ' does not equal the lines read above it (' + statementMoney(t.sum_since) + ')'); } });
+    if (parsed.unknown_rows) { incomplete.push(parsed.unknown_rows + ' row(s) with only an amount (no number, date or type) that are neither an invoice we can look up nor equal to the lines above'); }
     if (truncated) { incomplete.push('the reader ran out of room and stopped before the end (the last lines may be missing) — split the file and check it in parts'); }
     var pc = Number(body.page_count); var pageCount = (typeof body.file_base64 === 'string' && pc >= 1 && pc <= 500 && Math.floor(pc) === pc) ? pc : null;
     var pagesInfo = null;
@@ -83,7 +86,8 @@ export async function POST(req) {
       if (parsed.statement.pages_read !== null && parsed.statement.pages_read < pageCount) { incomplete.push('the file has ' + pageCount + ' pages but the reader says it read ' + parsed.statement.pages_read); }
       if (noLines.length && noLines.length < pageCount) { parsed.problems.push('No lines were read from page' + (noLines.length === 1 ? ' ' : 's ') + noLines.join(', ') + ' — check those pages in the file (a cover or remittance page is normal).'); }
     }
-    return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, statement: parsed.statement, lines: parsed.lines, problems: parsed.problems,
+    // lines = every row in order, total rows included as kind 'total' (the screen re-checks them on every correction); total_rows = the checks
+    return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, statement: parsed.statement, lines: parsed.rows, total_rows: parsed.totals, problems: parsed.problems,
       truncated: truncated, incomplete: incomplete, pages: pagesInfo,
       adds_up: statementAddsUp(parsed.lines, parsed.statement.printed_total) });
   } catch (e) {

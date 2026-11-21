@@ -11,7 +11,7 @@ import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { hubFetch } from '../lib/hub-fetch';
 import { pdfPageCountFromBase64 } from '../lib/pdf-page-count-browser';
-import { checkStatement, cleanStatementLines, statementAddsUp, vendorChoices, statementCsv, guessColumns, linesFromRows, tabRows, cleanStatementAmount,
+import { checkStatement, cleanStatementLines, statementAddsUp, totalRowWords, vendorChoices, statementCsv, guessColumns, linesFromRows, tabRows, cleanStatementAmount,
   STATUS, STATUS_KEYS, SHEET_ROLES, SHEET_ROLE_LABEL, statementMoney as money } from '../lib/vendor-statement';
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
@@ -92,14 +92,15 @@ export default function VendorStatementPanel(props) {
       if (!s.use) { counts.push({ name: s.name, used: false, rows: s.rows.length }); return; }
       var r = linesFromRows(s.rows, s.header, s.map, sheet.order, sheet.sheets.length > 1 ? s.name : '');
       amb += r.ambiguous_dates; all = all.concat(r.lines);
-      counts.push({ name: s.name, used: true, source_rows: r.source_rows, lines: r.lines.length, skipped: r.skipped });
+      var ci = {}; var cl = cleanStatementLines(r.lines, [], ci); // counted the way the check will see them
+      counts.push({ name: s.name, used: true, source_rows: r.source_rows, lines: cl.filter(function (x) { return x.kind !== 'unknown'; }).length, totals: (ci.totals || []).length, unknown: ci.unknown_rows || 0, skipped: r.skipped });
     });
     var probs = [];
-    var ls = cleanStatementLines(all, probs);
+    var tInfo = {}; cleanStatementLines(all, probs, tInfo); var ls = tInfo.rows; // v55.83-XA — total rows kept in order as kind 'total', checked live
     if (amb) { probs.push(amb + ' date(s) could be read either way (like 03/04/2026) and were read as ' + (sheet.order === 'dmy' ? 'day / month' : 'month / day (US)') + ' — change it above if that is wrong.'); }
     counts.forEach(function (c) { if (!c.used) { probs.push('Sheet “' + c.name + '” (' + c.rows + ' rows) was NOT used.'); } });
     setSheet(Object.assign({}, sheet, { counts: counts }));
-    startFrom({ source: 'sheet', statement: { vendor_name: null, statement_date: null, printed_total: null, currency: 'USD' }, problems: probs, file: sheet.file, incomplete: [], pages: null }, ls);
+    startFrom({ source: 'sheet', statement: { vendor_name: null, statement_date: null, printed_total: tInfo.grand_total, printed_total_from_row: tInfo.grand_total !== null, currency: 'USD' }, problems: probs, file: sheet.file, incomplete: [], pages: null }, ls);
   }
   function setSheetPart(i, patch) { setSheet(Object.assign({}, sheet, { counts: null, sheets: sheet.sheets.map(function (s, j) { return j === i ? Object.assign({}, s, patch) : s; }) })); }
   function onFile(e) {
@@ -130,11 +131,14 @@ export default function VendorStatementPanel(props) {
 
   var choices = useMemo(function () { return vendorChoices(bills, read && read.statement && read.statement.vendor_name, payments); }, [bills, payments, read]);
   var vendorNames = Object.keys(picked).filter(function (k) { return picked[k]; });
-  var clean = useMemo(function () { return cleanStatementLines(lines.map(function (l) { return { ref: l.ref, date: l.date, due_date: l.due_date, amount: l.amount, open: l.open, kind: l.kind, po: l.po, page: l.page, src: l.src }; }), []); }, [lines]);
+  // v55.83-XA — total rows (kind 'total') are taken out of the lines and checked against the rows above them on EVERY correction
+  var cleanInfo = useMemo(function () { var inf = {}; var c = cleanStatementLines(lines.map(function (l) { return { ref: l.ref, date: l.date, due_date: l.due_date, has_date_text: l.has_date_text, type: l.type, amount: l.amount, open: l.open, kind: l.kind, po: l.po, page: l.page, src: l.src }; }), [], inf); return { clean: c, info: inf }; }, [lines]);
+  var clean = cleanInfo.clean; var totalRows = cleanInfo.info.totals || [];
   var printedN = cleanStatementAmount(printed);
   var addsUp = statementAddsUp(clean, printedN);
   var res = useMemo(function () { return checked && vendorNames.length ? checkStatement({ lines: clean, vendorNames: vendorNames, bills: bills, payments: payments, statementDate: stDate, asOf: asOf, picks: picks, statementCurrency: cur }) : null; }, [checked, vendorNames.join('|'), clean, bills, payments, stDate, asOf, picks, cur]); // eslint-disable-line
-  var incomplete = read && read.incomplete && read.incomplete.length ? read.incomplete.join('; ') : '';
+  var incompleteList = ((read && read.incomplete) || []).filter(function (x) { return !/^their total row /.test(x); }).filter(function (x) { return x.indexOf(' row(s) with only an amount ') < 0; }).concat(totalRows.filter(function (t) { return !t.equals; }).map(function (t) { return 'their total row ' + money(t.value) + ' does not equal the lines read above it (' + money(t.sum_since) + ')'; })).concat(cleanInfo.info.unknown_rows ? [cleanInfo.info.unknown_rows + ' row(s) with only an amount (no number, date or type) that are neither an invoice we can look up nor equal to the lines above'] : []);
+  var incomplete = incompleteList.join('; ');
   var warnings = [].concat(enrichWarnings.map(function (w) { return 'Wire details are incomplete: ' + w + '. A payment without its wire is not proof of anything — the status comes from the payments only.'; }),
     cur !== 'USD' ? ['The statement is in ' + cur + '. Only our bills in ' + cur + ' are compared and added up against it; bills in other currencies are shown apart, never compared or added in (no exchange rate is assumed).'] : [],
     read && read.source === 'reader' && !(read.statement && read.statement.currency) ? ['The statement does not say its currency — USD is assumed. Change it above if that is wrong.'] : []);
@@ -143,7 +147,7 @@ export default function VendorStatementPanel(props) {
   function exportCsv() {
     if (!res) { return; }
     var vend = vendorNames.join(' + ');
-    var csv = statementCsv(res, { vendor: vend, statement_date: stDate, checked_at: new Date().toISOString().substring(0, 16).replace('T', ' '), adds_up: addsUp, incomplete: incomplete, warnings: warnings });
+    var csv = statementCsv(res, { vendor: vend, statement_date: stDate, checked_at: new Date().toISOString().substring(0, 16).replace('T', ' '), adds_up: addsUp, incomplete: incomplete, warnings: warnings, total_rows: totalRows });
     var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
     a.download = 'statement-check-' + (vend.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 40) || 'vendor') + '-' + (stDate || new Date().toISOString().substring(0, 10)) + '.csv';
@@ -196,7 +200,7 @@ export default function VendorStatementPanel(props) {
             return <label key={ro} className="text-[10px] font-bold">{SHEET_ROLE_LABEL[ro] + ' '}<select value={s.map[ro] === undefined ? '' : String(s.map[ro])} onChange={function (e) { var m2 = Object.assign({}, s.map); if (e.target.value === '') { delete m2[ro]; } else { m2[ro] = Number(e.target.value); } setSheetPart(i, { map: m2 }); }} className={inp}>
               <option value="">— none —</option>{cols.map(function (c2) { return <option key={c2} value={String(c2)}>{'column ' + XLSX.utils.encode_col(c2) + (hdr[c2] ? ' · ' + String(hdr[c2]).substring(0, 24) : '')}</option>; })}</select></label>;
           })}</div>
-          {cnt && cnt.used && <div className="text-[11px] mt-1" style={{ color: cnt.skipped.length ? '#9a3412' : '#065f46' }}>{cnt.source_rows + ' rows after the headings → ' + cnt.lines + ' lines taken' + (cnt.skipped.length ? ' · ' + cnt.skipped.length + ' not taken: ' + cnt.skipped.slice(0, 12).map(function (k) { return 'row ' + k.row + ' (' + k.why + ')'; }).join(', ') + (cnt.skipped.length > 12 ? ' …' : '') : '')}</div>}
+          {cnt && cnt.used && <div className="text-[11px] mt-1" style={{ color: cnt.skipped.length ? '#9a3412' : '#065f46' }}>{cnt.source_rows + ' rows after the headings → ' + cnt.lines + ' lines taken' + (cnt.totals ? ' + ' + cnt.totals + ' total row' + (cnt.totals === 1 ? '' : 's') + ' (checked, not invoices)' : '') + (cnt.unknown ? ' + ' + cnt.unknown + ' row' + (cnt.unknown === 1 ? '' : 's') + ' with only an amount, to check' : '') + (cnt.skipped.length ? ' · ' + cnt.skipped.length + ' not taken: ' + cnt.skipped.slice(0, 12).map(function (k) { return 'row ' + k.row + ' (' + k.why + ')'; }).join(', ') + (cnt.skipped.length > 12 ? ' …' : '') : '')}</div>}
         </div>;
       })}
       <button onClick={applySheet} disabled={!sheet.sheets.some(function (s) { return s.use && s.map.ref !== undefined && (s.map.amount !== undefined || s.map.open !== undefined); })} className="mt-2 px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#0f766e', color: '#ffffff' }}>Use these columns</button>
@@ -206,7 +210,8 @@ export default function VendorStatementPanel(props) {
     {read && <div className="rounded-lg p-2 mb-2" style={{ background: '#f8fafc', border: '1px solid ' + LINE }}>
       <div className="text-[12px] font-extrabold mb-1">{'Read from ' + (read.file || 'the statement') + ': ' + clean.length + ' line' + (clean.length === 1 ? '' : 's') + (read.source === 'reader' ? ' · vendor on the statement: ' + (read.statement.vendor_name || '(not read)') : '') + (read.pages ? ' · ' + read.pages.count + ' page(s) in the file' + (read.statement.pages_read ? ', ' + read.statement.pages_read + ' read' : '') : '')}</div>
       {incomplete && <div className="rounded px-2 py-1 my-1 text-[12px] font-extrabold" style={{ background: '#7f1d1d', color: '#ffffff' }}>{'⛔ INCOMPLETE READ — this is NOT a clean check: ' + incomplete + '.'}</div>}
-      {read.problems.map(function (p, i) { return <div key={i} className="text-[11px]" style={{ color: '#9a3412' }}>{'⚠ ' + p}</div>; })}
+      {read.problems.filter(function (p) { return !/^Their total row /.test(p); }).map(function (p, i) { return <div key={i} className="text-[11px]" style={{ color: '#9a3412' }}>{'⚠ ' + p}</div>; })}
+      {totalRows.map(function (t, i) { return <div key={'t' + i} className="text-[11px] font-bold" style={{ color: t.equals ? '#065f46' : '#7f1d1d' }}>{(t.equals ? '✓ ' : '⛔ ') + totalRowWords(t) + (t.src ? ' (' + t.src + ')' : (t.page ? ' (page ' + t.page + ')' : ''))}</div>; })}
       <div className="flex gap-3 flex-wrap items-center mt-1">
         <label className="text-[11px] font-bold">Statement date <input type="date" value={stDate} onChange={function (e) { setStDate(e.target.value); }} className={inp} /></label>
         <label className="text-[11px] font-bold">Total printed on it <input value={printed} onChange={function (e) { setPrinted(e.target.value); }} placeholder="as printed" className={inp} style={{ width: 110 }} aria-label="Total printed on the statement" /></label>
@@ -241,7 +246,7 @@ export default function VendorStatementPanel(props) {
             <td><input type="date" value={l.date || ''} onChange={function (e) { setLine(i, { date: e.target.value || null }); }} className={inp} aria-label={'Date, line ' + (i + 1)} /></td>
             <td className="text-right"><input value={l.amount === null || l.amount === undefined ? '' : String(l.amount)} onChange={function (e) { var v = numIn(e.target.value); if (v !== undefined) { setLine(i, { amount: v }); } }} className={inp} style={{ width: 90, textAlign: 'right' }} aria-label={'Amount, line ' + (i + 1)} /></td>
             <td className="text-right"><input value={l.open === null || l.open === undefined ? '' : String(l.open)} onChange={function (e) { var v = numIn(e.target.value); if (v !== undefined) { setLine(i, { open: v }); } }} className={inp} style={{ width: 90, textAlign: 'right' }} aria-label={'Open, line ' + (i + 1)} /></td>
-            <td><select value={l.kind || 'invoice'} onChange={function (e) { setLine(i, { kind: e.target.value }); }} className={inp} aria-label={'Kind, line ' + (i + 1)}><option value="invoice">invoice</option><option value="credit">credit</option><option value="payment">payment</option><option value="forward">balance forward</option></select></td>
+            <td><select value={l.kind || 'invoice'} onChange={function (e) { setLine(i, { kind: e.target.value }); }} className={inp} aria-label={'Kind, line ' + (i + 1)}><option value="invoice">invoice</option><option value="credit">credit</option><option value="payment">payment</option><option value="forward">balance forward</option><option value="total">total row (not an invoice)</option></select></td>
             <td>{l.po || ''}</td>
             <td><button onClick={function () { setLines(lines.filter(function (x, j) { return j !== i; })); setPicks({}); }} title="Leave this line out of the check" className="px-1.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>✕</button></td>
           </tr>;
