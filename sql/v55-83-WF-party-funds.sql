@@ -430,7 +430,10 @@ BEGIN
     UNION ALL SELECT o.amount FROM public.order_deposit_links o WHERE o.bank_transaction_id = v_in AND o.voided IS NOT TRUE) x;
   IF v_used > 0.005 THEN RAISE EXCEPTION 'HUB_GUARD: that money-in line is already used for a customer payment.'; END IF;
   IF EXISTS (SELECT 1 FROM public.party_money_entries e WHERE e.kind = 'refund' AND e.bank_transaction_id = v_in) THEN RAISE EXCEPTION 'HUB_GUARD: that money-in line is already recorded as a refund.'; END IF;
-  IF v_amt > round(abs(coalesce(i.amount_abs, 0)), 2) + 0.005 THEN RAISE EXCEPTION 'HUB_GUARD: the refund is more than the money-in line.'; END IF;
+  -- Codex 21 Nov 09:05 P2: a refund uses the WHOLE money-in line against ONE transfer. A part would strand the rest of the deposit
+  -- (it could then neither be refunded against another transfer nor matched to an invoice). Returns covering several transfers need
+  -- allocation support, which is not built.
+  IF abs(v_amt - round(abs(coalesce(i.amount_abs, 0)), 2)) > 0.005 THEN RAISE EXCEPTION 'HUB_GUARD: a refund uses the whole money-in line ($%) against one transfer. A return that covers more than one transfer cannot be split yet.', to_char(round(abs(coalesce(i.amount_abs, 0)), 2), 'FM999,999,990.00'); END IF;
   v_date := coalesce(nullif(p->>'entry_date', '')::date, i.d);
   IF v_date < i.d THEN RAISE EXCEPTION 'HUB_GUARD: a refund cannot be dated before the money arrived (%).', i.d; END IF;
   IF v_date > (now() AT TIME ZONE 'America/New_York')::date THEN RAISE EXCEPTION 'HUB_GUARD: the date cannot be in the future.'; END IF;
@@ -456,25 +459,104 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.hub_party_refund(jsonb) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.hub_party_refund(jsonb) TO service_role;
 
--- 10. A CONFIRMED TRANSFER PAYS BILLS ONLY THROUGH A REQUEST (Max: "follow the same protocol as other wires"; Codex 21 Nov: on
---     the server, not a screen). Once a transfer to RTM / NextTrade is CONFIRMED as funds held, a NEW bill payment on it must, by
---     the end of its database step, be the payment of a wire line (wire_request_send and hub_wire_line_pay both write the payment
---     and close the line in one step) — the two signatures of every wire. While a transfer is NOT confirmed, linking the bills it
---     already paid stays possible: that is how a transfer is reconciled before it is confirmed (Max, 20 Nov: "we will select the
---     bills associated to those transfers"); the Hub server allows that only to a person with the Advances: Manage switch, and the
---     transfer guard still caps it at what was sent. Direct payments from our bank to a vendor, voids and existing rows: untouched.
+-- 10. MONEY SENT TO A COMPANY PAYS BILLS ONLY THROUGH A REQUEST — OR IS RECONCILED AS HISTORY, SAID SO (Max: "follow the same
+--     protocol as other wires" and "we will select the bills associated to those transfers"; Codex 21 Nov 09:05: keep ordinary Pay
+--     routed to Wires, and give reconciliation its OWN action with the real paid date and a reference, audited as history).
+--     A transfer marked as sent to RTM / NextTrade (or with a confirmation row): a NEW bill payment on it must, by the end of its
+--     database step, EITHER be the payment of a wire line (wire_request_send / hub_wire_line_pay write payment + line in one step)
+--     OR be written by hub_party_record_paid below (method 'historical_reconciliation', only while the transfer is NOT confirmed).
+--     Voids allowed. Existing payments untouched. Direct payments from our bank to a vendor untouched.
 CREATE OR REPLACE FUNCTION public.hub_party_payment_route() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+DECLARE b record; v_state text;
 BEGIN
   IF NEW.voided IS TRUE OR NEW.bank_transaction_id IS NULL THEN RETURN NULL; END IF;
   IF TG_OP = 'UPDATE' AND OLD.bank_transaction_id IS NOT DISTINCT FROM NEW.bank_transaction_id AND OLD.voided IS NOT DISTINCT FROM NEW.voided THEN RETURN NULL; END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.party_funding_transfers f WHERE f.bank_transaction_id = NEW.bank_transaction_id AND f.state = 'confirmed') THEN RETURN NULL; END IF;
+  SELECT t.direction, t.transfer_group_id, nullif(trim(coalesce(t.third_party_payer, '')), '') AS payer INTO b FROM public.bank_transactions t WHERE t.id = NEW.bank_transaction_id;
+  SELECT f.state INTO v_state FROM public.party_funding_transfers f WHERE f.bank_transaction_id = NEW.bank_transaction_id;
+  IF v_state IS NULL AND (b.payer IS NULL OR coalesce(b.direction, '') <> 'out' OR b.transfer_group_id IS NOT NULL) THEN RETURN NULL; END IF; -- not money sent to a company
   IF EXISTS (SELECT 1 FROM public.wire_package_lines l WHERE l.payment_id = NEW.id) THEN RETURN NULL; END IF;
-  RAISE EXCEPTION 'HUB_GUARD: that bank line is a transfer confirmed as funds held by RTM / NextTrade. Bills are paid from it only through a request to that company (Wires → New, pick the transfer — the same two signatures as every wire). Nothing was recorded.';
+  IF NEW.method = 'historical_reconciliation' AND NEW.request_id IS NOT NULL AND NEW.request_id = coalesce(current_setting('hub.party_reconcile', true), '') AND coalesce(v_state, 'needs_reconciliation') <> 'confirmed' THEN RETURN NULL; END IF;
+  RAISE EXCEPTION 'HUB_GUARD: that bank line is money sent to RTM / NextTrade. New bills are paid from it only through a request to that company (Wires → New, pick the transfer — the same two signatures as every wire). Bills it ALREADY paid are recorded in Bills → Funds with the company → Record bills already paid. Nothing was recorded.';
 END $fn$;
 DROP TRIGGER IF EXISTS hub_party_payment_route ON public.vendor_bill_payments;
 CREATE CONSTRAINT TRIGGER hub_party_payment_route AFTER INSERT OR UPDATE OF bank_transaction_id, voided ON public.vendor_bill_payments
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.hub_party_payment_route();
+
+-- 10b. RECORD BILLS ALREADY PAID BY THE COMPANY OUT OF A TRANSFER (historical reconciliation, before the transfer is confirmed).
+--     It is NOT a new payment and sends nothing: it documents what the company already paid. Required: the date the company
+--     actually paid (never taken from our transfer date), a payment reference / proof, the person's explicit statement that these
+--     bills were already paid out of this transfer, a reason. One click id = one result. Locks: company → bank line → each bill.
+--     The bill caps and the transfer guard still apply. p: { party, bank_transaction_id, bills: [{ bill_id, amount }], paid_date,
+--     reference, already_paid (true), reason, actor, request_id, allow_closed }
+CREATE TABLE IF NOT EXISTS public.party_reconciliations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), party text NOT NULL, bank_transaction_id uuid NOT NULL, request_id text NOT NULL UNIQUE,
+  paid_date date NOT NULL, reference text NOT NULL, reason text NOT NULL, bills jsonb NOT NULL, payment_ids uuid[] NOT NULL,
+  created_by uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE public.party_reconciliations ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.party_reconciliations FROM anon, authenticated;
+CREATE OR REPLACE FUNCTION public.hub_party_record_paid(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+DECLARE v_party text := nullif(trim(coalesce(p->>'party', '')), ''); v_txn uuid := nullif(p->>'bank_transaction_id', '')::uuid;
+  v_date date := nullif(p->>'paid_date', '')::date; v_ref text := nullif(left(trim(coalesce(p->>'reference', '')), 200), '');
+  v_reason text := nullif(left(trim(coalesce(p->>'reason', '')), 300), ''); v_actor uuid := nullif(p->>'actor', '')::uuid;
+  v_req text := nullif(p->>'request_id', ''); v_closed_ok boolean := coalesce((p->>'allow_closed')::boolean, false);
+  v_bills jsonb := coalesce(p->'bills', '[]'::jsonb); t record; x record; v_fp text; v_old record; lock_through date; v_state text;
+  v_ids uuid[] := ARRAY[]::uuid[]; v_pid uuid; v_total numeric := 0; v_res jsonb; s jsonb; v_n int;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: no signed-in person.'; END IF;
+  IF v_party IS NULL OR NOT EXISTS (SELECT 1 FROM public.paid_through_parties z WHERE z.name = v_party) THEN RAISE EXCEPTION 'HUB_GUARD: unknown company.'; END IF;
+  IF v_txn IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: pick the transfer.'; END IF;
+  IF v_req IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: missing click id — refresh and try again.'; END IF;
+  IF coalesce((p->>'already_paid')::boolean, false) IS NOT TRUE THEN RAISE EXCEPTION 'HUB_GUARD: confirm that these bills were ALREADY paid by % out of this transfer. New bills go through Wires → New.', v_party; END IF;
+  IF v_date IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: type the date % actually paid these bills.', v_party; END IF;
+  IF v_ref IS NULL OR length(v_ref) < 3 THEN RAISE EXCEPTION 'HUB_GUARD: type the payment reference or where the proof is (at least 3 characters).'; END IF;
+  IF v_reason IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: say why (a short reason).'; END IF;
+  IF jsonb_typeof(v_bills) <> 'array' OR jsonb_array_length(v_bills) = 0 THEN RAISE EXCEPTION 'HUB_GUARD: pick at least one bill.'; END IF;
+  IF v_date > (now() AT TIME ZONE 'America/New_York')::date THEN RAISE EXCEPTION 'HUB_GUARD: the date cannot be in the future.'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('hub-party:' || v_party, 0));
+  PERFORM pg_advisory_xact_lock(hashtextextended('hub-bank-line:' || v_txn::text, 0));
+  v_fp := md5(concat_ws('|', 'record_paid', lower(v_party), v_txn::text, v_date::text, v_ref, v_reason, v_bills::text));
+  SELECT r.request_id, r.fingerprint, r.result INTO v_old FROM public.hub_party_requests r WHERE r.request_id = v_req;
+  IF v_old.request_id IS NOT NULL THEN
+    IF v_old.fingerprint = v_fp THEN RETURN v_old.result || jsonb_build_object('repeat', true); END IF;
+    RAISE EXCEPTION 'HUB_GUARD: that click was already used for something else — refresh and try again.';
+  END IF;
+  SELECT b.id, b.direction, b.pending, b.review_status, b.third_party_payer, b.transfer_group_id, coalesce(b.posted_date, b.date) AS d INTO t FROM public.bank_transactions b WHERE b.id = v_txn FOR UPDATE;
+  IF t.id IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: the transfer was not found.'; END IF;
+  IF coalesce(t.direction, '') <> 'out' OR t.transfer_group_id IS NOT NULL OR lower(trim(coalesce(t.third_party_payer, ''))) <> lower(v_party) THEN RAISE EXCEPTION 'HUB_GUARD: that is not a transfer marked as sent to %. Mark it first (All Transactions).', v_party; END IF;
+  IF t.pending IS TRUE OR coalesce(t.review_status, '') = 'duplicate' THEN RAISE EXCEPTION 'HUB_GUARD: that bank line is pending or a duplicate copy.'; END IF;
+  SELECT f.state INTO v_state FROM public.party_funding_transfers f WHERE f.bank_transaction_id = v_txn;
+  IF v_state = 'confirmed' THEN RAISE EXCEPTION 'HUB_GUARD: this transfer is already confirmed — bills it already paid are recorded BEFORE confirming. Put it back to needs reconciliation first (that changes nothing already recorded).'; END IF;
+  IF t.d IS NOT NULL AND v_date < t.d THEN RAISE EXCEPTION 'HUB_GUARD: % cannot have paid these bills out of this transfer before the money was sent (%).', v_party, t.d; END IF;
+  IF to_regclass('clickbooks_us.books') IS NOT NULL AND NOT v_closed_ok THEN
+    EXECUTE 'select locked_through from clickbooks_us.books where code = ''KTC_US''' INTO lock_through;
+    IF lock_through IS NOT NULL AND v_date <= lock_through THEN
+      RAISE EXCEPTION 'HUB_GUARD: % is inside a closed month (books are closed through %). Only a person allowed to correct closed months can date it there.', v_date, lock_through;
+    END IF;
+  END IF;
+  SELECT count(DISTINCT e->>'bill_id') INTO v_n FROM jsonb_array_elements(v_bills) e;
+  IF v_n <> jsonb_array_length(v_bills) THEN RAISE EXCEPTION 'HUB_GUARD: the same bill is listed twice.'; END IF;
+  s := public.hub_party_transfer_state(v_txn, NULL);
+  PERFORM set_config('hub.party_reconcile', v_req, true); -- the payment rule (checked at the end of the step) lets through ONLY payments carrying THIS click id, in THIS transaction
+  FOR x IN SELECT (e->>'bill_id')::uuid AS bill_id, round((e->>'amount')::numeric, 2) AS amount FROM jsonb_array_elements(v_bills) e ORDER BY (e->>'bill_id') LOOP
+    IF x.amount IS NULL OR x.amount <= 0 THEN RAISE EXCEPTION 'HUB_GUARD: every bill needs an amount above zero.'; END IF;
+    PERFORM pg_advisory_xact_lock(hashtextextended('hub-bill:' || x.bill_id::text, 0));
+    IF NOT EXISTS (SELECT 1 FROM public.vendor_bills vb WHERE vb.id = x.bill_id AND vb.record_status = 'active') THEN RAISE EXCEPTION 'HUB_GUARD: a bill was not found or is not active.'; END IF;
+    INSERT INTO public.vendor_bill_payments (bill_id, amount, paid_date, bank_transaction_id, method, created_by, request_id)
+    VALUES (x.bill_id, x.amount, v_date, v_txn, 'historical_reconciliation', v_actor, v_req) RETURNING id INTO v_pid;
+    v_ids := v_ids || v_pid; v_total := v_total + x.amount;
+  END LOOP;
+  INSERT INTO public.party_reconciliations (party, bank_transaction_id, request_id, paid_date, reference, reason, bills, payment_ids, created_by)
+  VALUES (v_party, v_txn, v_req, v_date, v_ref, v_reason, v_bills, v_ids, v_actor);
+  v_res := jsonb_build_object('ok', true, 'action', 'record_paid', 'payments', to_jsonb(v_ids), 'total', v_total, 'paid_date', v_date, 'state', public.hub_party_transfer_state(v_txn, NULL));
+  INSERT INTO public.hub_party_requests (request_id, action, party, fingerprint, result, created_by) VALUES (v_req, 'record_paid', v_party, v_fp, v_res, v_actor);
+  INSERT INTO public.hub_audit_log (actor_id, action, entity, entity_id, details) VALUES (v_actor, 'party_historical_reconciliation', 'bank_transaction', v_txn::text,
+    jsonb_build_object('party', v_party, 'paid_date', v_date, 'reference', v_ref, 'reason', v_reason, 'bills', v_bills, 'payment_ids', to_jsonb(v_ids), 'total', v_total, 'closed_month_allowed', v_closed_ok, 'before', s));
+  RETURN v_res;
+END $fn$;
+REVOKE ALL ON FUNCTION public.hub_party_record_paid(jsonb) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.hub_party_record_paid(jsonb) TO service_role;
 
 -- 11. A BANK LINE RECORDED AS MONEY BACK FROM A COMPANY IS USED FOR THAT ONLY (Codex 21 Nov): it cannot later be matched to an
 --     invoice, receive a customer payment, or be paired as a transfer between our own accounts. (The refund itself already
@@ -521,6 +603,7 @@ CREATE OR REPLACE FUNCTION public.hub_party_funds_installed() RETURNS boolean LA
   SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'hub_party_transfer_state')
      AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'hub_party_fee')
      AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'hub_party_refund')
+     AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'hub_party_record_paid')
      AND to_regclass('public.party_funding_transfers') IS NOT NULL
      AND (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_party_transfer_guard' AND t.tgenabled <> 'D') = 4
      AND EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_party_payment_route' AND t.tgenabled <> 'D')
@@ -534,7 +617,7 @@ SELECT 'one calculation of what a transfer holds' AS check_item, CASE WHEN posit
 UNION ALL SELECT 'no writer can take a transfer below zero (4 guards on)', CASE WHEN public.hub_party_funds_installed() THEN 'OK' ELSE 'PROBLEM' END
 UNION ALL SELECT 'a request leaves its own reservation out when it is sent', CASE WHEN position('wire_funding_summary(w.funding_txn_id, w.id)' in pg_get_functiondef('public.wire_request_send(uuid,uuid,date)'::regprocedure)) > 0 THEN 'OK' ELSE 'PROBLEM' END
 UNION ALL SELECT 'old advance moves are retired for new entries', CASE WHEN EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_b_entry_rules' AND t.tgenabled <> 'D') THEN 'OK' ELSE 'PROBLEM' END
-UNION ALL SELECT 'a confirmed company transfer pays bills only through a request (two signatures)', CASE WHEN EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_party_payment_route' AND t.tgenabled <> 'D') THEN 'OK' ELSE 'PROBLEM' END
+UNION ALL SELECT 'money sent to a company pays new bills only through a request (two signatures); history only through Record bills already paid', CASE WHEN EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_party_payment_route' AND t.tgenabled <> 'D') THEN 'OK' ELSE 'PROBLEM' END
 UNION ALL SELECT 'a money-back line cannot also be an invoice, customer payment or own transfer', CASE WHEN (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'hub_refund_line_only' AND t.tgenabled <> 'D') = 2 THEN 'OK' ELSE 'PROBLEM' END
-UNION ALL SELECT 'only the Hub server can mark services rendered, record a refund or confirm a transfer', CASE WHEN NOT has_function_privilege('authenticated', 'public.hub_party_fee(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_transfer_set_state(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_refund(jsonb)', 'EXECUTE')
+UNION ALL SELECT 'only the Hub server can mark services rendered, record a refund or confirm a transfer', CASE WHEN NOT has_function_privilege('authenticated', 'public.hub_party_fee(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_transfer_set_state(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_refund(jsonb)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'public.hub_party_record_paid(jsonb)', 'EXECUTE')
         AND has_function_privilege('service_role', 'public.hub_party_fee(jsonb)', 'EXECUTE') THEN 'OK' ELSE 'PROBLEM' END;

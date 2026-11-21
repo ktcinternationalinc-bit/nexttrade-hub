@@ -24,7 +24,11 @@ import { feeExplanation, currentFundsWords } from '../../../../lib/party-funds';
 var API_BUILD_MARKER = 'v55.83-WF-party-funds';
 // (Codex 17:51 P2) NOT an instruction to install anything: the database step is released together with the screens that need it.
 var SQL_MISSING_WF = 'Confirming a transfer and marking services rendered are not switched on yet — they arrive with a later update. Nothing was changed.';
-var WRITES = { confirm: 1, unconfirm: 1, fee_mark: 1, fee_reverse: 1, refund: 1 };
+var WRITES = { confirm: 1, unconfirm: 1, fee_mark: 1, fee_reverse: 1, refund: 1, record_paid: 1 };
+// v55.83-WF (Codex 21 Nov 09:05): Money back is HELD from this release — Max decides first how returned money shows in the tax
+// report (it still counts the full transfer). The database function stays (whole money-in line only); the Hub does not call it.
+var REFUNDS_ON = false;
+var REFUNDS_HELD = 'Money back is not switched on yet in this version: Max is still deciding how money returned by the company shows in the tax report. Nothing was changed.';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -62,7 +66,7 @@ export async function POST(req) {
   try {
     var body = await req.json();
     var action = String(body.action || '');
-    if (action !== 'funds' && action !== 'refund_candidates' && !WRITES[action]) { return fail('Unknown action.'); }
+    if (action !== 'funds' && action !== 'refund_candidates' && action !== 'record_paid_candidates' && !WRITES[action]) { return fail('Unknown action.'); }
     var who = await verifiedCaller(req, body, createClient);
     if (who.error) { return fail(who.error, who.status || 401); }
     var userId = who.userId;
@@ -87,6 +91,27 @@ export async function POST(req) {
     // v55.83-WF B2 — the money-in lines a refund of this transfer could have arrived on (for the person who records it). Read-only.
     // KTC's books, settled, not a duplicate, not paired between own accounts, not matched to an invoice, not already a refund;
     // from the transfer's date on. Each line's own amount is shown (no totals). Private lines only for people who may see them.
+    if ((action === 'refund_candidates' || action === 'refund') && !REFUNDS_ON) { return fail(REFUNDS_HELD, 409); }
+    // v55.83-WF (Codex 21 Nov 09:05) — the bills a person may record as ALREADY paid by the company out of a transfer (history,
+    // before the transfer is confirmed): active, still open, not on an open wire, paid through this company or by nobody yet. Read-only.
+    if (action === 'record_paid_candidates') {
+      if (!canManage) { return fail('This needs the 🔒 "Advances: Manage" permission.', 403); }
+      var pcParty = parties.filter(function (p) { return p.name === body.party; })[0]; if (!pcParty) { return fail('Pick NextTrade or RTM.'); }
+      var vbq; try { vbq = await fetchAllRows(function () { return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, total_amount, paid_via, record_status, currency').eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('record_status', 'active').order('id', { ascending: true }); }); } catch (eVb) { return readFail('the bills', eVb); }
+      var vbs = vbq.filter(function (b) { return !b.paid_via || String(b.paid_via).toLowerCase() === pcParty.name.toLowerCase(); });
+      var vIds = vbs.map(function (b) { return b.id; }); var paidB = {}; var onWire = {};
+      for (var vi = 0; vi < vIds.length; vi += 200) {
+        var ppq = await db.from('vendor_bill_payments').select('bill_id, amount, voided').in('bill_id', vIds.slice(vi, vi + 200));
+        if (ppq.error) { return readFail('what is paid on the bills', ppq.error); }
+        (ppq.data || []).forEach(function (x) { if (x.voided !== true) { paidB[x.bill_id] = r2((paidB[x.bill_id] || 0) + (Number(x.amount) || 0)); } });
+        var wlq = await db.from('wire_package_lines').select('bill_id, amount, is_open').in('bill_id', vIds.slice(vi, vi + 200));
+        if (wlq.error) { return readFail('the wires the bills are on', wlq.error); }
+        (wlq.data || []).forEach(function (x) { if (x.is_open === true) { onWire[x.bill_id] = r2((onWire[x.bill_id] || 0) + (Number(x.amount) || 0)); } });
+      }
+      var cb = vbs.map(function (b) { return { id: b.id, vendor: b.vendor_name || '', bill_number: b.bill_number || '', bill_date: b.bill_date || null, total: r2(b.total_amount), currency: String(b.currency || 'USD').toUpperCase(), open: r2((Number(b.total_amount) || 0) - (paidB[b.id] || 0) - (onWire[b.id] || 0)), via: b.paid_via || null }; })
+        .filter(function (b) { return b.open > 0.005; }).sort(function (a, b) { return String(a.bill_date || '') < String(b.bill_date || '') ? -1 : 1; });
+      return NextResponse.json({ ok: true, bills: cb.slice(0, 500) });
+    }
     if (action === 'refund_candidates') {
       if (!canManage) { return fail('This needs the 🔒 "Advances: Manage" permission.', 403); }
       var tq = await db.from('bank_transactions').select('id, date, posted_date, wave_business_id, account_id, third_party_payer').eq('id', body.bank_transaction_id || '').maybeSingle();
@@ -189,6 +214,21 @@ export async function POST(req) {
     }
     var rid = typeof body.request_id === 'string' && body.request_id.trim().length >= 8 ? body.request_id.trim().substring(0, 80) : null;
     if (!rid) { return fail('Refresh the page and try again (missing click id).'); }
+    // v55.83-WF (Codex 21 Nov 09:05) — RECORD BILLS ALREADY PAID by the company out of this transfer: history, not a new payment,
+    // before the transfer is confirmed. The real date the company paid (never our transfer date), a reference / where the proof is,
+    // the person's statement that they were already paid, a reason. Database: hub_party_record_paid (locks, caps, audit).
+    if (action === 'record_paid') {
+      var rpBills = Array.isArray(body.bills) ? body.bills : [];
+      if (!rpBills.length || rpBills.length > 50) { return fail('Pick the bills (1 to 50).'); }
+      var rpClean = []; for (var bi = 0; bi < rpBills.length; bi++) { var bx = rpBills[bi] || {}; var ba = r2(bx.amount); if (!bx.bill_id || !(ba > 0)) { return fail('Every bill needs an amount above zero.'); } rpClean.push({ bill_id: String(bx.bill_id), amount: ba }); }
+      if (!isDate(body.paid_date)) { return fail('Type the date ' + party.name + ' actually paid these bills.'); }
+      var rpRef = String(body.reference || '').trim().substring(0, 200); if (rpRef.length < 3) { return fail('Type the payment reference or where the proof is.'); }
+      if (body.already_paid !== true) { return fail('Tick that these bills were ALREADY paid by ' + party.name + ' out of this transfer. New bills go through Wires → New.'); }
+      var rpWhy = String(body.reason || '').trim().substring(0, 300); if (rpWhy.length < 3) { return fail('Say why, in a few words.'); }
+      var rpR = await db.rpc('hub_party_record_paid', { p: { party: party.name, bank_transaction_id: line.id, bills: rpClean, paid_date: body.paid_date, reference: rpRef, already_paid: true, reason: rpWhy, actor: userId, request_id: rid, allow_closed: isSuper && body.allow_closed === true } });
+      if (rpR.error) { return guardFail(rpR, canTotalsW); }
+      var rpA = ack(action, rpR.data); rpA.bills = rpClean.length; return NextResponse.json(rpA);
+    }
     var amount = r2(body.amount);
     if (!(amount > 0)) { return fail('Type an amount above zero.'); }
     var reason = String(body.reason || '').trim().substring(0, 300);

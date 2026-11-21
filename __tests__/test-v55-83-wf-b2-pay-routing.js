@@ -72,18 +72,19 @@ console.log('WF B2 — bills from money held by a company go through a request')
   var p0 = await call(bills, 'u1', payBody(TC, B1, 100, 'r-0'));
   check('BEFORE the WF database step: Bills → Pay on an RTM transfer works as before', p0.ok === true && paysOn(TC) === 1, p0);
   db = seed(); global.__db = db; setWf(true);
-  // ── confirmed transfer: refused for everyone, both direct paths
+  // ── once the step is on, money sent to a company is never paid from Bills → Pay / record a payment (Codex 21 Nov 09:05)
   var p1 = await call(bills, 'u2', payBody(TC, B1, 100, 'r-1'));
-  check('WF on, CONFIRMED transfer: Bills → Pay is refused (409) even with Advances: Manage, nothing recorded, the answer says Wires → New', p1._status === 409 && /only through a request to RTM Capital/.test(p1.error || '') && /Wires → New/.test(p1.error || '') && paysOn(TC) === 0, p1);
+  check('WF on, CONFIRMED transfer: Bills → Pay is refused (409) even with Advances: Manage, nothing recorded, the answer says Wires → New', p1._status === 409 && /Wires → New → RTM Capital/.test(p1.error || '') && paysOn(TC) === 0, p1);
   var p2 = await call(bills, 'u2', { action: 'record_payment', bill_id: B1, amount: 100, paid_date: '2026-11-11', bank_transaction_id: TC, method: 'bank' });
-  check('WF on, CONFIRMED transfer: “record a payment” is refused the same way', p2._status === 409 && /only through a request/.test(p2.error || '') && paysOn(TC) === 0, p2);
-  // ── not confirmed: reconciling needs the switch
+  check('WF on, CONFIRMED transfer: “record a payment” is refused the same way', p2._status === 409 && /Wires → New/.test(p2.error || '') && paysOn(TC) === 0, p2);
   var p3 = await call(bills, 'u1', payBody(TU, B1, 100, 'r-3'));
-  check('WF on, transfer NOT confirmed: linking a bill without 🔒 Advances: Manage is refused (403), nothing recorded', p3._status === 403 && /Advances: Manage/.test(p3.error || '') && paysOn(TU) === 0, p3);
+  check('WF on, transfer NOT confirmed: Bills → Pay is refused too — a new unpaid bill cannot use it; the answer names Record bills already paid for history', p3._status === 409 && /Record bills already paid/.test(p3.error || '') && paysOn(TU) === 0, p3);
   var p4 = await call(bills, 'u2', payBody(TU, B1, 100, 'r-4'));
-  check('WF on, transfer NOT confirmed: the person with the switch links the bill it paid (reconciling)', p4.ok === true && paysOn(TU) === 1, p4);
-  var p5 = await call(bills, 'u1', payBody(TX, B2, 50, 'r-5'));
-  check('WF on, a transfer recognised ONLY from its bank text (to CHK ...9909) gets the same rule — not an escape route', p5._status === 403 && /recognised from its bank text/.test(p5.error || '') && paysOn(TX) === 0, p5);
+  check('WF on, transfer NOT confirmed: even the person with 🔒 Advances: Manage cannot use the ordinary Pay path (history has its own action)', p4._status === 409 && paysOn(TU) === 0, p4);
+  var p4b = await call(bills, 'u2', { action: 'record_payment', bill_id: B1, amount: 100, paid_date: '2026-11-11', bank_transaction_id: TU, method: 'bank' });
+  check('WF on, transfer NOT confirmed: “record a payment” refused the same way', p4b._status === 409 && paysOn(TU) === 0, p4b);
+  var p5 = await call(bills, 'u2', payBody(TX, B2, 50, 'r-5'));
+  check('WF on, a transfer recognised ONLY from its bank text (to CHK ...9909) gets the same rule — not an escape route; it says to mark the line first', p5._status === 409 && /recognised from its bank text/.test(p5.error || '') && /mark the line as sent to RTM Capital first/.test(p5.error || '') && paysOn(TX) === 0, p5);
   var p6 = await call(bills, 'u1', payBody(TO, B2, 200, 'r-6'));
   check('WF on, an ordinary bank line (a wire to a vendor): Bills → Pay unchanged', p6.ok === true && paysOn(TO) === 1, p6);
   // ── Wires → New: the database's figure

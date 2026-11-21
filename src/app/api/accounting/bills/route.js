@@ -246,29 +246,19 @@ export async function POST(req) {
     var MONEY_ACTIONS = { record_payment: 1, void_payment: 1, pay_bills_from_bank: 1, bank_lines_for_bills: 1 };
     // the database guards (sql/v55-83-TO-payment-guards.sql) lock the bank line and the bill and refuse any over-payment, for every
     // writer at once. Until they are installed, no bill payment is written here.
-    // v55.83-WF B2 (Max: "follow the same protocol as other wires"; Codex 21 Nov: on the server, by the ONE identity rule — a stamped
-    // transfer AND one recognised only from its bank text). Once Funds-with-company is in the database:
-    //   • a transfer CONFIRMED as funds held pays bills only through a request to that company (two signatures) — refused here;
-    //     the database refuses it too (hub_party_payment_route), whichever screen tries;
-    //   • a transfer NOT confirmed yet: linking the bills it already paid is how it is reconciled (Max, 20 Nov: "we will select the
-    //     bills associated to those transfers") — allowed only to a person with the 🔒 Advances: Manage switch.
-    // Direct payments from our bank to a vendor are unchanged. Before the database step: unchanged.
+    // v55.83-WF (Max: "follow the same protocol as other wires"; Codex 21 Nov 09:05: keep ordinary Pay on company funding routed to
+    // Wires → New, and give reconciliation its OWN action). Once Funds-with-company is in the database, money sent to RTM / NextTrade
+    // (stamped, or recognised only from its bank text — the ONE identity rule) is never paid from here, confirmed or not:
+    //   • new bills → a request to the company (two signatures);
+    //   • bills the company ALREADY paid out of it → Bills → Funds with the company → Record bills already paid (before confirming).
+    // The database refuses it too (hub_party_payment_route). Direct payments from our bank to a vendor are unchanged; before the step, unchanged.
     async function companyFundsBlock(line) {
       if (!line || line.direction !== 'out' || line.transfer_group_id) { return null; }
       var who = fundingIdentity({ direction: 'out', third_party_payer: line.third_party_payer, name: line.name, merchant_name: line.merchant_name });
       if (!who) { return null; }
       var on = false; try { var wfI = await db.rpc('hub_party_funds_installed'); on = !wfI.error && wfI.data === true; } catch (eWf) { on = false; }
       if (!on) { return null; }
-      var stR = await db.from('party_funding_transfers').select('state').eq('bank_transaction_id', line.id).maybeSingle();
-      if (stR.error) { return readFail('whether that transfer is confirmed', stR.error); }
-      if (stR.data && stR.data.state === 'confirmed') {
-        return NextResponse.json({ error: 'This bank line is a transfer confirmed as funds held by ' + who.payer + '. Bills are paid from it only through a request to ' + who.payer + ', with the same two signatures as every wire: Wires → New → ' + who.payer + ', pick this transfer. Nothing was recorded.', blocked_by: 'company funds' }, { status: 409 });
-      }
-      var gA = await assertPermission(db, userId, 'advances.manage', req);
-      if (!gA || gA.ok !== true) {
-        return NextResponse.json({ error: 'This bank line is money sent to ' + who.payer + (who.basis === 'bank_text' ? ' (recognised from its bank text)' : '') + ' and is not confirmed yet. Linking the bills it paid is part of reconciling it, which needs the 🔒 "Advances: Manage" permission. To use money held by ' + who.payer + ' for new bills: confirm the transfer (Bills → Funds with ' + who.payer + '), then Wires → New → ' + who.payer + '. Nothing was recorded.', blocked_by: 'company funds' }, { status: 403 });
-      }
-      return null;
+      return NextResponse.json({ error: 'This bank line is money sent to ' + who.payer + (who.basis === 'bank_text' ? ' (recognised from its bank text)' : '') + '. It is not paid from here. New bills: Wires → New → ' + who.payer + ', pick this transfer (the same two signatures as every wire). Bills ' + who.payer + ' ALREADY paid out of it: Bills → 💰 Funds with ' + who.payer + ' → 📎 Record bills already paid' + (who.basis === 'bank_text' ? ' (mark the line as sent to ' + who.payer + ' first, in All Transactions)' : '') + '. Nothing was recorded.', blocked_by: 'company funds' }, { status: 409 });
     }
     async function guardsReady() { try { var gR0 = await db.rpc('hub_payment_guards_installed'); return !gR0.error && gR0.data === true; } catch (eG0) { return false; } }
     var GUARD_OFF = 'Paying bills is switched off until the payment safety update is installed: run sql/v55-83-TO-payment-guards.sql in Supabase (SQL Editor). It makes sure a bank line or a bill can never be paid twice, even when two people click at the same moment.';

@@ -46,6 +46,7 @@ try {
   async function st(txn, except) { return (await db.query('SELECT public.hub_party_transfer_state($1, $2) AS s', [txn, except || null])).rows[0].s; }
   var click = 0;
   function feeCall(c, p) { click++; return q(c, 'SELECT public.hub_party_fee($1::jsonb) AS r', [JSON.stringify(Object.assign({ actor: ACTOR, request_id: 'click-' + click, reason: 'services rendered' }, p))]); }
+  function recordPaid(c, txn, party, bills, date, extra) { click++; return q(c, 'SELECT public.hub_party_record_paid($1::jsonb) AS r', [JSON.stringify(Object.assign({ actor: ACTOR, request_id: 'rp-' + click, party: party, bank_transaction_id: txn, bills: bills.map(function (b) { return { bill_id: b[0], amount: b[1] }; }), paid_date: date, reference: 'RTM statement line 4', already_paid: true, reason: 'reconciling the transfer' }, extra || {}))]); }
   function confirm(c, txn, party, state) { return q(c, 'SELECT public.hub_party_transfer_set_state($1::jsonb) AS r', [JSON.stringify({ bank_transaction_id: txn, party: party, state: state || 'confirmed', actor: ACTOR, note: 'test' })]); }
   function pay(c, billId, amount, txn, date) { return q(c, 'INSERT INTO public.vendor_bill_payments (bill_id, amount, paid_date, bank_transaction_id, method, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id', [billId, amount, date || '2026-09-11', txn, 'rtm', ACTOR]); }
 
@@ -185,8 +186,10 @@ try {
 
   // ── reconciliation of an unconfirmed transfer: bills it ALREADY paid can be linked, never beyond what it sent ──
   var H = await transfer(500, RTM, '2026-07-01'); var HB = await bill(300, RTM, '2026-07-02'); var HB2 = await bill(300, RTM, '2026-07-03');
-  var h1 = await pay(db, HB, 300, H, '2026-07-05'); var h2 = await pay(db, HB2, 300, H, '2026-07-06'); var hs = await st(H);
-  check('an unconfirmed (historical) transfer: linking a 300 bill it paid is allowed; a second 300 (over the 500 sent) is refused', !h1.error && /HUB_GUARD/.test(h2.error || '') && Number(hs.bills) === 300 && Number(hs.held) === 200 && hs.status === 'needs_reconciliation' && Number(hs.available) === 0, [h1, h2, hs]);
+  var h0 = await pay(db, HB, 300, H, '2026-07-05');
+  check('an unconfirmed transfer: the ORDINARY payment path is refused too (a new unpaid bill cannot use it) — history has its own action', /Record bills already paid/.test(h0.error || '') && Number((await st(H)).bills) === 0, h0);
+  var h1 = await recordPaid(db, H, RTM, [[HB, 300]], '2026-07-05'); var h2 = await recordPaid(db, H, RTM, [[HB2, 300]], '2026-07-06'); var hs = await st(H);
+  check('an unconfirmed (historical) transfer: Record bills already paid — a 300 bill it paid is recorded; a second 300 (over the 500 sent) is refused', !h1.error && /HUB_GUARD/.test(h2.error || '') && Number(hs.bills) === 300 && Number(hs.held) === 200 && hs.status === 'needs_reconciliation' && Number(hs.available) === 0, [h1, h2, hs]);
   var plain = await transfer(100, null, '2026-07-10'); var PB = await bill(100, null, '2026-07-11'); var pp = await pay(db, PB, 100, plain, '2026-07-12');
   check('an ordinary bank line (not sent to a company) is not affected by any of this', !pp.error && (await st(plain)).status === 'not_a_company_transfer');
 
@@ -245,7 +248,10 @@ try {
   var IN2 = await incoming(500, '2026-10-11');
   var rf2 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN1, amount: 10 });
   check('refund: the same money-in line cannot be used for a second refund', /already recorded as a refund/.test(rf2.error || ''), rf2);
-  var rf3 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 400 });
+  var rfPart = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 250 });
+  check('refund: PART of a money-in line is refused (it would strand the rest of the deposit) — nothing recorded, the line stays free', /uses the whole money-in line \(\$500\.00\)/.test(rfPart.error || '') && Number((await st(RT)).refunds) === 300 && (await db.query("SELECT count(*)::int AS n FROM public.party_money_entries WHERE bank_transaction_id = $1", [IN2])).rows[0].n === 0, rfPart);
+  var IN4 = await incoming(400, '2026-10-11');
+  var rf3 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN4, amount: 400 });
   check('refund: more than the transfer still holds (400 > 300) is refused', /more than this transfer still holds/.test(rf3.error || '') && Number((await st(RT)).refunds) === 300, rf3);
   var OUTL = await incoming(50, '2026-10-12', { dir: 'out' });
   var rf4 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: OUTL, amount: 50 });
@@ -256,11 +262,12 @@ try {
   var INV = await incoming(80, '2026-10-12'); await db.query('INSERT INTO public.accounting_invoice_payments (bank_transaction_id, amount, voided) VALUES ($1, 80, false)', [INV]);
   var rf6 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: INV, amount: 80 });
   check('refund: a money-in line already used for a customer payment is refused', /customer payment/.test(rf6.error || ''), rf6);
-  var rf7 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 100, entry_date: '2026-10-05' });
+  var rf7 = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 500, entry_date: '2026-10-05' });
   check('refund: cannot be dated before the money arrived', /before the money arrived/.test(rf7.error || ''), rf7);
   var rf8 = await refund(db, { party: NT, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 100 });
   check('refund: against a transfer of the other company is refused', /not a transfer marked as sent to/.test(rf8.error || ''), rf8);
-  var sameR = { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN2, amount: 100, request_id: 'rf-same', actor: ACTOR, reason: 'part back' };
+  var IN3 = await incoming(100, '2026-10-11');
+  var sameR = { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: IN3, amount: 100, request_id: 'rf-same', actor: ACTOR, reason: 'part back' };
   var rr1 = await q(db, 'SELECT public.hub_party_refund($1::jsonb) AS r', [JSON.stringify(sameR)]); var rr2 = await q(db, 'SELECT public.hub_party_refund($1::jsonb) AS r', [JSON.stringify(sameR)]);
   check('refund: the same click twice records it ONCE (second answer says repeat)', rr1.rows && rr2.rows && rr2.rows[0].r.repeat === true && Number((await st(RT)).refunds) === 400 && Number((await st(RT)).held) === 200, [rr1, rr2, await st(RT)]);
   var rfOld = await refund(db, { party: RTM, bank_transaction_id: RT, incoming_bank_transaction_id: await incoming(5, '2026-09-20'), amount: 5 });
@@ -296,19 +303,34 @@ try {
   var r2 = await race(function (c) { return q(c, "INSERT INTO public.wire_packages (payee_kind, payee_name, fee_amount, status, funding_txn_id, created_by) VALUES ('service_provider', $1, 300, 'draft', $2, $3) RETURNING id", [RTM, X, ACTOR]); }, function (c) { return feeCall(c, { action: 'mark', party: RTM, bank_transaction_id: X, amount: 300, entry_date: '2026-11-13' }); });
   check('a draft request reserving the last 300 while someone marks a 300 fee: one waits, only ONE succeeds, the transfer never goes below zero', r2.waited && ((!r2.a.error && !r2.commitError && /is free/.test(r2.b.error || '')) || (!!(r2.a.error || r2.commitError) && !r2.b.error)) && Number((await st(X)).held) - Number((await st(X)).reserved) >= 0, [r2, await st(X)]);
   var Y = await transfer(1000, RTM, '2026-11-14'); var YB = await bill(800, RTM); var YB2 = await bill(800, RTM);
-  var r3 = await race(function (c) { return pay(c, YB, 800, Y, '2026-11-15'); }, function (c) { return pay(c, YB2, 800, Y, '2026-11-15'); });
-  check('two bill payments of 800 linked onto one 1,000 transfer (not confirmed yet: reconciling) at once: the second waits and is refused; 800 to bills', !r3.a.error && r3.waited && !!r3.b.error && Number((await st(Y)).bills) === 800, [r3, await st(Y)]);
+  var r3 = await race(function (c) { return recordPaid(c, Y, RTM, [[YB, 800]], '2026-11-15'); }, function (c) { return recordPaid(c, Y, RTM, [[YB2, 800]], '2026-11-15'); });
+  check('two people record 800 already paid on one 1,000 transfer (not confirmed yet) at once: the second waits and is refused; 800 to bills', !r3.a.error && r3.waited && !!r3.b.error && Number((await st(Y)).bills) === 800, [r3, await st(Y)]);
   // ── (WF B2) a CONFIRMED transfer pays bills only through a request; reconciling before confirmation still works ──
   var Z = await transfer(600, RTM, '2026-11-16'); var ZB = await bill(200, RTM); var ZB2 = await bill(100, RTM);
-  var zp1 = await pay(db, ZB, 200, Z, '2026-11-16');
-  check('before confirmation: linking a bill the transfer already paid is allowed (reconciling)', !zp1.error, zp1);
+  var zp0 = await pay(db, ZB, 200, Z, '2026-11-16');
+  check('before confirmation: Bills → Pay style direct payment is refused (new bills go through Wires → New)', /Wires → New/.test(zp0.error || '') && Number((await st(Z)).bills) === 0, zp0);
+  var zNoRef = await recordPaid(db, Z, RTM, [[ZB, 200]], '2026-11-16', { reference: '' });
+  var zNoDate = await recordPaid(db, Z, RTM, [[ZB, 200]], null);
+  var zNoSay = await recordPaid(db, Z, RTM, [[ZB, 200]], '2026-11-16', { already_paid: false });
+  var zEarly = await recordPaid(db, Z, RTM, [[ZB, 200]], '2026-11-10');
+  var zTwice = await recordPaid(db, Z, RTM, [[ZB, 100], [ZB, 100]], '2026-11-16');
+  check('Record bills already paid needs a payment reference, the real paid date, the statement that they were ALREADY paid; not before the transfer; one bill once', /reference/.test(zNoRef.error || '') && /actually paid/.test(zNoDate.error || '') && /ALREADY paid/.test(zNoSay.error || '') && /before the money was sent/.test(zEarly.error || '') && /listed twice/.test(zTwice.error || '') && Number((await st(Z)).bills) === 0, [zNoRef, zNoDate, zNoSay, zEarly, zTwice]);
+  var zr = { actor: ACTOR, request_id: 'rp-same', party: RTM, bank_transaction_id: Z, bills: [{ bill_id: ZB, amount: 200 }], paid_date: '2026-11-16', reference: 'RTM wire copy 16 Nov', already_paid: true, reason: 'reconciling' };
+  var zp1 = await q(db, 'SELECT public.hub_party_record_paid($1::jsonb) AS r', [JSON.stringify(zr)]); var zp1b = await q(db, 'SELECT public.hub_party_record_paid($1::jsonb) AS r', [JSON.stringify(zr)]);
+  var zRow = (await db.query('SELECT reference, paid_date::text AS d, array_length(payment_ids, 1) AS n FROM public.party_reconciliations WHERE request_id = $1', ['rp-same'])).rows[0];
+  var zPay = (await db.query("SELECT method, paid_date::text AS d FROM public.vendor_bill_payments WHERE bank_transaction_id = $1 AND voided IS NOT TRUE", [Z])).rows;
+  var zAud = (await db.query("SELECT count(*)::int AS n FROM public.hub_audit_log WHERE action = 'party_historical_reconciliation' AND entity_id = $1", [String(Z)])).rows[0].n;
+  check('Record bills already paid: recorded ONCE (same click twice = repeat), dated the day the company paid, method historical_reconciliation, reference kept, audited as history', !zp1.error && zp1b.rows && zp1b.rows[0].r.repeat === true && zPay.length === 1 && zPay[0].method === 'historical_reconciliation' && zPay[0].d === '2026-11-16' && zRow && zRow.reference === 'RTM wire copy 16 Nov' && zRow.n === 1 && zAud === 1 && Number((await st(Z)).bills) === 200, [zp1, zp1b, zRow, zPay, zAud]);
+  var zFake = await q(db, "INSERT INTO public.vendor_bill_payments (bill_id, amount, paid_date, bank_transaction_id, method, created_by) VALUES ($1, 50, '2026-11-16', $2, 'historical_reconciliation', $3) RETURNING id", [ZB2, Z, ACTOR]);
+  check('writing method historical_reconciliation straight into the table (not through the action) is refused', /Record bills already paid/.test(zFake.error || ''), zFake);
   await confirm(db, Z, RTM);
-  var zp2 = await pay(db, ZB2, 100, Z, '2026-11-17');
-  check('after confirmation: a direct bill payment on the transfer is REFUSED — only a request (two signatures) can use it; bills stay 200', /confirmed as funds held/.test(zp2.error || '') && Number((await st(Z)).bills) === 200, [zp2, await st(Z)]);
-  var zv = await q(db, 'UPDATE public.vendor_bill_payments SET voided = true WHERE id = $1 RETURNING id', [zp1.rows[0].id]);
+  var zp2 = await pay(db, ZB2, 100, Z, '2026-11-17'); var zp3 = await recordPaid(db, Z, RTM, [[ZB2, 100]], '2026-11-17');
+  check('after confirmation: a direct payment is refused, and so is Record bills already paid (history is recorded before confirming); bills stay 200', /Wires → New/.test(zp2.error || '') && /already confirmed/.test(zp3.error || '') && Number((await st(Z)).bills) === 200, [zp2, zp3, await st(Z)]);
+  var zPid = (await db.query('SELECT id FROM public.vendor_bill_payments WHERE bank_transaction_id = $1', [Z])).rows[0].id;
+  var zv = await q(db, 'UPDATE public.vendor_bill_payments SET voided = true WHERE id = $1 RETURNING id', [zPid]);
   check('after confirmation: voiding an existing payment is still allowed (money goes back to the transfer: bills 0)', !zv.error && Number((await st(Z)).bills) === 0, [zv, await st(Z)]);
-  var zu = await q(db, 'UPDATE public.vendor_bill_payments SET voided = false WHERE id = $1 RETURNING id', [zp1.rows[0].id]);
-  check('after confirmation: un-voiding that payment is refused the same way (it would be a new direct use)', /confirmed as funds held/.test(zu.error || ''), zu);
+  var zu = await q(db, 'UPDATE public.vendor_bill_payments SET voided = false WHERE id = $1 RETURNING id', [zPid]);
+  check('after confirmation: un-voiding that payment is refused the same way (it would be a new direct use)', /Wires → New/.test(zu.error || ''), zu);
   var ZO = await transfer(100, null, '2026-11-16'); var ZOB = await bill(100, null);
   check('an ordinary bank line (not a company transfer) is untouched: a direct payment works', !(await pay(db, ZOB, 100, ZO, '2026-11-16')).error);
   // ── (WF B2) a money-back line is used for that only ──

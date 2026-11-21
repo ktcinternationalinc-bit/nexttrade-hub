@@ -19,6 +19,8 @@ export var STATUS_WORDS = {
   needs_reconciliation: { text: 'Needs reconciliation — not spendable yet', bg: '#fef3c7', fg: '#92400e' },
   to_confirm_identity: { text: 'Recognised from the bank text — mark it for the company first', bg: '#e0e7ff', fg: '#3730a3' },
 };
+// v55.83-WF (Codex 21 Nov 09:05): Money back is held from this release until Max decides how returned money shows in the tax report
+export var REFUNDS_ON = false;
 // what the person may do with one transfer right now (pure — tested)
 export function transferActions(t, o) {
   var can = !!(o && o.canManage) && !!(o && o.installed);
@@ -27,7 +29,8 @@ export function transferActions(t, o) {
     unconfirm: can && t.status === 'confirmed',
     markFee: can && t.status === 'confirmed' && Number(t.available) > 0.005,
     reverseFee: can && t.status !== 'to_confirm_identity',
-    refund: can && t.status !== 'to_confirm_identity' && Number(t.held) - Number(t.reserved || 0) > 0.005, // v55.83-WF B2 — money back from the company
+    refund: REFUNDS_ON && can && t.status !== 'to_confirm_identity' && Number(t.held) - Number(t.reserved || 0) > 0.005, // v55.83-WF B2 — money back from the company (held)
+    recordPaid: can && t.status === 'needs_reconciliation' && Number(t.held) > 0.005, // v55.83-WF — history: bills the company ALREADY paid out of it, before confirming
     why: !(o && o.installed) ? 'not switched on yet' : !(o && o.canManage) ? 'needs the 🔒 Advances: Manage permission' : t.status === 'to_confirm_identity' ? 'mark this bank line as sent to the company first (All Transactions)' : '',
   };
 }
@@ -60,6 +63,22 @@ export default function FundsHeldPanel(props) {
       : 'Put the transfer of ' + t.date + ' back to "needs reconciliation"?\n\nNothing already recorded changes; nothing more can be drawn from it until it is confirmed again.';
     if (!window.confirm(q)) { return; }
     act({ action: confirm ? 'confirm' : 'unconfirm', party: p.party, bank_transaction_id: t.id }, confirm ? 'Transfer confirmed' : 'Back to needs reconciliation');
+  }
+  // v55.83-WF (Codex 21 Nov 09:05) — Record bills already paid: history, not a new payment. The person ticks the bills, types the date
+  // the company actually paid them, a reference / where the proof is, and confirms they were ALREADY paid out of this transfer.
+  function openRecordPaid(p, t) {
+    setForm({ kind: 'record_paid', party: p.party, id: t.id, max: Number(t.held), date: '', reference: '', reason: '', already: false, picks: {}, bills: null, click: clickId() });
+    api({ action: 'record_paid_candidates', party: p.party }).then(function (j) { setForm(function (f) { return f && f.kind === 'record_paid' && f.id === t.id ? Object.assign({}, f, { bills: (j && j.ok) ? (j.bills || []) : [], billsErr: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the bills.') }) : f; }); });
+  }
+  function pickedTotal(fm) { var tot = 0; Object.keys((fm && fm.picks) || {}).forEach(function (k) { tot += Number(String(fm.picks[k] || '').replace(/,/g, '')) || 0; }); return Math.round(tot * 100) / 100; }
+  function saveRecordPaid() {
+    var rows = Object.keys(form.picks || {}).map(function (k) { return { bill_id: k, amount: Number(String(form.picks[k] || '').replace(/,/g, '')) || 0 }; }).filter(function (x) { return x.amount > 0; });
+    if (!rows.length) { toast.error('Tick at least one bill and give its amount.'); return; }
+    if (!form.date) { toast.error('Type the date ' + form.party + ' actually paid these bills.'); return; }
+    if (String(form.reference || '').trim().length < 3) { toast.error('Type the payment reference or where the proof is.'); return; }
+    if (form.already !== true) { toast.error('Tick that these bills were ALREADY paid by ' + form.party + ' out of this transfer.'); return; }
+    if (String(form.reason || '').trim().length < 3) { toast.error('Say why, in a few words.'); return; }
+    act({ action: 'record_paid', party: form.party, bank_transaction_id: form.id, bills: rows, paid_date: form.date, reference: form.reference, already_paid: true, reason: form.reason, allow_closed: form.closed === true, request_id: form.click }, rows.length + ' bill(s) recorded as already paid by ' + form.party);
   }
   // v55.83-WF B2 — money back: pick the money-in line it arrived on (the server lists the possible ones)
   function openRefund(p, t) {
@@ -110,12 +129,33 @@ export default function FundsHeldPanel(props) {
                 <td className="p-1 whitespace-nowrap text-right">
                   {a.confirm && <button type="button" disabled={busy} onClick={function () { setState(p, t, true); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#166534', color: '#ffffff' }}>✓ Confirm</button>}
                   {a.markFee && <button type="button" disabled={busy} onClick={function () { setForm({ kind: 'mark', party: p.party, id: t.id, amount: '', date: today(), reason: '', click: clickId(), max: t.available }); }} className="ml-1 px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Mark services rendered</button>}
+                  {a.recordPaid && <button type="button" disabled={busy} onClick={function () { openRecordPaid(p, t); }} title="Bills this company ALREADY paid out of this transfer, before it is confirmed (history — no money is sent)" className="ml-1 px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fef3c7', color: '#92400e' }}>📎 Record bills already paid</button>}
                   {a.refund && <button type="button" disabled={busy} onClick={function () { openRefund(p, t); }} className="ml-1 px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e0f2fe', color: '#075985' }}>↩ Money back</button>}
                   {a.unconfirm && <button type="button" disabled={busy} onClick={function () { setState(p, t, false); }} className="ml-1 px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Undo confirm</button>}
-                  {!a.confirm && !a.markFee && !a.unconfirm && !a.refund && a.why ? <span className="text-[10px]" style={{ color: MUTED }}>{a.why}</span> : null}
+                  {!a.confirm && !a.markFee && !a.unconfirm && !a.refund && !a.recordPaid && a.why ? <span className="text-[10px]" style={{ color: MUTED }}>{a.why}</span> : null}
                 </td>
               </tr>
-              {form && form.id === t.id && <tr><td colSpan={8} className="p-2" style={{ background: form.kind === 'mark' ? '#fff7ed' : form.kind === 'refund' ? '#eff6ff' : '#f0fdf4' }}>
+              {form && form.id === t.id && form.kind === 'record_paid' && <tr><td colSpan={8} className="p-2" style={{ background: '#fffbeb' }}>
+                <div className="text-[12px] font-extrabold">{'Record bills ' + p.party + ' ALREADY paid out of this transfer (history — no money is sent, nothing is approved here):'}</div>
+                <div className="text-[11px] mb-1" style={{ color: SUB }}>{'Only bills that were really paid by ' + p.party + ' from this money. A new bill that still needs paying goes through Wires → New → ' + p.party + ' (two signatures). Type the date ' + p.party + ' paid, not the date we sent the money.'}</div>
+                {form.bills === null ? <div className="text-[11px]" style={{ color: MUTED }}>Looking for open bills…</div> : form.billsErr ? <div className="text-[11px]" style={{ color: '#991b1b' }}>{form.billsErr}</div> : form.bills.length === 0 ? <div className="text-[11px]" style={{ color: MUTED }}>No open bill can be recorded here.</div> :
+                  <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #fde68a', borderRadius: 6 }}>{form.bills.map(function (b) { var on = Object.prototype.hasOwnProperty.call(form.picks || {}, b.id);
+                    return <label key={b.id} className="flex gap-2 items-center text-[11px] px-2 py-0.5" style={{ color: INK, borderTop: '1px solid #fef3c7' }}>
+                      <input type="checkbox" checked={on} onChange={function (e) { var pk = Object.assign({}, form.picks); if (e.target.checked) { pk[b.id] = String(b.open); } else { delete pk[b.id]; } setForm(Object.assign({}, form, { picks: pk })); }} />
+                      <span>{b.bill_date || '—'}</span><b>{b.vendor}</b><span>{'bill ' + (b.bill_number || '—')}</span><span style={{ color: MUTED }}>{'open ' + fmt(b.open) + (b.currency !== 'USD' ? ' ' + b.currency : '')}</span>
+                      {on && <input className={inp} style={Object.assign({ width: 90 }, inpS)} value={form.picks[b.id]} onChange={function (e) { var pk = Object.assign({}, form.picks); pk[b.id] = e.target.value; setForm(Object.assign({}, form, { picks: pk })); }} />}
+                    </label>; })}</div>}
+                <div className="flex gap-2 items-center flex-wrap mt-2">
+                  <span className="text-[11px] font-bold">{'picked ' + fmt(pickedTotal(form)) + ' of ' + fmt(form.max) + ' held'}</span>
+                  <span className="text-[11px] font-bold">{'date ' + p.party + ' paid'}</span><input type="date" className={inp} style={inpS} value={form.date} max={today()} onChange={function (e) { setForm(Object.assign({}, form, { date: e.target.value })); }} />
+                  <input className={inp} style={Object.assign({ minWidth: 200 }, inpS)} value={form.reference} placeholder="payment reference / where the proof is (required)" onChange={function (e) { setForm(Object.assign({}, form, { reference: e.target.value })); }} />
+                  <input className={inp} style={Object.assign({ minWidth: 180 }, inpS)} value={form.reason} placeholder="why (required)" onChange={function (e) { setForm(Object.assign({}, form, { reason: e.target.value })); }} />
+                  <label className="text-[11px] font-bold" style={{ color: '#92400e' }}><input type="checkbox" checked={form.already === true} onChange={function (e) { setForm(Object.assign({}, form, { already: e.target.checked })); }} />{' these bills were already paid by ' + p.party + ' out of this transfer'}</label>
+                  {data.can_closed_month && <label className="text-[10px] font-bold" style={{ color: SUB }}><input type="checkbox" checked={form.closed === true} onChange={function (e) { setForm(Object.assign({}, form, { closed: e.target.checked })); }} /> the date is in a closed month — record it as a correction</label>}
+                  <button type="button" disabled={busy} onClick={saveRecordPaid} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: INK, color: '#ffffff' }}>{busy ? 'Saving…' : 'Record'}</button>
+                  <button type="button" onClick={function () { setForm(null); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Cancel</button>
+                </div></td></tr>}
+              {form && form.id === t.id && form.kind !== 'record_paid' && <tr><td colSpan={8} className="p-2" style={{ background: form.kind === 'mark' ? '#fff7ed' : form.kind === 'refund' ? '#eff6ff' : '#f0fdf4' }}>
                 <div className="flex gap-2 items-center flex-wrap">
                   <span className="text-[12px] font-extrabold">{form.kind === 'mark' ? 'Mark as ' + p.party + ' services rendered (an expense; no payment is made):' : form.kind === 'refund' ? 'Money back from ' + p.party + ' on this transfer (lowers what it holds; not a fee, not income):' : 'Put a services-rendered amount back to available funds (no payment is made):'}</span>
                   {form.kind === 'refund' && (form.lines === null ? <span className="text-[11px]" style={{ color: MUTED }}>Looking for money-in lines…</span> : form.linesErr ? <span className="text-[11px]" style={{ color: '#991b1b' }}>{form.linesErr}</span> : form.lines.length === 0 ? <span className="text-[11px]" style={{ color: '#92400e' }}>No unused money-in line since this transfer — the money must be in the bank feed first.</span> :
