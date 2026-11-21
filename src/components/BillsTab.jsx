@@ -17,6 +17,7 @@ import PriceRulesPanel from './PriceRulesPanel';
 import RepeatingBillsPanel from './RepeatingBillsPanel'; // v55.83-TV
 import NextradeBillsPanel from './NextradeBillsPanel'; // v55.83-TW
 import AdvancesPanel from './AdvancesPanel'; // v55.83-TX
+import FundsHeldPanel from './FundsHeldPanel'; // v55.83-WF — funds with RTM / NextTrade, transfer by transfer
 import BillDocViewer, { BillDocToggle } from './BillDocViewer'; // v55.83-SN — the actual bill, on the screen
 import WireQuickView from './WireQuickView'; // v55.83-SU — open the wire / request that paid a bill
 import PayablesPanel from './PayablesPanel'; // v55.83-SJ
@@ -558,6 +559,7 @@ export default function BillsTab(props) {
       <span className="text-[10px] font-bold" style={{ color: '#475569' }}>{shown.length + (shown.length === 1 ? ' bill' : ' bills') + ' · ' + vendorGroups.length + (vendorGroups.length === 1 ? ' vendor' : ' vendors') + (searching ? ' match the search (of ' + beforeSearch + ')' : '')}</span>
     </div>
     {canView && <AdvancesPanel userProfile={userProfile} toast={toast} onChanged={load} />}{/* v55.83-TX — advance balances, always visible */}
+    {canView && <FundsHeldPanel userProfile={userProfile} toast={toast} onChanged={load} />}{/* v55.83-WF — funds held, per transfer (closed until opened; reads only when opened) */}
     {panel === 'nextrade' && <NextradeBillsPanel userProfile={userProfile} onClose={function () { setPanel(null); }} />}
     {panel === 'repeating' && <RepeatingBillsPanel userProfile={userProfile} canManage={canManage} cats={cats} toast={toast} onClose={function () { setPanel(null); }} onChanged={load} />}
     {panel === 'rules' && <PriceRulesPanel api={api} toast={toast} onClose={function () { setPanel(null); }} onChanged={load} />}
