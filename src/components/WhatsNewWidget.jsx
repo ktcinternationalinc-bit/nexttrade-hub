@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XD',
+    date: '2026-11-21',
+    title: 'Customs invoice saved under a customer invoice (counted nowhere)',
+    items: [
+      { text: '**New: a customs invoice under any customer invoice.** Accounting → Invoices → click an invoice to open it → scroll down to the box "🛃 Customs invoices" → "+ New customs invoice". It starts as a copy of the invoice (lines, customer, your company); change anything: descriptions, quantities, prices, HS codes, country of origin, weights, freight, the title (Customs invoice or Commercial invoice).' },
+      { text: 'The invoice number printed on it is the invoice number, and you can change it by hand (Max 21 Nov).' },
+      { text: '**It counts nowhere.** It does not change the amount due, customer balances, the Customers overview, the sales report, P&L, Profitability, Stats, tax, the accountant pack, Wave, reminders, invoice numbers, duplicate checks, payment matching or the Orders report. It is a separate paper kept with the invoice, like a proforma.' },
+      { text: 'Print / Save PDF prints it (choose "Save as PDF" in the print window). Edit saves a new version and keeps every earlier one (Versions shows them all, each can be printed). Void keeps it on record with who, when and why. Nothing is ever deleted.' },
+      { text: 'Who: people with Invoice: Create or Invoice: Edit make and edit them; anyone who can view invoices can see and print them (Max 21 Nov).' },
+      { superAdminOnly: true, text: 'Technical (XD, Codex 21 Nov plan): NEW tables accounting_customs_invoices (identity + snapshot of the invoice number / date / customer / business, no foreign key, void once, never deleted) and accounting_customs_invoice_versions (every save a new row, never changed), three locked steps hub_customs_invoice_create / _save (refuses an older base version and a voided paper) / _void, RLS on, browser roles revoked: sql/v55-83-XD-customs-invoices.sql (Max installs). NEW POST /api/accounting/customs-invoices (verifiedCaller; read = invoices.view/create/edit, write = invoices.create/edit; history window on the saved and the current invoice date; writes only the customs tables + audit). NEW lib/customs-invoice.js, CustomsInvoiceBox.jsx; AccountingInvoicesTab only mounts the box. No report, Wave, reminder, numbering, duplicate or matching code reads the new tables (test XD).' },
+    ]
+  },
+  {
     version: 'v55.83-XF',
     date: '2026-11-22',
     title: 'NT Warehouse opens inside the Hub',

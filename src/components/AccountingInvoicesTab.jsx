@@ -19,6 +19,7 @@ import { isTransportLine } from '../lib/profitability'; // v55.83-TG
 import ProformaLinkBox, { proformaLinksApi } from './ProformaLinkBox'; // v55.83-VZ — proforma ↔ invoice links + signed proforma
 import ProformaPeek from './ProformaPeek';
 import InvoicePeek from './InvoicePeek';
+import CustomsInvoiceBox from './CustomsInvoiceBox'; // v55.83-XD — customs invoice saved under an invoice (counted nowhere)
 import ShippingPartsBox from './ShippingPartsBox'; // v55.83-WH — internal breakdown of the shipping (never printed)
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -961,6 +962,8 @@ export default function AccountingInvoicesTab(props) {
                 <ProformaLinkBox kind={isInvoice() ? 'invoice' : 'proforma'} docId={viewing.id} doc={viewing} mayEdit={mayEdit} toast={toast}
                   invoices={scopeIfRegistered(invoices, waveBiz, waveReg, true)} proformas={scopeIfRegistered(proformas, waveBiz, waveReg, true)} customerName={custName} linkMap={linkMap}
                   onOpenInvoice={openPeekInvoice} onOpenProforma={openPeekProforma} onChanged={loadLinkMap} />
+                {/* v55.83-XD — customs invoices saved under this invoice: their own tables, counted nowhere */}
+                {isInvoice() && <CustomsInvoiceBox invoice={viewing} items={viewItems} company={company} customer={customers.find(function (c) { return c.id === viewing.accounting_customer_id; }) || null} mayEdit={mayEdit} toast={toast} />}
               </div>
             </div>
           </div>
