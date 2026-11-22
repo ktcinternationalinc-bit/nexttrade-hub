@@ -1,6 +1,6 @@
 // v55.83-AD — Accounting tab: groups the accounting screens under one tab.
 // (The Plaid bank connection/import stays in the Bank tab.)
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import WaveBusinessFilter from './WaveBusinessFilter';
 import AccountingDashboard from './AccountingDashboard';
 import { acctAccess, screenHub } from '../lib/accounting-access'; // v55.83-RE / RF
@@ -8,6 +8,7 @@ import CompanyProfileTab from './CompanyProfileTab';
 import AccountingCustomerHistory from './AccountingCustomerHistory';
 import CustomerLedger from './CustomerLedger';
 import WaveHub from './WaveHub';
+import WaveHistoryTab, { fetchHistory } from './WaveHistoryTab';
 import AccountingCustomersTab from './AccountingCustomersTab';
 import AccountingInvoicesTab from './AccountingInvoicesTab';
 import NexttradeReconciliation from './NexttradeReconciliation';
@@ -77,6 +78,17 @@ export default function AccountingTab(props) {
   function alive(k) { return sub === k || (back && back.sub === k); }
   function shown(k) { return { display: sub === k ? 'block' : 'none' }; }
   var [waveKey, setWaveKey] = useState('');
+  var [historyAccess, setHistoryAccess] = useState(null);
+  var authUserId = props.user?.id;
+  useEffect(function () {
+    var active = true;
+    setHistoryAccess(null);
+    if (authUserId) fetchHistory({ action: 'access' }).then(function (access) {
+      if (active) setHistoryAccess({ ...access, userId: authUserId });
+    }).catch(function () {});
+    return function () { active = false; };
+  }, [authUserId]);
+  var mayViewWaveHistory = !!historyAccess && historyAccess.userId === authUserId;
   var tabs = [
     ['dashboard', '📊 Dashboard'],
     ['books_home', '🏦 Books'], // v55.83-PB — ONE home: cash in/out, match queues, bills due
@@ -114,6 +126,7 @@ export default function AccountingTab(props) {
     // "🌊 Wave" tab (WaveHub) with a Connect → Import → Review&Push step flow.
     ['wavehub', '🌊 Wave'],
   ];
+  if (mayViewWaveHistory) tabs.push(['wavehistory', 'Wave History']);
   // v55.83-GB — Wave Sync Center is now permission-gated: only super_admin OR a user granted
   // wave.sync.view sees the tab and can mount the screen. (Server routes already enforce the
   // specific push/import/settings permissions; this controls the screen itself.)
@@ -137,6 +150,7 @@ export default function AccountingTab(props) {
     ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'profitability', 'pnl']],
     ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast', 'monthend']],
     ['📊 REPORTS · LEDGER (ClickBooks)', ['clickbooks_reports', 'journals']],
+    ['📚 HISTORICAL REPORTS', ['wavehistory']],
     ['🏢 OTHER COMPANIES — their own books', ['nextrade', 'rtm']], // v55.83-TW (Max: three separate companies)
     ['⚙️ SYSTEM — rarely touched', ['company', 'wavehub', 'clickbooks_admin', 'audit']],
   ];
@@ -183,7 +197,7 @@ export default function AccountingTab(props) {
           </div>;
         })}
       </div>
-      {sub !== 'books_home' && sub !== 'nextrade' && sub !== 'rtm' && sub !== 'bills' && sub !== 'wires' && sub !== 'waiting' && sub !== 'monthend' && sub !== 'journals' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
+      {sub !== 'wavehistory' && sub !== 'books_home' && sub !== 'nextrade' && sub !== 'rtm' && sub !== 'bills' && sub !== 'wires' && sub !== 'waiting' && sub !== 'monthend' && sub !== 'journals' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
       </div>}
       {/* v55.83-SO — the obvious way back after a quick jump, or after arriving from another part of the Hub */}
@@ -225,6 +239,7 @@ export default function AccountingTab(props) {
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} onBack={back ? goBack : (props.onReturn || null)} backLabel={back ? labelOfSub(tabs, back.sub) : (props.returnLabel || '')} />}
       {sub === 'wavehub' && <WaveHub key={'acct-wavehub|' + waveKey} {...props} waveKey={waveKey} canWaveSync={canWaveSync} initialWaveStep={_initWaveStep} />}
+      {sub === 'wavehistory' && mayViewWaveHistory && <WaveHistoryTab mayManage={historyAccess.mayManage} />}
     </div>
   );
 }
