@@ -82,7 +82,7 @@ ok('4a (PI→RC): applyExpenseRules targets classification IS NULL + settled + n
   /q\.is\('classification', null\)/.test(srv) && /\.eq\('wave_business_id', US_WAVE_BUSINESS_ID\)/.test(srv) &&
   /\.not\('pending', 'is', true\)/.test(srv) && /review_status\.neq\.duplicate/.test(srv));
 ok('4b (PI→RC): the update RE-CHECKS the line is still blank (never races a human) and marks category_source rule',
-  /if \(mode === 'blank'\) \{ q = q\.is\('classification', null\); \}/.test(srv) &&
+  /if \(mode === 'blank'\) \{ q = q\.is\('classification', null\)\.or\('category_source\.is\.null,category_source\.neq\.cleared'\); \}/.test(srv) && // XU: also never refills a category a person took off
   /category_source: 'rule'/.test(srv));
 ok('4c: applying a rule NEVER reviews or verifies for the human (and never touches a verified line)',
   !/review_status: 'reviewed'/.test(srv) && !/category_verified: true/.test(srv) && /\.not\('category_verified', 'is', true\)/.test(srv));

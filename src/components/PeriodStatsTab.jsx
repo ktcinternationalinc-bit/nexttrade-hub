@@ -94,6 +94,7 @@ export default function PeriodStatsTab(props) {
   var sCl = useState(null); var catList = sCl[0]; var setCatList = sCl[1];
   var sSv = useState({}); var saving = sSv[0]; var setSaving = sSv[1];
   // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
+  var sXL = useState(null); var leftList = sXL[0]; var setLeftList = sXL[1]; // v55.83-XU — lines left by Remove category
   var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
   function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); load(from, to); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (keepUndoBar(j)) { if (undoChangedSomething(j)) { load(from, to); } } else { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
   function erApi(action, payload) {
@@ -128,6 +129,33 @@ export default function PeriodStatsTab(props) {
         load(from, to);
       } else { toast.error((j && j.error) || 'Nothing was saved — reload the page and try again.'); }
     }).finally(function () { setSaving(function (m) { var n = Object.assign({}, m); delete n[r.id]; return n; }); });
+  }
+  // v55.83-XU (Max 22 Nov: "i need to be able to uncATEORIZE A SELCTION AFTER I CATEGORIZE IT.") — take the category off one line
+  // (✕ on the row) or every line listed under this category; same server action and checks as All Transactions; asks first
+  function removeCat(ids, what) {
+    var list = (ids || []).filter(Boolean);
+    if (!canPick || !list.length) { return; }
+    if (!window.confirm('Take the category off ' + (what || (list.length + ' line(s)')) + '?\n\nThey go back to Uncategorized and rules will not fill them again. Lines already in the ClickBooks ledger, sent to Wave, in a closed month, matched, paired as a transfer or verified are LEFT as they are and listed.')) { return; }
+    setSaving(function (m) { var n = Object.assign({}, m); list.forEach(function (id) { n[id] = true; }); return n; });
+    erApi('clear_category', { ids: list, confirm: true }).then(function (j) {
+      if (j && j.ok) { if ((j.refused || []).length) { toast.error(j.message, { duration: 9000 }); setLeftList(j.refused); } else { toast.success(j.message); setLeftList(null); } load(from, to); }
+      else { toast.error((j && j.error) || 'Nothing was changed.'); }
+    }).finally(function () { setSaving(function (m) { var n = Object.assign({}, m); list.forEach(function (id) { delete n[id]; }); return n; }); });
+  }
+  // (Codex 18:08) the lines that were LEFT stay listed (date, payee, amount, reason) until closed; a restricted line is counted only
+  function leftPanel() {
+    if (!leftList || !leftList.length) { return null; }
+    var seenL = leftList.filter(function (x) { return !x.restricted; }); var restL = leftList.length - seenL.length;
+    return <div className="mt-1 mb-1 rounded p-1.5 text-[10px]" style={{ background: '#fffbeb', border: '1px solid #f59e0b', color: '#78350f' }}>
+      <div className="flex items-center gap-2 mb-0.5"><b>{leftList.length} line(s) kept their category</b><button onClick={function () { setLeftList(null); }} className="ml-auto px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ background: '#ffffff', border: '1px solid #f59e0b', color: '#78350f' }}>close</button></div>
+      {seenL.map(function (x) { return <div key={x.id} className="flex gap-2"><span className="tabular-nums">{x.date}</span><span className="font-semibold">{x.who}</span><span className="tabular-nums">${fmt(x.amount)}</span><span>— {x.why}</span></div>; })}
+      {restL > 0 && <div>{restL} line(s) you may not change were left as they are.</div>}
+    </div>;
+  }
+  function removeBtn(r) {
+    if (!canPick || !r || !r.id) { return null; }
+    if (saving[r.id]) { return <span className="text-[9px] font-bold" style={{ color: '#475569' }}>saving…</span>; }
+    return <button onClick={function () { removeCat([r.id], 'this line (' + String(r.who || '').substring(0, 40) + ')'); }} title="Remove the category from this line (back to Uncategorized)" className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>✕ remove category</button>;
   }
   function catPicker(r) {
     if (!canPick || !r.id) { return null; }
@@ -422,6 +450,7 @@ export default function PeriodStatsTab(props) {
             <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">{(data.spending.total_out ? '' : '')}</td>
             <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">${fmt(data.spending.real_spending)}</td><td /></tr></tfoot>
         </table>
+        {spCat !== null && leftPanel()}
         {spCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
           <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
             {spCat === '' && canPick && <tr><td colSpan={5} className="pb-1 text-[9px] font-bold" style={{ color: '#9a3412' }}>Pick a category on any line — it is saved at once, a rule is learned from the description, and every other line with the same description is filled in too.</td></tr>}
@@ -432,8 +461,10 @@ export default function PeriodStatsTab(props) {
                 <td className="py-0.5 pr-2 font-semibold">{String(r.who).substring(0, 60)}</td>
                 <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#7f1d1d' }}>-${fmt(r.amount)}</td>
                 <td className="py-0.5 pr-2 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td>
-                {spCat === '' && <td className="py-0.5 text-right">{catPicker(r)}</td>}</tr>;
+                {spCat === '' && <td className="py-0.5 text-right">{catPicker(r)}</td>}
+                {spCat !== '' && spCat !== 'transfer' && <td className="py-0.5 text-right">{removeBtn(r)}</td>}</tr>;
             })}
+            {spCat !== '' && spCat !== 'transfer' && canPick && (function () { var idsX = (data.spending.rows || []).filter(function (r) { return r.category === spCat && r.id; }).map(function (r) { return r.id; }); return idsX.length > 1 ? <tr><td colSpan={5} className="pt-1 text-right"><button onClick={function () { removeCat(idsX, 'all ' + idsX.length + ' lines listed here'); }} className="px-2 py-1 rounded text-[10px] font-extrabold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>✕ Remove category from all {idsX.length} lines listed</button></td></tr> : null; })()}
           </tbody></table>
         </div>}
 
@@ -520,6 +551,7 @@ export default function PeriodStatsTab(props) {
             <div className="text-[9px] mt-1" style={{ color: '#64748b' }}>Cash basis = income when received, expenses when paid — the standard filing basis for most LLCs (your accountant confirms which basis you file on). Transfers and Not-P&L money (loans, owner) are excluded by the category types.</div>
           </div>;
         })()}
+        {inCat !== null && leftPanel()}
         {inCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
             <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
               {inCat === '' && canPick && <tr><td colSpan={5} className="pb-1 text-[9px] font-bold" style={{ color: '#9a3412' }}>Pick a category on any deposit — saved at once, a rule is learned, and deposits with the same description are filled in too. (A customer payment is best matched to its invoice in Bank Review.)</td></tr>}
@@ -530,8 +562,10 @@ export default function PeriodStatsTab(props) {
                   <td className="py-0.5 pr-2 font-semibold">{String(r.who).substring(0, 60)}</td>
                   <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>+${fmt(r.amount)}</td>
                   <td className="py-0.5 pr-2 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td>
-                  {inCat === '' && <td className="py-0.5 text-right">{catPicker(r)}</td>}</tr>;
+                  {inCat === '' && <td className="py-0.5 text-right">{catPicker(r)}</td>}
+                  {inCat !== '' && inCat !== 'transfer' && <td className="py-0.5 text-right">{removeBtn(r)}</td>}</tr>;
               })}
+              {inCat !== '' && inCat !== 'transfer' && canPick && (function () { var idsY = (data.spending.in_rows || []).filter(function (r) { return r.category === inCat && r.id; }).map(function (r) { return r.id; }); return idsY.length > 1 ? <tr><td colSpan={5} className="pt-1 text-right"><button onClick={function () { removeCat(idsY, 'all ' + idsY.length + ' deposits listed here'); }} className="px-2 py-1 rounded text-[10px] font-extrabold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>✕ Remove category from all {idsY.length} deposits listed</button></td></tr> : null; })()}
             </tbody></table>
           </div>}
         </div>}

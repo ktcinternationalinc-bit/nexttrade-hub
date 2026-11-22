@@ -15,6 +15,8 @@ import {
 import { classifyApplication, computeInvoiceBalance, validateSplit, bankAllocationStatus, roundMoney, isPaymentVoid } from '../lib/payment-matching';
 import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-XU — Remove category (verified sign-in)
+import { singleLineWords } from '../lib/category-clear-words'; // v55.83-XU (Codex 20:34)
 
 function invoiceTotal(inv) {
   // PINNED v55.83-AA: this app stores the invoice total in total_amount
@@ -487,6 +489,23 @@ export default function BankReviewTab(props) {
       })
       .catch(function (e) { setCatPullMsg('✕ Pull error: ' + ((e && e.message) || 'network')); })
       .finally(function () { setCatPulling(false); });
+  }
+
+  // v55.83-XU (Max 22 Nov: "i need to be able to uncATEORIZE A SELCTION AFTER I CATEGORIZE IT.") — the same server action and
+  // checks as All Transactions; asks first
+  function removeCategory(t) {
+    if (!t || !mayClassify) { return; }
+    if (!window.confirm('Take the category off this line?\n\nIt goes back to Uncategorized and rules will not fill it again. A line already in the ClickBooks ledger, sent to Wave, in a closed month, matched, paired as a transfer or verified is left as it is.')) { return; }
+    setBusy(true);
+    hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_category', payload: { ids: [t.id], confirm: true } }) })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
+      .then(function (j) {
+        var w = singleLineWords(j); // (Codex 20:34) this line's own reason when it was kept — this screen has no list
+        if (w.ok) { toast.success(w.text); setSel(Object.assign({}, t, { classification: null, category_source: 'cleared' })); load(); }
+        else { toast.error(w.text, { duration: 12000 }); }
+      })
+      .catch(function (e) { toast.error('Could not reach the server (' + ((e && e.message) || 'network') + ').'); })
+      .finally(function () { setBusy(false); });
   }
 
   function setClassification(t, cls) {
@@ -1085,6 +1104,8 @@ export default function BankReviewTab(props) {
                 <option value="">— choose —</option>
                 {CLASSIFICATIONS.map(function (c) { return <option key={c} value={c}>{labelize(c)}</option>; })}
               </select>
+              {/* v55.83-XU (Max 22 Nov) — take the category off this line, with the same checks as All Transactions */}
+              {sel.classification && mayClassify && <button onClick={function () { removeCategory(sel); }} disabled={busy} className="mt-1 px-2 py-1 rounded text-[11px] font-bold disabled:opacity-50" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>✕ Remove category</button>}
             </div>
 
             {/* v55.83-FZ — Wave Category (Chart of Accounts). Real Wave accounts, scoped to the

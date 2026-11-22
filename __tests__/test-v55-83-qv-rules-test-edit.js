@@ -28,7 +28,7 @@ ok('1 (QV→RC): rule_preview uses the SAME ruleMatches() as the 15-minute job, 
   /fillable: bk\.blank\.length \+ bk\.rule\.length, rule_filled: bk\.rule\.length, human_picked: bk\.human\.length, verified: bk\.verified\.length/.test(er));
 ok('2 (QV→RC): apply_rule_now never touches a VERIFIED row, re-checks at write time, replaces a person\'s pick only when asked, hit count + audit updated',
   /\.not\('category_verified', 'is', true\)/.test(srvQ) &&
-  /if \(mode === 'blank'\) \{ q = q\.is\('classification', null\); \}/.test(srvQ) && /else if \(mode === 'rule'\) \{ q = q\.eq\('category_source', 'rule'\); \}/.test(srvQ) &&
+  /if \(mode === 'blank'\) \{ q = q\.is\('classification', null\)\.or\('category_source\.is\.null,category_source\.neq\.cleared'\); \}/.test(srvQ) && // XU /else if \(mode === 'rule'\) \{ q = q\.eq\('category_source', 'rule'\); \}/.test(srvQ) &&
   /overwrite_people: pv\.overwrite_people === true/.test(er) && /'rule_applied_now'/.test(er));
 ok('3: the 0-hits case EXPLAINS itself — "no bank line contains this text... match the words AS THE BANK WRITES THEM"',
   /No bank line contains this text — that is why Hits stays at 0/.test(ui));

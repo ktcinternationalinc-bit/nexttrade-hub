@@ -24,6 +24,7 @@ import { ruleMatches } from '../../../../lib/expense-rules'; // v55.83-QV — th
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { readLine, readRuleFor, readRule, writeUndoPoint, undoCategoryPick, undoWords, ledgerPosted, UNDO_HOURS } from '../../../../lib/category-undo-server'; // v55.83-WS — undo a single category pick
 import { windowFloorFor } from '../../../../lib/visibility-window-server'; // v55.83-WS — the undo re-checks the person's history window
+import { clearCategories, clearWords } from '../../../../lib/category-clear-server'; // v55.83-XU — "Remove category"
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { realAccounts, realKeyOf, dupText, dupCents, dupDate } from '../../../../lib/duplicate-detect'; // v55.83-SO — the same REAL account can be in the Hub twice (reconnected bank)
@@ -373,6 +374,20 @@ export async function POST(req) {
       var labU = {}; try { var lcU = await db.from('expense_categories').select('key, label'); ((lcU && lcU.data) || []).forEach(function (cU) { labU[cU.key] = cU.label; }); } catch (eLU) {}
       await audit(db, by, 'category_pick_undo', 'bank_transaction', urU.line_id, { to: urU.to, look: urU.look, rule: urU.rule });
       return NextResponse.json(Object.assign({}, urU, { message: undoWords(urU, function (kU) { return labU[kU]; }), api_build_marker: API_BUILD_MARKER }));
+    }
+    // ── clear_category (v55.83-XU, Max 22 Nov: "i need to be able to uncATEORIZE A SELCTION AFTER I CATEGORIZE IT.") — takes the
+    //    category off the picked KTC lines at any later time. Same permission as a pick. Every line is checked NOW: in the ledger,
+    //    sent to Wave, closed month, matched / applied, paired, verified, pending, duplicate, or out of this person's reach → refused
+    //    and named. Nothing deleted; rules untouched; the line is marked so rules never fill it again. ──
+    if (action === 'clear_category') {
+      if (!(body.payload && body.payload.confirm === true)) { return NextResponse.json({ ok: false, error: 'Confirm first — nothing was changed.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var privX = await privateScope(db, by);
+      if (privX && privX.error) { return NextResponse.json({ ok: false, error: privX.error + ' — nothing was changed.', api_build_marker: API_BUILD_MARKER }, { status: 503 }); }
+      var winX = await windowFloorFor(db, gate.ctx);
+      if (winX && winX.error) { return NextResponse.json({ ok: false, error: winX.error + ' — nothing was changed.', api_build_marker: API_BUILD_MARKER }, { status: 503 }); }
+      var rX = await clearCategories(db, by, body.payload.ids, { priv: privX, floor: (winX && winX.floor) || null, business: US_WAVE_BUSINESS_ID });
+      if (!rX.ok) { return NextResponse.json({ ok: false, error: rX.error, needs_sql: rX.needs_sql === true, api_build_marker: API_BUILD_MARKER }, { status: rX.status || 400 }); }
+      return NextResponse.json(Object.assign({}, rX, { message: clearWords(rX), api_build_marker: API_BUILD_MARKER }));
     }
     if (action === 'bulk_classify') {
       var idsB = (body.payload && body.payload.ids) || [];

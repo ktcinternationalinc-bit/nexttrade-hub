@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XU',
+    date: '2026-11-22',
+    title: 'Remove the category from bank lines you already categorized',
+    items: [
+      { text: '**All Transactions:** tick one or many lines, then click **✕ Remove category**. The lines go back to Uncategorized. It asks first and shows how many.' },
+      { text: '**Bank Review:** the selected line has **✕ Remove category** under its category. **P&L by period** (Stats): open a category to see its lines; each line has **✕ remove category**, and there is **Remove category from all N lines listed**. **Profitability** expense lines: **✕ remove category** at the bottom of the change-category menu.' },
+      { text: 'A line you take the category off is never filled again by a rule. Pick a category on it yourself whenever you like.' },
+      { text: 'Left as they are, and listed on the screen with the reason until you close the list: a line already in the ClickBooks ledger, sent to Wave, in a closed month, matched to an invoice or a payment, paying a bill, split, holding money (unapplied deposit / customer credit), linked to a wire, to RTM / NextTrade money or a Nextrade bill, to an order deposit or Treasury, paired as a transfer, verified, pending or a duplicate. Undo those in their own place first.' },
+      { text: 'A line you may not see (a private account, or older than your history) is never described: it is only counted as "you may not change".' },
+      { text: '**Nextrade / RTM books** already had this: tick the lines and pick **✕ remove category (back to Uncategorized)**. It now asks first too, and a KTC bill made from a line is voided, never deleted.' },
+      { text: 'Every removal is saved together with its audit entry (the category it had) — never one without the other. Nothing is deleted. **Needs a one-time database step** (sql/v55-83-XU-clear-category.sql); until then the button says so and changes nothing.' },
+      { superAdminOnly: true, text: 'Technical: NEW sql/v55-83-XU-clear-category.sql — hub_bank_clear_category(p jsonb), SECURITY DEFINER, service_role only: locks the line; compares 14 read fields null-safe (category, source, verified, review, Wave account, category / Wave / sync status, transfer, invoice match, pending, account, date, posted date) → "changed"; company → "restricted"; then ledger (hub_bank_ledger_posted), Wave synced/syncing, closed month (clickbooks_us.books.locked_through vs posted_date / date), transfer, invoice (matched_invoice_id or live accounting_invoice_payments), payment_matches, vendor_bill_payments, bank_transaction_splits, open unapplied_deposits / customer_credits, live wire_packages (bank_transaction_id or funding_txn_id), party_money_entries / party_funding_transfers / party_reconciliations / active company_bill_links, unreversed manual_bank_adjustments, live order_deposit_links, treasury, verified, pending, duplicate; then the update and the hub_audit_log row in the same transaction. src/lib/category-clear-server.js: out of scope / not found → { id, restricted } only, decided before any formatting, never sent to the step; step missing or silent before any change → nothing changed; per-line results; reasonFor names where to fix each. expense-rules route action clear_category (bank.classify; confirm:true; privateScope + windowFloorFor + company; ≤500). Rules never refill: ruleBucket cleared → human, batchSet blank + applyExpenseRules skip cleared; wire-auto-match skips cleared; the Plaid sync payload has no category fields. Screens: AllTransactionsTab + PeriodStatsTab (persistent list of lines left), BankReviewTab, ProfitabilityTab, CompanyBooksTab (confirm + label). Tests: test-v55-83-xu-remove-category.js (real route, permission resolver, private scope, window, rule run, sync mapper) + test-v55-83-xu-clear-category-real-postgres.mjs (the SQL run on Postgres, incl. audit-failure rollback).' }
+    ]
+  },
+  {
     version: 'v55.83-XB',
     date: '2026-11-21',
     title: 'Warehouse check: what a supplier billed vs what was actually scanned into the warehouse',

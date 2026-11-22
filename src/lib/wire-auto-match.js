@@ -157,13 +157,14 @@ export async function attachWire(db, pkg, bankRow, actorId, opts) {
 // "professional…" — two or none → left for a person (never guessed). Fail-soft.
 export async function fileAsProfessionalFees(db, txnId, actorId, pkg) {
   try {
-    var tr = await db.from('bank_transactions').select('id, classification').eq('id', txnId).limit(1);
+    var tr = await db.from('bank_transactions').select('id, classification, category_source').eq('id', txnId).limit(1);
     var t = tr && tr.data && tr.data[0];
     if (!t || (t.classification && String(t.classification).trim())) { return null; }
+    if (t.category_source === 'cleared') { return null; } // v55.83-XU — a person took the category off this line: never filled automatically
     var cr = await db.from('expense_categories').select('key, label, active');
     var hits = ((cr && cr.data) || []).filter(function (c) { return c.active !== false && /professional/i.test(String(c.label || '') + ' ' + String(c.key || '')); });
     if (hits.length !== 1) { return null; }
-    var up = await db.from('bank_transactions').update({ classification: hits[0].key }).eq('id', txnId).is('classification', null).select('id');
+    var up = await db.from('bank_transactions').update({ classification: hits[0].key }).eq('id', txnId).is('classification', null).or('category_source.is.null,category_source.neq.cleared').select('id');
     if (up.error || !up.data || !up.data.length) { return null; }
     await audit(db, actorId || null, 'bank_line_filed_professional_fees', 'bank_transaction', txnId, { category: hits[0].key, label: hits[0].label, wire: packageLabel(pkg), payee: pkg.payee_name });
     return hits[0].label;

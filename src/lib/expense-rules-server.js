@@ -110,7 +110,7 @@ async function pageBankRows(db, cols, extra) {
 export function rowText(t) { return ((t.merchant_name || '') + ' ' + (t.name || '')).trim(); }
 export function ruleBucket(t, ruleCls) {
   if (t.category_verified === true) { return 'verified'; }
-  if (!t.classification) { return 'blank'; }
+  if (!t.classification) { return t.category_source === 'cleared' ? 'human' : 'blank'; } // v55.83-XU: a person took the category off — not a blank
   if (t.category_source === 'rule') { return t.classification === ruleCls ? 'same' : 'rule'; }
   return t.classification === ruleCls ? 'same' : 'human';
 }
@@ -120,7 +120,7 @@ async function batchSet(db, ids, cls, mode, outIds) {
     var chunk = ids.slice(i, i + 200);
     var q = db.from('bank_transactions').update({ classification: cls, category_source: 'rule' }).in('id', chunk)
       .not('category_verified', 'is', true); // a verified row is never touched
-    if (mode === 'blank') { q = q.is('classification', null); }           // re-check: never race a person
+    if (mode === 'blank') { q = q.is('classification', null).or('category_source.is.null,category_source.neq.cleared'); } // re-check: never race a person (XU: nor a category a person took off)
     else if (mode === 'rule') { q = q.eq('category_source', 'rule'); }
     var r = await q.select('id');
     if (!r.error && r.data) { n += r.data.length; if (outIds) { r.data.forEach(function (x) { outIds.push(x.id); }); } }
@@ -271,11 +271,12 @@ export async function applyExpenseRules(db, limit) {
     if (!rules.length) { return { applied: 0, scanned: 0, rules: 0 }; }
     var catRules = rules.filter(function (r) { return !!r.classification; });
     // every row with NO category (any review status, money in and out) — blanks only on the automatic run
-    var got = await pageBankRows(db, 'id, name, merchant_name, classification, category_verified', function (q) { return q.is('classification', null); });
+    var got = await pageBankRows(db, 'id, name, merchant_name, classification, category_source, category_verified', function (q) { return q.is('classification', null); });
     if (got.error) { return { error: got.error }; }
     var byRule = {};
     got.rows.forEach(function (t) {
       if (t.category_verified === true) { return; }
+      if (t.category_source === 'cleared') { return; } // v55.83-XU — a person took this category off: rules never fill it again
       var r = bestRule(catRules, rowText(t));
       if (r) { (byRule[r.id] = byRule[r.id] || []).push(t.id); }
     });

@@ -77,6 +77,7 @@ export default function AllTransactionsTab(props) {
   // v55.83-RN (Max, Nov 9 20:18: "I tried selecting a category ... and nothing updated") — every call answers: a timeout or
   // non-JSON reply becomes a message on screen instead of a silent nothing
   // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
+  var sXL = useState(null); var leftList = sXL[0]; var setLeftList = sXL[1]; // v55.83-XU — lines left by Remove category
   var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
   function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); api('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); quietReload(); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (keepUndoBar(j)) { if (undoChangedSomething(j)) { quietReload(); } } else { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
   function api(action, payload) {
@@ -157,6 +158,29 @@ export default function AllTransactionsTab(props) {
       }
       else { toast.error((j && j.error) || 'Bulk update failed.'); }
     }).finally(function () { setBusy(false); });
+  }
+  // v55.83-XU (Max 22 Nov: "i need to be able to uncATEORIZE A SELCTION AFTER I CATEGORIZE IT.") — asks first, with the count
+  function removeCategory() {
+    if (selIds.length === 0) { return; }
+    if (!window.confirm('Take the category off ' + selIds.length + ' line(s)?\n\nThey go back to Uncategorized and rules will not fill them again. Lines already in the ClickBooks ledger, sent to Wave, in a closed month, matched to an invoice or bill, paired as a transfer or verified are LEFT as they are and listed.')) { return; }
+    setBusy(true);
+    api('clear_category', { ids: selIds, confirm: true }).then(function (j) {
+      if (j && j.ok) {
+        var left = (j.refused || []).length;
+        if (left) { toast.error(j.message, { duration: 9000 }); setLeftList(j.refused); } else { toast.success(j.message); setLeftList(null); }
+        load();
+      } else { toast.error((j && j.error) || 'Nothing was changed.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  // (Codex 18:08) the lines that were LEFT stay listed (date, payee, amount, reason) until closed; a restricted line is counted only
+  function leftPanel() {
+    if (!leftList || !leftList.length) { return null; }
+    var seenL = leftList.filter(function (x) { return !x.restricted; }); var restL = leftList.length - seenL.length;
+    return <div className="mb-2 rounded-lg p-2 text-[11px]" style={{ background: '#fffbeb', border: '1px solid #f59e0b', color: '#78350f' }}>
+      <div className="flex items-center gap-2 mb-1"><b>{leftList.length} line(s) kept their category</b><button onClick={function () { setLeftList(null); }} className="ml-auto px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#ffffff', border: '1px solid #f59e0b', color: '#78350f' }}>close</button></div>
+      {seenL.map(function (x) { return <div key={x.id} className="flex gap-2"><span className="tabular-nums">{x.date}</span><span className="font-semibold">{x.who}</span><span className="tabular-nums">${fmt(x.amount)}</span><span>— {x.why}</span></div>; })}
+      {restL > 0 && <div>{restL} line(s) you may not change were left as they are.</div>}
+    </div>;
   }
   // v55.83-QF (Max 12:08): search ANY invoice/bill from inside the popup
   // (q goes server-side over ALL open rows), apply to SEVERAL for the same
@@ -506,6 +530,7 @@ export default function AllTransactionsTab(props) {
       </div>}
 
       {/* bulk bar */}
+      {leftPanel()}
       <div className="flex gap-1.5 items-center flex-wrap mb-2 rounded-lg p-2" style={{ background: selIds.length ? '#eef2ff' : '#f8fafc', border: '1px solid #e2e8f0' }}>
         <span className="text-[11px] font-extrabold" style={{ color: '#312e81' }}>{selIds.length} selected{selIds.length ? ' · Σ ' + (sumSel < 0 ? '−$' : '+$') + fmt(Math.abs(sumSel)) : ''}</span>
         <select value={bulkCat} onChange={function (e) { setBulkCat(e.target.value); }} className="px-1.5 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }}>
@@ -514,6 +539,9 @@ export default function AllTransactionsTab(props) {
         </select>
         <button onClick={applyBulk} disabled={busy || !bulkCat || selIds.length === 0} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || !bulkCat || selIds.length === 0) ? 0.5 : 1 }}>
           Apply to {selIds.length || '…'} selected</button>
+        {/* v55.83-XU (Max 22 Nov) — take the category off the selected lines */}
+        <button onClick={removeCategory} disabled={busy || selIds.length === 0} title="Put the selected lines back to Uncategorized. Lines in the ClickBooks ledger, sent to Wave, in a closed month, matched, paired or verified are left as they are and named." className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b', opacity: (busy || selIds.length === 0) ? 0.5 : 1 }}>
+          ✕ Remove category</button>
         <span className="text-[9px]" style={{ color: '#64748b' }}>Bulk never touches verified stamps or invoice matches; rules learn from your picks. 🔗 on any deposit matches it to an invoice right here — splits/unapplied live in Bank Review.</span>
       </div>
 

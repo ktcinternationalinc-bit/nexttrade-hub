@@ -61,7 +61,7 @@ var er = R('src/app/api/accounting/expense-rules/route.js');
 ok('1f: saving or editing a rule APPLIES it immediately ("it should automatically apply regardless"); the 15-minute job keeps applying it',
   /var apI = \(patch\.active && patch\.auto_apply && insr\.data && insr\.data\[0\]\) \? await applyRuleToAll\(db, insr\.data\[0\], \{ by: by \}\) : null;/.test(er) &&
   /var apU = \(patch\.active && patch\.auto_apply && updr\.data && updr\.data\[0\]\) \? await applyRuleToAll\(db, updr\.data\[0\], \{ by: by \}\) : null;/.test(er) &&
-  /var got = await pageBankRows\(db, 'id, name, merchant_name, classification, category_verified', function \(q\) \{ return q\.is\('classification', null\); \}\);/.test(srv));
+  /var got = await pageBankRows\(db, 'id, name, merchant_name, classification, category_source, category_verified', function \(q\) \{ return q\.is\('classification', null\); \}\);/.test(srv));
 var ert = R('src/components/ExpenseRulesTab.jsx');
 ok('1g: the Apply button is ALWAYS clickable, always answers (incl. timeouts), and offers "apply to ALL matches" with a confirm',
   /<button onClick=\{function \(\) \{ applyOne\(preview\.rule, false\); \}\} disabled=\{busy\}/.test(ert) &&

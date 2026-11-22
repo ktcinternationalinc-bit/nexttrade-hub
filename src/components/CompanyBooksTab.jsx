@@ -125,6 +125,9 @@ export default function CompanyBooksTab(props) {
 
   function setCategory(ids, key) {
     if (!ids.length) { return; }
+    // v55.83-XU (Max 22 Nov) — taking the category off asks first, with the count (a KTC bill made from the line is voided by the
+    // existing guarded step; a paid or posted one stops it and is named)
+    if (!key && !window.confirm('Take the category off ' + ids.length + ' line(s)?\n\nThey go back to Uncategorized. A KTC bill made from a line is voided (never deleted); a line whose KTC bill is paid or posted is left as it is and named.')) { return; }
     setBusy(true);
     api({ action: 'set_category', ids: ids, category_key: key || null }).then(function (j) {
       var made = ((j && j.results) || []).filter(function (r) { return r.ktc && r.ktc.action && r.ktc.action !== 'none'; });
@@ -235,7 +238,7 @@ export default function CompanyBooksTab(props) {
       </div>}
       {canManage && selIds.length > 0 && <div className="flex gap-2 items-center mb-2 p-2 rounded" style={{ background: '#f8fafc', border: '1px solid #cbd5e1' }}>
         <span className="text-[11px] font-bold">{selIds.length} selected →</span>
-        <select className={inp} style={inpS} value={bulkCat} onChange={function (e) { setBulkCat(e.target.value); }}><option value="">pick a category…</option>{activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}<option value="__clear">— take the category off —</option></select>
+        <select className={inp} style={inpS} value={bulkCat} onChange={function (e) { setBulkCat(e.target.value); }}><option value="">pick a category…</option>{activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}<option value="__clear">✕ remove category (back to Uncategorized)</option></select>
         <button disabled={busy || !bulkCat} onClick={function () { setCategory(selIds, bulkCat === '__clear' ? null : bulkCat); setBulkCat(''); }} className="px-2 py-1 rounded text-[10px] font-extrabold" style={btn('#0f172a', '#ffffff')}>Save</button>
       </div>}
       <div style={{ overflowX: 'auto' }}>

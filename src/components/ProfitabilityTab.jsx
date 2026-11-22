@@ -29,6 +29,7 @@ import PnlFormula from './PnlFormula'; // v55.83-VT — the formula of a row, wi
 import { pnlFormula, periodInvoices } from '../lib/pnl-expense-detail';
 import { rtmAdjust, foldUnc } from './PeriodStatsTab'; // v55.83-VQ — the Income Statement's own real-cost rule (one copy) // v55.83-VL — P&L by period: periods and the breakdown of one period
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
+import { singleLineWords } from '../lib/category-clear-words'; // v55.83-XU (Codex 20:34)
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 // v55.83-TC (Max, Nov 16: "you need a bottom and side scroll bar to move within the square") — the Hub's dark theme draws 6 px white
@@ -161,6 +162,17 @@ export default function ProfitabilityTab(props) {
   // the SAME save as Stats → Income Statement (expense-rules bulk_classify, single pick); then every period is asked again
   function pickCat(row, key) {
     if (!key || !row || !row.id) { return; }
+    // v55.83-XU (Max 22 Nov) — take the category off this line: the same server action and checks as All Transactions; asks first
+    if (key === '__remove__') {
+      if (!window.confirm('Take the category off this line (' + String(row.who || '').substring(0, 40) + ')?\n\nIt goes back to Uncategorized and rules will not fill it again. A line already in the ClickBooks ledger, sent to Wave, in a closed month, matched, paired as a transfer or verified is left as it is.')) { return; }
+      setCatSaving(function (m) { var n = Object.assign({}, m); n[row.id] = true; return n; });
+      erApi('clear_category', { ids: [row.id], confirm: true }).then(function (j) {
+        var w = singleLineWords(j); // (Codex 20:34) this line's own reason when it was kept — this screen has no list
+        if (w.ok) { toast.success(w.text + ' The expenses are loaded again.'); startExpenses({ ignoreCache: true }); }
+        else { toast.error(w.text, { duration: 12000 }); }
+      }).finally(function () { setCatSaving(function (m) { var n = Object.assign({}, m); delete n[row.id]; return n; }); });
+      return;
+    }
     setCatSaving(function (m) { var n = Object.assign({}, m); n[row.id] = true; return n; });
     erApi('bulk_classify', { ids: [row.id], classification: key, single_pick: true }).then(function (j) {
       if (j && j.ok && j.updated > 0) { setUndoPt(j.undo_id ? { id: j.undo_id, who: row.who, label: ((catList || []).filter(function (cU) { return cU.key === key; })[0] || {}).label || key, hours: j.undo_hours, ready: j.undo_ready !== false } : null); var more = Number(j.look_alikes_updated) || 0; toast.success('Category saved' + (more ? ' — ' + more + ' more line(s) with the same description filled in' : '') + '. The expenses are loaded again.'); startExpenses({ ignoreCache: true }); }
@@ -203,6 +215,7 @@ export default function ProfitabilityTab(props) {
     return <select value="" aria-label={'Change the category of ' + row.who} onClick={function (e) { e.stopPropagation(); }} onChange={function (e) { pickCat(row, e.target.value); }} className="nt-light text-[11px] font-semibold rounded px-1 py-0.5" style={{ border: '1px solid #fdba74', background: '#ffffff', color: '#0f172a', maxWidth: 180 }}>
       <option value="">change category…</option>
       {pickableCategories(catList).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
+      <option value="__remove__">✕ remove category (back to Uncategorized)</option>
     </select>;
   }
   var todayIso = new Date().toISOString().substring(0, 10);
