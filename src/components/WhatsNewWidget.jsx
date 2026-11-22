@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XI',
+    date: '2026-11-22',
+    title: 'Staging warehouse now opens inside the Hub too',
+    items: [
+      { text: 'The **NT Warehouse · STAGING · TEST** link now opens the test warehouse **inside the Hub** as a panel, the same way the live one does — no more popping a separate browser tab. It keeps its amber **STAGING · TEST** marking so you always know it is the test copy, not production.' },
+      { text: 'The staging site has its own sign-in, so the panel may show the staging login until you sign in — that is expected. The **“Open in its own window”** button at the top always works if the panel looks empty.' },
+      { superAdminOnly: true, text: 'Technical (release-governance session): NEW hidden tab “ntwarehouse-staging” (in TABS, not in any sidebar group, visible to everyone — not in TAB_MODULE_MAP, not in the hidden list) renders an <iframe> of fix.nextrade-staging.com/admin with an always-present new-window fallback (target=_blank, noopener); the NT WAREHOUSE sidebar staging entry is now a navigate(“ntwarehouse-staging”) button instead of an <a target=_blank>, keeping amber + the STAGING · TEST badge and gaining the in-Hub active highlight. Mirrors the XF production panel; no Hub token/session crosses the frame. Staging already returns frame-ancestors for the Hub origins (no Nextrade change). badge XD->XI. Test xi-staging-inhub.' },
+    ]
+  },
+  {
     version: 'v55.83-XD',
     date: '2026-11-21',
     title: 'Customs invoice saved under a customer invoice (counted nowhere)',

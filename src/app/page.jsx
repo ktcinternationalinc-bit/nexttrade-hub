@@ -212,6 +212,8 @@ const TABS = [
   { id: 'warehouse', label: 'Warehouse / المخزن', icon: '🏭' },
   // v55.83-XF — in-Hub view of the live Nextrade warehouse (reached from the NT WAREHOUSE block, everyone).
   { id: 'ntwarehouse', label: 'NT Warehouse / مخزن', icon: '🏭' },
+  // v55.83-XI — STAGING warehouse now opens INSIDE the Hub too (embedded panel), not a new tab.
+  { id: 'ntwarehouse-staging', label: 'NT Warehouse Staging / مخزن', icon: '🏭' },
   { id: 'inventory', label: 'Inventory / المخزون', icon: '📦' },
   { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
   { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
@@ -5601,7 +5603,7 @@ function HubApp() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-XD</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-XI</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -6045,18 +6047,22 @@ function HubApp() {
                   </span>
                   {tab === 'ntwarehouse' && <span className="text-emerald-400 text-[10px] font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>▸</span>}
                 </button>
-                <a href="https://fix.nextrade-staging.com/admin" target="_blank" rel="noopener noreferrer"
-                  onClick={() => setSidebarOpen(false)}
-                  title="Staging / test warehouse — a preview of updates; do not perform real work here"
-                  className="w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 text-amber-400/90 border-transparent hover:text-amber-300 hover:bg-amber-900/10">
+                {/* v55.83-XI — staging now opens IN the Hub (panel 'ntwarehouse-staging'), like production,
+                    instead of a new tab. Kept amber + the STAGING · TEST marking so it stays distinct. */}
+                <button onClick={() => { navigate('ntwarehouse-staging'); setSidebarOpen(false); }}
+                  title="Staging / test warehouse — a preview of updates, inside the Hub; do not perform real work here"
+                  className={'w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 ' + (tab === 'ntwarehouse-staging'
+                    ? 'text-amber-300 border-amber-400 bg-amber-900/10'
+                    : 'text-amber-400/90 border-transparent hover:text-amber-300 hover:bg-amber-900/10')}
+                  style={tab === 'ntwarehouse-staging' ? { boxShadow: 'inset 1px 0 0 #f2cf5b' } : {}}>
                   <span className="w-4 flex items-center justify-center shrink-0 opacity-80"><Warehouse size={15} strokeWidth={2} /></span>
                   {/* TEST badge on its own non-truncating line (Codex 15:18 P2). */}
                   <span className="flex-1 min-w-0">
                     <span className="block truncate">NT Warehouse</span>
                     <span className="text-[8px] font-mono mt-0.5 inline-block px-1 py-px rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 whitespace-nowrap">STAGING · TEST</span>
                   </span>
-                  <span className="text-amber-500/70 text-[10px] shrink-0">↗</span>
-                </a>
+                  {tab === 'ntwarehouse-staging' && <span className="text-amber-400 text-[10px] font-mono shrink-0" style={{ fontFamily: '"JetBrains Mono", monospace' }}>▸</span>}
+                </button>
               </div>
             )}
           </div>
@@ -14705,6 +14711,30 @@ function HubApp() {
               </div>
               <iframe src="https://nextradeindustries.com/admin" title="NT Warehouse"
                 className="flex-1 w-full rounded-lg border border-zinc-800"
+                style={{ minHeight: 400, background: '#ffffff' }} />
+            </div>
+          </SafeSection>
+        )}
+
+        {/* v55.83-XI — STAGING warehouse inside the Hub, mirroring the production panel. Amber
+            STAGING · TEST banner keeps it distinct. Staging sits behind its own sign-in, so in-frame
+            it shows the staging login until signed in; the open-in-own-window fallback always works.
+            No Hub data crosses into the frame. */}
+        {tab === 'ntwarehouse-staging' && (
+          <SafeSection label="NT Warehouse Staging">
+            <div className="flex flex-col gap-2" style={{ height: 'calc(100vh - 150px)' }}>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-[12px] text-amber-600 font-semibold inline-flex items-center gap-2" style={{ minWidth: 0 }}>
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 border border-amber-500/40 whitespace-nowrap">STAGING · TEST</span>
+                  <span className="text-slate-400 font-normal">Test copy of the warehouse — a preview of updates, inside the Hub. Do not do real work here. If it shows a sign-in screen or looks empty, open it in its own window.</span>
+                </div>
+                <a href="https://fix.nextrade-staging.com/admin" target="_blank" rel="noopener noreferrer"
+                  className="shrink-0 px-3 py-1.5 text-[12px] font-semibold rounded bg-amber-500 text-white inline-flex items-center gap-1.5">
+                  Open in its own window <span aria-hidden="true">↗</span>
+                </a>
+              </div>
+              <iframe src="https://fix.nextrade-staging.com/admin" title="NT Warehouse Staging"
+                className="flex-1 w-full rounded-lg border-2 border-amber-500/40"
                 style={{ minHeight: 400, background: '#ffffff' }} />
             </div>
           </SafeSection>
