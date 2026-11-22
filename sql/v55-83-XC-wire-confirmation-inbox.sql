@@ -109,6 +109,52 @@ END $fn$;
 DROP TRIGGER IF EXISTS trg_wdn_guard ON public.wire_discrepancy_notices;
 CREATE TRIGGER trg_wdn_guard BEFORE UPDATE OR DELETE ON public.wire_discrepancy_notices FOR EACH ROW EXECUTE FUNCTION public.wdn_guard();
 
+-- v55.83-XC rev2 (Codex 22 Nov 08:26 P2) — attaching a confirmation to its wire is ONE step: the file on the wire, its discrepancy
+-- notes and the "linked" decision are saved together or not at all (a failed file save leaves the confirmation open to retry).
+-- The same confirmation + the SAME wire again finishes / repeats safely: no second file, no second note. Another wire is refused.
+-- p_notices = [{ dedupe_key, kind, note }]. Returns which notes it added (their ids), so only those are e-mailed.
+CREATE OR REPLACE FUNCTION public.hub_wire_inbox_link(p_inbox_id uuid, p_package_id uuid, p_user uuid, p_note text, p_notices jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $fn$
+DECLARE
+  r public.wire_confirmation_inbox%ROWTYPE;
+  w record;
+  v_resumed boolean := false; v_file boolean := false; v_ids uuid[] := '{}'; v_id uuid; x jsonb;
+BEGIN
+  SELECT * INTO r FROM public.wire_confirmation_inbox WHERE id = p_inbox_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'not_found'); END IF;
+  SELECT id, status, funding_txn_id INTO w FROM public.wire_packages WHERE id = p_package_id FOR SHARE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'wire_not_found'); END IF;
+  IF r.status = 'dismissed' THEN RETURN jsonb_build_object('ok', false, 'code', 'dismissed'); END IF;
+  IF r.status = 'linked' THEN
+    IF r.linked_package_id IS DISTINCT FROM p_package_id THEN RETURN jsonb_build_object('ok', false, 'code', 'linked_elsewhere', 'linked_package_id', r.linked_package_id); END IF;
+    v_resumed := true;
+  ELSIF r.status NOT IN ('new', 'read', 'unreadable', 'proposed', 'several', 'no_wire') THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'not_open');
+  END IF;
+  IF NOT v_resumed AND (w.status IN ('cancelled', 'reversed') OR w.funding_txn_id IS NOT NULL) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'wire_not_eligible');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.wire_package_files WHERE package_id = p_package_id AND path = r.path) THEN
+    INSERT INTO public.wire_package_files (package_id, kind, path, file_name, uploaded_by) VALUES (p_package_id, 'bank_confirmation', r.path, r.file_name, p_user);
+    v_file := true;
+  END IF;
+  FOR x IN SELECT * FROM jsonb_array_elements(COALESCE(p_notices, '[]'::jsonb)) LOOP
+    v_id := NULL;
+    INSERT INTO public.wire_discrepancy_notices (dedupe_key, kind, package_id, inbox_id, note, created_by, mail_status)
+      VALUES (left(x->>'dedupe_key', 200), x->>'kind', p_package_id, p_inbox_id, left(COALESCE(x->>'note', x->>'kind'), 1000), p_user, 'pending')
+      ON CONFLICT (dedupe_key) DO NOTHING RETURNING id INTO v_id;
+    IF v_id IS NOT NULL THEN v_ids := v_ids || v_id; END IF;
+  END LOOP;
+  IF NOT v_resumed THEN
+    UPDATE public.wire_confirmation_inbox SET status = 'linked', linked_package_id = p_package_id, linked_by = p_user, linked_at = now(), note = NULLIF(left(COALESCE(p_note, ''), 1000), '')
+      WHERE id = p_inbox_id;
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'resumed', v_resumed, 'file_added', v_file, 'notice_ids', to_jsonb(v_ids));
+END $fn$;
+REVOKE ALL ON FUNCTION public.hub_wire_inbox_link(uuid, uuid, uuid, text, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.hub_wire_inbox_link(uuid, uuid, uuid, text, jsonb) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.hub_wire_inbox_link(uuid, uuid, uuid, text, jsonb) TO service_role;
+
 -- browsers get nothing: the Hub's server (service role) reads and writes, after its own permission checks
 ALTER TABLE public.wire_confirmation_inbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.wire_discrepancy_notices ENABLE ROW LEVEL SECURITY;
@@ -123,4 +169,5 @@ UNION ALL SELECT 'wire_discrepancy_notices', CASE WHEN to_regclass('public.wire_
 UNION ALL SELECT 'no delete / locked decisions (inbox)', CASE WHEN EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_wci_guard') THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'no delete / locked notes', CASE WHEN EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_wdn_guard') THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'one note per discrepancy', CASE WHEN to_regclass('public.uq_wdn_dedupe') IS NOT NULL THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'attach = one step (file + notes + decision)', CASE WHEN to_regprocedure('public.hub_wire_inbox_link(uuid, uuid, uuid, text, jsonb)') IS NOT NULL AND NOT has_function_privilege('authenticated', 'public.hub_wire_inbox_link(uuid, uuid, uuid, text, jsonb)', 'EXECUTE') THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'browsers cannot read the inbox', CASE WHEN NOT has_table_privilege('authenticated', 'public.wire_confirmation_inbox', 'SELECT') AND NOT has_table_privilege('anon', 'public.wire_confirmation_inbox', 'SELECT') THEN 'OK' ELSE 'OPEN' END;

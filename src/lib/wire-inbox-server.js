@@ -41,19 +41,26 @@ export async function raiseNotice(db, n, actorId, opts) {
     return { created: false, error: ins.error.message };
   }
   var notice = (ins.data && ins.data[0]) || row;
-  await audit(db, actorId, 'wire_discrepancy_noted', n.package_id ? 'wire_package' : 'wire_inbox', n.package_id || n.inbox_id || null, { kind: n.kind, note: row.note, dedupe_key: row.dedupe_key, inbox_id: n.inbox_id || null });
+  var sentM = await mailNotice(db, notice, n.wire_label || null, actorId, o);
+  return { created: true, notice: sentM.notice, mail: sentM.mail };
+}
+
+// a note just saved (mail_status 'pending'): audited, then e-mailed once; the result is recorded only while it is still pending
+export async function mailNotice(db, notice, wireLabel, actorId, opts) {
+  var o = opts || {};
+  await audit(db, actorId, 'wire_discrepancy_noted', notice.package_id ? 'wire_package' : 'wire_inbox', notice.package_id || notice.inbox_id || null, { kind: notice.kind, note: notice.note, dedupe_key: notice.dedupe_key, inbox_id: notice.inbox_id || null });
   var ids = o.recipients || await noticeRecipients(db);
   var mailRes; var patch;
   if (!ids.length) { patch = { mail_status: 'no_recipients', mail_recipients: 0, mail_sent: 0 }; }
   else {
-    var m = noticeMail(n.kind, n.wire_label || null, o.hubUrl || process.env.NEXT_PUBLIC_APP_URL || null);
+    var m = noticeMail(notice.kind, wireLabel || null, o.hubUrl || process.env.NEXT_PUBLIC_APP_URL || null);
     try { mailRes = await (o.send || notifyServer)('wire_discrepancy', ids, m.subject, m.html, actorId || null); } catch (eM) { mailRes = { attempted: ids.length, sent: 0, error: eM.message }; }
     var sent = Number(mailRes && mailRes.sent) || 0; var tried = Number(mailRes && mailRes.attempted) || 0;
     patch = { mail_recipients: ids.length, mail_sent: sent, mail_status: sent > 0 && sent >= tried ? 'sent' : (sent > 0 ? 'partly_sent' : 'not_sent'),
       mail_at: sent > 0 ? new Date().toISOString() : null, mail_error: sent > 0 ? null : String((mailRes && (mailRes.error || (mailRes.skipped ? 'the mail service did not send (not set up, or turned off for these people)' : ''))) || 'nothing was sent').substring(0, 300) };
   }
   if (notice.id) { await db.from('wire_discrepancy_notices').update(patch).eq('id', notice.id).eq('mail_status', 'pending'); }
-  return { created: true, notice: Object.assign({}, notice, patch), mail: patch };
+  return { notice: Object.assign({}, notice, patch), mail: patch };
 }
 
 // sent wires (not requests) with no bank confirmation file, MISSING_PROOF_DAYS after their sent date → one note each, ever
@@ -122,13 +129,22 @@ export async function wireChoices(db) {
   return { list: list, labels: labels };
 }
 
-async function loadRow(db, id) {
+// sameWire: attaching again to the wire it is ALREADY attached to is allowed (it finishes anything an earlier try left undone)
+async function loadRow(db, id, sameWire) {
   if (!isUuid(id)) { return { res: no('Pick the bank confirmation.') }; }
   var q = await db.from('wire_confirmation_inbox').select('*').eq('id', id).maybeSingle();
   if (q.error) { return { res: dbNo(q.error) }; }
   if (!q.data) { return { res: no('That bank confirmation is not in the inbox.', 404) }; }
-  if (OPEN_STATUSES.indexOf(q.data.status) < 0) { return { res: no(q.data.status === 'linked' ? 'This confirmation is already attached to its wire.' : 'This confirmation was set aside.', 409) }; }
+  if (sameWire && q.data.status === 'linked' && String(q.data.linked_package_id) === String(sameWire)) { return { row: q.data }; }
+  if (OPEN_STATUSES.indexOf(q.data.status) < 0) { return { res: no(q.data.status === 'linked' ? 'This confirmation is already attached to another wire.' : 'This confirmation was set aside.', 409) }; }
   return { row: q.data };
+}
+var RESUME_MAIL_AFTER_MS = 120000; // a note still "pending" this long after it was saved was left by an interrupted try: e-mail it now
+
+// an audit row of this wire for this inbox confirmation already there? (a repeated attach writes each audit once)
+async function hasAudit(db, action, pkgId, test) {
+  var q = await db.from('hub_audit_log').select('details').eq('action', action).eq('entity_id', String(pkgId)).limit(500);
+  return !q.error && ((q.data || []).some(function (a) { return test(a.details || {}); }));
 }
 
 // deps = { canSend, today, readConfirmation(db, path), loadPackage(db, id), compare(read, wire, today), sha(db, path)?, recipients?, send? }
@@ -144,10 +160,19 @@ export async function handleInbox(db, userId, action, body, deps) {
     // sent wires that never got their bank's file: one note each, ever (only the people who can act run the check)
     var missing = null;
     if (d.canSend) { try { missing = await checkMissingConfirmations(db, userId, d.today, mailOpts); } catch (eM) { missing = { error: eM.message }; } }
-    var nq = await db.from('wire_discrepancy_notices').select('*').order('created_at', { ascending: false }).limit(100);
-    if (nq.error) { return dbNo(nq.error); }
     var wc; try { wc = await wireChoices(db); } catch (eW) { wc = { error: eW }; }
     if (wc.error) { return no('The wires could not be loaded: ' + ((wc.error && wc.error.message) || 'database error'), 500); }
+    // XC rev2 — a note saved by an attach whose answer never came back (still "pending" after 2 minutes) is e-mailed now, once
+    if (d.canSend) {
+      try {
+        var pq = await db.from('wire_discrepancy_notices').select('*').eq('mail_status', 'pending').limit(50);
+        var stale = ((pq && pq.data) || []).filter(function (x) { return Date.now() - Date.parse(x.created_at || 0) >= RESUME_MAIL_AFTER_MS; });
+        var rcpS = stale.length ? (d.recipients || await noticeRecipients(db)) : null;
+        for (var s = 0; s < stale.length; s++) { await mailNotice(db, stale[s], stale[s].package_id ? (wc.labels[stale[s].package_id] || null) : null, userId, Object.assign({}, mailOpts, { recipients: rcpS })); }
+      } catch (eP) { /* the list still shows; the next opening tries again */ }
+    }
+    var nq = await db.from('wire_discrepancy_notices').select('*').order('created_at', { ascending: false }).limit(100);
+    if (nq.error) { return dbNo(nq.error); }
     var rows = rq.data || [];
     var nm = await names(db, [].concat(rows.map(function (r) { return r.uploaded_by; }), rows.map(function (r) { return r.linked_by; }), rows.map(function (r) { return r.dismissed_by; })));
     return out(200, { ok: true, can_send: !!d.canSend, missing_check: missing,
@@ -212,48 +237,57 @@ export async function handleInbox(db, userId, action, body, deps) {
 
   // ── a person confirms the wire: the file is attached to it as its bank confirmation. This does NOT mark the wire sent.
   if (action === 'inbox_link') {
-    var L2 = await loadRow(db, b.inbox_id); if (L2.res) { return L2.res; }
-    var rowL = L2.row;
     if (!isUuid(b.package_id)) { return no('Pick the wire.'); }
+    var L2 = await loadRow(db, b.inbox_id, b.package_id); if (L2.res) { return L2.res; }
+    var rowL = L2.row; var already = rowL.status === 'linked';
     var P = await d.loadPackage(db, b.package_id);
     if (P.error) { return no((P.error && P.error.message) || 'The wire could not be loaded.', 400); }
     if (P.missing) { return no('Wire not found.', 404); }
     var pkg = P.pkg; var lab = label(pkg);
-    if (pkg.funding_txn_id) { return no(lab + ' is a request drawn from money already sent to ' + pkg.payee_name + ' — no wire leaves our bank for it, so it has no bank confirmation.', 409); }
-    if (pkg.status === 'cancelled' || pkg.status === 'reversed') { return no(lab + ' was ' + (pkg.status === 'cancelled' ? 'cancelled' : 'undone') + ' — pick the wire that really went.', 409); }
+    if (!already && pkg.funding_txn_id) { return no(lab + ' is a request drawn from money already sent to ' + pkg.payee_name + ' — no wire leaves our bank for it, so it has no bank confirmation.', 409); }
+    if (!already && (pkg.status === 'cancelled' || pkg.status === 'reversed')) { return no(lab + ' was ' + (pkg.status === 'cancelled' ? 'cancelled' : 'undone') + ' — pick the wire that really went.', 409); }
     var total = pkg.approved_total != null ? r2(pkg.approved_total) : r2(P.live && P.live.total);
     var wireView = { total: total, payee_name: pkg.payee_name, sent_date: pkg.sent_date ? String(pkg.sent_date).substring(0, 10) : null, planned_send_date: pkg.planned_send_date ? String(pkg.planned_send_date).substring(0, 10) : null };
     var diffs = rowL.read ? discrepanciesFor(rowL.read, wireView) : [];
-    // claim the confirmation first (only one person can attach it), then attach the file to the wire
-    var uL = await db.from('wire_confirmation_inbox').update({ status: 'linked', linked_package_id: pkg.id, linked_by: userId, linked_at: nowIso(), note: diffs.length ? diffs.map(function (x) { return x.note; }).join(' ').substring(0, 1000) : null })
-      .eq('id', rowL.id).in('status', OPEN_STATUSES).select('id');
-    if (uL.error) { return dbNo(uL.error); }
-    if (!uL.data || !uL.data.length) { return no('Someone attached or set aside this confirmation at the same moment — reload.', 409); }
-    var exF = await db.from('wire_package_files').select('id').eq('package_id', pkg.id).eq('path', rowL.path).limit(1);
-    if (!(exF && exF.data && exF.data.length)) {
-      var fI = await db.from('wire_package_files').insert({ package_id: pkg.id, kind: 'bank_confirmation', path: rowL.path, file_name: rowL.file_name || null, uploaded_by: userId });
-      if (fI.error) {
-        await audit(db, userId, 'wire_inbox_file_not_attached', 'wire_package', pkg.id, { inbox_id: rowL.id, path: rowL.path, error: fI.error.message });
-        return no('The confirmation is marked for ' + lab + ' but its file could not be put on the wire (' + fI.error.message + '). Tell the super admin — nothing was lost.', 500);
-      }
+    // v55.83-XC rev2 (Codex 22 Nov 08:26 P2) — ONE database step: the file on the wire, the notes and the "linked" decision are saved
+    // together or not at all. A failed save leaves the confirmation open; attaching it again to the same wire finishes the job.
+    var rpcL = await db.rpc('hub_wire_inbox_link', { p_inbox_id: rowL.id, p_package_id: pkg.id, p_user: userId,
+      p_note: diffs.length ? diffs.map(function (x) { return x.note; }).join(' ').substring(0, 1000) : null,
+      p_notices: diffs.map(function (x) { return { dedupe_key: 'link:' + rowL.id + ':' + x.kind, kind: x.kind, note: lab + ': ' + x.note }; }) });
+    if (rpcL.error) {
+      if (inboxTableMissing(rpcL.error) || /hub_wire_inbox_link/.test(String(rpcL.error.message || ''))) { return no(XC_HINT, 503); }
+      return no('The confirmation could not be attached to ' + lab + ' (' + (rpcL.error.message || 'database error') + '). Nothing was saved — it is still in the inbox; press attach again.', 500);
     }
+    var res = rpcL.data || {};
+    if (!res.ok) {
+      var whyL = { linked_elsewhere: 'This confirmation is already attached to another wire.', dismissed: 'This confirmation was set aside.', not_found: 'That bank confirmation is not in the inbox.',
+        wire_not_found: 'Wire not found.', wire_not_eligible: lab + ' cannot take a bank confirmation (cancelled, undone, or a request drawn from a transfer).', not_open: 'This confirmation is not open any more — reload.' }[res.code];
+      return no(whyL || 'The confirmation could not be attached — reload.', res.code === 'not_found' || res.code === 'wire_not_found' ? 404 : 409);
+    }
+    // after the step is saved: the audit rows (each once, also when an earlier try stopped before writing them) and the e-mails
+    var isMine = function (dt) { return String(dt.inbox_id || '') === String(rowL.id); };
     // what the SERVER read from this exact file, kept on the wire: "Mark as sent" records whether its date / reference are the ones read
-    if (rowL.read && d.compare) {
+    if (rowL.read && d.compare && !(res.resumed && await hasAudit(db, 'wire_confirmation_read', pkg.id, function (dt) { return isMine(dt) && dt.path === rowL.path; }))) {
       var cmp = d.compare(rowL.read, { total: total, payee_name: pkg.payee_name }, d.today);
       await audit(db, userId, 'wire_confirmation_read', 'wire_package', pkg.id, { path: rowL.path, read: rowL.read, fill: cmp.fill, warnings: cmp.warnings, via: 'inbox', inbox_id: rowL.id });
     }
-    await audit(db, userId, 'wire_inbox_linked', 'wire_package', pkg.id, { inbox_id: rowL.id, path: rowL.path, file_name: rowL.file_name || null, proposed: rowL.proposed_package_id || null,
-      followed_proposal: rowL.proposed_package_id ? rowL.proposed_package_id === pkg.id : null, discrepancies: diffs.map(function (x) { return x.kind; }), wire_status: pkg.status });
-    var mails = [];
-    if (diffs.length) {
+    if (!(res.resumed && await hasAudit(db, 'wire_inbox_linked', pkg.id, isMine))) {
+      await audit(db, userId, 'wire_inbox_linked', 'wire_package', pkg.id, { inbox_id: rowL.id, path: rowL.path, file_name: rowL.file_name || null, proposed: rowL.proposed_package_id || null,
+        followed_proposal: rowL.proposed_package_id ? rowL.proposed_package_id === pkg.id : null, discrepancies: diffs.map(function (x) { return x.kind; }), wire_status: pkg.status, file_added: res.file_added === true });
+    }
+    // e-mail the notes THIS step saved; on a repeat, also notes an interrupted earlier try saved but never e-mailed
+    var newIds = (res.notice_ids || []).map(String); var mails = [];
+    var nq = await db.from('wire_discrepancy_notices').select('*').eq('inbox_id', rowL.id).eq('package_id', pkg.id).eq('mail_status', 'pending');
+    var toMail = ((nq && nq.data) || []).filter(function (x) { return newIds.indexOf(String(x.id)) >= 0 || (res.resumed && Date.now() - Date.parse(x.created_at || 0) >= RESUME_MAIL_AFTER_MS); });
+    if (toMail.length) {
       var rcp = d.recipients || await noticeRecipients(db);
-      for (var k = 0; k < diffs.length; k++) {
-        var nR = await raiseNotice(db, { dedupe_key: 'link:' + rowL.id + ':' + diffs[k].kind, kind: diffs[k].kind, package_id: pkg.id, inbox_id: rowL.id, wire_label: lab, note: lab + ': ' + diffs[k].note }, userId, Object.assign({}, mailOpts, { recipients: rcp }));
-        mails.push({ kind: diffs[k].kind, mail: nR.mail ? nR.mail.mail_status : (nR.duplicate ? 'already noted' : 'not recorded') });
+      for (var k = 0; k < toMail.length; k++) {
+        var mR = await mailNotice(db, toMail[k], lab, userId, Object.assign({}, mailOpts, { recipients: rcp }));
+        mails.push({ kind: toMail[k].kind, mail: mR.mail.mail_status });
       }
     }
     var next = pkg.status === 'draft' ? 'To mark it sent, open ' + lab + ' and press “📥 Use the confirmation from the inbox”, then Mark as sent.' : (pkg.status === 'sent' ? lab + ' waits for its bank line.' : '');
-    return out(200, { ok: true, wire: lab, wire_status: pkg.status, notes: diffs, mails: mails, next: next });
+    return out(200, { ok: true, wire: lab, wire_status: pkg.status, resumed: res.resumed === true, file_added: res.file_added === true, notes: diffs, mails: mails, next: next });
   }
 
   // ── set a confirmation aside (wrong file, not ours, a copy): kept forever, with who and why

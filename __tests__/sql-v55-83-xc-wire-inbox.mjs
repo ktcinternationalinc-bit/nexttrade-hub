@@ -24,13 +24,14 @@ try {
   await server.initialise(); await server.start();
   db = new pg.Client({ host: 'localhost', port: port, user: 'postgres', password: 'test-only', database: 'postgres' }); await db.connect();
   await db.query("CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS; GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;"
-    + " CREATE TABLE public.wire_packages (id uuid PRIMARY KEY, status text DEFAULT 'draft');"
+    + " CREATE TABLE public.wire_packages (id uuid PRIMARY KEY, status text DEFAULT 'draft', funding_txn_id text);"
+    + " CREATE TABLE public.wire_package_files (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), package_id uuid NOT NULL REFERENCES public.wire_packages(id), kind text NOT NULL CHECK (kind IN ('bank_confirmation', 'rtm_proof', 'other')), path text NOT NULL, file_name text, uploaded_by uuid, uploaded_at timestamptz NOT NULL DEFAULT now());"
     + " ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated;" // like Supabase: new tables are open to browsers unless revoked
     + " INSERT INTO public.wire_packages (id) VALUES ('" + W1 + "');");
   var sql = fs.readFileSync(path.join(root, 'sql/v55-83-XC-wire-confirmation-inbox.sql'), 'utf8');
   await db.query(sql); var r2 = await db.query(sql);
   var checks = (Array.isArray(r2) ? r2[r2.length - 1] : r2).rows;
-  check('SQL run twice: its check list says OK on every line (6)', checks.length === 6 && checks.every(function (c) { return c.result === 'OK'; }), checks);
+  check('SQL run twice: its check list says OK on every line (7)', checks.length === 7 && checks.every(function (c) { return c.result === 'OK'; }), checks);
 
   var a = await q("INSERT INTO public.wire_confirmation_inbox (path, file_name, file_sha256, uploaded_by) VALUES ('pv/wire-inbox-1-a.pdf', 'a.pdf', 'aa', '" + U1 + "') RETURNING id");
   check('a confirmation in the private inbox folder is added', !a.error && a.rows.length === 1, a);
@@ -73,6 +74,30 @@ try {
   var sv = await q('SELECT count(*)::int AS n FROM public.wire_confirmation_inbox'); var sd = await q("DELETE FROM public.wire_confirmation_inbox");
   await db.query('RESET ROLE');
   check('the Hub\'s server (service role) reads; even it cannot delete', !sv.error && sv.rows[0].n === 1 && !!sd.error, [sv, sd]);
+  // ── rev2 (Codex 22 Nov 08:26 P2): attaching = ONE step — file on the wire + notes + "linked" saved together or not at all
+  var W2 = '00000000-0000-0000-0000-0000000000c2'; var W3 = '00000000-0000-0000-0000-0000000000c3';
+  await db.query("INSERT INTO public.wire_packages (id, status) VALUES ('" + W2 + "', 'draft'), ('" + W3 + "', 'cancelled')");
+  var b = (await q("INSERT INTO public.wire_confirmation_inbox (path, file_name, file_sha256, status) VALUES ('pv/wire-inbox-3-boom.pdf', 'boom.pdf', 'bb', 'proposed') RETURNING id")).rows[0].id;
+  var NOTES = JSON.stringify([{ dedupe_key: 'link:' + b + ':amount', kind: 'amount', note: 'WP: amount differs' }, { dedupe_key: 'link:' + b + ':recipient', kind: 'recipient', note: 'WP: recipient differs' }]);
+  var link = function (inbox, wire) { return q("SELECT public.hub_wire_inbox_link($1, $2, $3, 'differs', $4::jsonb) AS r", [inbox, wire, U1, NOTES]); };
+  var state = async function () { var r = await q("SELECT (SELECT status FROM public.wire_confirmation_inbox WHERE id = $1) AS st, (SELECT count(*)::int FROM public.wire_package_files WHERE path = 'pv/wire-inbox-3-boom.pdf') AS files, (SELECT count(*)::int FROM public.wire_discrepancy_notices WHERE inbox_id = $1) AS notes", [b]); return r.rows[0]; };
+  await db.query("CREATE FUNCTION public.t_fail_file() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RAISE EXCEPTION 'disk full'; END $f$; CREATE TRIGGER t_fail_file BEFORE INSERT ON public.wire_package_files FOR EACH ROW EXECUTE FUNCTION public.t_fail_file();");
+  var f1 = await link(b, W2); var s1x = await state();
+  check('rev2: the wire-file save fails → the whole step is undone: still "proposed", no file, no note', /disk full/.test(f1.error || '') && s1x.st === 'proposed' && s1x.files === 0 && s1x.notes === 0, [f1, s1x]);
+  await db.query('DROP TRIGGER t_fail_file ON public.wire_package_files');
+  var ok1 = await link(b, W2); var r1 = ok1.rows && ok1.rows[0].r; var s2x = await state();
+  check('rev2: the retry attaches: linked, ONE file, both notes (pending), their ids returned for e-mailing', r1 && r1.ok === true && r1.resumed === false && r1.file_added === true && r1.notice_ids.length === 2 && s2x.st === 'linked' && s2x.files === 1 && s2x.notes === 2, [ok1, s2x]);
+  var ok2 = await link(b, W2); var r2x = ok2.rows && ok2.rows[0].r; var s3x = await state();
+  check('rev2: the same attach again (answer lost) → ok "resumed": no second file, no second note, nothing to e-mail', r2x && r2x.ok === true && r2x.resumed === true && r2x.file_added === false && r2x.notice_ids.length === 0 && s3x.files === 1 && s3x.notes === 2, [ok2, s3x]);
+  var el = await link(b, W1); var rel = el.rows && el.rows[0].r;
+  var w1files = (await q("SELECT count(*)::int AS n FROM public.wire_package_files WHERE package_id = $1 AND path = 'pv/wire-inbox-3-boom.pdf'", [W1])).rows[0].n;
+  check('rev2: attaching it to ANOTHER wire → refused (linked_elsewhere), nothing put on that wire', rel && rel.ok === false && rel.code === 'linked_elsewhere' && w1files === 0, [el, w1files]);
+  var c = (await q("INSERT INTO public.wire_confirmation_inbox (path, file_sha256) VALUES ('pv/wire-inbox-4-c.pdf', 'cc') RETURNING id")).rows[0].id;
+  var cx = await q("SELECT public.hub_wire_inbox_link($1, $2, $3, NULL, '[]'::jsonb) AS r", [c, W3, U1]);
+  var cst = (await q('SELECT status FROM public.wire_confirmation_inbox WHERE id = $1', [c])).rows[0].status;
+  check('rev2: a cancelled wire → refused (wire_not_eligible), the confirmation stays open', !!(cx.rows && cx.rows[0].r.code === 'wire_not_eligible') && cst === 'new', [cx, cst]);
+  await db.query('SET ROLE authenticated'); var ax = await q("SELECT public.hub_wire_inbox_link($1, $2, $3, NULL, '[]'::jsonb)", [c, W2, U1]); await db.query('RESET ROLE');
+  check('rev2: a browser cannot run the attach step', /permission denied/.test(ax.error || ''), ax);
 } catch (e) { failN++; console.log('  ✗ FAIL: crashed — ' + e.message); }
 finally { try { await db.end(); } catch (e) { /* closed */ } try { await server.stop(); } catch (e) { /* stopped */ } try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (e) { /* left */ } }
 console.log('\nXC wire inbox SQL: ' + pass + ' passed, ' + failN + ' failed');

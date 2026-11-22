@@ -64,6 +64,36 @@ Module._resolveFilename = function (req, parent) {
 };
 global.__db = db; global.__mails = []; global.__mailMode = 'ok';
 db.rpcs = Object.assign({}, db.rpcs || {}, { hub_payment_guards_installed: function () { return true; } });
+// XC rev2 — stand-in for sql hub_wire_inbox_link (the real one is tested on Postgres 16 in sql-v55-83-xc): one step, all or nothing.
+// global.__failFileInsert = true makes the wire-file save fail ONCE; everything this call wrote is then undone, like a rolled-back transaction.
+db.rpcs.hub_wire_inbox_link = function (a) {
+  var T = ['wire_confirmation_inbox', 'wire_package_files', 'wire_discrepancy_notices'];
+  var snap = {}; T.forEach(function (t) { snap[t] = db.t[t].map(function (r) { return Object.assign({}, r); }); });
+  function rollback(msg) { T.forEach(function (t) { db.t[t] = snap[t]; }); throw new Error(msg); }
+  var r = db.t.wire_confirmation_inbox.filter(function (x) { return x.id === a.p_inbox_id; })[0];
+  if (!r) { return { ok: false, code: 'not_found' }; }
+  var w = pk(a.p_package_id); if (!w) { return { ok: false, code: 'wire_not_found' }; }
+  if (r.status === 'dismissed') { return { ok: false, code: 'dismissed' }; }
+  var resumed = false;
+  if (r.status === 'linked') { if (r.linked_package_id !== a.p_package_id) { return { ok: false, code: 'linked_elsewhere' }; } resumed = true; }
+  else if (OPEN.indexOf(r.status) < 0) { return { ok: false, code: 'not_open' }; }
+  if (!resumed && (w.status === 'cancelled' || w.status === 'reversed' || w.funding_txn_id)) { return { ok: false, code: 'wire_not_eligible' }; }
+  var fileAdded = false;
+  if (!db.t.wire_package_files.some(function (f) { return f.package_id === a.p_package_id && f.path === r.path; })) {
+    if (global.__failFileInsert) { global.__failFileInsert = false; rollback('could not write wire_package_files (disk full)'); }
+    db.t.wire_package_files.push({ id: require('crypto').randomUUID(), package_id: a.p_package_id, kind: 'bank_confirmation', path: r.path, file_name: r.file_name, uploaded_by: a.p_user, uploaded_at: new Date().toISOString() });
+    fileAdded = true;
+  }
+  var ids = [];
+  (a.p_notices || []).forEach(function (x) {
+    if (db.t.wire_discrepancy_notices.some(function (y) { return y.dedupe_key === x.dedupe_key; })) { return; }
+    var id = require('crypto').randomUUID();
+    db.t.wire_discrepancy_notices.push({ id: id, dedupe_key: x.dedupe_key, kind: x.kind, package_id: a.p_package_id, inbox_id: a.p_inbox_id, note: x.note, created_by: a.p_user, created_at: new Date().toISOString(), mail_status: 'pending' });
+    ids.push(id);
+  });
+  if (!resumed) { Object.assign(r, { status: 'linked', linked_package_id: a.p_package_id, linked_by: a.p_user, linked_at: new Date().toISOString(), note: a.p_note || null }); }
+  return { ok: true, resumed: resumed, file_added: fileAdded, notice_ids: ids };
+};
 var route = require(path.join(root, 'src/app/api/accounting/wire-packages/route.js'));
 var XS = require(path.join(root, 'src/lib/wire-inbox-server.js'));
 var XI = require(path.join(root, 'src/lib/wire-inbox.js'));
@@ -162,11 +192,42 @@ console.log('XC — the bank-confirmation inbox');
   aiAnswer = aiText({ is_wire_confirmation: true, reference: 'BC555', status: 'Pending', sent_date: '2026-07-11', amount: 300, currency: 'USD', beneficiary: 'Other Hauling Co' });
   var rC = await call('u1', { action: 'inbox_read', inbox_id: ids['bolt-wire.png'] });
   var mailsBefore = global.__mails.length;
+  // XC rev2 (Codex 22 Nov 08:26 P2) — the wire-file save fails once: NOTHING is saved, the confirmation stays open, the retry finishes it
+  var stBefore = ib(ids['bolt-wire.png']).status; var noticesBefore = db.t.wire_discrepancy_notices.length;
+  global.__failFileInsert = true;
+  var lkF = await call('u1', { action: 'inbox_link', inbox_id: ids['bolt-wire.png'], package_id: w2.id });
+  check('rev2: the file save fails → 500 "Nothing was saved … press attach again"; the confirmation is still open (not linked), W2 has no file', !lkF.ok && lkF._status === 500 && /Nothing was saved/.test(lkF.error) && !/super admin/.test(lkF.error) && ib(ids['bolt-wire.png']).status === stBefore && stBefore !== 'linked' && !ib(ids['bolt-wire.png']).linked_package_id && filesOf(w2.id).length === 0, [lkF, stBefore, ib(ids['bolt-wire.png']).status]);
+  check('… and no note, no e-mail, no "attached" history row from the failed try', db.t.wire_discrepancy_notices.length === noticesBefore && global.__mails.length === mailsBefore && auditOf('wire_inbox_linked', w2.id).length === 0, db.t.wire_discrepancy_notices.length - noticesBefore);
   var lkC = await call('u1', { action: 'inbox_link', inbox_id: ids['bolt-wire.png'], package_id: w2.id });
+  check('… the normal retry works: attached, ONE file on W2, not a "repeat"', lkC.ok && lkC.resumed === false && lkC.file_added === true && filesOf(w2.id).length === 1 && ib(ids['bolt-wire.png']).status === 'linked' && ib(ids['bolt-wire.png']).linked_package_id === w2.id, lkC);
   var kinds = lkC.notes ? lkC.notes.map(function (x) { return x.kind; }).sort().join(',') : '';
   check('attached by a person although it differs: amount, recipient and bank status are each noted', rC.ok && lkC.ok && kinds === 'amount,recipient,status' && /300.00/.test(ib(ids['bolt-wire.png']).note), [rC.status, lkC]);
   var nC = db.t.wire_discrepancy_notices.filter(function (x) { return x.package_id === w2.id; });
   check('… one note per difference, each tied to W2 and the file, each e-mailed (3 e-mails), no amounts in them', nC.length === 3 && nC.every(function (x) { return x.inbox_id === ids['bolt-wire.png'] && x.mail_status === 'sent'; }) && global.__mails.length === mailsBefore + 3 && global.__mails.slice(mailsBefore).every(function (m) { return !/300|250|Other Hauling/.test(m.subject + m.body); }), nC);
+  // the answer got lost after the save → the same click again: finishes safely, nothing doubled
+  var mailsAfterC = global.__mails.length; var auditsC = db.t.hub_audit_log.length;
+  var lkR = await call('u1', { action: 'inbox_link', inbox_id: ids['bolt-wire.png'], package_id: w2.id });
+  check('rev2: the same attach again (answer lost) → ok "repeat"; still ONE file, the same 3 notes, no new e-mail, no new history rows', lkR.ok && lkR.resumed === true && lkR.file_added === false && filesOf(w2.id).length === 1 && db.t.wire_discrepancy_notices.filter(function (x) { return x.package_id === w2.id; }).length === 3 && global.__mails.length === mailsAfterC && db.t.hub_audit_log.length === auditsC && auditOf('wire_inbox_linked', w2.id).length === 1, [lkR, db.t.hub_audit_log.length - auditsC]);
+  var lkX = await call('u1', { action: 'inbox_link', inbox_id: ids['bolt-wire.png'], package_id: w1.id });
+  check('… attaching it to ANOTHER wire is still refused (409), nothing moved', !lkX.ok && lkX._status === 409 && /another wire/.test(lkX.error) && ib(ids['bolt-wire.png']).linked_package_id === w2.id && filesOf(w1.id).length === 1, lkX);
+  // an earlier try saved a note but stopped before e-mailing it (still "pending", 3 minutes old): the repeat e-mails it once
+  var oldIso = new Date(Date.now() - 180000).toISOString();
+  db.t.wire_discrepancy_notices.push({ id: 'n0000000-0000-0000-0000-0000000000e1', dedupe_key: 'link:' + ids['bolt-wire.png'] + ':date', kind: 'date', package_id: w2.id, inbox_id: ids['bolt-wire.png'], note: 'WP: date differs', created_at: oldIso, mail_status: 'pending' });
+  var lkP = await call('u1', { action: 'inbox_link', inbox_id: ids['bolt-wire.png'], package_id: w2.id });
+  var nP = db.t.wire_discrepancy_notices.filter(function (x) { return x.id === 'n0000000-0000-0000-0000-0000000000e1'; })[0];
+  var lkP2 = await call('u1', { action: 'inbox_link', inbox_id: ids['bolt-wire.png'], package_id: w2.id });
+  check('rev2: a note an interrupted try never e-mailed is e-mailed by the repeat — once (a further repeat sends nothing)', lkP.ok && lkP.mails.length === 1 && nP.mail_status === 'sent' && global.__mails.length === mailsAfterC + 1 && lkP2.ok && lkP2.mails.length === 0 && global.__mails.length === mailsAfterC + 1, [lkP, nP]);
+  // … and opening the inbox does the same for any such note (no one has to repeat the attach)
+  db.t.wire_discrepancy_notices.push({ id: 'n0000000-0000-0000-0000-0000000000e2', dedupe_key: 'link:x:amount', kind: 'amount', package_id: w2.id, inbox_id: ids['bolt-wire.png'], note: 'WP: amount', created_at: oldIso, mail_status: 'pending' });
+  db.t.wire_discrepancy_notices.push({ id: 'n0000000-0000-0000-0000-0000000000e3', dedupe_key: 'link:y:amount', kind: 'amount', package_id: w2.id, inbox_id: ids['bolt-wire.png'], note: 'WP: fresh', created_at: new Date().toISOString(), mail_status: 'pending' });
+  var mailsL = global.__mails.length;
+  await call('u3', { action: 'inbox_list' });
+  var viewOnlyNoMail = global.__mails.length === mailsL;
+  await call('u1', { action: 'inbox_list' });
+  var nE2 = db.t.wire_discrepancy_notices.filter(function (x) { return x.id === 'n0000000-0000-0000-0000-0000000000e2'; })[0];
+  var nE3 = db.t.wire_discrepancy_notices.filter(function (x) { return x.id === 'n0000000-0000-0000-0000-0000000000e3'; })[0];
+  check('rev2: opening the inbox (Wires: Send) e-mails a note left pending 2+ minutes; a just-saved one is left to its own step; view-only sends nothing', viewOnlyNoMail && nE2.mail_status === 'sent' && nE3.mail_status === 'pending' && global.__mails.length === mailsL + 1, [viewOnlyNoMail, nE2.mail_status, nE3.mail_status]);
+  nE3.mail_status = 'not_sent'; nE3.mail_error = 'test fixture'; // keep later counts simple
 
   // ── set aside: reason required, kept forever
   var dsBad = await call('u1', { action: 'inbox_dismiss', inbox_id: ids['mystery.png'], reason: 'no' });
@@ -176,7 +237,7 @@ console.log('XC — the bank-confirmation inbox');
   // ── the list shows it all
   var l1 = await call('u3', { action: 'inbox_list' });
   var rowL = (l1.rows || []).filter(function (r) { return r.id === ids['acme-wire.pdf']; })[0];
-  check('the inbox list: 4 files, names of who added / attached, the wire label, 5 notes (the Bolt file also got its own "no matching wire" note when it was read)', l1.ok && l1.rows.length === 4 && rowL.uploaded_by_name === 'Preparer' && rowL.linked_by_name === 'Preparer' && /^WP-/.test(rowL.linked_label) && l1.notices.length === 5, [l1.notices && l1.notices.length, rowL && rowL.uploaded_by_name, rowL && rowL.linked_by_name, rowL && rowL.linked_label]);
+  check('the inbox list: 4 files, names of who added / attached, the wire label, 5 notes (the Bolt file also got its own "no matching wire" note when it was read)', l1.ok && l1.rows.length === 4 && rowL.uploaded_by_name === 'Preparer' && rowL.linked_by_name === 'Preparer' && /^WP-/.test(rowL.linked_label) && l1.notices.length === 8, [l1.notices && l1.notices.length, rowL && rowL.uploaded_by_name, rowL && rowL.linked_by_name, rowL && rowL.linked_label]);
 
   // ── mail service off: the note says NOT e-mailed (never "sent")
   global.__mailMode = 'off';
