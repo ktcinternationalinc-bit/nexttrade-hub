@@ -31,7 +31,9 @@ function base(over) {
   db.rpcs.hub_settle_pending = function (a) {
     var p = db.t.bank_transactions.find(function (r) { return r.id === a.p_pending; });
     if (!p || p.pending !== true) { return { data: { ok: false, why: 'not pending' }, error: null }; }
-    p.review_status = 'duplicate'; db.settled.push({ pending: a.p_pending, posted: a.p_posted, reason: a.p_reason });
+    // like the real bank_duplicate_remove: the row moves OUT of bank_transactions into the restorable archive
+    db.t.bank_transactions = db.t.bank_transactions.filter(function (r) { return r.id !== a.p_pending; });
+    (db.archive = db.archive || []).push(p); db.settled.push({ pending: a.p_pending, posted: a.p_posted, reason: a.p_reason });
     return { data: { ok: true, carried: [] }, error: null };
   };
   db.rpcs.hub_reconcile_pending = function () { return { data: { ok: false, why: 'should not be called for an archived final line' }, error: null }; };
@@ -47,7 +49,7 @@ function run(db, raw) { return S.settlePendingLines(db, { rawTxns: raw === undef
 
   var db = base(); var r = await run(db);
   check('1 pending settled into the live final line on the other connection', db.settled.length === 1 && db.settled[0].posted === 'K1', db.settled);
-  check('1 pending line is no longer live', row(db, 'P1').review_status === 'duplicate');
+  check('1 pending line is no longer live (moved to the restorable archive)', !row(db, 'P1') && db.archive.length === 1 && db.archive[0].id === 'P1');
   check('1 live final line K untouched (status, category)', row(db, 'K1').review_status === 'reviewed' && row(db, 'K1').classification === 'cat-1');
   check('1 archived final line Q untouched', row(db, 'Q1').review_status === 'duplicate' && row(db, 'Q1').pending === false);
   check('1 counted as replaced via another connection', r.posted_replaced === 1 && r.via_other_connection === 1 && r.needs_person === 0, r);
@@ -59,7 +61,7 @@ function run(db, raw) { return S.settlePendingLines(db, { rawTxns: raw === undef
   check('2 reason says nothing carried over', /nothing carried over/.test(db.settled[0].reason));
 
   db = base(function (P, Q, K, d) { d.extra = [Object.assign({}, K, { id: 'K2', plaid_transaction_id: 'other-2' })]; }); r = await run(db);
-  check('3 two live candidates: nothing retired, a person reviews', db.settled.length === 0 && row(db, 'P1').review_status === 'unreviewed' && r.needs_person === 1, r);
+  check('3 two live candidates: nothing retired, a person reviews', db.settled.length === 0 && row(db, 'P1') && row(db, 'P1').review_status === 'unreviewed' && r.needs_person === 1, r);
 
   db = base(function (P, Q, K) { K.review_status = 'duplicate'; }); r = await run(db);
   check('4 no live final line: nothing retired', db.settled.length === 0 && r.needs_person === 1);
@@ -89,6 +91,28 @@ function run(db, raw) { return S.settlePendingLines(db, { rawTxns: raw === undef
 
   db = base(); delete db.rpcs.hub_settle_pending; r = await run(db);
   check('13 database step missing: nothing touched (fail closed)', row(db, 'P1').review_status === 'unreviewed' && r.needs_sql === true, r);
+
+  // Codex 18:24 P2 — the archived-final lookup fails: nothing at all is archived or settled; a healthy retry settles once
+  db = base(); db.t.accounting_invoice_payments = [{ id: 'pay1', bank_transaction_id: 'K1', amount: 4321 }];
+  var origFrom = db.from.bind(db); var failNext = true;
+  db.from = function (table) {
+    var q = origFrom(table);
+    if (table !== 'bank_transactions' || !failNext) { return q; }
+    var origEq = q.eq.bind(q);
+    q.eq = function (k, v) { if (k === 'review_status' && v === 'duplicate') { var bad = { error: { message: 'read timeout' }, data: null }; return { limit: function () { return Promise.resolve(bad); }, then: function (a, b) { return Promise.resolve(bad).then(a, b); } }; } return origEq(k, v); };
+    return q;
+  };
+  var snap = JSON.stringify(db.t.bank_transactions) + JSON.stringify(db.t.accounting_invoice_payments);
+  r = await run(db, []);
+  check('16 failed archived-final read: no archive and no settle call', db.settled.length === 0 && !db.removed, { settled: db.settled, removed: db.removed });
+  check('16 P, Q, K and the payment unchanged', JSON.stringify(db.t.bank_transactions) + JSON.stringify(db.t.accounting_invoice_payments) === snap);
+  check('16 sync flagged partial (error + incomplete), nothing counted as dropped', r.errors === 1 && r.incomplete === true && r.archived_lookup_failed === true && r.dropped === 0 && r.posted_replaced === 0, r);
+  failNext = false;
+  r = await run(db, []);
+  check('17 healthy retry settles exactly once into K', db.settled.length === 1 && db.settled[0].posted === 'K1' && r.posted_replaced === 1 && !db.removed, r);
+  r = await run(db, []);
+  check('17 a repeat sync creates no second settlement', db.settled.length === 1 && r.posted_replaced === 0, r);
+  check('17 the payment on K is unchanged', db.t.accounting_invoice_payments.length === 1 && db.t.accounting_invoice_payments[0].bank_transaction_id === 'K1');
 
   check('14 cheque number wins over description', C.descKey({ check_number: ' 10-55 ', name: 'x' }) === 'check1055');
   check('15 pending work block: clean line has none', C.pendingWorkBlock({ id: 'x' }) === null);

@@ -111,7 +111,12 @@ export async function settlePendingLines(db, o) {
       var postId = pairs[p.plaid_transaction_id] || (stored[0] && stored[0].plaid_transaction_id);
       if (!postId) {
         // v55.83-XT — the stored final line may be an archived copy (older than this sync's window)
-        if (archivedPairs === null) { try { archivedPairs = await archivedReplacements(db, pendRows); } catch (eAr) { archivedPairs = {}; res.errors++; } }
+        // Codex 18:24 P2 — a FAILED lookup is not "no archived final line": stop here, touch nothing more, retry next sync
+        // (an unknown answer must never reach the cancellation file-away below)
+        if (archivedPairs === null) {
+          try { archivedPairs = await archivedReplacements(db, pendRows); }
+          catch (eAr) { res.errors++; res.incomplete = true; res.archived_lookup_failed = true; break; }
+        }
         var arch = archivedPairs[p.plaid_transaction_id] || [];
         if (arch.length > 1) { res.needs_person++; continue; }
         if (arch.length === 1) { await settleViaLiveCopy(p, arch[0]); if (res.needs_sql) { break; } continue; }
