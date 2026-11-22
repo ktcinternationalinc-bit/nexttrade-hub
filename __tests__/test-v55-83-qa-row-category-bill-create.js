@@ -40,7 +40,7 @@ ok('2c: no merchant name → clear refusal (never a nameless vendor bill); bill-
   /but the payment link failed/.test(at));
 // superseded (v55.83-WX): bill rules first, then the same vendor memory (bill-rules-server categoryForNewBill → suggestCategory)
 ok('2d: server-side save_bill still fills the vendor\'s REMEMBERED category when none given and no bill rule fits (PJ memory)',
-  /wxPick = await categoryForNewBill\(db, wxBill, \[\]\)/.test(R('src/app/api/accounting/bills/route.js')) && /mem = await suggestCategory\(db, bill && bill\.vendor_name\)/.test(R('src/lib/bill-rules-server.js')));
+  /wxPick = await categoryForNewBill\(db, wxBill, wxLines\)/.test(R('src/app/api/accounting/bills/route.js')) && /mem = await suggestCategory\(db, bill && bill\.vendor_name\)/.test(R('src/lib/bill-rules-server.js')));
 
 console.log('');
 console.log('QA: ' + pass + ' passed, ' + fail + ' failed');

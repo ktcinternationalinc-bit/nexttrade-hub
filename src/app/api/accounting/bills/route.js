@@ -541,7 +541,10 @@ export async function POST(req) {
       var autoCat = null; var wxPick = null;
       var wxBill = { vendor_name: vendor, total_amount: amt, currency: fields.currency, wave_business_id: fields.wave_business_id, bill_number: fields.bill_number, notes: fields.notes,
         bill_type: fields.bill_type || bl.bill_type || null, release_number: Object.prototype.hasOwnProperty.call(fields, 'release_number') ? fields.release_number : (bl.release_number || null), other_reference: fields.other_reference || null };
-      if (!fields.category || bl.category_rule_id) { wxPick = await categoryForNewBill(db, wxBill, []); }
+      // (Codex 22 Nov 08:53 P2) the bill's own lines, as they will be saved, go into the rule check: a supplier line that is a
+      // product cost blocks a deducted category, and words that appear only on a line count
+      var wxLines = Array.isArray(bl.lines) ? bl.lines.slice(0, 60).map(function (l, i) { var lx = l || {}; var tB = fields.bill_type || bl.bill_type || ''; var dk = (tB === 'trucking' || tB === 'shipping' || tB === 'bonded_brokerage') ? 'charge' : 'item'; return shapeLine(Object.assign({}, lx, { line_kind: lx.line_kind || (/commission/i.test(String(lx.description || '')) ? 'commission' : dk) }), i); }) : []; // the same shaping saveBillLines uses
+      if (!fields.category || bl.category_rule_id) { wxPick = await categoryForNewBill(db, wxBill, wxLines); }
       if (!fields.category) {
         if (wxPick && wxPick.category) { autoCat = wxPick.category; fields.category = autoCat; }
         Object.assign(fields, provenanceFields(wxPick, wxPick && wxPick.ready));

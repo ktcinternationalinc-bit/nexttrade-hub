@@ -25,7 +25,7 @@ var br = R('src/app/api/accounting/bills/route.js');
 // fits, categoryForNewBill falls back to the SAME vendor memory (suggestCategory) — the auto-fill is unchanged for such bills
 var wxSrv = R('src/lib/bill-rules-server.js');
 ok('1b: save_bill with NO category auto-fills (bill rules, then the vendor\'s remembered rule), reported as auto_category',
-  /wxPick = await categoryForNewBill\(db, wxBill, \[\]\)/.test(br) && /if \(wxPick && wxPick\.category\) \{ autoCat = wxPick\.category; fields\.category = autoCat; \}/.test(br) &&
+  /wxPick = await categoryForNewBill\(db, wxBill, wxLines\)/.test(br) && /if \(wxPick && wxPick\.category\) \{ autoCat = wxPick\.category; fields\.category = autoCat; \}/.test(br) &&
   /mem = await suggestCategory\(db, bill && bill\.vendor_name\)/.test(wxSrv) && /auto_category: autoCat/.test(br));
 ok('1c: save_bill WITH a category LEARNS it (create + edit) — a changed pick updates the rule; auto-filled picks are NOT re-learned',
   /if \(fields\.category && !autoCat\) \{ learnedB = await learnRule\(db, vendor, fields\.category, userId\); \}/.test(br) &&

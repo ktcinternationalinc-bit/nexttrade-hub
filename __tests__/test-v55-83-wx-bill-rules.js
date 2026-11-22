@@ -158,6 +158,30 @@ function audits(a) { return db.t.hub_audit_log.filter(function (h) { return h.ac
   var n6 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Example Partner Corporation', bill_number: 'EP-26', bill_date: '2026-10-01', total_amount: 1234.56, bill_type: 'trucking', release_number: '1002-78', shipment_direction: 'outbound' } });
   var b26 = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'EP-26'; })[0];
   check('7g: a new trucking bill with a release # is NOT put into Partner fee (it is in transport profit): no category, and NOT the vendor memory', n6.ok && b26.category === null && b26.category_source === 'rule_conflict' && /transport profit/.test(n6.category_conflict || ''), { n6: n6, b: b26 });
+  // ── 7k–7o (Codex 22 Nov 08:53 P2): save_bill must check the rule against the lines it is about to save
+  db.t.pl_group_names.push({ id: 'g1', group_id: 'grp', source: 'bill', name_key: nameKey('Roll Goods A'), raw_name: 'Roll Goods A', active: true });
+  await call(rulesRoute, 'u1', { action: 'save', rule: { name: 'Mill fee', vendor_match: 'Sample Mill', amount_exact: 2222.22, category: 'partner_fee' } });
+  var lk = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Sample Mill Inc', bill_number: 'SM-1', bill_date: '2026-10-03', total_amount: 2222.22, bill_type: 'supplier', lines: [{ description: 'Roll Goods A', qty: 10, unit_price: 222.222, amount: 2222.22 }] } });
+  var bLk = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'SM-1'; })[0];
+  var lnLk = db.t.vendor_bill_lines.filter(function (l) { return bLk && l.bill_id === bLk.id; });
+  check('7k: REAL save_bill: a supplier bill whose line is a product cost is NOT put into Partner fee by a rule (no category, flagged), and its line is saved',
+    lk.ok && bLk.category === null && bLk.category_source === 'rule_conflict' && /goods profit/.test(lk.category_conflict || '') && lnLk.length === 1 && lnLk[0].description === 'Roll Goods A', { lk: lk, b: bLk, lines: lnLk });
+  await call(rulesRoute, 'u1', { action: 'save', rule: { name: 'Mill goods', vendor_match: 'Sample Mill', amount_exact: 3333.33, category: 'freight' } });
+  var lk2 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Sample Mill Inc', bill_number: 'SM-2', bill_date: '2026-10-03', total_amount: 3333.33, bill_type: 'supplier', lines: [{ description: 'Roll Goods A', amount: 3333.33 }] } });
+  var bLk2 = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'SM-2'; })[0];
+  check('7l: …the same line with a rule to a category that is NOT deducted (Freight) → the rule applies', lk2.ok && bLk2.category === 'freight' && bLk2.category_source === 'rule', bLk2);
+  await call(rulesRoute, 'u1', { action: 'save', rule: { name: 'Mill monthly', vendor_match: 'Sample Mill', words: 'monthly service', category: 'office' } });
+  var lw = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Sample Mill Inc', bill_number: 'SM-3', bill_date: '2026-10-04', total_amount: 450, bill_type: 'supplier', lines: [{ description: 'Monthly service November', amount: 450 }] } });
+  var bLw = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'SM-3'; })[0];
+  check('7m: a rule whose words appear ONLY on a line of the typed bill → applies', lw.ok && bLw.category === 'office' && bLw.category_source === 'rule', bLw);
+  var mill = db.t.bill_category_rules.filter(function (r) { return r.name === 'Mill fee'; })[0];
+  var pf1 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Sample Mill Inc', bill_number: 'SM-4', bill_date: '2026-10-05', total_amount: 2222.22, bill_type: 'supplier', category: 'partner_fee', category_rule_id: mill.id, lines: [{ description: 'Roll Goods A', amount: 2222.22 }] } });
+  var bPf1 = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'SM-4'; })[0];
+  check('7n: an import pre-fill kept by the person is re-checked with the same lines: the linked product line means it is NOT recorded as "set by rule"', pf1.ok && bPf1.category_source !== 'rule' && !bPf1.category_rule_id, bPf1);
+  var pf2 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Sample Mill Inc', bill_number: 'SM-5', bill_date: '2026-10-05', total_amount: 2222.22, bill_type: 'supplier', category: 'partner_fee', category_rule_id: mill.id, lines: [{ description: 'Mill fee for November', amount: 2222.22 }] } });
+  var bPf2 = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'SM-5'; })[0];
+  check('7o: …with a line that is not a product cost, the kept pre-fill stays "set by rule"', pf2.ok && bPf2.category === 'partner_fee' && bPf2.category_source === 'rule' && bPf2.category_rule_id === mill.id, bPf2);
+
   // two equally good rules with different categories
   await call(rulesRoute, 'u1', { action: 'save', rule: { name: 'Other view', vendor_match: 'Example Partner', amount_exact: 1234.56, category: 'office' } });
   var n7 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Example Partner Corporation', bill_number: 'EP-27', bill_date: '2026-10-01', total_amount: 1234.56 } });
