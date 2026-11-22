@@ -10,7 +10,7 @@
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
 import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
-import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
+import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
 import { loadPartyFunds, isMissingOpeningsTable, openingsUnavailable } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
 // v55.83-WF step C — periodAdjustments (the TX tax adjustments) is no longer used here: a transfer to RTM / NextTrade counts once, in full
 import { NextResponse } from 'next/server';
@@ -2036,12 +2036,15 @@ export async function POST(req) {
           (xoOb.data || []).forEach(function (o0) { xoKnown[o0.id] = true; });
           try { var xoRows = await fetchAll(function () { return db.from('vendor_bill_payments').select('id, party_opening_id').not('party_opening_id', 'is', null).order('id', { ascending: true }); }); (xoRows || []).forEach(function (x0) { xoOf[x0.id] = x0.party_opening_id; }); }
           catch (eXo) { xoStop = openingsUnavailable(eXo).message; throw new Error('XO_UNAVAILABLE'); }
-          // (Codex 14:52 P1) a balance this caller may not see that counts in these dates: the spending block is withheld (an
-          // explicit restricted state), never shown recalculated without it. The super admin sees everything.
-          var xoHidden = hiddenStartingBalances(xoOb.data || [], callerIsSuper, pTo);
-          if (xoHidden.length) { xoRestrict = { reason: HIDDEN_STARTING_BALANCE_REASON, hidden_starting_balances: xoHidden.length }; }
         }
         xoPays = xoPays.map(function (p0) { var oid = xoOf[p0.id] || p0.party_opening_id || null; if (oid && xoKnown[oid]) { return oid === p0.party_opening_id ? p0 : Object.assign({}, p0, { party_opening_id: oid }); } return p0.party_opening_id ? Object.assign({}, p0, { party_opening_id: null }) : p0; });
+        // (Codex 14:52 P1) a balance this caller may not see that counts in these dates: the spending block is withheld (an
+        // explicit restricted state), never shown recalculated without it. The super admin sees everything.
+        // (Codex 18:29 P1) "counts in these dates" = as of on / before the end date, OR a bill paid from it on / before that date.
+        if (!xoOb.error) {
+          var xoHidden = hiddenStartingBalances(xoOb.data || [], callerIsSuper, pTo, xoPays);
+          if (xoHidden.length) { xoRestrict = { reason: HIDDEN_STARTING_BALANCE_REASON, hidden_starting_balances: xoHidden.length }; }
+        }
         var rtmBlk = null; var ptBlocks = [];
         try {
           var partiesP = await loadParties(db);
@@ -2094,6 +2097,11 @@ export async function POST(req) {
           partyFunds = pfLoaded.funds;
           // the bill's own file, so the screen can open it (the storage rules decide who may)
           partyFunds.forEach(function (c7) { c7.transfers.forEach(function (t6) { ['lifetime_rows', 'as_of_rows'].forEach(function (k6) { (t6[k6] || []).forEach(function (r6) { var b6 = billNameById[r6.bill_id]; r6.attachment_path = (b6 && b6.attachment_path) || null; }); }); }); (c7.period.applied_rows || []).concat((c7.paid_without_a_transfer && c7.paid_without_a_transfer.period_rows) || []).forEach(function (r5) { var b5 = billNameById[r5.bill_id]; r5.attachment_path = (b5 && b5.attachment_path) || null; }); });
+          // v55.83-XO (Codex 22 Nov 18:29 P1) — the WHOLE funds answer as this caller may see it, whatever dates were asked for: for
+          // anyone but the super admin a hidden starting balance is left out entirely and its company's `current` (whole history,
+          // includes it) is withheld; a hidden balance that counts in these dates withholds the report (the explicit restricted state).
+          var pfView = partyFundsForViewer(partyFunds, callerIsSuper, pTo); partyFunds = pfView.funds;
+          if (pfView.restricted && !xoRestrict) { xoRestrict = { reason: HIDDEN_STARTING_BALANCE_REASON, hidden_starting_balances: pfView.restricted }; }
         } catch (ePf) { partyFunds = null; if (ePf && ePf.code === 'XO_UNAVAILABLE') { xoStop = ePf.message; throw new Error('XO_UNAVAILABLE'); } }
         // v55.83-XO (Max's (b): "NEW EXPENSE WHEN USED AFTER 6/1/2026") — bills paid from a starting balance on or after 1 June
         // 2026 are a new professional-fee expense in the TAX view, on their paid date. The amount is the shared calculation's own

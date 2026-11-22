@@ -270,7 +270,8 @@ export async function POST(req) {
           if (canTotals) { sr.amount = s.amount; sr.original = s.original; sr.corrections = s.corrections; sr.used = s.current.used; sr.left = s.current.held; }
           sbRows.push(sr);
         });
-        var o = { party: f.party, transfers: rows, hidden_private_transfers: hiddenN, needs_reconciliation: f.needs_reconciliation, identity_to_confirm_count: f.identity_to_confirm.count,
+        var o = { party: f.party, transfers: rows, hidden_private_transfers: hiddenN, needs_reconciliation: hiddenSb ? (f.transfers_need_reconciliation === true || (f.starting_balances || []).some(function (s) { return canSeeStartingBalance(s, isSuper) && s.over_used === true; })) : f.needs_reconciliation, // v55.83-XO (Codex 18:29): never says a hidden balance is over-used
+          identity_to_confirm_count: f.identity_to_confirm.count,
           paid_without_a_transfer_count: f.paid_without_a_transfer.lifetime_rows.length, starting_balances: sbRows, hidden_starting_balances: hiddenSb };
         if (canTotals && hiddenN === 0 && hiddenSb === 0) {
           var spend = 0; var heldAll = 0; var unconf = 0; rows.forEach(function (r) { spend = r2(spend + r.available); heldAll = r2(heldAll + r.held); if (r.status !== 'confirmed') { unconf = r2(unconf + r.held - r.reserved); } });

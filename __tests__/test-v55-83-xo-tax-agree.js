@@ -109,6 +109,67 @@ function pfOf(sp, party) { return (sp.party_funds || []).filter(function (p) { r
   var tabSrc = require('fs').readFileSync(path.join(root, 'src/components/PeriodStatsTab.jsx'), 'utf8');
   check('the accountant pack refuses (no files) when spending is restricted, and the screen says why', tabSrc.indexOf('if (data && data.spending_restricted) { toast.error(') > 0 && tabSrc.indexOf('{data.spending_restricted && <div') > 0);
 
+  // ── (Codex 22 Nov 18:29 P1) WHOLE-JSON SCANS: the hidden balance never reaches anyone but the super admin, WHATEVER the dates ──
+  // Fixture (fabricated): NextTrade has a VISIBLE balance O2 (2,000 as of 15 March, a 250 bill paid from it on 20 April) and the
+  // HIDDEN balance O1 (5,000 as of 10 May, corrected by −100 → 4,900; bills of 600 on 20 May and 400 on 15 June paid from it:
+  // used 1,000, held 3,900). An April transfer of 3,000 to NextTrade. April is BEFORE the hidden balance, June is AFTER it.
+  var DED = { 'accounting.view': true, 'bills.view': true, 'accounting.view_totals': true, 'accounting.change_dates': true, 'accounting.view_invoicing': true };
+  function mixedWorld(extraUse) {
+    var d = hiddenWorld();
+    d.t.party_opening_balances.push({ id: 'O1c', party: NT, amount: -100, as_of: '2026-05-10', reason: 'SECRET-CORRECTION typo', visible_to_staff: false, corrects_id: 'O1', created_at: '2026-11-21T00:00:00Z' });
+    d.t.party_opening_balances.push({ id: 'O2', party: NT, amount: 2000, as_of: '2026-03-15', reason: 'VISIBLE-MARCH statement', visible_to_staff: true, corrects_id: null, created_at: '2026-11-20T00:00:00Z' });
+    d.t.vendor_bills.push({ id: 'b3', wave_business_id: US, vendor_name: 'Kronos', bill_number: 'V-1', bill_date: '2026-04-18', due_date: '2026-04-30', currency: 'USD', total_amount: 250, category: 'trucking', record_status: 'active', paid_via: NT });
+    d.t.vendor_bill_payments.push({ id: 'pV', bill_id: 'b3', amount: 250, paid_date: '2026-04-20', bank_transaction_id: null, party_opening_id: 'O2', method: 'rtm', voided: false, created_at: '2026-04-20T00:00:00Z' });
+    d.t.bank_transactions.push(ln('J0', '2026-04-05', 3000, { third_party_payer: NT, classification: 'professional_fees', name: 'WIRE TO NEXTTRADE APRIL' }));
+    if (extraUse) { d.t.vendor_bills.push({ id: 'b4', wave_business_id: US, vendor_name: 'Hidden Use Co', bill_number: 'H-9', bill_date: '2026-04-24', due_date: '2026-04-30', currency: 'USD', total_amount: 77, category: 'trucking', record_status: 'active', paid_via: NT }); d.t.vendor_bill_payments.push({ id: 'pE', bill_id: 'b4', amount: 77, paid_date: '2026-04-25', bank_transaction_id: null, party_opening_id: 'O1', method: 'rtm', voided: false, created_at: '2026-04-25T00:00:00Z' }); }
+    return d;
+  }
+  // everything that exists ONLY because of the hidden balance: its words, ids, the payment ids that name it, its amounts — scanned
+  // over the WHOLE JSON. The bills paid from it (K-1, R-1, H-9) are ordinary bills: the Bills screen and the report's own bill drills
+  // list them like any bill (no word of where they were paid from); inside the funds / spending answer they must not appear.
+  var SECRET = /SECRET-|"O1c?"|"p[ABE]"|party_opening|\b5000\b|\b4900\b|\b3900\b|\b1000\b|-100\b/;
+  var USES = /"K-1"|"R-1"|"H-9"|Hidden Use Co|\b77\b/;
+  function scan(j) { var s = JSON.stringify(j); var m = s.match(SECRET); if (m) { return m[0]; } var sp = j && j.spending !== undefined ? JSON.stringify(j.spending) : ''; var u = sp.match(USES); return u ? 'spending:' + u[0] : null; }
+  function drillsPlain(j) { var d = (j && j.drills) || {}; return ['billed', 'bills_paid'].every(function (k) { return (d[k] || []).every(function (r) { return !/starting|opening/i.test(JSON.stringify(r)); }); }); }
+  async function as(who, from, to) { state.super = who === 'super'; state.perms = who === 'staff' ? DED : null; return call({ action: 'period_stats', from: from, to: to }); }
+  var KL7 = { expense: 'Expense', not_pnl: 'Not P&L' }; var DET = require(path.join(root, 'src/lib/pnl-expense-detail.js'));
+  function exportsOf(resp, from, to) { // the consumers that turn this answer into screens and files
+    var sp = resp.spending || null;
+    return { pnl: PE.readExpenseAnswer(resp, { from: from, to: to }, UI.rtmAdjust, UI.foldUnc), detail: sp ? DET.expenseDetail(sp, PE.realCostCategories(sp, UI.rtmAdjust, UI.foldUnc)) : null,
+      pf_rows: sp ? PE.partyFundsRows(sp.categories, sp.party_funds) : null, f7: sp ? TP.spendingByCategoryCsv(sp, KL7) : null, f8: sp ? TP.spendingDetailCsv(sp) : null, is: sp ? TP.incomeStatementCsv(sp) : null };
+  }
+  mixedWorld(); var supApr = await as('super', '2026-04-01', '2026-04-30'); var supJun = await as('super', '2026-06-01', '2026-06-30');
+  var sNT = pfOf(supApr.spending, NT);
+  check('SUPER ADMIN, April and June (mixed balances): the full answer — both balances listed, the hidden one with its reason, today\'s figures', supApr.ok === true && !supApr.spending_restricted && sNT.starting_balances.length === 2 && sNT.starting_balances.some(function (s) { return s.reason === 'SECRET-REASON NextTrade May statement' && s.amount === 4900 && s.current.held === 3900; }) && sNT.current && sNT.current.starting_balance === 6900 && supJun.ok === true && !supJun.spending_restricted, sNT && sNT.starting_balances);
+  check('(the scan is real: it finds the hidden balance in the super admin\'s April AND June answers, and the bills paid from it in June\'s funds answer)', !!scan(supApr) && /SECRET-REASON/.test(JSON.stringify(supApr)) && /\b3900\b/.test(JSON.stringify(supApr)) && !!scan(supJun) && USES.test(JSON.stringify(supJun.spending.party_funds)), [scan(supApr), scan(supJun)]);
+  var who = [['STAFF', 'staff'], ['ORDINARY ADMIN', 'admin']];
+  for (var wi = 0; wi < who.length; wi++) {
+    var W = who[wi][0];
+    mixedWorld(); var apr = await as(who[wi][1], '2026-04-01', '2026-04-30'); var aNT = apr.spending && pfOf(apr.spending, NT);
+    check(W + ', April (BEFORE the hidden balance): ok, the spending block is there, not restricted', apr.ok === true && apr._status === 200 && !apr.spending_restricted && !!apr.spending && !!aNT, [apr._status, apr.spending_restricted]);
+    check(W + ', April: WHOLE JSON scan — no reason, correction, id, use, bill number or amount of the hidden balance anywhere', scan(apr) === null, scan(apr));
+    check(W + ', April: NextTrade lists ONLY the visible balance (its reason, 2,000, the 250 April use); "1 not shown to you"', aNT.starting_balances.length === 1 && aNT.starting_balances[0].id === 'O2' && aNT.starting_balances[0].reason === 'VISIBLE-MARCH statement' && aNT.starting_balances[0].amount === 2000 && aNT.hidden_starting_balances === 1, aNT.starting_balances);
+    check(W + ', April: today\'s company totals (whole history, they include the hidden balance) are WITHHELD — current null, said why; never recomputed without it', aNT.current === null && aNT.current_withheld === 'includes a starting balance only the super admin may see', [aNT.current, aNT.current_withheld]);
+    check(W + ', April: the PERIOD and AS-OF figures are the super admin\'s own, unchanged (the hidden balance is not in them): sent 3,000, opening 2,000, 250 used, closing 4,750', JSON.stringify(aNT.period) === JSON.stringify(sNT.period) && JSON.stringify(aNT.as_of) === JSON.stringify(sNT.as_of) && aNT.period.funds_sent === 3000 && aNT.period.opening_held === 2000 && aNT.period.from_starting_balance === 250 && aNT.period.closing_held === 4750 && aNT.arithmetic_ok === true && apr.spending.funds_sent_tax.total === supApr.spending.funds_sent_tax.total, [aNT.period, sNT.period]);
+    var ex = exportsOf(apr, '2026-04-01', '2026-04-30'); var dNT = (ex.detail.funding || []).filter(function (f) { return f.payer === NT; })[0];
+    check(W + ', April EXPORT BOUNDARY: the P&L reader, the expense detail (today\'s words say "not shown"), the funds rows and the accountant-pack files carry none of it', ex.pnl.status === 'ok' && scan(ex) === null && !USES.test(JSON.stringify(ex)) && dNT && /^Today: not shown/.test(dNT.today_words) && Array.isArray(ex.f7) && ex.f7.length > 0, [ex.pnl.status, scan(ex), dNT && dNT.today_words]);
+    mixedWorld(); var jun = await as(who[wi][1], '2026-06-01', '2026-06-30');
+    check(W + ', June (AFTER the hidden balance): the explicit restricted state, and the WHOLE JSON scan finds nothing', jun.ok === true && jun.spending === null && !!jun.spending_restricted && jun.spending_restricted.hidden_starting_balances === 1 && scan(jun) === null && scan(exportsOf(jun, '2026-06-01', '2026-06-30')) === null && drillsPlain(jun), [jun.spending_restricted, scan(jun)]);
+    mixedWorld(); var may = await as(who[wi][1], '2026-05-01', '2026-05-31');
+    check(W + ', May (the hidden balance starts inside it): restricted, nothing of it in the answer', may.spending === null && !!may.spending_restricted && scan(may) === null && drillsPlain(may), scan(may));
+    mixedWorld(true); var aprUse = await as(who[wi][1], '2026-04-01', '2026-04-30');
+    check(W + ', April when a bill was paid from the hidden balance on 25 April (before its as-of date): restricted — the period moves by it — and nothing of it shown', aprUse.spending === null && !!aprUse.spending_restricted && scan(aprUse) === null && drillsPlain(aprUse), [aprUse.spending_restricted, scan(aprUse)]);
+  }
+  mixedWorld(true); var supUse = await as('super', '2026-04-01', '2026-04-30');
+  check('SUPER ADMIN, that same April: the full answer with the 77 use from the hidden balance', supUse.ok === true && !supUse.spending_restricted && pfOf(supUse.spending, NT).period.from_starting_balance === 327, pfOf(supUse.spending, NT).period);
+  // the shared rule, directly: a future-dated hidden balance counts for nobody but by its date — or once a bill is paid from it
+  var PF = require(path.join(root, 'src/lib/party-funds.js'));
+  var obs = [{ id: 'H', party: NT, amount: 5000, as_of: '2026-05-10', visible_to_staff: false }];
+  check('hiddenStartingBalances: a hidden balance dated after the end does not count by its date, but DOES once a bill is paid from it on / before the end (also through a correction id)', PF.hiddenStartingBalances(obs, false, '2026-04-30').length === 0 && PF.hiddenStartingBalances(obs, false, '2026-04-30', [{ party_opening_id: 'H', paid_date: '2026-04-25' }]).length === 1 && PF.hiddenStartingBalances(obs, false, '2026-04-30', [{ party_opening_id: 'H', paid_date: '2026-04-25', voided: true }]).length === 0 && PF.hiddenStartingBalances(obs.concat([{ id: 'Hc', corrects_id: 'H', amount: -1, visible_to_staff: false }]), false, '2026-04-30', [{ party_opening_id: 'Hc', paid_date: '2026-04-01' }]).length === 1 && PF.hiddenStartingBalances(obs, true, '2026-06-30').length === 0);
+  var ovr = PF.partyFundsBreakdown({ parties: [{ name: NT }], bankLines: [], pays: [{ id: 'q1', bill_id: 'bx', amount: 9000, paid_date: '2026-06-20', party_opening_id: 'H' }], bills: [{ id: 'bx', paid_via: NT, total_amount: 9000 }], openings: obs, requests: [], entries: [], from: '2026-04-01', to: '2026-04-30' });
+  var ovrV = PF.partyFundsForViewer(ovr, false, '2026-04-30');
+  check('partyFundsForViewer: an OVER-USED hidden balance (used 9,000 of 5,000 after the period) — the super admin sees needs_reconciliation; anyone else gets the transfers\' own flag (false), current withheld, the balance gone, not restricted', ovr[0].needs_reconciliation === true && ovrV.funds[0].needs_reconciliation === false && ovrV.funds[0].current === null && ovrV.funds[0].starting_balances.length === 0 && ovrV.restricted === 0 && !/9000|5000|"H"/.test(JSON.stringify(ovrV.funds)), ovrV.funds[0]);
+  check('partyFundsForViewer: the super admin\'s answer is returned as it is; a company without a hidden balance is untouched', (function () { var f = [{ party: RTM, starting_balances: [], current: { unused: 1 } }]; return PF.partyFundsForViewer(f, true, '2026-04-30').funds === f && PF.partyFundsForViewer(f, false, '2026-04-30').funds[0] === f[0]; })());
   // ── (Codex 22 Nov 14:52 P2) the starting balances cannot be read: 10,400 → unavailable → 10,400, no business row changed ──
   state.super = true; state.perms = null;
   var dbF = world(); function rowsSnap() { return JSON.stringify([dbF.t.bank_transactions, dbF.t.vendor_bills, dbF.t.vendor_bill_payments, dbF.t.party_opening_balances, dbF.t.party_money_entries]); }

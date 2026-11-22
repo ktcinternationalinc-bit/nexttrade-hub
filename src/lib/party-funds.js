@@ -77,9 +77,39 @@ export var STARTING_BALANCE_TAX_FROM = '2026-06-01';
 export var HIDDEN_STARTING_BALANCE_REASON = 'includes a starting balance only the super admin may see';
 export function canSeeStartingBalance(sb, isSuperAdmin) { return isSuperAdmin === true || !!(sb && sb.visible_to_staff === true); }
 // the starting balances (rows of party_opening_balances, corrections left out) this caller may NOT see that count in a report
-// ending on `to` (as of that date or earlier: they are in its held figures, and any use of them in it)
-export function hiddenStartingBalances(openings, isSuperAdmin, to) {
-  return (openings || []).filter(function (b) { return !b.corrects_id && Number(b.amount) > 0 && !canSeeStartingBalance(b, isSuperAdmin) && (!to || day(b.as_of) <= to); });
+// ending on `to` (as of that date or earlier: they are in its held figures, and any use of them in it).
+// v55.83-XO (Codex 22 Nov 18:29 P1) — `pays` (optional, vendor_bill_payments with party_opening_id): a hidden balance also counts
+// when a live bill payment from it is dated on / before `to`, even if its as-of date is later (the period's held figures move by it).
+export function hiddenStartingBalances(openings, isSuperAdmin, to, pays) {
+  var usedBy = {}; (pays || []).forEach(function (p) { if (p && p.voided !== true && p.party_opening_id && (!to || day(p.paid_date) <= to)) { usedBy[p.party_opening_id] = true; } });
+  var rootOf = {}; (openings || []).forEach(function (c) { if (c.corrects_id) { rootOf[c.id] = c.corrects_id; } });
+  Object.keys(usedBy).forEach(function (id) { if (rootOf[id]) { usedBy[rootOf[id]] = true; } });
+  return (openings || []).filter(function (b) { return !b.corrects_id && Number(b.amount) > 0 && !canSeeStartingBalance(b, isSuperAdmin) && (!to || day(b.as_of) <= to || !!usedBy[b.id]); });
+}
+// v55.83-XO (Codex 22 Nov 18:29 P1) — THE WHOLE FUNDS ANSWER, AS THIS CALLER MAY SEE IT, whatever dates were asked for.
+// funds = partyFundsBreakdown(...) for the report's dates. The super admin gets it unchanged. For anyone else, a company with a
+// starting balance they may not see keeps ONLY what that balance does not touch:
+//   • the hidden balance is left out entirely (amount, original, corrections, reason, uses, bill rows, ids);
+//   • `current` (today: whole history) includes it, so it is WITHHELD (null + current_withheld says why) — never recomputed without it;
+//   • needs_reconciliation is said from the transfers and the balances the caller may see (an over-used hidden balance is a
+//     current fact of the hidden balance);
+//   • period / as_of figures are kept only when the hidden balance is not in them (as of after `to`, no use dated on / before `to`).
+// `restricted` = how many hidden balances DO count in these dates: the caller must then withhold the whole report figures
+// (the explicit restricted state), because the period / as_of figures include them.
+export function partyFundsForViewer(funds, isSuperAdmin, to) {
+  if (isSuperAdmin === true || !Array.isArray(funds)) { return { funds: funds, restricted: 0 }; }
+  var restricted = 0;
+  var out = funds.map(function (f) {
+    var all = (f && f.starting_balances) || [];
+    var hidden = all.filter(function (s) { return !canSeeStartingBalance(s, false); });
+    if (!hidden.length) { return f; }
+    hidden.forEach(function (s) { if (!to || !s.as_of || s.as_of <= to || (s.lifetime_rows || []).some(function (r) { return !r.paid_date || r.paid_date <= to; })) { restricted++; } });
+    var shown = all.filter(function (s) { return canSeeStartingBalance(s, false); });
+    var x = Object.assign({}, f, { starting_balances: shown, hidden_starting_balances: hidden.length, current: null, current_withheld: HIDDEN_STARTING_BALANCE_REASON,
+      needs_reconciliation: f.transfers_need_reconciliation === true || shown.some(function (s) { return s.over_used === true; }) });
+    return x;
+  });
+  return { funds: out, restricted: restricted };
 }
 export function partyFundsBreakdown(o) {
   o = o || {}; var from = o.from || null; var to = o.to || null;
@@ -205,12 +235,15 @@ export function partyFundsBreakdown(o) {
     });
     // v55.83-XO — the starting balances, in the same three views. Never in funds_sent.
     var sbPer = { added_rows: [], use_rows: [] }; var sbAsOf = { amount: 0, used: 0 }; var sbCur = { amount: 0, used: 0 };
+    if (looseFees.length || unlinked.length) { unresolved = true; }
+    var unresolvedTransfers = unresolved; // v55.83-XO (Codex 18:29 P1): the flag WITHOUT the starting balances, so a viewer projection never reads a hidden one
     starting.forEach(function (s) {
       s.counted_as_of = !to || s.as_of <= to;
       s.as_of_rows = s.lifetime_rows.filter(function (r) { return !to || r.paid_date <= to; });
       s.as_of_view = { amount: s.counted_as_of ? s.amount : 0, used: sum(s.as_of_rows, 'portion') }; s.as_of_view.held = r2(s.as_of_view.amount - s.as_of_view.used);
       s.current = { used: sum(s.lifetime_rows, 'portion') }; s.current.held = r2(s.amount - s.current.used);
-      if (s.as_of_view.held < -0.005 || s.current.held < -0.005) { unresolved = true; }
+      s.over_used = s.as_of_view.held < -0.005 || s.current.held < -0.005;
+      if (s.over_used) { unresolved = true; }
       if (from && s.as_of < from) { per.opening_held = r2(per.opening_held + s.amount); }
       if (inRange(s.as_of, from, to)) { sbPer.added_rows.push({ starting_balance_id: s.id, as_of: s.as_of, amount: s.amount }); }
       s.lifetime_rows.forEach(function (r) { if (inRange(r.paid_date, from, to)) { sbPer.use_rows.push(r); } if (from && r.paid_date < from) { per.opening_held = r2(per.opening_held - r.portion); } });
@@ -260,6 +293,7 @@ export function partyFundsBreakdown(o) {
       paid_without_a_transfer: { period_total: sum(unlinkedPeriod, 'portion'), period_rows: unlinkedPeriod, as_of_total: sum(unlinkedAsOf, 'portion'), as_of_rows: unlinkedAsOf,
         lifetime_total: sum(unlinked, 'portion'), lifetime_rows: unlinked },
       needs_reconciliation: unresolved,                           // more used than sent on some transfer, a fee that names no transfer, or a bill paid through the company with no transfer named
+      transfers_need_reconciliation: unresolvedTransfers,          // v55.83-XO: the same, starting balances left out (partyFundsForViewer uses it)
     };
   });
 }
@@ -276,6 +310,7 @@ export function feeExplanation(x, money) {
 export function currentFundsWords(x, money) {
   var f = money || function (n) { return '$' + r2(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var c = x.current;
+  if (!c) { return 'Today: not shown — it ' + (x.current_withheld || HIDDEN_STARTING_BALANCE_REASON) + '.'; } // v55.83-XO: withheld by partyFundsForViewer
   if (c.unused < -0.005) { return 'Today: more is used or reserved than was sent, by ' + f(-c.unused) + ' — needs reconciliation.'; }
   return 'Today: ' + f(c.unused) + ' unused and available' + (c.reserved > 0.005 ? ', and ' + f(c.reserved) + ' reserved for requests not sent yet (held — not paid, not an expense)' : '') + '.';
 }
