@@ -51,6 +51,16 @@ function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(
 function fmt(n) { if (n == null) { return '•••'; } return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-QI — masked totals render as •••
 var TODAY = new Date().toISOString().substring(0, 10);
 
+// v55.83-XR (Codex 10:32 P2) — the Income Statement when the money-back records could not be read: NO figures at all (no revenue,
+// expenses or profit recomputed from the incomplete categories, in either view) and no "covers the whole period" claim
+export function incomeStatementBlocked(spending) { return !!(spending && spending.incomplete); }
+export function IncomeStatementUnavailable(p) {
+  return <div className="mt-3 rounded-lg p-3" style={{ background: '#fee2e2', border: '1px solid #fca5a5' }}>
+    <div className="text-xs font-extrabold mb-1" style={{ color: '#7f1d1d' }}>📊 INCOME STATEMENT — {p.from} → {p.to}: NOT AVAILABLE</div>
+    <div className="text-[11px] font-bold" style={{ color: '#7f1d1d' }}>The statement cannot be shown because part of the data could not be read: {p.why} Without it, revenue, expenses and profit would be wrong. Reload the page to try again.</div>
+  </div>;
+}
+
 export default function PeriodStatsTab(props) {
   var onGo = props.onGo || function () {}; // v55.83-RN — the invoice peek's "edit" called onGo, which was never declared (crash on click)
   var userProfile = props.userProfile;
@@ -518,7 +528,8 @@ export default function PeriodStatsTab(props) {
             expense kinds). Transfers and Not-P&L money excluded on both
             sides. Uncategorized shown as its own line so the gap to a
             filing-ready statement is VISIBLE, never hidden. */}
-        {data.spending.in_categories && (function () {
+        {data.spending.in_categories && incomeStatementBlocked(data.spending) && <IncomeStatementUnavailable why={data.spending.incomplete.reason} from={from} to={to} />}
+        {data.spending.in_categories && !incomeStatementBlocked(data.spending) && (function () {
           var rev = 0; var cogs2 = 0; var exp2 = 0; var oin = 0; var oex = 0;
           (data.spending.in_categories || []).forEach(function (c) {
             if (c.kind === 'income') { rev += c.total; } else if (c.kind === 'other_income') { oin += c.total; }

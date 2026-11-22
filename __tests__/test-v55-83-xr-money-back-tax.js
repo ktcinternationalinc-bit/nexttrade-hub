@@ -40,7 +40,7 @@ function world(o) {
     ln('T1', '2026-03-05', 1000, { third_party_payer: NT, classification: 'professional_fees', name: 'Online Transfer to CHK ...2061 transaction#: 7000001' })].concat(o.noRtm ? [] : [
     ln('T2', '2026-04-02', 400, { third_party_payer: RTM, classification: null, name: 'WIRE TO RTM' })]).concat([
     ln('B1', '2026-04-08', 200, { direction: 'in', classification: o.backCat === undefined ? 'sales' : o.backCat, name: 'DEPOSIT FROM NEXTTRADE' }), // NextTrade sends back 200 of T1 (March)
-    ln('B2', '2026-04-20', 50, { direction: 'in', classification: null, name: 'RTM RETURN' }),                                                      // RTM sends back 50 of T2 (same month)
+    ln('B2', '2026-04-20', 50, { direction: 'in', classification: o.b2Cat || null, name: 'RTM RETURN' }),                                                    // RTM sends back 50 of T2 (same month)
     ln('IN1', '2026-04-22', 5000, { direction: 'in', classification: 'customer_payment', name: 'CUSTOMER WIRE' }),
     ln('DUP', '2026-04-23', 75, { direction: 'in', classification: 'sales', review_status: 'duplicate', name: 'DUPLICATE COPY' })
   ]).filter(function (x) { return !(o.noRtm && x.id === 'B2'); });
@@ -150,6 +150,16 @@ function incomeCat(sp, key) { return cat(sp.in_categories, key); }
   check('… the Accountant pack files 7 / 8 / 12 contain NO figures, only "NOT AVAILABLE — incomplete" (no Revenue 5,200 / Operating expenses 400)', [eb7, eb8, eb12].every(function (x) { return /NOT AVAILABLE - this report is incomplete/.test(x) && !/5200\.00|400\.00/.test(x); }) && TP.taxPackBlocked(e0) !== null, eb12);
   var ui = fs.readFileSync(path.join(root, 'src/components/PeriodStatsTab.jsx'), 'utf8');
   check('… the screen refuses the pack download and shows the red INCOMPLETE notice; taxable income / deductible spending show "not available"', ui.indexOf('var blockedWhy = data && data.spending ? taxPackBlocked(data.spending) : null;') > 0 && ui.indexOf('if (blockedWhy) { toast.error(') > 0 && ui.indexOf('{data.spending.incomplete && <div') > 0 && ui.indexOf("data.spending.taxable_income === null ? 'not available (incomplete)'") > 0 && ui.indexOf("data.spending.deductible_spending === null ? 'not available (incomplete)'") > 0 && ui.indexOf("taxPackBlocked } from '../lib/tax-pack'") > 0);
+  // (Codex 10:32 P2) the Income Statement itself, RENDERED: Codex's fixture — failed read on an installed system, every deposit categorized
+  var RDS = require('react-dom/server'); var React = require('react');
+  world({ readError: true, installed: true, b2Cat: 'customer_payment' }); var c0 = (await stats('2026-04-01', '2026-04-30')).sp;
+  var html0 = UI.incomeStatementBlocked(c0) ? RDS.renderToStaticMarkup(React.createElement(UI.IncomeStatementUnavailable, { why: c0.incomplete.reason, from: '2026-04-01', to: '2026-04-30' })) : '(statement would render with figures)';
+  var text0 = html0.replace(/<[^>]+>/g, ' ');
+  check('all-categorized failed read: the route says incomplete, the screen\'s own check BLOCKS the statement, and the rendered statement shows NOT AVAILABLE with no amount, no Revenue / NET PROFIT line and no "covers the whole period" claim', !!c0.incomplete && c0.taxable_income === null && UI.incomeStatementBlocked(c0) === true && /NOT AVAILABLE/.test(text0) && !/\$\s?[0-9]|[0-9],[0-9]{3}|[0-9]\.[0-9]{2}/.test(text0.replace(/2026-0[0-9]-[0-9]{2}/g, '')) && !/Revenue [(]cash|GROSS PROFIT|NET PROFIT|Operating expenses|whole period|Every transaction/.test(text0), text0);
+  world({ b2Cat: 'customer_payment' }); var ok0 = (await stats('2026-04-01', '2026-04-30')).sp;
+  check('… after a successful reload the normal statement is shown again (the check no longer blocks; taxable income back)', UI.incomeStatementBlocked(ok0) === false && ok0.taxable_income === 5000 && !ok0.incomplete);
+  var gate = fs.readFileSync(path.join(root, 'src/components/PeriodStatsTab.jsx'), 'utf8');
+  check('… the screen renders EITHER the unavailable box OR the figures, through that one check (both views: tax and real-cost share this block)', gate.indexOf('{data.spending.in_categories && incomeStatementBlocked(data.spending) && <IncomeStatementUnavailable') > 0 && gate.indexOf('{data.spending.in_categories && !incomeStatementBlocked(data.spending) && (function () {') > 0 && (gate.match(/data\.spending\.in_categories && \(function/g) || []).length === 0);
   world({ readError: 'relation "public.party_money_entries" does not exist', installed: false }); var x0 = (await stats('2026-04-01', '2026-04-30')).sp;
   check('a POSITIVELY missing prerequisite (WF not installed AND the table missing) keeps the old complete report (no refunds can exist)', !!x0 && !x0.incomplete && x0.taxable_income === 5200, x0 && [x0.incomplete, x0.taxable_income]);
   world({ readError: 'relation "public.party_money_entries" does not exist', installed: true }); var y0 = (await stats('2026-04-01', '2026-04-30')).sp;
