@@ -173,8 +173,9 @@ var goodPay = { action: 'opening_pay', party: NT, opening_id: 'O1', bills: [{ bi
   check('screen: "+ Starting balance", "Starting balance held with …, as of …", "Pay bills from it"; every write is a server action with a click id', ui.indexOf('+ Starting balance') > 0 && ui.indexOf("'Starting balance held with ' + p.party + ', as of ' + sb.as_of") > 0 && ui.indexOf('Pay bills from it') > 0 && ui.indexOf("action: 'opening_add'") > 0 && ui.indexOf("action: 'opening_pay'") > 0 && ui.indexOf('supabase') < 0);
   var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8');
   var WN = require(path.join(root, 'src/components/WhatsNewWidget.jsx'));
-  var top = WN.BUILD_HISTORY[0];
-  check('badge v55.83-XO and the top What\'s New entry: plain items + one super-admin-only Technical item naming the SQL', page.indexOf('>v55.83-XO</span>') > 0 && top.version === 'v55.83-XO' && top.items.filter(function (x) { return x.superAdminOnly; }).length === 1 && top.items.filter(function (x) { return x.superAdminOnly; })[0].text.indexOf('sql/v55-83-XO-starting-balance.sql') >= 0 && top.items.every(function (x) { return typeof x.text === 'string' && x.text.length > 20; }));
+  // v55.83-XB: a later build moves the badge on (same rule XO gave the XI test): the badge names the newest entry, and the XO entry keeps its shape wherever it now sits
+  var top = WN.BUILD_HISTORY.filter(function (e) { return e.version === 'v55.83-XO'; })[0] || { items: [] };
+  check('badge names the newest What\'s New entry (XO or later) and the XO entry: plain items + one super-admin-only Technical item naming the SQL', page.indexOf('>' + WN.BUILD_HISTORY[0].version + '</span>') > 0 && top.version === 'v55.83-XO' &&top.items.filter(function (x) { return x.superAdminOnly; }).length === 1 && top.items.filter(function (x) { return x.superAdminOnly; })[0].text.indexOf('sql/v55-83-XO-starting-balance.sql') >= 0 && top.items.every(function (x) { return typeof x.text === 'string' && x.text.length > 20; }));
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('CRASHED: ' + (e && e.stack || e)); process.exit(1); });
