@@ -37,7 +37,8 @@ ok(!/items: \[[^\]]*'ntwarehouse-staging'/.test(page), "'ntwarehouse-staging' no
 ok(/<iframe src="https:\/\/nextradeindustries\.com\/admin" title="NT Warehouse"/.test(page), 'the production NT Warehouse panel is still present/untouched');
 
 // Badge + What's New.
-ok(page.includes('>v55.83-XI</span>'), 'badge bumped to v55.83-XI');
+// v55.83-XO: a later build moves the badge on; the badge always names the newest What's New entry (XI or later).
+ok((function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(whatsnew); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })(), 'badge names the newest What\'s New entry (v55.83-XI or a later build)');
 ok(/version: 'v55\.83-XI'/.test(whatsnew), "What's New has a v55.83-XI entry");
 
 console.log('\nXI staging-inhub: ' + pass + '/' + pass + ' checks passed');
