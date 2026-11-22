@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XF',
+    date: '2026-11-22',
+    title: 'NT Warehouse opens inside the Hub',
+    items: [
+      { text: 'Everyone now has an **NT Warehouse** link in the sidebar that opens the Nextrade warehouse **inside the Hub** as a panel — no more leaving the Hub. There is also an **NT Warehouse · STAGING · TEST** link (opens the test copy in a new tab) so the team can preview updates being worked on.' },
+      { text: 'The warehouse keeps its own sign-in. If the panel shows a sign-in screen or looks empty, use the **“Open in its own window”** button at the top — some browsers (notably iPhone/iPad) keep you signed out inside a panel.' },
+      { superAdminOnly: true, text: 'Technical: hidden tab “ntwarehouse” (in TABS, not in any sidebar group, visible to everyone) renders an <iframe> of nextradeindustries.com/admin with an always-present new-window fallback; the NT WAREHOUSE sidebar block’s production entry navigates to it, and the staging link is now shown to everyone (new tab, TEST). The old opt-in “NT Warehouse” permission key was removed. The live warehouse already allows Hub framing (CSP frame-ancestors + SameSite=None, 22 Nov). Test xf-nt-warehouse-inhub.' },
+    ]
+  },
+  {
     version: 'v55.83-WX',
     date: '2026-11-21',
     title: 'Category rules for bills',

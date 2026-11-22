@@ -210,6 +210,8 @@ const TABS = [
   { id: 'openaccounts', label: 'Open Accounts / حسابات', icon: '📒' },
   { id: 'reports', label: 'Reports / تقارير', icon: '📊' },
   { id: 'warehouse', label: 'Warehouse / المخزن', icon: '🏭' },
+  // v55.83-XF — in-Hub view of the live Nextrade warehouse (reached from the NT WAREHOUSE block, everyone).
+  { id: 'ntwarehouse', label: 'NT Warehouse / مخزن', icon: '🏭' },
   { id: 'inventory', label: 'Inventory / المخزون', icon: '📦' },
   { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
   { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
@@ -5599,7 +5601,7 @@ function HubApp() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-WX</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-XF</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -6020,45 +6022,41 @@ function HubApp() {
                 </div>
               );
             })}
-            {/* v55.83-VO — NT Warehouse external links. These open the Nextrade
-                warehouse in a NEW TAB (they are NOT Hub tabs and render no Hub
-                content). Production is gated by the "NT Warehouse" switch
-                (Settings → Action Permissions, default OFF) or super admin. The
-                STAGING link is super-admin only and marked TEST so no one does
-                real work there. Neither link logs anyone in — the warehouse has
-                its own sign-in. */}
-            {(isSuperAdmin || modulePerms?.['NT Warehouse'] === true) && (
+            {/* v55.83-XF — NT Warehouse, visible to EVERYONE (Max 22 Nov).
+                "NT Warehouse" opens an IN-HUB panel (tab 'ntwarehouse') that embeds
+                the live warehouse; "NT Warehouse · STAGING · TEST" opens the staging
+                copy in a NEW TAB (behind its own login) so the team can watch updates.
+                Neither logs anyone in — the warehouse keeps its own sign-in. */}
+            {true && (
               <div className="mb-1">
                 <div className="px-3 pt-3 pb-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-600 font-mono"
                   style={{ fontFamily: '"JetBrains Mono", monospace' }}>
                   <span className="text-zinc-700">// </span>NT WAREHOUSE
                 </div>
-                <a href="https://nextradeindustries.com/admin" target="_blank" rel="noopener noreferrer"
-                  onClick={() => setSidebarOpen(false)}
-                  className="w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 text-zinc-400 border-transparent hover:text-zinc-100 hover:bg-zinc-900/50">
+                <button onClick={() => { navigate('ntwarehouse'); setSidebarOpen(false); }}
+                  className={'w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 ' + (tab === 'ntwarehouse'
+                    ? 'text-emerald-400 border-emerald-400 bg-zinc-900'
+                    : 'text-zinc-400 border-transparent hover:text-zinc-100 hover:bg-zinc-900/50')}
+                  style={tab === 'ntwarehouse' ? { boxShadow: 'inset 1px 0 0 #34d399' } : {}}>
                   <span className="w-4 flex items-center justify-center shrink-0 opacity-80"><Warehouse size={15} strokeWidth={2} /></span>
                   <span className="truncate flex-1">
                     <span>NT Warehouse</span>
                     <span className="text-[9px] text-zinc-600 block leading-tight" style={{ direction: 'rtl' }}>مخزن نكست تريد</span>
                   </span>
-                  <span className="text-zinc-600 text-[10px]">↗</span>
+                  {tab === 'ntwarehouse' && <span className="text-emerald-400 text-[10px] font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>▸</span>}
+                </button>
+                <a href="https://fix.nextrade-staging.com/admin" target="_blank" rel="noopener noreferrer"
+                  onClick={() => setSidebarOpen(false)}
+                  title="Staging / test warehouse — a preview of updates; do not perform real work here"
+                  className="w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 text-amber-400/90 border-transparent hover:text-amber-300 hover:bg-amber-900/10">
+                  <span className="w-4 flex items-center justify-center shrink-0 opacity-80"><Warehouse size={15} strokeWidth={2} /></span>
+                  {/* TEST badge on its own non-truncating line (Codex 15:18 P2). */}
+                  <span className="flex-1 min-w-0">
+                    <span className="block truncate">NT Warehouse</span>
+                    <span className="text-[8px] font-mono mt-0.5 inline-block px-1 py-px rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 whitespace-nowrap">STAGING · TEST</span>
+                  </span>
+                  <span className="text-amber-500/70 text-[10px] shrink-0">↗</span>
                 </a>
-                {isSuperAdmin && (
-                  <a href="https://fix.nextrade-staging.com/admin" target="_blank" rel="noopener noreferrer"
-                    onClick={() => setSidebarOpen(false)}
-                    title="Staging / test warehouse — do not perform real work here"
-                    className="w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 text-amber-400/90 border-transparent hover:text-amber-300 hover:bg-amber-900/10">
-                    <span className="w-4 flex items-center justify-center shrink-0 opacity-80"><Warehouse size={15} strokeWidth={2} /></span>
-                    {/* v55.83-VO (Codex 15:18 P2): the TEST badge sits on its own line OUTSIDE the
-                        truncating name span and does not shrink, so the warning is never clipped at
-                        the 220px sidebar width (desktop, mobile or RTL). */}
-                    <span className="flex-1 min-w-0">
-                      <span className="block truncate">NT Warehouse</span>
-                      <span className="text-[8px] font-mono mt-0.5 inline-block px-1 py-px rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 whitespace-nowrap">STAGING · TEST</span>
-                    </span>
-                    <span className="text-amber-500/70 text-[10px] shrink-0">↗</span>
-                  </a>
-                )}
               </div>
             )}
           </div>
@@ -14688,6 +14686,27 @@ function HubApp() {
         {tab === 'inventory' && (
           <SafeSection label="Inventory">
             <InventoryTab userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+          </SafeSection>
+        )}
+
+        {/* v55.83-XF — NT Warehouse in-Hub panel: embeds the live Nextrade warehouse with an
+            always-present "open in its own window" fallback. No Hub data crosses into the frame. */}
+        {tab === 'ntwarehouse' && (
+          <SafeSection label="NT Warehouse">
+            <div className="flex flex-col gap-2" style={{ height: 'calc(100vh - 150px)' }}>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-[12px] text-slate-400" style={{ minWidth: 0 }}>
+                  Live Nextrade warehouse, inside the Hub. If it shows a sign-in screen or looks empty, open it in its own window — some browsers keep you signed out inside a panel.
+                </div>
+                <a href="https://nextradeindustries.com/admin" target="_blank" rel="noopener noreferrer"
+                  className="shrink-0 px-3 py-1.5 text-[12px] font-semibold rounded bg-blue-500 text-white inline-flex items-center gap-1.5">
+                  Open in its own window <span aria-hidden="true">↗</span>
+                </a>
+              </div>
+              <iframe src="https://nextradeindustries.com/admin" title="NT Warehouse"
+                className="flex-1 w-full rounded-lg border border-zinc-800"
+                style={{ minHeight: 400, background: '#ffffff' }} />
+            </div>
           </SafeSection>
         )}
 
