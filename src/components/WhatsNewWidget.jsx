@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XP',
+    date: '2026-11-22',
+    title: 'The warehouse can read product costs from the Hub (Advanced P&L)',
+    items: [
+      { text: '**New: the Nextrade warehouse can now read product costs from the Hub.** This feeds the warehouse’s new Advanced P&L report, which works out profit per shipment using the Hub’s blended average cost per pound — the same all-time blended figure you see as “Avg Cost All / LB” in Profitability. The warehouse uses it as an allocated goods cost, not a verified actual cost of that one shipment.' },
+      { text: 'It is read-only and secured by a secret token because product costs are sensitive: the warehouse can ask the Hub “what is the blended average cost per pound for each product?” and nothing else. No customer names, invoices, balances, orders or other private data are shared — only product names and their blended cost per pound.' },
+      { text: 'Nothing changes in the Hub screens; this is a behind-the-scenes feed the warehouse pulls when it needs to cost a shipment.' },
+      { superAdminOnly: true, text: 'Technical (XP): NEW read-only GET /api/hub-feed/product-costs, secured by the HUB_COST_TOKEN env var via the X-Hub-Cost-Token header (constant-time compare, ≥ 32 chars, 503 when unset, 401 on mismatch); the token exists because cost is sensitive. Service-role, no user session. Returns a self-describing basis block (metric hub_blended_all_time, weight_basis sales, USD/lb, components goods+commission+inbound allowance, excludes brokerage/bonded/outbound) plus products { product_key, product_name, grouped, avg_all_cost_per_lb (null stays null — never 0), pounds_sold } from the Profitability by_product summary. The figure is an ALL-TIME, SALES-WEIGHTED blended cost — not purchase-weighted, not one shipment’s actual cost; pounds_sold is the sold pounds behind it, not purchases. No cells, bills, vendors or customers. No Hub DB change, no Hub UI. The warehouse (Advanced P&L, Model P) pulls and caches it, marks products absent from a successful refresh as withdrawn (cost unknown, never the old figure), and maps each product type to a Hub product; unmapped/withdrawn → cost shown as “—”. Set HUB_COST_TOKEN on the Hub (Vercel) and the same value on the warehouse before costs appear.' },
+    ]
+  },
+  {
     version: 'v55.83-XH',
     date: '2026-11-22',
     title: 'Change Schedule — see every warehouse release',
