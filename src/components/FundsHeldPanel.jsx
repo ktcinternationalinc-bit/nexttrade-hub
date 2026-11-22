@@ -35,6 +35,15 @@ export function transferActions(t, o) {
   };
 }
 
+// v55.83-XO — what the super admin may do with one starting balance right now (pure — tested). Staff get nothing here.
+export var STARTING_BALANCE_PAY_FROM = '2026-06-01';
+export function startingBalanceActions(sb, o) {
+  var can = !!(o && o.canStart) && !!(o && o.installed);
+  var left = Number(sb && sb.left);
+  return { pay: can && left > 0.005, correct: can && Number(sb && sb.amount) > 0.005, add: can,
+    why: !(o && o.canStart) ? '' : !(o && o.installed) ? 'needs sql/v55-83-XO-starting-balance.sql first' : left > 0.005 ? '' : 'nothing left on it' };
+}
+
 export default function FundsHeldPanel(props) {
   var userProfile = props.userProfile; var toast = props.toast || { success: function () {}, error: function () {} };
   var s1 = useState(null); var data = s1[0]; var setData = s1[1];
@@ -93,6 +102,34 @@ export default function FundsHeldPanel(props) {
     else if (form.kind === 'refund') { if (!form.line) { toast.error('Pick the money-in line the money came back on.'); return; } act({ action: 'refund', party: form.party, bank_transaction_id: form.id, incoming_bank_transaction_id: form.line, amount: a, entry_date: form.date || null, reason: form.reason, allow_closed: form.closed === true, request_id: form.click }, fmt(a) + ' recorded as money back from ' + form.party); }
     else { act({ action: 'fee_reverse', party: form.party, bank_transaction_id: form.id, amount: a, entry_date: form.date, reason: form.reason, fee_id: form.fee, allow_closed: form.closed === true, request_id: form.click }, fmt(a) + ' put back to available funds'); }
   }
+  // v55.83-XO — STARTING BALANCE (super admin): add one, correct one, pay bills from one
+  function openOpeningAdd(p) { setForm({ kind: 'opening_add', party: p.party, id: 'sb-add:' + p.party, amount: '', date: '', reason: '', visible: null, click: clickId() }); }
+  function openOpeningCorrect(p, sb) { setForm({ kind: 'opening_correct', party: p.party, id: 'sb:' + sb.id, sb: sb.id, amount: '', reason: '', max: Number(sb.left), click: clickId() }); }
+  function openOpeningPay(p, sb) {
+    setForm({ kind: 'opening_pay', party: p.party, id: 'sb:' + sb.id, sb: sb.id, asOf: sb.as_of, max: Number(sb.left), date: '', reference: '', reason: '', picks: {}, bills: null, click: clickId() });
+    api({ action: 'opening_pay_candidates', party: p.party }).then(function (j) { setForm(function (f) { return f && f.kind === 'opening_pay' && f.sb === sb.id ? Object.assign({}, f, { bills: (j && j.ok) ? (j.bills || []) : [], billsErr: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the bills.') }) : f; }); });
+  }
+  function saveOpening() {
+    if (form.kind === 'opening_pay') {
+      var rows = Object.keys(form.picks || {}).map(function (k) { return { bill_id: k, amount: Number(String(form.picks[k] || '').replace(/,/g, '')) || 0 }; }).filter(function (x) { return x.amount > 0; });
+      if (!rows.length) { toast.error('Tick at least one bill and give its amount.'); return; }
+      if (!form.date || form.date < STARTING_BALANCE_PAY_FROM) { toast.error('Pick the paid date — 1 June 2026 or later.'); return; }
+      if (String(form.reference || '').trim().length < 3) { toast.error('Type the payment reference or where the proof is.'); return; }
+      if (String(form.reason || '').trim().length < 3) { toast.error('Say why, in a few words.'); return; }
+      act({ action: 'opening_pay', party: form.party, opening_id: form.sb, bills: rows, paid_date: form.date, reference: form.reference, reason: form.reason, allow_closed: form.closed === true, request_id: form.click }, rows.length + ' bill(s) paid from the starting balance with ' + form.party);
+      return;
+    }
+    var a = Number(String(form.amount || '').replace(/,/g, ''));
+    if (!(a > 0)) { toast.error('Type an amount above zero.'); return; }
+    if (String(form.reason || '').trim().length < 10) { toast.error('Say where this number comes from (at least 10 characters).'); return; }
+    if (form.kind === 'opening_add') {
+      if (!form.date) { toast.error('Pick the date this balance is as of.'); return; }
+      if (form.visible !== true && form.visible !== false) { toast.error('Say whether staff may see this balance.'); return; }
+      act({ action: 'opening_add', party: form.party, amount: a, as_of: form.date, reason: form.reason, visible_to_staff: form.visible, request_id: form.click }, 'Starting balance of ' + fmt(a) + ' with ' + form.party + ' saved');
+    } else {
+      act({ action: 'opening_add', party: form.party, amount: -a, corrects_id: form.sb, reason: form.reason, request_id: form.click }, 'Starting balance lowered by ' + fmt(a));
+    }
+  }
   var chip = function (st) { var w = STATUS_WORDS[st] || STATUS_WORDS.needs_reconciliation; return <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded" style={{ background: w.bg, color: w.fg }}>{w.text}</span>; };
 
   return <div className="rounded-xl p-3 mt-3" style={{ background: '#ffffff', color: INK, border: '1px solid #e2e8f0' }}>
@@ -112,10 +149,73 @@ export default function FundsHeldPanel(props) {
             <span>Sent <b style={{ color: INK }}>{fmt(T.funds_sent)}</b></span>{T.refunded > 0.005 ? <span>− money back <b style={{ color: INK }}>{fmt(T.refunded)}</b></span> : null}<span>− to bills <b style={{ color: INK }}>{fmt(T.to_bills)}</b></span><span>− services rendered <b style={{ color: '#991b1b' }}>{fmt(T.services_rendered)}</b></span>
             <span>= held <b style={{ color: INK }}>{fmt(T.held)}</b></span><span>· reserved <b style={{ color: '#92400e' }}>{fmt(T.reserved)}</b></span><span>· available now <b style={{ color: '#166534' }}>{fmt(T.available)}</b></span>
             {T.not_confirmed > 0.005 ? <span>· not confirmed yet <b style={{ color: '#92400e' }}>{fmt(T.not_confirmed)}</b></span> : null}
+            {T.starting_balance > 0.005 ? <span>· plus starting balance left <b style={{ color: '#075985' }}>{fmt(T.starting_balance_left)}</b></span> : null}
           </div> : <div className="text-[11px]" style={{ color: MUTED }}>{'Totals hidden — ' + (p.totals_hidden || 'no permission') + '.'}</div>}
         </div>
         {p.needs_reconciliation && <div className="text-[11px] mt-1 font-bold" style={{ color: '#b45309' }}>{'⚠ Needs reconciliation' + (p.paid_without_a_transfer_count ? ': ' + p.paid_without_a_transfer_count + ' bill payment(s) made through ' + p.party + ' name no transfer' + (T ? ' (' + fmt(T.paid_without_a_transfer) + ') — held funds are overstated by that until they are linked' : '') : ': the records disagree on a transfer') + '.'}</div>}
         {p.hidden_private_transfers > 0 && <div className="text-[11px] mt-1" style={{ color: MUTED }}>{p.hidden_private_transfers + ' transfer(s) from a private account are not shown.'}</div>}
+        {/* v55.83-XO — the starting balance(s) with this company: money it already held for KTC before the Hub. Never money sent. */}
+        {(function () {
+          var sbo = { canStart: data.can_starting_balance, installed: data.starting_balances_installed }; var addA = startingBalanceActions({}, sbo);
+          var sbs = p.starting_balances || [];
+          return <div className="mt-2">
+            {sbs.map(function (sb) { var sa = startingBalanceActions(sb, sbo);
+              return <div key={sb.id} className="rounded p-2 mt-1 text-[12px]" style={{ background: '#f0f9ff', border: '1px solid #bae6fd', color: INK }}>
+                <div className="flex gap-3 items-baseline flex-wrap">
+                  <b>{'Starting balance held with ' + p.party + ', as of ' + sb.as_of}</b>
+                  <span>amount <b>{fmt(sb.amount)}</b>{sb.corrections_count > 0 ? <span style={{ color: MUTED }}>{' (corrected ' + sb.corrections_count + '×)'}</span> : null}</span>
+                  <span>· used on bills <b>{fmt(sb.used)}</b></span><span>· left <b style={{ color: '#166534' }}>{fmt(sb.left)}</b></span>
+                  {data.can_starting_balance && <span className="text-[10px] font-bold" style={{ color: sb.visible_to_staff ? '#166534' : '#92400e' }}>{sb.visible_to_staff ? 'staff can see it' : 'only you can see it'}</span>}
+                  {sa.pay && <button type="button" disabled={busy} onClick={function () { openOpeningPay(p, sb); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#075985', color: '#ffffff' }}>Pay bills from it</button>}
+                  {sa.correct && <button type="button" disabled={busy} onClick={function () { openOpeningCorrect(p, sb); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Lower it (correction)</button>}
+                </div>
+                <div className="text-[10px]" style={{ color: MUTED }}>{'Where the number comes from: ' + (sb.reason || '—') + '. This is not money sent in any period. Bills paid from it count in their own categories; for the tax report each one is a new expense on the day it is paid (1 June 2026 or later).'}</div>
+                {sb.bills && sb.bills.length > 0 && <div className="mt-1">{sb.bills.map(function (b, i) { return <div key={i} className="text-[11px] flex gap-2 flex-wrap"><span>{b.paid_date}</span><b>{b.vendor}</b><span>{'bill ' + (b.bill_number || '—')}</span><span style={{ color: MUTED }}>{b.category}</span><span className="tabular-nums font-bold">{fmt(b.portion)}</span></div>; })}</div>}
+                {form && form.id === 'sb:' + sb.id && form.kind === 'opening_correct' && <div className="flex gap-2 items-center flex-wrap mt-2 p-2 rounded" style={{ background: '#ffffff' }}>
+                  <span className="text-[11px] font-extrabold">{'Lower this starting balance by (it cannot go below what is already used; ' + fmt(form.max) + ' can come off):'}</span>
+                  <span className="text-[11px] font-bold">$</span><input autoFocus className={inp} style={Object.assign({ width: 110 }, inpS)} value={form.amount} onChange={function (e) { setForm(Object.assign({}, form, { amount: e.target.value })); }} />
+                  <input className={inp} style={Object.assign({ minWidth: 240 }, inpS)} value={form.reason} placeholder="why it is lower (at least 10 characters)" onChange={function (e) { setForm(Object.assign({}, form, { reason: e.target.value })); }} />
+                  <button type="button" disabled={busy} onClick={saveOpening} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: INK, color: '#ffffff' }}>{busy ? 'Saving…' : 'Save'}</button>
+                  <button type="button" onClick={function () { setForm(null); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Cancel</button>
+                </div>}
+                {form && form.id === 'sb:' + sb.id && form.kind === 'opening_pay' && <div className="mt-2 p-2 rounded" style={{ background: '#ffffff', border: '1px solid #bae6fd' }}>
+                  <div className="text-[12px] font-extrabold">{'Pay KTC bills from the starting balance with ' + p.party + ' (no bank money moves; ' + fmt(form.max) + ' left):'}</div>
+                  <div className="text-[11px] mb-1" style={{ color: SUB }}>{'Tick the bills ' + p.party + ' paid (or will pay) out of this balance and the amount of each. The paid date must be 1 June 2026 or later' + (form.asOf > STARTING_BALANCE_PAY_FROM ? ' and not before ' + form.asOf : '') + '.'}</div>
+                  {form.bills === null ? <div className="text-[11px]" style={{ color: MUTED }}>Looking for open bills…</div> : form.billsErr ? <div className="text-[11px]" style={{ color: '#991b1b' }}>{form.billsErr}</div> : form.bills.length === 0 ? <div className="text-[11px]" style={{ color: MUTED }}>No open bill can be paid from it.</div> :
+                    <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #e0f2fe', borderRadius: 6 }}>{form.bills.map(function (b) { var on = Object.prototype.hasOwnProperty.call(form.picks || {}, b.id);
+                      return <label key={b.id} className="flex gap-2 items-center text-[11px] px-2 py-0.5" style={{ color: INK, borderTop: '1px solid #f0f9ff' }}>
+                        <input type="checkbox" checked={on} onChange={function (e) { var pk = Object.assign({}, form.picks); if (e.target.checked) { pk[b.id] = String(b.open); } else { delete pk[b.id]; } setForm(Object.assign({}, form, { picks: pk })); }} />
+                        <span>{b.bill_date || '—'}</span><b>{b.vendor}</b><span>{'bill ' + (b.bill_number || '—')}</span><span style={{ color: MUTED }}>{'open ' + fmt(b.open)}</span>{!b.via ? <span style={{ color: MUTED }}>{'(will be marked paid through ' + p.party + ')'}</span> : null}
+                        {on && <input className={inp} style={Object.assign({ width: 90 }, inpS)} value={form.picks[b.id]} onChange={function (e) { var pk = Object.assign({}, form.picks); pk[b.id] = e.target.value; setForm(Object.assign({}, form, { picks: pk })); }} />}
+                      </label>; })}</div>}
+                  <div className="flex gap-2 items-center flex-wrap mt-2">
+                    <span className="text-[11px] font-bold">{'picked ' + fmt(pickedTotal(form)) + ' of ' + fmt(form.max) + ' left'}</span>
+                    <span className="text-[11px] font-bold">paid date</span><input type="date" className={inp} style={inpS} value={form.date} min={form.asOf > STARTING_BALANCE_PAY_FROM ? form.asOf : STARTING_BALANCE_PAY_FROM} max={today()} onChange={function (e) { setForm(Object.assign({}, form, { date: e.target.value })); }} />
+                    <input className={inp} style={Object.assign({ minWidth: 200 }, inpS)} value={form.reference} placeholder="payment reference / where the proof is (required)" onChange={function (e) { setForm(Object.assign({}, form, { reference: e.target.value })); }} />
+                    <input className={inp} style={Object.assign({ minWidth: 180 }, inpS)} value={form.reason} placeholder="why (required)" onChange={function (e) { setForm(Object.assign({}, form, { reason: e.target.value })); }} />
+                    {data.can_closed_month && <label className="text-[10px] font-bold" style={{ color: SUB }}><input type="checkbox" checked={form.closed === true} onChange={function (e) { setForm(Object.assign({}, form, { closed: e.target.checked })); }} /> the date is in a closed month — record it as a correction</label>}
+                    <button type="button" disabled={busy} onClick={saveOpening} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: INK, color: '#ffffff' }}>{busy ? 'Saving…' : 'Pay'}</button>
+                    <button type="button" onClick={function () { setForm(null); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Cancel</button>
+                  </div></div>}
+              </div>; })}
+            {p.hidden_starting_balances > 0 && <div className="text-[11px] mt-1" style={{ color: MUTED }}>{p.hidden_starting_balances + ' starting balance(s) are not shown to you.'}</div>}
+            {data.can_starting_balance && <div className="mt-1">
+              {addA.add ? <button type="button" disabled={busy} onClick={function () { openOpeningAdd(p); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#e0f2fe', color: '#075985' }}>+ Starting balance</button>
+                : <span className="text-[10px]" style={{ color: MUTED }}>{'+ Starting balance: ' + (data.starting_balance_sql_missing || addA.why)}</span>}
+              {form && form.id === 'sb-add:' + p.party && <div className="flex gap-2 items-center flex-wrap mt-1 p-2 rounded" style={{ background: '#f0f9ff', border: '1px solid #bae6fd' }}>
+                <span className="text-[12px] font-extrabold">{'Money ' + p.party + ' already held for KTC before the Hub (it is not money sent now):'}</span>
+                <span className="text-[11px] font-bold">$</span><input autoFocus className={inp} style={Object.assign({ width: 110 }, inpS)} value={form.amount} onChange={function (e) { setForm(Object.assign({}, form, { amount: e.target.value })); }} />
+                <span className="text-[11px] font-bold">as of</span><input type="date" className={inp} style={inpS} value={form.date} max={today()} onChange={function (e) { setForm(Object.assign({}, form, { date: e.target.value })); }} />
+                <input className={inp} style={Object.assign({ minWidth: 260 }, inpS)} value={form.reason} placeholder="where the number comes from (e.g. their statement of 31 May)" onChange={function (e) { setForm(Object.assign({}, form, { reason: e.target.value })); }} />
+                <span className="text-[11px] font-bold">May staff see it?</span>
+                <label className="text-[11px]"><input type="radio" checked={form.visible === true} onChange={function () { setForm(Object.assign({}, form, { visible: true })); }} /> yes</label>
+                <label className="text-[11px]"><input type="radio" checked={form.visible === false} onChange={function () { setForm(Object.assign({}, form, { visible: false })); }} /> no, only me</label>
+                <button type="button" disabled={busy} onClick={saveOpening} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: INK, color: '#ffffff' }}>{busy ? 'Saving…' : 'Save'}</button>
+                <button type="button" onClick={function () { setForm(null); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Cancel</button>
+              </div>}
+            </div>}
+          </div>;
+        })()}
         <div style={{ overflowX: 'auto' }}><table className="w-full text-[12px] mt-2" style={{ color: INK }}>
           <thead><tr style={{ background: '#f1f5f9', color: SUB }}><th className="p-1 text-left">Transfer</th><th className="p-1 text-left">Status</th><th className="p-1 text-right">Sent</th><th className="p-1 text-right">To bills</th><th className="p-1 text-right">Services rendered</th><th className="p-1 text-right">Reserved</th><th className="p-1 text-right">Available</th><th className="p-1"></th></tr></thead>
           <tbody>{p.transfers.map(function (t) {

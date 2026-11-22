@@ -21,6 +21,8 @@ export default function FundsSent(props) {
     <table className="w-full text-[11px]"><thead><tr style={{ color: SUB }}><th className="px-2 py-1 text-left font-bold">In these dates</th><th className="px-2 py-1 text-right font-bold">Amount</th><th className="px-2 py-1 text-left font-bold">In this P&L</th></tr></thead><tbody>
       {row('Held with ' + f.payer + ' at the start', money(p.opening_held_cents), 'Sent before these dates and not yet used. Not an expense.')}
       {row('+ Funds sent', money(p.funds_sent_cents), 'NOT an expense by itself.')}
+      {p.starting_balance_added_cents ? row('+ Starting balance (held before the Hub, not money sent)', money(p.starting_balance_added_cents), 'NOT an expense. Recorded as of a date in these dates.') : null}
+      {p.from_starting_balance_cents ? row('− Bills paid from the starting balance', money(p.from_starting_balance_cents), 'NOT deducted here (the bills count in their own categories). Tax report: a new expense when used, from 1 June 2026' + (p.tax_from_starting_balance_cents !== p.from_starting_balance_cents ? ' (' + money(p.tax_from_starting_balance_cents) + ' of it)' : '') + '.') : null}
       {row('− Applied to underlying bills', money(p.applied_cents), 'NOT deducted here. Listed below, bill by bill.')}
       {row('− Explicitly marked as services rendered (their fee)', money(p.fee_cents), 'DEDUCTED here, in A · Warehouse / Office.', '#7f1d1d')}
       {row('= Held with ' + f.payer + ' at the end', money(p.closing_held_cents), p.closing_held_cents >= 0 ? 'NOT an expense. It stays with them for future bills, or until someone marks it as services rendered.' : 'More was used than was sent — needs reconciliation.', p.closing_held_cents >= 0 ? '#065f46' : '#b91c1c', true)}

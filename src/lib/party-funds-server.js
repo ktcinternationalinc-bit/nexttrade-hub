@@ -55,6 +55,22 @@ export async function loadPartyFunds(db, o) {
     var bl = await db.from('vendor_bill_lines').select('id, bill_id, amount').in('bill_id', billIds.slice(k, k + 200));
     if (bl.error) { billLines = null; } else { billLines = billLines.concat(bl.data || []); }
   }
-  var funds = partyFundsBreakdown({ parties: o.parties, bankLines: lines, pays: o.pays || [], bills: o.bills || {}, requests: requests, entries: o.entries || [], billLines: billLines, from: o.from, to: o.to });
-  return { funds: funds, lines: lines, requests: requests };
+  // v55.83-XO — the starting balances and the bill payments made from them (sql/v55-83-XO-starting-balance.sql). Read here so
+  // every caller gets them without changing its own payment query. Before XO is installed the table is not there: no starting
+  // balance, nothing else changes (openings_installed = false). A payment from a starting balance that the caller's own list
+  // already has gets the balance's id; one it does not have is added (counted once: by its id).
+  var openings = []; var openingsInstalled = false; var pays = o.pays || [];
+  var oq = await db.from('party_opening_balances').select('id, party, amount, as_of, reason, visible_to_staff, corrects_id, created_at').order('created_at', { ascending: true }).limit(5000);
+  if (!oq.error) {
+    openingsInstalled = true; openings = oq.data || [];
+    if (openings.length) {
+      var op = await fetchAll(function () { return db.from('vendor_bill_payments').select('id, bill_id, amount, paid_date, bank_transaction_id, party_opening_id, voided, method').not('party_opening_id', 'is', null).order('id', { ascending: true }); });
+      var opById = {}; (op || []).forEach(function (p) { opById[p.id] = p; });
+      var seenPay = {};
+      pays = pays.map(function (p) { seenPay[p.id] = true; return opById[p.id] ? Object.assign({}, p, { party_opening_id: opById[p.id].party_opening_id }) : p; });
+      (op || []).forEach(function (p) { if (!seenPay[p.id] && p.voided !== true) { pays.push(p); } });
+    }
+  }
+  var funds = partyFundsBreakdown({ parties: o.parties, bankLines: lines, pays: pays, bills: o.bills || {}, requests: requests, entries: o.entries || [], billLines: billLines, openings: openings, from: o.from, to: o.to });
+  return { funds: funds, lines: lines, requests: requests, openings: openings, openings_installed: openingsInstalled };
 }

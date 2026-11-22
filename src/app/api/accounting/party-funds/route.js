@@ -21,7 +21,19 @@ import { privateScope, isPrivateRow } from '../../../../lib/private-accounts-ser
 import { loadPartyFunds } from '../../../../lib/party-funds-server';
 import { feeExplanation, currentFundsWords } from '../../../../lib/party-funds';
 
-var API_BUILD_MARKER = 'v55.83-WF-party-funds';
+// v55.83-XO (Max 21-22 Nov) — STARTING BALANCES: money a company already held for KTC before the Hub ("a previous balance to
+// nextrade that we will pay bills from"), and paying KTC bills from it ("b- NEW EXPENSE WHEN USED AFTER 6/1/2026").
+//   opening_add            — add a starting balance (or a correction: a minus amount naming it). SUPER ADMIN only.
+//   opening_pay_candidates — the bills that may be paid from it (read-only). SUPER ADMIN only.
+//   opening_pay            — pay bills from it, dated 1 June 2026 or later. SUPER ADMIN only in this first version.
+//   funds                  — now also lists each company's starting balances; one marked "staff may not see" is shown only to
+//                            the super admin (for anyone else it is not listed and the company totals are withheld).
+// Writes only through sql/v55-83-XO-starting-balance.sql (hub_party_opening_add / hub_party_opening_pay); without it they say
+// which script to run and change nothing.
+var API_BUILD_MARKER = 'v55.83-XO-party-funds';
+var SQL_MISSING_XO = 'Starting balances need one database update first: run sql/v55-83-XO-starting-balance.sql (Supabase → SQL Editor → New query → paste → Run). Nothing was changed.';
+var OPENING = { opening_add: 1, opening_pay: 1, opening_pay_candidates: 1 };
+var OPENING_PAY_FROM = '2026-06-01'; // Max's (b): using a starting balance is a new expense from 1 June 2026
 // (Codex 17:51 P2) NOT an instruction to install anything: the database step is released together with the screens that need it.
 var SQL_MISSING_WF = 'Confirming a transfer and marking services rendered are not switched on yet — they arrive with a later update. Nothing was changed.';
 var WRITES = { confirm: 1, unconfirm: 1, fee_mark: 1, fee_reverse: 1, refund: 1, record_paid: 1 };
@@ -66,13 +78,14 @@ export async function POST(req) {
   try {
     var body = await req.json();
     var action = String(body.action || '');
-    if (action !== 'funds' && action !== 'refund_candidates' && action !== 'record_paid_candidates' && !WRITES[action]) { return fail('Unknown action.'); }
+    if (action !== 'funds' && action !== 'refund_candidates' && action !== 'record_paid_candidates' && !WRITES[action] && !OPENING[action]) { return fail('Unknown action.'); }
     var who = await verifiedCaller(req, body, createClient);
     if (who.error) { return fail(who.error, who.status || 401); }
     var userId = who.userId;
     var gA = await assertPermission(db, userId, 'accounting.view', req);
     if (!gA || gA.ok !== true) { return fail('This needs "Accounting Access" (P1).', 403); }
     var isSuper = !!(gA.ctx && gA.ctx.isSuperAdmin);
+    if (OPENING[action] && !isSuper) { return fail('Starting balances are added and used by the super admin only.', 403); } // v55.83-XO
     var gM = await assertPermission(db, userId, 'advances.manage', req);
     var canManage = !!(gM && gM.ok === true);
     if (WRITES[action] && !canManage) { return fail('Confirming a transfer and marking services rendered need the 🔒 "Advances: Manage" permission — only the super admin can grant it.', 403); }
@@ -87,6 +100,66 @@ export async function POST(req) {
     var parties = pr.data || [];
     var instR = await db.rpc('hub_party_funds_installed');
     var installed = !instR.error && instR.data === true;
+    var xoR = await db.rpc('hub_party_opening_installed'); // v55.83-XO
+    var installedXO = !xoR.error && xoR.data === true;
+
+    // ── v55.83-XO — STARTING BALANCES (super admin only; checked above). Only through the XO database functions. ──
+    if (OPENING[action]) {
+      if (!installedXO) { return fail(SQL_MISSING_XO, 409); }
+      var obParty = parties.filter(function (p) { return p.name === body.party; })[0];
+      if (!obParty) { return fail('Pick NextTrade or RTM.'); }
+      if (action === 'opening_pay_candidates') {
+        // the bills that may be paid from a starting balance: KTC's, active, in US dollars, open (not paid, not on an open wire),
+        // paid through this company or by nobody yet. Read-only.
+        var ocq; try { ocq = await fetchAllRows(function () { return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, total_amount, paid_via, record_status, currency').eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('record_status', 'active').order('id', { ascending: true }); }); } catch (eOc) { return readFail('the bills', eOc); }
+        var ocb = ocq.filter(function (b) { return (!b.paid_via || String(b.paid_via).toLowerCase() === obParty.name.toLowerCase()) && String(b.currency || 'USD').toUpperCase() === 'USD'; });
+        var ocIds = ocb.map(function (b) { return b.id; }); var ocPaid = {}; var ocWire = {};
+        for (var oi = 0; oi < ocIds.length; oi += 200) {
+          var opq = await db.from('vendor_bill_payments').select('bill_id, amount, voided').in('bill_id', ocIds.slice(oi, oi + 200));
+          if (opq.error) { return readFail('what is paid on the bills', opq.error); }
+          (opq.data || []).forEach(function (x) { if (x.voided !== true) { ocPaid[x.bill_id] = r2((ocPaid[x.bill_id] || 0) + (Number(x.amount) || 0)); } });
+          var owq = await db.from('wire_package_lines').select('bill_id, amount, is_open').in('bill_id', ocIds.slice(oi, oi + 200));
+          if (owq.error) { return readFail('the wires the bills are on', owq.error); }
+          (owq.data || []).forEach(function (x) { if (x.is_open === true) { ocWire[x.bill_id] = r2((ocWire[x.bill_id] || 0) + (Number(x.amount) || 0)); } });
+        }
+        var ocOut = ocb.map(function (b) { return { id: b.id, vendor: b.vendor_name || '', bill_number: b.bill_number || '', bill_date: b.bill_date || null, total: r2(b.total_amount), open: r2((Number(b.total_amount) || 0) - (ocPaid[b.id] || 0) - (ocWire[b.id] || 0)), via: b.paid_via || null }; })
+          .filter(function (b) { return b.open > 0.005; }).sort(function (a, b) { return String(a.bill_date || '') < String(b.bill_date || '') ? -1 : 1; });
+        return NextResponse.json({ ok: true, bills: ocOut.slice(0, 500) });
+      }
+      var obRid = typeof body.request_id === 'string' && body.request_id.trim().length >= 8 ? body.request_id.trim().substring(0, 80) : null;
+      if (!obRid) { return fail('Refresh the page and try again (missing click id).'); }
+      if (action === 'opening_add') {
+        var obAmt = r2(body.amount); if (!obAmt) { return fail('Type the amount.'); }
+        var obWhy = String(body.reason || '').trim().substring(0, 500); if (obWhy.length < 10) { return fail('Say where this number comes from (at least 10 characters).'); }
+        var obP = { party: obParty.name, amount: obAmt, reason: obWhy, actor: userId, request_id: obRid };
+        if (obAmt > 0) {
+          if (!isDate(body.as_of)) { return fail('Pick the date this balance is as of.'); }
+          if (body.visible_to_staff !== true && body.visible_to_staff !== false) { return fail('Say whether staff may see this balance.'); }
+          if (body.corrects_id) { return fail('Only a minus amount corrects a starting balance.'); }
+          obP.as_of = body.as_of; obP.visible_to_staff = body.visible_to_staff;
+        } else {
+          if (!body.corrects_id) { return fail('A minus amount is a correction — pick the starting balance it corrects.'); }
+          obP.corrects_id = String(body.corrects_id);
+        }
+        var oa = await db.rpc('hub_party_opening_add', { p: obP });
+        if (oa.error) { return guardFail(oa, true); }
+        var oaAck = { ok: true, action: action, id: (oa.data && oa.data.id) || null }; if (oa.data && oa.data.repeat === true) { oaAck.repeat = true; }
+        return NextResponse.json(oaAck);
+      }
+      // opening_pay
+      if (!body.opening_id) { return fail('Pick the starting balance.'); }
+      var opBills = Array.isArray(body.bills) ? body.bills : [];
+      if (!opBills.length || opBills.length > 50) { return fail('Pick the bills (1 to 50).'); }
+      var opClean = []; for (var ob = 0; ob < opBills.length; ob++) { var ox = opBills[ob] || {}; var oam = r2(ox.amount); if (!ox.bill_id || !(oam > 0)) { return fail('Every bill needs an amount above zero.'); } opClean.push({ bill_id: String(ox.bill_id), amount: oam }); }
+      if (!isDate(body.paid_date)) { return fail('Pick the date these bills are paid.'); }
+      if (body.paid_date < OPENING_PAY_FROM) { return fail('Bills are paid from a starting balance on 1 June 2026 or later (using it is a new expense from that date). Nothing was recorded.', 409); }
+      var opRef = String(body.reference || '').trim().substring(0, 200); if (opRef.length < 3) { return fail('Type the payment reference or where the proof is.'); }
+      var opWhy = String(body.reason || '').trim().substring(0, 300); if (opWhy.length < 3) { return fail('Say why, in a few words.'); }
+      var opR = await db.rpc('hub_party_opening_pay', { p: { party: obParty.name, opening_id: String(body.opening_id), bills: opClean, paid_date: body.paid_date, reference: opRef, reason: opWhy, actor: userId, request_id: obRid, allow_closed: isSuper && body.allow_closed === true } });
+      if (opR.error) { return guardFail(opR, true); }
+      var opAck = { ok: true, action: action, bills: opClean.length }; if (opR.data && opR.data.repeat === true) { opAck.repeat = true; }
+      return NextResponse.json(opAck);
+    }
 
     // v55.83-WF B2 — the money-in lines a refund of this transfer could have arrived on (for the person who records it). Read-only.
     // KTC's books, settled, not a duplicate, not paired between own accounts, not matched to an invoice, not already a refund;
@@ -187,18 +260,31 @@ export async function POST(req) {
           }
           rows.push(row);
         }
+        // v55.83-XO — the starting balances. One marked "staff may not see" is listed only for the super admin; for anyone else it
+        // is left out and the company totals are withheld (they would include it). Amounts need "Bank & Financial Summary".
+        var sbRows = []; var hiddenSb = 0;
+        (f.starting_balances || []).forEach(function (s) {
+          if (!isSuper && s.visible_to_staff !== true) { hiddenSb++; return; }
+          var sr = { id: s.id, kind: 'starting_balance', as_of: s.as_of, reason: s.reason, visible_to_staff: s.visible_to_staff, corrections_count: (s.correction_rows || []).length,
+            bills: s.lifetime_rows.map(function (r) { return { bill_id: r.bill_id, vendor: r.vendor, bill_number: r.bill_number, paid_date: r.paid_date, release_number: r.release_number, portion: canTotals ? r.portion : null, category: r.source_bill.category }; }) };
+          if (canTotals) { sr.amount = s.amount; sr.original = s.original; sr.corrections = s.corrections; sr.used = s.current.used; sr.left = s.current.held; }
+          sbRows.push(sr);
+        });
         var o = { party: f.party, transfers: rows, hidden_private_transfers: hiddenN, needs_reconciliation: f.needs_reconciliation, identity_to_confirm_count: f.identity_to_confirm.count,
-          paid_without_a_transfer_count: f.paid_without_a_transfer.lifetime_rows.length };
-        if (canTotals && hiddenN === 0) {
+          paid_without_a_transfer_count: f.paid_without_a_transfer.lifetime_rows.length, starting_balances: sbRows, hidden_starting_balances: hiddenSb };
+        if (canTotals && hiddenN === 0 && hiddenSb === 0) {
           var spend = 0; var heldAll = 0; var unconf = 0; rows.forEach(function (r) { spend = r2(spend + r.available); heldAll = r2(heldAll + r.held); if (r.status !== 'confirmed') { unconf = r2(unconf + r.held - r.reserved); } });
           o.totals = { funds_sent: f.current.funds_sent, refunded: f.current.refunds || 0, to_bills: f.current.applied_to_bills, services_rendered: f.current.services_rendered, reserved: f.current.reserved, held: heldAll, available: spend, not_confirmed: unconf,
-            paid_without_a_transfer: f.paid_without_a_transfer.lifetime_total, identity_to_confirm: f.identity_to_confirm.sent };
+            paid_without_a_transfer: f.paid_without_a_transfer.lifetime_total, identity_to_confirm: f.identity_to_confirm.sent,
+            starting_balance: f.current.starting_balance || 0, starting_balance_used: f.current.from_starting_balance || 0, starting_balance_left: f.current.starting_balance_held || 0 }; // v55.83-XO (held / available above stay the transfers')
           o.words = currentFundsWords(f);
-          if (from || to) { o.period = { from: from, to: to, opening_held: f.period.opening_held, funds_sent: f.period.funds_sent, refunds: f.period.refunds || 0, applied_to_bills: f.period.applied_to_bills, services_rendered: f.period.services_rendered, closing_held: f.period.closing_held, fee_deduction: f.period.fee_deduction, tax_professional_fees: f.period.tax_professional_fees, words: feeExplanation(f) }; }
-        } else { o.totals = null; o.totals_hidden = canTotals ? 'includes a transfer from a private account' : 'needs the Bank & Financial Summary permission'; }
+          if (from || to) { o.period = { from: from, to: to, opening_held: f.period.opening_held, funds_sent: f.period.funds_sent, refunds: f.period.refunds || 0, applied_to_bills: f.period.applied_to_bills, services_rendered: f.period.services_rendered, closing_held: f.period.closing_held, fee_deduction: f.period.fee_deduction, tax_professional_fees: f.period.tax_professional_fees,
+            starting_balance_added: f.period.starting_balance_added || 0, from_starting_balance: f.period.from_starting_balance || 0, tax_from_starting_balance: f.period.tax_from_starting_balance || 0, words: feeExplanation(f) }; }
+        } else { o.totals = null; o.totals_hidden = !canTotals ? 'needs the Bank & Financial Summary permission' : hiddenN > 0 ? 'includes a transfer from a private account' : 'includes a starting balance only the super admin may see'; }
         out.push(o);
       }
-      return NextResponse.json({ ok: true, parties: out, installed: installed, sql_missing: installed ? null : SQL_MISSING_WF, can_manage: canManage, can_closed_month: isSuper, can_totals: canTotals, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, parties: out, installed: installed, sql_missing: installed ? null : SQL_MISSING_WF, can_manage: canManage, can_closed_month: isSuper, can_totals: canTotals,
+        starting_balances_installed: installedXO, can_starting_balance: isSuper, starting_balance_sql_missing: isSuper && !installedXO ? SQL_MISSING_XO : null, starting_balance_pay_from: OPENING_PAY_FROM, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── the three write actions: only through the database functions (locks, never below zero, one click = one result) ──

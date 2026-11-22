@@ -64,12 +64,26 @@ export function billLineSplit(portion, billTotal, billLines) {
   if (ls.length === 1 && pc > 0 && pc <= ls[0].amount_cents) { return { line_split: 'from_lines', lines: [{ bill_line_id: ls[0].bill_line_id, amount_cents: pc }] }; }
   return { line_split: 'unresolved', lines: [], why: sum !== tc ? 'the lines do not add up to the bill' : 'part of a bill with several lines — no record says which lines' };
 }
+// v55.83-XO — STARTING BALANCES (Max 21-22 Nov 2026: "a previous balance to nextrade that we will pay bills from"; using it is
+// "b- NEW EXPENSE WHEN USED AFTER 6/1/2026"). o.openings = party_opening_balances rows (a correction is its own row with
+// corrects_id). A starting balance is a SOURCE next to the transfers — never money sent: held = amount (with corrections) − bills
+// paid from it (vendor_bill_payments.party_opening_id). It counts in what is held (period opening / closing, as_of, current),
+// NEVER in funds_sent. Tax presentation: the bills paid from it dated on or after STARTING_BALANCE_TAX_FROM are added to the
+// period's tax line (a new expense when used); the internal view is unchanged (those bills count in their own categories).
+export var STARTING_BALANCE_TAX_FROM = '2026-06-01';
 export function partyFundsBreakdown(o) {
   o = o || {}; var from = o.from || null; var to = o.to || null;
   var linesOfBill = null; if (Array.isArray(o.billLines)) { linesOfBill = {}; o.billLines.forEach(function (l) { (linesOfBill[l.bill_id] = linesOfBill[l.bill_id] || []).push(l); }); }
   var billById = {}; if (Array.isArray(o.bills)) { o.bills.forEach(function (b) { billById[b.id] = b; }); } else { billById = o.bills || {}; }
+  var obAll = Array.isArray(o.openings) ? o.openings : []; var obKnown = {}; obAll.forEach(function (b) { obKnown[b.id] = true; }); // v55.83-XO
   return (o.parties || []).map(function (party) {
     var pk = key(party.name);
+    // v55.83-XO — this company's starting balances, each with its corrections folded in (same date, same visibility)
+    var starting = obAll.filter(function (b) { return !b.corrects_id && key(b.party) === pk && Number(b.amount) > 0; })
+      .sort(function (a, b) { return day(a.as_of) < day(b.as_of) ? -1 : day(a.as_of) > day(b.as_of) ? 1 : String(a.id) < String(b.id) ? -1 : 1; })
+      .map(function (b) { return { id: b.id, kind: 'starting_balance', as_of: day(b.as_of), original: r2(b.amount), corrections: 0, correction_rows: [], amount: r2(b.amount), reason: b.reason || '', visible_to_staff: b.visible_to_staff === true, lifetime_rows: [] }; });
+    var sbById = {}; starting.forEach(function (s) { sbById[s.id] = s; });
+    obAll.forEach(function (c) { var s = c.corrects_id ? sbById[c.corrects_id] : null; if (!s) { return; } s.correction_rows.push({ id: c.id, amount: r2(c.amount), reason: c.reason || '', created_at: c.created_at || null }); s.corrections = r2(s.corrections + (Number(c.amount) || 0)); s.amount = r2(s.amount + (Number(c.amount) || 0)); });
     var idOf = {}; var lines = (o.bankLines || []).filter(function (t) { var who = fundingIdentity(t); if (!who || key(who.payer) !== pk) { return false; } idOf[t.id] = who.basis; return true; })
       .sort(function (a, b) { return day(a.date) < day(b.date) ? -1 : day(a.date) > day(b.date) ? 1 : String(a.id) < String(b.id) ? -1 : 1; });
     var transfers = lines.map(function (t) { return { id: t.id, date: day(t.date), reference: t.name || '', sent: r2(Math.abs(Number(t.amount_abs != null ? t.amount_abs : t.amount) || 0)), identity: idOf[t.id], lifetime_refund_rows: [], lifetime_rows: [], lifetime_fee_rows: [], reserved_now: 0, reserved_rows: [] }; });
@@ -102,6 +116,15 @@ export function partyFundsBreakdown(o) {
         // facts ABOUT the bill only. Where and when the report recognizes this cost is NOT decided here — the report must resolve it.
         source_bill: { category: b.category || 'uncategorized', bill_date: day(b.bill_date) || null, recognition: 'unverified' } });
     });
+    // v55.83-XO — bills paid FROM A STARTING BALANCE (the payment names the balance, not a bank line): one row each
+    (o.pays || []).forEach(function (p) {
+      if (p.voided === true || !p.party_opening_id) { return; }
+      var s = sbById[p.party_opening_id]; if (!s) { return; }
+      var b = billById[p.bill_id] || {};
+      s.lifetime_rows.push({ source: 'starting_balance', starting_balance_id: s.id, starting_balance_as_of: s.as_of, payment_id: p.id || null, paid_date: day(p.paid_date), portion: r2(p.amount), bill_id: p.bill_id,
+        vendor: b.vendor_name || '(bill)', bill_number: b.bill_number || null, bill_total: b.total_amount != null ? r2(b.total_amount) : null, release_number: b.release_number || null, method: p.method || null,
+        source_bill: { category: b.category || 'uncategorized', bill_date: day(b.bill_date) || null, recognition: 'unverified' } });
+    });
     // BILLS PAID THROUGH THIS COMPANY WITH NO SOURCE TRANSFER NAMED: the bill is marked "paid through" the company and has a live
     // payment, but that payment is on no bank line of ours (recorded as "paid for us" without saying from which transfer), or on a
     // bank line that is not one of this company's transfers. They are real bill payments (the bill's own cost is counted where the
@@ -109,6 +132,7 @@ export function partyFundsBreakdown(o) {
     var unlinked = [];
     (o.pays || []).forEach(function (p) {
       if (p.voided === true || tById[p.bank_transaction_id]) { return; }
+      if (p.party_opening_id && obKnown[p.party_opening_id]) { return; } // v55.83-XO — paid from a starting balance: its source IS named
       var b = billById[p.bill_id]; if (!b || key(b.paid_via) !== pk) { return; }
       unlinked.push({ payment_id: p.id || null, paid_date: day(p.paid_date), portion: r2(p.amount), bill_id: p.bill_id, vendor: b.vendor_name || '(bill)', bill_number: b.bill_number || null,
         bill_total: b.total_amount != null ? r2(b.total_amount) : null, release_number: b.release_number || null, method: p.method || null,
@@ -169,6 +193,22 @@ export function partyFundsBreakdown(o) {
       t.lifetime_refund_rows.forEach(function (r) { if (inRange(r.date, from, to)) { per.refund_rows.push(r); } if (from && r.date < from) { per.opening_held = r2(per.opening_held - r.amount); } });
       delete t.reserved_now;
     });
+    // v55.83-XO — the starting balances, in the same three views. Never in funds_sent.
+    var sbPer = { added_rows: [], use_rows: [] }; var sbAsOf = { amount: 0, used: 0 }; var sbCur = { amount: 0, used: 0 };
+    starting.forEach(function (s) {
+      s.counted_as_of = !to || s.as_of <= to;
+      s.as_of_rows = s.lifetime_rows.filter(function (r) { return !to || r.paid_date <= to; });
+      s.as_of_view = { amount: s.counted_as_of ? s.amount : 0, used: sum(s.as_of_rows, 'portion') }; s.as_of_view.held = r2(s.as_of_view.amount - s.as_of_view.used);
+      s.current = { used: sum(s.lifetime_rows, 'portion') }; s.current.held = r2(s.amount - s.current.used);
+      if (s.as_of_view.held < -0.005 || s.current.held < -0.005) { unresolved = true; }
+      if (from && s.as_of < from) { per.opening_held = r2(per.opening_held + s.amount); }
+      if (inRange(s.as_of, from, to)) { sbPer.added_rows.push({ starting_balance_id: s.id, as_of: s.as_of, amount: s.amount }); }
+      s.lifetime_rows.forEach(function (r) { if (inRange(r.paid_date, from, to)) { sbPer.use_rows.push(r); } if (from && r.paid_date < from) { per.opening_held = r2(per.opening_held - r.portion); } });
+      sbAsOf.amount = r2(sbAsOf.amount + s.as_of_view.amount); sbAsOf.used = r2(sbAsOf.used + s.as_of_view.used);
+      sbCur.amount = r2(sbCur.amount + s.amount); sbCur.used = r2(sbCur.used + s.current.used);
+    });
+    var sbAdded = sum(sbPer.added_rows, 'amount'); var sbUsed = sum(sbPer.use_rows, 'portion');
+    var sbTax = sum(sbPer.use_rows.filter(function (r) { return r.paid_date >= STARTING_BALANCE_TAX_FROM; }), 'portion');
     var looseInPeriod = looseFees.filter(function (r) { return inRange(r.date, from, to); });
     if (looseFees.length) { unresolved = true; }
     if (unlinked.length) { unresolved = true; }
@@ -176,21 +216,30 @@ export function partyFundsBreakdown(o) {
     var unlinkedAsOf = unlinked.filter(function (r) { return !to || r.paid_date <= to; });
     var applied = sum(per.applied_rows, 'portion'); var fees = sum(per.fee_rows, 'amount');
     var refunds = sum(per.refund_rows, 'amount');
-    var closing = r2(per.opening_held + per.funds_sent - refunds - applied - fees);
-    var asOfHeld = r2(asOf.funds_sent - asOf.refunds - asOf.applied_to_bills - asOf.services_rendered);
+    // v55.83-XO: + a starting balance dated in the period − bills paid from a starting balance in the period (both 0 without one)
+    var closing = r2(per.opening_held + per.funds_sent + sbAdded - refunds - applied - fees - sbUsed);
+    var asOfHeld = r2(asOf.funds_sent - asOf.refunds - asOf.applied_to_bills - asOf.services_rendered + sbAsOf.amount - sbAsOf.used);
     return {
       party: party.name, transfers: transfers,
-      // PERIOD: flows only. opening_held + funds_sent − refunds − applied_to_bills − services_rendered = closing_held
+      // v55.83-XO — the starting balances (NOT money sent): amount with corrections, bills paid from each, what each still holds
+      starting_balances: starting.map(function (s) { var x = Object.assign({}, s, { as_of_figures: s.as_of_view }); delete x.as_of_view; return x; }),
+      // PERIOD: flows only. opening_held + funds_sent + starting_balance_added − refunds − applied_to_bills − services_rendered
+      //         − from_starting_balance = closing_held   (the two starting-balance terms are 0 when there is none)
       period: { from: from, to: to, opening_held: per.opening_held, funds_sent: per.funds_sent, refunds: refunds, applied_to_bills: applied, services_rendered: fees, closing_held: closing,
         applied_rows: per.applied_rows, fee_rows: per.fee_rows, refund_rows: per.refund_rows,
         fee_deduction: r2(fees + sum(looseInPeriod, 'amount')), // INTERNAL: the only amount that reduces profit as a professional fee in this period
         fees_without_a_transfer: sum(looseInPeriod, 'amount'), loose_fee_rows: looseInPeriod,
-        tax_professional_fees: per.funds_sent },                 // TAX presentation: the full original transfers of the period, once
-      // AS OF the end of `to`: dated records only. held = funds sent − applied to bills − services rendered (reservations are NOT in here)
-      as_of: { date: to, funds_sent: asOf.funds_sent, refunds: asOf.refunds, applied_to_bills: asOf.applied_to_bills, services_rendered: asOf.services_rendered, held: asOfHeld },
-      // CURRENT (today, whatever dates were asked for): held today = reserved + unused, nothing overlaps
+        starting_balance_added: sbAdded, starting_balance_added_rows: sbPer.added_rows,      // v55.83-XO: a starting balance as of a date in the period (held, never sent)
+        from_starting_balance: sbUsed, from_starting_balance_rows: sbPer.use_rows,            // v55.83-XO: bills paid from a starting balance in the period
+        tax_from_starting_balance: sbTax,                                                     // v55.83-XO: the part dated on / after 1 June 2026 (Max's (b))
+        tax_professional_fees: r2(per.funds_sent + sbTax) }, // TAX presentation: the full original transfers of the period, once + (XO) starting-balance uses on / after 1 June 2026
+      // AS OF the end of `to`: dated records only. held = funds sent − applied to bills − services rendered (+ starting balances left; reservations are NOT in here)
+      as_of: { date: to, funds_sent: asOf.funds_sent, refunds: asOf.refunds, applied_to_bills: asOf.applied_to_bills, services_rendered: asOf.services_rendered, held: asOfHeld,
+        starting_balance: sbAsOf.amount, from_starting_balance: sbAsOf.used, starting_balance_held: r2(sbAsOf.amount - sbAsOf.used) },
+      // CURRENT (today, whatever dates were asked for): held today = reserved + unused, nothing overlaps (unused includes what starting balances still hold)
       current: { funds_sent: cur.funds_sent, refunds: cur.refunds, applied_to_bills: cur.applied_to_bills, services_rendered: cur.services_rendered, reserved: cur.reserved,
-        unused: r2(cur.funds_sent - cur.refunds - cur.applied_to_bills - cur.services_rendered - cur.reserved) },
+        unused: r2(cur.funds_sent - cur.refunds - cur.applied_to_bills - cur.services_rendered - cur.reserved + sbCur.amount - sbCur.used),
+        starting_balance: sbCur.amount, from_starting_balance: sbCur.used, starting_balance_held: r2(sbCur.amount - sbCur.used) },
       arithmetic_ok: Math.abs(r2(closing - asOfHeld)) < 0.005,   // the sums agree with each other — says NOTHING about whether the records are right
       // transfers recognized only from the bank's text (not stamped by a person): counted as money sent, and listed here to be confirmed
       identity_to_confirm: byText,
