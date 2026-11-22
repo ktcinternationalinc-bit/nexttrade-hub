@@ -12,7 +12,7 @@ function ok(cond, msg) { assert.ok(cond, msg); console.log('  ok: ' + msg); pass
 ok(/\{ id: 'ntwarehouse', label: '[^']*', icon: '[^']*' \}/.test(page), "'ntwarehouse' tab registered in TABS");
 ok(/tab === 'ntwarehouse' && \(/.test(page), "content area renders a block for tab === 'ntwarehouse'");
 const panelIdx = page.indexOf("tab === 'ntwarehouse' && (");
-const panel = page.slice(panelIdx, panelIdx + 1200);
+const panel = page.slice(panelIdx, panelIdx + 2000);
 ok(/<iframe\s+src="https:\/\/nextradeindustries\.com\/admin"/.test(panel), 'the panel embeds the live warehouse in an iframe');
 ok(/Open in its own window/.test(panel), 'panel has an open-in-new-window fallback');
 ok(/navigate\('ntwarehouse'\)/.test(page), 'sidebar production entry navigates to the in-Hub tab');

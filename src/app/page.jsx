@@ -5603,7 +5603,7 @@ function HubApp() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-XT</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-XJ</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -6024,11 +6024,12 @@ function HubApp() {
                 </div>
               );
             })}
-            {/* v55.83-XF — NT Warehouse, visible to EVERYONE (Max 22 Nov).
-                "NT Warehouse" opens an IN-HUB panel (tab 'ntwarehouse') that embeds
-                the live warehouse; "NT Warehouse · STAGING · TEST" opens the staging
-                copy in a NEW TAB (behind its own login) so the team can watch updates.
-                Neither logs anyone in — the warehouse keeps its own sign-in. */}
+            {/* v55.83-XF / XI — NT Warehouse, visible to EVERYONE (Max 22 Nov).
+                "NT Warehouse" opens an IN-HUB panel (tab 'ntwarehouse') that embeds the
+                live warehouse; "NT Warehouse · STAGING · TEST" opens the staging copy in
+                its own IN-HUB panel (tab 'ntwarehouse-staging', v55.83-XI) — both have an
+                "open in its own window" fallback. Neither logs anyone in — the warehouse
+                keeps its own sign-in. */}
             {true && (
               <div className="mb-1">
                 <div className="px-3 pt-3 pb-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-600 font-mono"
@@ -14709,9 +14710,14 @@ function HubApp() {
                   Open in its own window <span aria-hidden="true">↗</span>
                 </a>
               </div>
-              <iframe src="https://nextradeindustries.com/admin" title="NT Warehouse"
-                className="flex-1 w-full rounded-lg border border-zinc-800"
-                style={{ minHeight: 400, background: '#ffffff' }} />
+              {/* v55.83-XJ — the warehouse dashboard is wider than the panel; wrap the iframe in a
+                  horizontally-scrolling div (a cross-site iframe can't be forced to scroll from the
+                  parent). The iframe lays out at its full min-width and the wrapper scrolls when the
+                  Hub window is narrower, so nothing is clipped. */}
+              <div className="flex-1 w-full rounded-lg border border-zinc-800 overflow-x-auto overflow-y-hidden" style={{ minHeight: 400 }}>
+                <iframe src="https://nextradeindustries.com/admin" title="NT Warehouse"
+                  style={{ minWidth: 1440, width: '100%', height: '100%', minHeight: 400, background: '#ffffff', border: 'none', display: 'block' }} />
+              </div>
             </div>
           </SafeSection>
         )}
@@ -14733,9 +14739,11 @@ function HubApp() {
                   Open in its own window <span aria-hidden="true">↗</span>
                 </a>
               </div>
-              <iframe src="https://fix.nextrade-staging.com/admin" title="NT Warehouse Staging"
-                className="flex-1 w-full rounded-lg border-2 border-amber-500/40"
-                style={{ minHeight: 400, background: '#ffffff' }} />
+              {/* v55.83-XJ — same horizontal-scroll wrapper as the production panel (above). */}
+              <div className="flex-1 w-full rounded-lg border-2 border-amber-500/40 overflow-x-auto overflow-y-hidden" style={{ minHeight: 400 }}>
+                <iframe src="https://fix.nextrade-staging.com/admin" title="NT Warehouse Staging"
+                  style={{ minWidth: 1440, width: '100%', height: '100%', minHeight: 400, background: '#ffffff', border: 'none', display: 'block' }} />
+              </div>
             </div>
           </SafeSection>
         )}

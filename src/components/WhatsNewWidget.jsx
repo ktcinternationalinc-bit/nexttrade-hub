@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XJ',
+    date: '2026-11-22',
+    title: 'Warehouse panels now scroll sideways (no more cut-off edges)',
+    items: [
+      { text: 'The warehouse screens shown inside the Hub (both the live **NT Warehouse** and the **STAGING · TEST** one) were wider than the panel, so the edges — the Stocklot logo on the left and the "Total weight" card on the right — were getting cut off with no way to scroll to them. Now the panel has a **bottom scrollbar**: when the Hub window is narrower than the warehouse, you can slide left and right to see everything.' },
+      { text: 'Nothing else about the panels changed — the warehouse keeps its own sign-in, and the **“Open in its own window”** button still opens the full screen in its own tab.' },
+      { superAdminOnly: true, text: 'Technical (release-governance session): both the XF production (ntwarehouse) and XI staging (ntwarehouse-staging) iframe panels are now wrapped in a div with overflow-x:auto / overflow-y:hidden; the iframe gets min-width:1440px, width:100%, height:100% (border moved to the wrapper). A cross-site iframe can’t be forced to scroll from the parent, so the wrapper provides the horizontal scrollbar when the Hub window is narrower than the warehouse layout. Also fixed the stale page.jsx sidebar comment that still said STAGING opens a NEW TAB (Codex 14:19). badge XI->XJ. Test test-v55-83-xj-warehouse-iframe-scroll.' },
+    ]
+  },
+  {
     version: 'v55.83-XT',
     date: '2026-11-22',
     title: 'Pending bank transactions never count, and are removed when the final transaction arrives',
