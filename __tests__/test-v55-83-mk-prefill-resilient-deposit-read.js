@@ -19,7 +19,8 @@ ok('1: the deposit read is resilient — select(*), not an explicit list that na
   /var depRes = await db\.from\('bank_transactions'\)\.select\('\*'\)\.eq\('wave_business_id', waveBusinessId\)\.eq\('direction', 'in'\)/.test(route) &&
   !/select\('id, name, amount, amount_abs, posted_date, date, direction, matched_invoice_id, wave_transaction_id/.test(route));
 ok('2: the already-synced filter still tolerates a missing wave_transaction_id (undefined → not skipped)',
-  /\.filter\(function \(t\) \{ return !t\.matched_invoice_id && !t\.wave_transaction_id && !claimedDep\[t\.id\]; \}\)/.test(route));
+  // v55.83-XT — pending lines and marked copies are now dropped first; the already-synced part is unchanged
+  /\.filter\(function \(t\) \{ return (t\.pending !== true && t\.review_status !== 'duplicate' && )?!t\.matched_invoice_id && !t\.wave_transaction_id && !claimedDep\[t\.id\]; \}\)/.test(route));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-MK prefill-resilient-deposit-read tests passed'); process.exit(0); }
