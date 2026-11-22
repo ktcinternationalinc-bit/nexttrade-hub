@@ -19,7 +19,7 @@ import { verifiedCaller } from '../../../../lib/verified-caller';
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { privateScope, isPrivateRow } from '../../../../lib/private-accounts-server';
 import { loadPartyFunds } from '../../../../lib/party-funds-server';
-import { feeExplanation, currentFundsWords } from '../../../../lib/party-funds';
+import { feeExplanation, currentFundsWords, canSeeStartingBalance, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds';
 
 // v55.83-XO (Max 21-22 Nov) — STARTING BALANCES: money a company already held for KTC before the Hub ("a previous balance to
 // nextrade that we will pay bills from"), and paying KTC bills from it ("b- NEW EXPENSE WHEN USED AFTER 6/1/2026").
@@ -230,7 +230,7 @@ export async function POST(req) {
           (mb.data || []).forEach(function (b) { billById[b.id] = b; });
         }
         loaded = await loadPartyFunds(db, { fetchAll: fetchAllRows, businessId: US_WAVE_BUSINESS_ID, parties: parties, pays: pays, bills: billById, entries: entries, from: from, to: to });
-      } catch (eR) { return readFail('the funds held', eR); }
+      } catch (eR) { if (eR && eR.code === 'XO_UNAVAILABLE') { return NextResponse.json({ ok: false, unavailable: 'starting_balances', error: 'Could not read ' + eR.message + '. Nothing is shown, so no total is given without them. Try again in a moment.' }, { status: 503 }); } return readFail('the funds held', eR); } // v55.83-XO (Codex 14:52 P2)
       // which bank account each transfer is in (privacy), and the database's own state per transfer when WF is installed
       var ids = loaded.lines.map(function (l) { return l.id; }); var acct = {};
       for (var ai = 0; ai < ids.length; ai += 200) {
@@ -264,7 +264,7 @@ export async function POST(req) {
         // is left out and the company totals are withheld (they would include it). Amounts need "Bank & Financial Summary".
         var sbRows = []; var hiddenSb = 0;
         (f.starting_balances || []).forEach(function (s) {
-          if (!isSuper && s.visible_to_staff !== true) { hiddenSb++; return; }
+          if (!canSeeStartingBalance(s, isSuper)) { hiddenSb++; return; } // the ONE rule (party-funds.js), also used by the report route
           var sr = { id: s.id, kind: 'starting_balance', as_of: s.as_of, reason: s.reason, visible_to_staff: s.visible_to_staff, corrections_count: (s.correction_rows || []).length,
             bills: s.lifetime_rows.map(function (r) { return { bill_id: r.bill_id, vendor: r.vendor, bill_number: r.bill_number, paid_date: r.paid_date, release_number: r.release_number, portion: canTotals ? r.portion : null, category: r.source_bill.category }; }) };
           if (canTotals) { sr.amount = s.amount; sr.original = s.original; sr.corrections = s.corrections; sr.used = s.current.used; sr.left = s.current.held; }
@@ -280,7 +280,7 @@ export async function POST(req) {
           o.words = currentFundsWords(f);
           if (from || to) { o.period = { from: from, to: to, opening_held: f.period.opening_held, funds_sent: f.period.funds_sent, refunds: f.period.refunds || 0, applied_to_bills: f.period.applied_to_bills, services_rendered: f.period.services_rendered, closing_held: f.period.closing_held, fee_deduction: f.period.fee_deduction, tax_professional_fees: f.period.tax_professional_fees,
             starting_balance_added: f.period.starting_balance_added || 0, from_starting_balance: f.period.from_starting_balance || 0, tax_from_starting_balance: f.period.tax_from_starting_balance || 0, words: feeExplanation(f) }; }
-        } else { o.totals = null; o.totals_hidden = !canTotals ? 'needs the Bank & Financial Summary permission' : hiddenN > 0 ? 'includes a transfer from a private account' : 'includes a starting balance only the super admin may see'; }
+        } else { o.totals = null; o.totals_hidden = !canTotals ? 'needs the Bank & Financial Summary permission' : hiddenN > 0 ? 'includes a transfer from a private account' : HIDDEN_STARTING_BALANCE_REASON; }
         out.push(o);
       }
       return NextResponse.json({ ok: true, parties: out, installed: installed, sql_missing: installed ? null : SQL_MISSING_WF, can_manage: canManage, can_closed_month: isSuper, can_totals: canTotals,

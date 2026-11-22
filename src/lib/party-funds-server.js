@@ -13,6 +13,17 @@ import { partyFundsBreakdown, FUNDING_DESTINATIONS, fundingIdentity } from './pa
 
 // o: { fetchAll(buildQuery) → rows, businessId, parties, pays, bills (by id), entries, from, to }
 // Returns { funds: partyFundsBreakdown(...) result, lines: the company bank lines found, requests: what was handed to the helper }.
+// v55.83-XO — the ONLY error that means "starting balances are not installed yet": the table itself does not exist
+// (Postgres 42P01 / PostgREST PGRST205). Everything else is a read failure.
+export function isMissingOpeningsTable(err) {
+  var e = err || {}; var m = String(e.message || '');
+  if (e.code === '42P01' || e.code === 'PGRST205') { return true; }
+  return /relation\s+"?(public\.)?party_opening_balances"?\s+does not exist/i.test(m) || /Could not find the table\s+'?(public\.)?party_opening_balances'?/i.test(m);
+}
+export function openingsUnavailable(err) {
+  var u = new Error('the starting balances with RTM / NextTrade could not be read (' + String((err && err.message) || 'read error') + ')');
+  u.code = 'XO_UNAVAILABLE'; return u;
+}
 export async function loadPartyFunds(db, o) {
   var fetchAll = o.fetchAll; var biz = o.businessId;
   var sel = 'id, date, posted_date, amount_abs, classification, third_party_payer, name, merchant_name, direction, transfer_group_id';
@@ -59,12 +70,17 @@ export async function loadPartyFunds(db, o) {
   // every caller gets them without changing its own payment query. Before XO is installed the table is not there: no starting
   // balance, nothing else changes (openings_installed = false). A payment from a starting balance that the caller's own list
   // already has gets the balance's id; one it does not have is added (counted once: by its id).
+  // (Codex 22 Nov 14:52 P2) ONLY a table that is really not there yet (XO not installed) means "no starting balance". Any other
+  // failure (permission, timeout, …) throws XO_UNAVAILABLE: the caller answers 503 — never figures without the balances.
   var openings = []; var openingsInstalled = false; var pays = o.pays || [];
   var oq = await db.from('party_opening_balances').select('id, party, amount, as_of, reason, visible_to_staff, corrects_id, created_at').order('created_at', { ascending: true }).limit(5000);
+  if (oq.error && !isMissingOpeningsTable(oq.error)) { throw openingsUnavailable(oq.error); }
   if (!oq.error) {
     openingsInstalled = true; openings = oq.data || [];
     if (openings.length) {
-      var op = await fetchAll(function () { return db.from('vendor_bill_payments').select('id, bill_id, amount, paid_date, bank_transaction_id, party_opening_id, voided, method').not('party_opening_id', 'is', null).order('id', { ascending: true }); });
+      var op;
+      try { op = await fetchAll(function () { return db.from('vendor_bill_payments').select('id, bill_id, amount, paid_date, bank_transaction_id, party_opening_id, voided, method').not('party_opening_id', 'is', null).order('id', { ascending: true }); }); }
+      catch (eOp) { throw openingsUnavailable(eOp); }
       var opById = {}; (op || []).forEach(function (p) { opById[p.id] = p; });
       var seenPay = {};
       pays = pays.map(function (p) { seenPay[p.id] = true; return opById[p.id] ? Object.assign({}, p, { party_opening_id: opById[p.id].party_opening_id }) : p; });

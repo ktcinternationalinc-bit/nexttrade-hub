@@ -10,8 +10,8 @@
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
 import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
-import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
-import { loadPartyFunds } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
+import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
+import { loadPartyFunds, isMissingOpeningsTable, openingsUnavailable } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
 // v55.83-WF step C — periodAdjustments (the TX tax adjustments) is no longer used here: a transfer to RTM / NextTrade counts once, in full
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -1883,6 +1883,10 @@ export async function POST(req) {
       // accounts are their own line and NEVER counted as spending. Fail-soft
       // on the transfer column until the PQ SQL runs.
       var spend = null;
+      // v55.83-XO (Codex 22 Nov 14:52) — set inside the spending block, answered after it (never swallowed by its catch):
+      //   xoStop     — the starting balances could not be read (not "not installed"): 503, nothing shown, no pack
+      //   xoRestrict — a starting balance this caller may not see counts in these dates: spending withheld, said so
+      var xoStop = null; var xoRestrict = null; var callerIsSuper = !!(visT && visT.ctx && visT.ctx.isSuperAdmin);
       try {
         // v55.83-PV (Max, Nov 7 10:34: "tax reports need data for all of 2026
         // to start") — Wave's API exposes no dated payment records, so the
@@ -2023,15 +2027,20 @@ export async function POST(req) {
         // v55.83-XO — which bill payments were paid FROM A STARTING BALANCE (sql/v55-83-XO-starting-balance.sql). Read once: the
         // internal-view blocks and the shared funds calculation below use these SAME rows. Before XO is installed: none.
         // Only a payment whose starting balance is really on file carries it (the shared calculation counts only those too).
+        // (Codex 22 Nov 14:52 P2) ONLY a table that is not there yet means "none"; any other read failure stops the report with a 503
+        // (xoStop is answered AFTER this block, so no catch here can turn it into figures without the balances).
         var xoPays = LS.pays || []; var xoOf = {}; var xoKnown = {};
-        try {
-          var xoOb = await db.from('party_opening_balances').select('id').limit(5000);
-          if (!xoOb.error) {
-            (xoOb.data || []).forEach(function (o0) { xoKnown[o0.id] = true; });
-            var xoRows = await fetchAll(function () { return db.from('vendor_bill_payments').select('id, party_opening_id').not('party_opening_id', 'is', null).order('id', { ascending: true }); });
-            (xoRows || []).forEach(function (x0) { xoOf[x0.id] = x0.party_opening_id; });
-          }
-        } catch (eXo) { xoOf = {}; xoKnown = {}; }
+        var xoOb = await db.from('party_opening_balances').select('id, party, amount, as_of, visible_to_staff, corrects_id').limit(5000);
+        if (xoOb.error && !isMissingOpeningsTable(xoOb.error)) { xoStop = openingsUnavailable(xoOb.error).message; throw new Error('XO_UNAVAILABLE'); }
+        if (!xoOb.error) {
+          (xoOb.data || []).forEach(function (o0) { xoKnown[o0.id] = true; });
+          try { var xoRows = await fetchAll(function () { return db.from('vendor_bill_payments').select('id, party_opening_id').not('party_opening_id', 'is', null).order('id', { ascending: true }); }); (xoRows || []).forEach(function (x0) { xoOf[x0.id] = x0.party_opening_id; }); }
+          catch (eXo) { xoStop = openingsUnavailable(eXo).message; throw new Error('XO_UNAVAILABLE'); }
+          // (Codex 14:52 P1) a balance this caller may not see that counts in these dates: the spending block is withheld (an
+          // explicit restricted state), never shown recalculated without it. The super admin sees everything.
+          var xoHidden = hiddenStartingBalances(xoOb.data || [], callerIsSuper, pTo);
+          if (xoHidden.length) { xoRestrict = { reason: HIDDEN_STARTING_BALANCE_REASON, hidden_starting_balances: xoHidden.length }; }
+        }
         xoPays = xoPays.map(function (p0) { var oid = xoOf[p0.id] || p0.party_opening_id || null; if (oid && xoKnown[oid]) { return oid === p0.party_opening_id ? p0 : Object.assign({}, p0, { party_opening_id: oid }); } return p0.party_opening_id ? Object.assign({}, p0, { party_opening_id: null }) : p0; });
         var rtmBlk = null; var ptBlocks = [];
         try {
@@ -2085,7 +2094,7 @@ export async function POST(req) {
           partyFunds = pfLoaded.funds;
           // the bill's own file, so the screen can open it (the storage rules decide who may)
           partyFunds.forEach(function (c7) { c7.transfers.forEach(function (t6) { ['lifetime_rows', 'as_of_rows'].forEach(function (k6) { (t6[k6] || []).forEach(function (r6) { var b6 = billNameById[r6.bill_id]; r6.attachment_path = (b6 && b6.attachment_path) || null; }); }); }); (c7.period.applied_rows || []).concat((c7.paid_without_a_transfer && c7.paid_without_a_transfer.period_rows) || []).forEach(function (r5) { var b5 = billNameById[r5.bill_id]; r5.attachment_path = (b5 && b5.attachment_path) || null; }); });
-        } catch (ePf) { partyFunds = null; }
+        } catch (ePf) { partyFunds = null; if (ePf && ePf.code === 'XO_UNAVAILABLE') { xoStop = ePf.message; throw new Error('XO_UNAVAILABLE'); } }
         // v55.83-XO (Max's (b): "NEW EXPENSE WHEN USED AFTER 6/1/2026") — bills paid from a starting balance on or after 1 June
         // 2026 are a new professional-fee expense in the TAX view, on their paid date. The amount is the shared calculation's own
         // period.tax_from_starting_balance (the same figure inside party-funds tax_professional_fees), so the two tax figures can
@@ -2121,6 +2130,8 @@ export async function POST(req) {
             transfers_count: fundingTax.transfers_count, transfers_total: fundingTax.transfers_total, // v55.83-XO: count / total = transfers + starting-balance uses (1 June 2026 on)
             from_starting_balance: fundingTax.from_starting_balance, from_starting_balance_count: fundingTax.from_starting_balance_count, from_starting_balance_by_party: fundingTax.from_starting_balance_by_party } };
       } catch (eSp) { spend = null; }
+      if (xoStop) { return NextResponse.json({ ok: false, unavailable: 'starting_balances', error: 'Could not read ' + xoStop + '. Nothing is shown, so no tax total, P&L or accountant pack is built without them. Try again in a moment.' }, { status: 503 }); }
+      if (xoRestrict) { spend = null; } // explicit: spending_restricted below says why — never figures recalculated without the balance
       var psPayload = {
         invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, collected_on_period: collectedCohort, collected_on_period_count: colCohortCount, still_open_from_period: stillOpen },
         bills: { billed: billed, count: billCount, paid: billsPaid, paid_count: billsPaidCount, still_open_from_period: billsOpen, disputed_open: billsDisputed },
@@ -2130,6 +2141,7 @@ export async function POST(req) {
         drills: { invoiced: rowsInvoiced, collected: rowsCollected, collected_on_period: rowsCollectedCohort, open_invoices: rowsOpenInv,
                   billed: rowsBilled, bills_paid: rowsBillsPaid, open_bills: rowsOpenBills } };
       psPayload = maskPeriodStats(psPayload, vis); // v55.83-RE — invoice figures P3, bank/financial P2, bills owed P1
+      if (xoRestrict) { psPayload.spending = null; psPayload.spending_restricted = { reason: xoRestrict.reason, hidden_starting_balances: xoRestrict.hidden_starting_balances, words: 'Spending, tax and P&L figures for these dates are withheld: they ' + xoRestrict.reason + '. Ask the super admin.' }; } // v55.83-XO
       psPayload.totals_masked = !canTotals; psPayload.rows_visible = canRows; psPayload.vis = vis; psPayload.date_filters_locked = pLocked;
       psPayload.from = pFrom; psPayload.to = pTo; psPayload.ok = true; psPayload.marker = API_BUILD_MARKER;
       return NextResponse.json(psPayload);

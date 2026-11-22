@@ -204,6 +204,7 @@ export default function PeriodStatsTab(props) {
   }
   function taxPack() {
     if (data && data.totals_masked) { toast.error('The accountant pack needs the "Accounting: See Money Totals" permission — totals are hidden for your account.'); return; } // v55.83-QI
+    if (data && data.spending_restricted) { toast.error('The accountant pack is not available for these dates: ' + (data.spending_restricted.words || 'the figures include a starting balance only the super admin may see.')); return; } // v55.83-XO (Codex 14:52 P1) — never a pack without its spending files
     // v55.83-PQ (Max, Nov 7 05:09): "need to make sure we have the reports
     // necessary to file our taxes" — one click, every hub CSV the accountant
     // needs for the chosen period, consistently named. (Wave remains the 2026
@@ -368,6 +369,7 @@ export default function PeriodStatsTab(props) {
         🔒 Totals are hidden for your account ("Accounting: See Money Totals" not granted).{data.rows_visible ? ' You CAN open any card and work with the underlying rows.' : ' Underlying rows are hidden too — ask for "Accounting: Open Cards (rows only)" or "See Money Totals".'}{data.date_filters_locked ? ' · Date range locked to the default — "Accounting: Change Date Filters" unlocks it.' : ''}</div>}
       {data && !data.totals_masked && data.date_filters_locked && <div className="mt-2 rounded-lg p-2 text-[10px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>🔒 Date range was clamped to the default — "Accounting: Change Date Filters" unlocks other periods.</div>}
       {/* v55.83-PQ (Max): "categorizing etc should affect the underlying reports" */}
+      {data.spending_restricted && <div className="mt-3 rounded-lg p-2 text-[12px] font-bold" style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d' }}>{'🔒 ' + (data.spending_restricted.words || 'Spending, tax and P&L figures for these dates are withheld.')}</div>}
       {data.spending && <div className="mt-3 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
         <div className="text-xs font-extrabold mb-1" style={{ color: '#0f172a' }}>💸 Spending by category — {from} → {to}</div>
         {ptBlocks().map(function (pb) {

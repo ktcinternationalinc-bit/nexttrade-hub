@@ -14,13 +14,15 @@ var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 1000))); }
 console.log('XO — starting-balance uses: the bills-route tax line and party-funds agree');
 
-var state = { db: null };
+// who is asking: super admin (default), an ordinary admin (every switch, not the super admin) or staff (only the switches listed)
+var state = { db: null, super: true, perms: null };
+function allowed(perm) { return state.super || state.perms === null || !!state.perms[perm]; }
 function stub(rel, exportsObj) { var p = require.resolve(path.join(root, rel)); require.cache[p] = { id: p, filename: p, loaded: true, exports: exportsObj }; }
 stub('src/lib/verified-caller.js', { verifiedCaller: function () { return Promise.resolve({ userId: 'u1' }); } });
 stub('src/lib/server-permissions.js', {
-  assertPermission: function () { return Promise.resolve({ ok: true, ctx: { isSuperAdmin: true, mp: {}, deny: {} } }); },
-  loadUserPermissions: function () { return Promise.resolve({ isSuperAdmin: true, mp: {}, deny: {} }); },
-  userHasPermission: function () { return true; }, SENSITIVE_PERMS: {},
+  assertPermission: function (db, uid, perm) { return Promise.resolve(allowed(perm) ? { ok: true, ctx: { isSuperAdmin: state.super, mp: {}, deny: {} } } : { ok: false, status: 403, ctx: { isSuperAdmin: false, mp: {}, deny: {} } }); },
+  loadUserPermissions: function () { return Promise.resolve({ isSuperAdmin: state.super, mp: {}, deny: {} }); },
+  userHasPermission: function (ctx, perm) { return allowed(perm); }, SENSITIVE_PERMS: {},
 });
 var supa = require.resolve('@supabase/supabase-js', { paths: [root] });
 require.cache[supa] = { id: supa, filename: supa, loaded: true, exports: { createClient: function () { return state.db; } } };
@@ -80,6 +82,49 @@ function pfOf(sp, party) { return (sp.party_funds || []).filter(function (p) { r
   world(false);
   var none = await stats('2026-06-01', '2026-06-30'); var nInt = none.categories; (none.paid_through || []).forEach(function (b) { nInt = UI.rtmAdjust(nInt, b); });
   check('a payment naming a starting balance the report does not know is taxed by NEITHER figure and taken out of nothing (the views still agree)', none.funds_sent_tax.total === 10000 && none.funds_sent_tax.from_starting_balance === 0 && cat(none, 'professional_fees').total === 10000 && pfOf(none, NT).period.tax_professional_fees === 10000 && (nInt.filter(function (c) { return c.key === 'professional_fees'; })[0] || { total: 0 }).total === 0, [none.funds_sent_tax, nInt.map(function (c) { return c.key + ':' + c.total; })]);
+  // ── (Codex 22 Nov 14:52 P1) an "only me" balance on the ACTUAL period_stats JSON, for three callers ──
+  var PE = require(path.join(root, 'src/lib/pnl-expenses.js'));
+  function hiddenWorld() { var d = world(); d.t.party_opening_balances[0].visible_to_staff = false; d.t.party_opening_balances[0].reason = 'SECRET-REASON NextTrade May statement'; return d; }
+  var LEAK = /SECRET-REASON|"starting_balances"|from_starting_balance|tax_from_starting|party_opening|"O1"|\b5000\b|\b4000\b|10400/;
+  var STAFF = { 'accounting.view': true, 'bills.view': true, 'accounting.view_totals': true, 'accounting.change_dates': true, 'accounting.view_invoicing': true };
+  hiddenWorld(); state.super = true; state.perms = null;
+  var hs = await call({ action: 'period_stats', from: '2026-06-01', to: '2026-06-30' });
+  check('SUPER ADMIN, hidden balance: the full report — Professional fees 10,400, the balance with its reason in party_funds, no restriction', hs.ok === true && !hs.spending_restricted && cat(hs.spending, 'professional_fees').total === 10400 && pfOf(hs.spending, NT).starting_balances[0].reason === 'SECRET-REASON NextTrade May statement', hs.spending_restricted || hs.error);
+  check('(the leak scan below is real: on the super admin\'s response it finds the reason, the uses and the 10,400)', LEAK.test(JSON.stringify(hs)) && /SECRET-REASON/.test(JSON.stringify(hs)) && /10400/.test(JSON.stringify(hs)));
+  var callers = [['ORDINARY ADMIN (every switch, not the super admin)', null], ['STAFF (accounting + bills + totals switches)', STAFF]];
+  for (var ci = 0; ci < callers.length; ci++) {
+    hiddenWorld(); state.super = false; state.perms = callers[ci][1];
+    var hr = await call({ action: 'period_stats', from: '2026-06-01', to: '2026-06-30' }); var whole = JSON.stringify(hr);
+    check(callers[ci][0] + ': period_stats answers ok with an EXPLICIT restricted state — spending withheld, the reason said, nothing recalculated without the balance', hr.ok === true && hr.spending === null && hr.spending_restricted && hr.spending_restricted.reason === 'includes a starting balance only the super admin may see' && hr.spending_restricted.hidden_starting_balances === 1, [hr.error, hr.spending_restricted, !!hr.spending]);
+    check(callers[ci][0] + ': the WHOLE response carries none of it — no amount, reason, use, id, tax or held figure of the hidden balance', !LEAK.test(whole), (whole.match(LEAK) || [])[0]);
+    var ea = PE.readExpenseAnswer(hr, { from: '2026-06-01', to: '2026-06-30' }, UI.rtmAdjust, UI.foldUnc);
+    check(callers[ci][0] + ': the P&L reader says the expenses are withheld (locked, restricted) — never a complete-looking partial P&L', ea.status === 'locked' && ea.restricted === true && /withheld/.test(ea.why), ea);
+  }
+  hiddenWorld(); state.super = false; state.perms = STAFF;
+  var before = await call({ action: 'period_stats', from: '2026-04-01', to: '2026-04-30' });
+  check('STAFF, April (before the hidden balance is as of 10 May): nothing to withhold — the spending block is there', before.ok === true && !before.spending_restricted && !!before.spending, before.spending_restricted);
+  world(); state.super = false; state.perms = STAFF;
+  var vis = await call({ action: 'period_stats', from: '2026-06-01', to: '2026-06-30' });
+  check('STAFF, a balance marked "staff can see it": the full figures (Professional fees 10,400; the two tax figures agree)', vis.ok === true && !vis.spending_restricted && cat(vis.spending, 'professional_fees').total === 10400 && pfOf(vis.spending, NT).period.tax_professional_fees === vis.spending.funds_sent_tax.by_party[NT]);
+  var tabSrc = require('fs').readFileSync(path.join(root, 'src/components/PeriodStatsTab.jsx'), 'utf8');
+  check('the accountant pack refuses (no files) when spending is restricted, and the screen says why', tabSrc.indexOf('if (data && data.spending_restricted) { toast.error(') > 0 && tabSrc.indexOf('{data.spending_restricted && <div') > 0);
+
+  // ── (Codex 22 Nov 14:52 P2) the starting balances cannot be read: 10,400 → unavailable → 10,400, no business row changed ──
+  state.super = true; state.perms = null;
+  var dbF = world(); function rowsSnap() { return JSON.stringify([dbF.t.bank_transactions, dbF.t.vendor_bills, dbF.t.vendor_bill_payments, dbF.t.party_opening_balances, dbF.t.party_money_entries]); }
+  var snap0 = rowsSnap();
+  var r1 = await stats('2026-06-01', '2026-06-30');
+  dbF.fail.party_opening_balances = { select: 'permission denied for table party_opening_balances' };
+  var bad = await call({ action: 'period_stats', from: '2026-06-01', to: '2026-06-30' });
+  check('read failure (permission denied): 503, ok false, "unavailable", NO spending, no totals, no pack — never 10,000 shown as if confirmed', bad._status === 503 && bad.ok === false && bad.unavailable === 'starting_balances' && !bad.spending && /could not be read/.test(bad.error) && !/10000|10,000|10400/.test(JSON.stringify(bad)), bad);
+  var eb = PE.readExpenseAnswer(bad, { from: '2026-06-01', to: '2026-06-30' }, UI.rtmAdjust, UI.foldUnc);
+  check('… the P&L reader treats it as an error (no expense columns)', eb.status === 'error' && !eb.cols, eb);
+  delete dbF.fail.party_opening_balances;
+  var r2 = await stats('2026-06-01', '2026-06-30');
+  check('recovery: 10,400 again (before 10,400 → unavailable → 10,400), and no business row was changed by any of it', cat(r1, 'professional_fees').total === 10400 && cat(r2, 'professional_fees').total === 10400 && r2.funds_sent_tax.total === 10400 && rowsSnap() === snap0);
+  dbF.fail.party_opening_balances = { select: 'relation "public.party_opening_balances" does not exist' };
+  var notInst = await stats('2026-06-01', '2026-06-30');
+  check('ONLY a table that is not there yet (XO not installed) keeps the old answer: ok, the transfer alone (10,000)', !!notInst && notInst.funds_sent_tax.total === 10000 && notInst.funds_sent_tax.from_starting_balance === 0);
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('CRASHED: ' + (e && e.stack || e)); process.exit(1); });

@@ -71,6 +71,16 @@ export function billLineSplit(portion, billTotal, billLines) {
 // NEVER in funds_sent. Tax presentation: the bills paid from it dated on or after STARTING_BALANCE_TAX_FROM are added to the
 // period's tax line (a new expense when used); the internal view is unchanged (those bills count in their own categories).
 export var STARTING_BALANCE_TAX_FROM = '2026-06-01';
+// v55.83-XO (Codex 22 Nov 14:52 P1) — WHO MAY SEE A STARTING BALANCE: the ONE rule every response that exposes the calculation
+// uses (the Funds route lists only these; the report route withholds its spending block when one it may not see is in its dates).
+// A balance marked "only me" (visible_to_staff = false) is for the super admin only; a correction follows its balance.
+export var HIDDEN_STARTING_BALANCE_REASON = 'includes a starting balance only the super admin may see';
+export function canSeeStartingBalance(sb, isSuperAdmin) { return isSuperAdmin === true || !!(sb && sb.visible_to_staff === true); }
+// the starting balances (rows of party_opening_balances, corrections left out) this caller may NOT see that count in a report
+// ending on `to` (as of that date or earlier: they are in its held figures, and any use of them in it)
+export function hiddenStartingBalances(openings, isSuperAdmin, to) {
+  return (openings || []).filter(function (b) { return !b.corrects_id && Number(b.amount) > 0 && !canSeeStartingBalance(b, isSuperAdmin) && (!to || day(b.as_of) <= to); });
+}
 export function partyFundsBreakdown(o) {
   o = o || {}; var from = o.from || null; var to = o.to || null;
   var linesOfBill = null; if (Array.isArray(o.billLines)) { linesOfBill = {}; o.billLines.forEach(function (l) { (linesOfBill[l.bill_id] = linesOfBill[l.bill_id] || []).push(l); }); }

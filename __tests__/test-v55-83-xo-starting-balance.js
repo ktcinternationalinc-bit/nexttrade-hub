@@ -149,6 +149,17 @@ var goodPay = { action: 'opening_pay', party: NT, opening_id: 'O1', bills: [{ bi
   check('WITHOUT the XO database step: add / pay / candidates answer 409 "run sql/v55-83-XO-starting-balance.sql", nothing called', m2.every(function (x) { return x._status === 409 && /run sql\/v55-83-XO-starting-balance\.sql/.test(x.error) && /Nothing was changed/.test(x.error); }) && db.calls.length === 0, m2);
   state.superAdmin = false; state.perms = STAFF;
   check('… and staff are never shown that instruction', (await call({ action: 'funds' })).starting_balance_sql_missing === null);
+  // (Codex 22 Nov 14:52 P2) installed, but the starting balances cannot be read: the Funds screen says so and shows NO totals
+  db = seed(true); state.superAdmin = true; state.perms = {};
+  var okF = await call({ action: 'funds' });
+  db.fail.party_opening_balances = { select: 'permission denied for table party_opening_balances' };
+  var unF = await call({ action: 'funds' });
+  check('Funds, read failure (permission denied — not "not installed"): 503 unavailable, no company figures at all', unF._status === 503 && unF.ok === false && unF.unavailable === 'starting_balances' && !unF.parties && /could not be read/.test(unF.error), unF);
+  delete db.fail.party_opening_balances;
+  var reF = await call({ action: 'funds' });
+  check('… recovery: the same figures as before the failure (left 3,500), nothing changed', okF.ok && reF.ok && party(okF, NT).totals.starting_balance_left === 3500 && JSON.stringify(party(reF, NT).totals) === JSON.stringify(party(okF, NT).totals));
+  var SRVS = fs.readFileSync(path.join(root, 'src/lib/party-funds-server.js'), 'utf8'); var PFS = require(path.join(root, 'src/lib/party-funds-server.js'));
+  check('only a table that does not exist is "not installed" (42P01 / PGRST205 / its own message); permission, timeout and other errors are not', PFS.isMissingOpeningsTable({ code: '42P01' }) && PFS.isMissingOpeningsTable({ code: 'PGRST205' }) && PFS.isMissingOpeningsTable({ message: 'relation "public.party_opening_balances" does not exist' }) && !PFS.isMissingOpeningsTable({ message: 'permission denied for table party_opening_balances' }) && !PFS.isMissingOpeningsTable({ message: 'canceling statement due to statement timeout' }) && !PFS.isMissingOpeningsTable({ message: 'relation "public.other_table" does not exist' }) && SRVS.indexOf('throw openingsUnavailable(oq.error)') > 0);
   var src = fs.readFileSync(path.join(root, 'src/app/api/accounting/party-funds/route.js'), 'utf8');
   check('API route style: no arrow functions, no template strings, no const / let; no table written directly; only the XO functions for starting balances', !/=>/.test(src) && !/`/.test(src) && !/\b(const|let)\s/.test(src) && !/\.insert\(|\.update\(|\.delete\(|\.upsert\(/.test(src) && src.indexOf("rpc('hub_party_opening_add'") > 0 && src.indexOf("rpc('hub_party_opening_pay'") > 0);
   var srv = fs.readFileSync(path.join(root, 'src/lib/party-funds-server.js'), 'utf8');

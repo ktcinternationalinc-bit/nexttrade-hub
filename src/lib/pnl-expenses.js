@@ -190,6 +190,7 @@ export function pendingRequests(requests, cache, scope, opts) {
 export function readExpenseAnswer(j, req, adjust, fold) {
   if (!j || j.ok !== true) { return { status: 'error', why: (j && j.error) || 'The expenses could not be loaded.', from: req.from, to: req.to, partial: !!req.partial }; }
   if (j.from !== req.from || j.to !== req.to) { return { status: 'outside', why: 'Expenses for ' + req.from + ' → ' + req.to + ' are not open to you (the Income Statement only answers for ' + j.from + ' → ' + j.to + ').', from: req.from, to: req.to, partial: !!req.partial }; }
+  if (j.spending_restricted) { return { status: 'locked', why: (j.spending_restricted.words || 'Expenses for these dates are withheld: they include a starting balance only the super admin may see.'), restricted: true, from: req.from, to: req.to, partial: !!req.partial }; } // v55.83-XO (Codex 14:52 P1)
   if (!j.spending) { return { status: 'locked', why: 'Expenses are shown only to people with the “see totals” switch.', from: req.from, to: req.to, partial: !!req.partial }; }
   var rc = realCostCategories(j.spending, adjust, fold);
   var colsR = expenseColumns(rc.cats, rc.uncategorized);
