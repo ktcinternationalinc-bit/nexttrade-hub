@@ -17,6 +17,7 @@ import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-XU — Remove category (verified sign-in)
 import { singleLineWords } from '../lib/category-clear-words'; // v55.83-XU (Codex 20:34)
+import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
 
 function invoiceTotal(inv) {
   // PINNED v55.83-AA: this app stores the invoice total in total_amount
@@ -512,6 +513,7 @@ export default function BankReviewTab(props) {
     if (!mayClassify) { toast.error('You do not have Bank: Classify permission.'); return; }
     if (isLocked(t)) { toast.error('Approved — reopen first to edit.'); return; }
     if (isReviewDuplicate(t)) { toast.error('This row is a duplicate in Bank Review. Keep the original row; duplicates cannot be classified or matched.'); return; }
+    if (t.pending === true) { toast.error('Still pending at the bank. It is categorized once the final line arrives.'); return; } // v55.83-XT
     setBusy(true);
     // v55.83-GS — a classification change is Wave-impacting, so mark the txn pending Wave sync
     // (category_status doubles as the bank-txn Wave-sync flag). This is what makes it appear in
@@ -1029,7 +1031,7 @@ export default function BankReviewTab(props) {
                        style={{ gridTemplateColumns: '90px 70px 1fr 110px 120px 110px' }}>
                     <div className="px-2 py-1.5 text-[11px] font-mono text-slate-300">{(t.posted_date || t.date || '').toString().substring(0, 10) || <span className="text-orange-300">pending</span>}</div>
                     <div className="px-2 py-1.5 text-[11px] font-bold">{t.direction === 'in' ? <span className="text-emerald-300">IN</span> : <span className="text-rose-300">OUT</span>}</div>
-                    <div className="px-2 py-2 text-xs text-slate-100 whitespace-normal break-words leading-snug" title={t.name || ''}>{t.name}{t.unsupported_account ? <span className="ml-1 text-[10px] bg-amber-500/20 text-amber-200 border border-amber-500/40 rounded px-1">⚠ credit/loan</span> : null}{!t.posted_date ? <span className="ml-1 text-[10px] bg-orange-500/20 text-orange-200 rounded px-1">pending</span> : null}{matched ? <span className="ml-1 text-[10px] bg-indigo-500/20 text-indigo-200 rounded px-1">matched</span> : null}{inferredDup ? <span className="ml-1 text-[10px] bg-rose-500/20 text-rose-100 border border-rose-500/40 rounded px-1">inferred duplicate</span> : null}</div>
+                    <div className="px-2 py-2 text-xs text-slate-100 whitespace-normal break-words leading-snug" title={t.name || ''}>{t.name}{t.pending === true ? <span className="ml-1 text-[10px] font-bold rounded px-1" title="A pending line never counts in any total, match or rule. It is replaced automatically when the final line arrives." style={{ background: isStalePending(t) ? '#92400e' : '#334155', color: '#f8fafc' }}>{pendingLabel(t)}</span> : null}{t.unsupported_account ? <span className="ml-1 text-[10px] bg-amber-500/20 text-amber-200 border border-amber-500/40 rounded px-1">⚠ credit/loan</span> : null}{!t.posted_date ? <span className="ml-1 text-[10px] bg-orange-500/20 text-orange-200 rounded px-1">pending</span> : null}{matched ? <span className="ml-1 text-[10px] bg-indigo-500/20 text-indigo-200 rounded px-1">matched</span> : null}{inferredDup ? <span className="ml-1 text-[10px] bg-rose-500/20 text-rose-100 border border-rose-500/40 rounded px-1">inferred duplicate</span> : null}</div>
                     <div className="px-2 py-1.5 text-right text-xs font-mono font-bold text-slate-100">{seeAmounts ? fmt(t.amount_abs || Math.abs(Number(t.amount))) : maskAmount(null, false)}</div>
                     <div className="px-2 py-1.5 text-[11px] text-slate-300">{
                       /* v55.83-LF mirror — show the WAVE category + where it came from (Wave vs Hub), falling

@@ -37,7 +37,7 @@ export async function autoReviewIfComplete(db, ids, by) {
       if (!a || a.missing || !a.complete || a.overAllocated) { continue; }
       var u = await db.from('bank_transactions')
         .update({ review_status: 'reviewed', reviewed_by: by || null, reviewed_at: new Date().toISOString() })
-        .eq('id', ids[i]).eq('review_status', 'unreviewed').select('id');
+        .eq('id', ids[i]).eq('review_status', 'unreviewed').not('pending', 'is', true).select('id'); // v55.83-XT
       if (!u.error && u.data && u.data.length) { done.push(ids[i]); }
     } catch (e) { /* fail-soft: the row simply stays unreviewed */ }
   }

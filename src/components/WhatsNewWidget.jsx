@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XT',
+    date: '2026-11-22',
+    title: 'Pending bank transactions never count, and are removed when the final transaction arrives',
+    items: [
+      { text: '**A pending transaction never counts.** It is left out of every total, report, P&L, cash and tax figure, and it cannot be matched to an invoice or bill, paired as a transfer, categorized, or sent to Wave. It still shows in the lists, marked **Pending, not counted**.' },
+      { text: '**When the final transaction arrives, the pending one is removed automatically** at the next bank sync. This now also works when the final transaction came in through a second connection to the same bank account. Nothing is deleted: the pending copy is filed away and can be restored.' },
+      { text: '**Old pending transactions are flagged.** One still pending after 10 days shows in orange: **Pending N days, not counted. Check with the bank.** It is never removed just because it is old.' },
+      { superAdminOnly: true, text: 'Technical (no SQL): settlePendingLines follows an archived bank-linked final line to its ONE live copy on the same real account (bank + last four + company, same money, posted day, description or cheque number) and calls the existing hub_settle_pending (restorable, audited in hub_pending_settlements). None or several copies, or a pending line with links / notes, stays for a person. New server guard lib/pending-guard refuses pending lines (409, fail closed) in bank-write, bulk / single category, verify, transfer pairing, company-books categorize, advance flag, deposit match, Wave push and Wave payment push; Wave auto-link and CSV matching skip pending; company totals, Bank tab totals and dashboard counts skip pending.' }
+    ]
+  },
+  {
     version: 'v55.83-XU',
     date: '2026-11-22',
     title: 'Remove the category from bank lines you already categorized',

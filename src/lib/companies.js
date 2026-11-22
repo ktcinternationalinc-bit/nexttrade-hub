@@ -62,6 +62,7 @@ export function companyTotals(lines, cats) {
   var byKey = {}; (cats || []).forEach(function (c) { byKey[c.key] = c; });
   var months = {}; var rows = {}; var inT = 0; var outT = 0; var trIn = 0; var trOut = 0;
   (lines || []).forEach(function (l) {
+    if (l && l.pending === true) { return; } // v55.83-XT — a pending line never counts in a total
     var ym = String(l.date || '').substring(0, 7); if (!ym) { return; }
     months[ym] = true;
     var amt = Math.round((Number(l.amount_abs) || 0) * 100) / 100; var signed = l.direction === 'in' ? amt : -amt;

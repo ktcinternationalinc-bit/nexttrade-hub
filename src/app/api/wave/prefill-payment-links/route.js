@@ -120,7 +120,7 @@ export async function POST(req) {
     if (aipRes && aipRes.error) { return NextResponse.json({ ok: false, error: 'Payment-link read failed: ' + aipRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
     ((aipRes && aipRes.data) || []).forEach(function (p) { if (p && p.bank_transaction_id && !isPaymentVoid(p)) { claimedDep[p.bank_transaction_id] = true; } });
 
-    var deposits = ((depRes && depRes.data) || []).filter(function (t) { return !t.matched_invoice_id && !t.wave_transaction_id && !claimedDep[t.id]; });
+    var deposits = ((depRes && depRes.data) || []).filter(function (t) { return t.pending !== true && t.review_status !== 'duplicate' && !t.matched_invoice_id && !t.wave_transaction_id && !claimedDep[t.id]; }); // v55.83-XT — never a pending line or a marked copy
 
     // ── Wave invoice payments (read only) ────────────────────────────────────
     var query = 'query($bid: ID!, $page: Int!){ business(id:$bid){ invoices(page:$page, pageSize:25){ pageInfo{ totalPages } edges{ node{ id invoiceNumber payments{ id amount paymentDate account{ id name } } } } } } }';

@@ -9,6 +9,7 @@ import { hubFetch } from '../lib/hub-fetch';
 import { companyByKey } from '../lib/companies';
 import { lineShown } from '../lib/company-rule-learn'; // v55.83-VK — All / Categorized / Not categorized / one category
 import StatementImport from './StatementImport';
+import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function iso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
@@ -248,8 +249,8 @@ export default function CompanyBooksTab(props) {
           <tbody>{shown.map(function (l) {
             var panel = rowPanel && rowPanel.id === l.id ? rowPanel : null;
             return <React.Fragment key={l.id}><tr style={{ borderTop: '1px solid #e2e8f0', background: l.company_category ? '#f0fdf4' : '#ffffff' }}>
-              <td className="p-1">{canManage && <input type="checkbox" checked={!!sel[l.id]} onChange={function (e) { var n = Object.assign({}, sel); n[l.id] = e.target.checked; setSel(n); }} />}</td>
-              <td className="p-1 whitespace-nowrap">{l.date}{l.pending ? ' ⏳' : ''}</td>
+              <td className="p-1">{canManage && <input type="checkbox" disabled={l.pending === true} checked={!!sel[l.id] && l.pending !== true} onChange={function (e) { if (l.pending === true) { return; } var n = Object.assign({}, sel); n[l.id] = e.target.checked; setSel(n); }} />}</td>
+              <td className="p-1 whitespace-nowrap">{l.date}{l.pending ? <div className="text-[10px] font-bold" style={{ color: isStalePending(l) ? '#b45309' : '#64748b' }}>{pendingLabel(l)}</div> : ''}</td>
               <td className="p-1 whitespace-nowrap">{l.is_card ? '💳 ' : '🏦 '}{l.account_label}</td>
               <td className="p-1">{l.name}</td>
               <td className="p-1 text-right whitespace-nowrap font-bold" style={{ color: l.direction === 'in' ? '#166534' : '#991b1b' }}>{l.direction === 'in' ? '+' : '−'}{fmt(l.amount_abs)}</td>
@@ -257,7 +258,7 @@ export default function CompanyBooksTab(props) {
                 {l.transfer_group_id
                   ? <span className="text-[12px] font-bold" style={{ color: '#1e40af' }}>↔ {(catByKey[l.company_category] || {}).label || 'Transfer'}{l.transfer_with ? <span className="font-normal" style={{ color: '#334155' }}> · {l.transfer_with.private ? 'with a private account' : 'with ' + l.transfer_with.account_label + ', ' + l.transfer_with.date}</span> : null}{canManage ? <button onClick={function () { unpair(l); }} disabled={busy} className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#991b1b' }}>Unpair</button> : null}</span>
                   : canManage
-                    ? <span className="inline-flex items-center gap-1"><select className={inp} style={inpS} value={l.company_category || ''} disabled={busy} onChange={function (e) { if (e.target.value === '__new') { setRowPanel({ id: l.id, mode: 'newcat', label: '', direction: l.direction, kind: l.direction === 'in' ? 'income' : 'expense', is_payroll: false }); return; } setCategory([l.id], e.target.value || null); }}><option value="">— not categorized —</option>{catsFor(l).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}<option value="__new">➕ New category…</option></select>
+                    ? <span className="inline-flex items-center gap-1"><select className={inp} style={inpS} value={l.company_category || ''} disabled={busy || l.pending === true} onChange={function (e) { if (e.target.value === '__new') { setRowPanel({ id: l.id, mode: 'newcat', label: '', direction: l.direction, kind: l.direction === 'in' ? 'income' : 'expense', is_payroll: false }); return; } setCategory([l.id], e.target.value || null); }}><option value="">— not categorized —</option>{catsFor(l).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}<option value="__new">➕ New category…</option></select>
                       <button onClick={function () { openTransfer(l, false, ''); }} disabled={busy} title="This is money moving between two of the company's own accounts (or paying its credit card): find the other side and pair them as ONE transfer — never income or spending" className="px-1.5 py-0.5 rounded text-[11px] font-bold" style={{ background: '#dbeafe', color: '#1e40af' }}>↔</button></span>
                     : ((catByKey[l.company_category] || {}).label || '—')}
                 {l.company_category_source === 'rule' ? <span className="ml-1 text-[9px]" style={{ color: '#6d28d9' }}>📏 rule</span> : null}</td>

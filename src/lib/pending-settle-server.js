@@ -14,6 +14,7 @@
 // Never throws; never blocks the sync. Var + concat only.
 
 import { storedPendingReplacements, sameMoney } from './pending-repair-server';
+import { archivedReplacements, findLiveCopy, pendingWorkBlock } from './pending-final-copy'; // v55.83-XT
 export { sameMoney } from './pending-repair-server';
 
 var CARRY = ['classification', 'category_source', 'category_verified', 'category_verified_by', 'category_verified_at', 'third_party_payer'];
@@ -84,6 +85,21 @@ export async function settlePendingLines(db, o) {
     }
     async function fileAway(pend, keepId, reason) { return !!(await callRpc('bank_duplicate_remove', { p_dup: pend.id, p_keep: keepId, p_actor: null, p_reason: reason })); }
 
+    // v55.83-XT — the bank-linked final line was archived as a copy from a second connection: settle the pending line into
+    // the ONE live copy of that final line (same real account, money, posted day, description). Otherwise a person reviews.
+    var copyCtx = {}; var archivedPairs = null;
+    async function settleViaLiveCopy(pend, archivedPost) {
+      if (pendingWorkBlock(pend)) { res.needs_person++; return; }
+      var lc = await findLiveCopy(db, archivedPost, copyCtx);
+      if (!lc || lc.status !== 'found') { res.needs_person++; if (lc && lc.status === 'error') { res.errors++; } return; }
+      var keep = lc.keeper;
+      var sr2 = await callRpc('hub_settle_pending', { p_pending: pend.id, p_posted: keep.id,
+        p_reason: 'Pending line has posted — its final line ' + (archivedPost.plaid_transaction_id || archivedPost.id) +
+          ' came in twice (two bank connections); the pending line is replaced by the live final line ' + (keep.plaid_transaction_id || keep.id) +
+          (sameMoney(pend, keep) ? '' : ' (final amount differs from the pending hold — nothing carried over)') + '. Kept on file, restorable.' });
+      if (sr2) { res.posted_replaced++; res.via_other_connection = (res.via_other_connection || 0) + 1; if (sr2.carried && sr2.carried.length) { res.carried++; } }
+    }
+
     for (var i = 0; i < pendRows.length; i++) {
       if (Date.now() - t0 > budget) { res.incomplete = true; break; }
       var p = pendRows[i];
@@ -93,8 +109,19 @@ export async function settlePendingLines(db, o) {
       });
       if (stored.length > 1) { res.needs_person++; continue; }
       var postId = pairs[p.plaid_transaction_id] || (stored[0] && stored[0].plaid_transaction_id);
+      if (!postId) {
+        // v55.83-XT — the stored final line may be an archived copy (older than this sync's window)
+        if (archivedPairs === null) { try { archivedPairs = await archivedReplacements(db, pendRows); } catch (eAr) { archivedPairs = {}; res.errors++; } }
+        var arch = archivedPairs[p.plaid_transaction_id] || [];
+        if (arch.length > 1) { res.needs_person++; continue; }
+        if (arch.length === 1) { await settleViaLiveCopy(p, arch[0]); if (res.needs_sql) { break; } continue; }
+      }
       if (postId) {
         var post = postBy[postId] || stored[0] || null;
+        if (post && post.pending !== true && post.review_status === 'duplicate' && post.account_id === p.account_id &&
+            post.connection_id === p.connection_id && post.wave_business_id === p.wave_business_id) {
+          await settleViaLiveCopy(p, post); if (res.needs_sql) { break; } continue; // v55.83-XT
+        }
         // A replacement reported by the bank must actually exist before we retire its pending record.
         if (!post || post.pending === true || post.review_status === 'duplicate') { res.needs_person++; continue; }
         var same = sameMoney(p, post);

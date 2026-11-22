@@ -95,7 +95,7 @@ export default function AccountingDashboard(props) {
       fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_customers', 'id,company_name,business_tag').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status,bank_transaction_id,voided').catch(function () { return { data: [] }; }),
-      supabase.from('bank_transactions').select('id,review_status,wave_business_id,account_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      supabase.from('bank_transactions').select('id,review_status,wave_business_id,account_id,pending') /* v55.83-XT */.then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('wave_sync_log').select('entity_type,success,error_message,completed_at,attempted_at').order('id', { ascending: false }).limit(1).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       fetchAllRows('wave_business_registry', '*').catch(function () { return { data: [] }; }),
       supabase.from('daily_log').select('entry_text,log_date,log_category').in('log_category', ['accounting_invoices', 'accounting_proformas', 'accounting_customers', 'bank_review']).order('log_date', { ascending: false }).limit(12).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
@@ -223,7 +223,7 @@ export default function AccountingDashboard(props) {
       var custBalances = Object.keys(balByCust).map(function (id) { return { name: custName[id] || '(unknown)', bal: r2(balByCust[id]) }; })
         .sort(function (a, b) { return b.bal - a.bal; }).slice(0, 8);
 
-      var unmatched = txns.filter(function (t) { return (t.review_status || 'unreviewed') === 'unreviewed'; });
+      var unmatched = txns.filter(function (t) { return t.pending !== true && (t.review_status || 'unreviewed') === 'unreviewed'; }); // v55.83-XT
       var pendingApprovalRows = inv.filter(function (i) { return isLive(i) && i.approval_status === 'internal_review'; })
         .map(function (i) { return { id: i.id, num: i.invoice_number, cust: custName[i.accounting_customer_id] || '(unknown)', inv_date: i.invoice_date || '', due_date: i.due_date || '', total: r2(i.total_amount), paid: 0, balance: r2(i.total_amount), du: 0, source: i.source === 'wave_import' ? 'Wave' : 'Hub' }; });
       var pendingApproval = pendingApprovalRows;

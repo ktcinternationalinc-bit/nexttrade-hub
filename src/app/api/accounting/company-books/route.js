@@ -17,6 +17,7 @@ import { categorizeLine, partyName, wantsBill, loadBillCutoff, beforeCutoff, NEX
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP private bank accounts — respected here too
 import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
+import { PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
 import { learnPlan, linesForRule } from '../../../../lib/company-rule-learn'; // v55.83-VK — the books learn a rule from what a person categorizes
 var SQL_MISSING_UD = '"KTC pays this" on a category needs one database update first: run sql/v55-83-UD-pay-nextrade.sql in Supabase (SQL Editor).';
 var SQL_MISSING_VK = 'Rules need one small database update before they can categorize lines: run sql/v55-83-VK-rule-apply-guard.sql in Supabase (SQL Editor). Nothing was changed. You can still categorize lines by hand.';
@@ -380,7 +381,7 @@ export async function POST(req) {
         // how many OTHER lines (any date, not categorized yet, visible to this person) each of these rules would now categorize
         var open = [];
         for (var op = 0; op < 10; op++) {
-          var oq = await db.from('bank_transactions').select(LINE_COLS).eq('wave_business_id', cid).is('company_category', null).is('transfer_group_id', null)
+          var oq = await db.from('bank_transactions').select(LINE_COLS).eq('wave_business_id', cid).is('company_category', null).is('transfer_group_id', null).not('pending', 'is', true) // v55.83-XT
             .or('review_status.is.null,review_status.neq.duplicate').order('date', { ascending: false }).order('id', { ascending: true }).range(op * 1000, op * 1000 + 999);
           if (oq.error) { open = null; break; }
           open = open.concat(oq.data || []); if (!oq.data || oq.data.length < 1000) { break; }
@@ -410,6 +411,7 @@ export async function POST(req) {
       if (lr.error) { return readFail('the lines', lr.error); }
       var wrong = (lr.data || []).filter(function (l) { return l.wave_business_id !== cid || isPrivateRow(l, scope); });
       if (wrong.length || (lr.data || []).length !== ids.length) { return fail('Some of those lines are not ' + comp.label + ' lines — nothing was changed.', 409); }
+      if ((lr.data || []).some(function (l) { return l.pending === true; })) { return fail(PENDING_REFUSAL, 409); } // v55.83-XT
       var nctx = null;
       if (comp.key === 'nextrade') { nctx = await nextradeCtx(); if (nctx.error) { return readFail('the category mapping', nctx.error); } }
       var results = [];
@@ -507,6 +509,7 @@ export async function POST(req) {
       var t0 = t0r.data;
       if (!t0 || t0.wave_business_id !== cid || isPrivateRow(t0, scope)) { return fail('That line is not one of ' + comp.label + '\u2019s lines.', 404); }
       if (t0.transfer_group_id) { return fail('This line is already paired — unpair it first.', 409); }
+      if (t0.pending === true) { return fail(PENDING_REFUSAL, 409); } // v55.83-XT
       var manualT = body.manual === true; var spanT = manualT ? 90 : 10;
       var dT = t0.posted_date || t0.date;
       var loT = new Date(Date.parse(dT) - spanT * 86400000).toISOString().substring(0, 10); var hiT = new Date(Date.parse(dT) + spanT * 86400000).toISOString().substring(0, 10);

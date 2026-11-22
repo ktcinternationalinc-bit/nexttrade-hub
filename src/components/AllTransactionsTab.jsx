@@ -18,6 +18,7 @@ import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import WireQuickView from './WireQuickView'; // v55.83-RM
 import { matchesTransaction, searchFragments } from '../lib/transaction-search';
 import PendingBankRepair from './PendingBankRepair';
+import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -134,7 +135,7 @@ export default function AllTransactionsTab(props) {
     return 0;
   });
   var selIds = Object.keys(sel).filter(function (k) { return sel[k]; });
-  var sumSel = 0; rows.forEach(function (t) { if (sel[t.id]) { sumSel += t.direction === 'out' ? -t.amount : t.amount; } });
+  var sumSel = 0; rows.forEach(function (t) { if (sel[t.id] && t.pending !== true) { sumSel += t.direction === 'out' ? -t.amount : t.amount; } }); // v55.83-XT
 
   function th(key, label, right) {
     return <th className={'py-1.5 pr-2 font-semibold cursor-pointer select-none ' + (right ? 'text-right' : 'text-left')}
@@ -142,8 +143,9 @@ export default function AllTransactionsTab(props) {
       {label}{sortBy === key ? (sortDesc ? ' ↓' : ' ↑') : ''}</th>;
   }
   function toggleAll() {
-    var all = {}; var every = rows.length > 0 && rows.every(function (t) { return sel[t.id]; });
-    if (!every) { rows.forEach(function (t) { all[t.id] = true; }); }
+    var pickable = rows.filter(function (t) { return t.pending !== true; }); // v55.83-XT — a pending line is never selected for a category
+    var all = {}; var every = pickable.length > 0 && pickable.every(function (t) { return sel[t.id]; });
+    if (!every) { pickable.forEach(function (t) { all[t.id] = true; }); }
     setSel(all);
   }
   function applyBulk() {
@@ -547,7 +549,7 @@ export default function AllTransactionsTab(props) {
 
       <div className="overflow-x-auto" style={{ maxHeight: 520, overflowY: 'auto' }}><table className="w-full text-[11px]">
         <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569', position: 'sticky', top: 0, background: '#ffffff' }}>
-          <th className="py-1.5 pr-1"><input type="checkbox" checked={rows.length > 0 && rows.every(function (t) { return sel[t.id]; })} onChange={toggleAll} /></th>
+          <th className="py-1.5 pr-1"><input type="checkbox" checked={rows.some(function (t) { return t.pending !== true; }) && rows.every(function (t) { return t.pending === true || sel[t.id]; })} onChange={toggleAll} /></th>
           {th('date', 'Date')}{th('account', 'Account')}{th('who', 'Description')}
           {th('amount', 'Amount', true)}
           <th className="py-1.5 pr-2 text-left font-semibold">Category</th>
@@ -555,7 +557,7 @@ export default function AllTransactionsTab(props) {
         <tbody style={{ color: '#0f172a' }}>
           {rows.slice(0, 1000).map(function (t) {
             return <tr key={t.id} style={{ borderBottom: '1px solid #f1f5f9', opacity: t.pending ? 0.5 : 1 }}>
-              <td className="py-1 pr-1"><input type="checkbox" checked={!!sel[t.id]} onChange={function () { var n2 = Object.assign({}, sel); n2[t.id] = !n2[t.id]; setSel(n2); }} /></td>
+              <td className="py-1 pr-1"><input type="checkbox" disabled={t.pending === true} title={t.pending ? 'Pending at the bank. It cannot be categorized until the final line arrives' : undefined} checked={!!sel[t.id] && t.pending !== true} onChange={function () { if (t.pending === true) { return; } var n2 = Object.assign({}, sel); n2[t.id] = !n2[t.id]; setSel(n2); }} /></td>
               <td className="py-1 pr-2 whitespace-nowrap">{t.date}</td>
               <td className="py-1 pr-2 whitespace-nowrap text-[10px]">{t.account}</td>
               <td className="py-1 pr-2 font-semibold cursor-pointer" title="Click to show the full description"
@@ -580,7 +582,7 @@ export default function AllTransactionsTab(props) {
                     </select>{t._saving ? <span className="ml-1 text-[9px] font-bold" style={{ color: '#64748b' }}>saving…</span> : t._saved ? <span className="ml-1 text-[9px] font-extrabold" style={{ color: '#065f46' }}>✓ saved</span> : null}
                     {t.pending ? <div className="text-[8px]" style={{ color: '#64748b' }}>pending — pick after it settles</div> : null}</span>}</td>
               <td className="py-1 text-[9px]">
-                {t.pending && <span className="mr-1" style={{ color: '#64748b' }}>pending</span>}
+                {t.pending && <span className="mr-1 font-bold" title="A pending line never counts in any total, report, match or rule. It is replaced automatically when the final line arrives." style={{ color: isStalePending(t) ? '#b45309' : '#64748b' }}>{pendingLabel(t)}</span>}
                 {/* v55.83-QF (Max 12:08): "signified as partial matched or split full or split partial or unmatched" */}
                 {(function () {
                   var ap = Number(t.applied) || 0; var legs = Number(t.applied_legs) || 0;

@@ -42,6 +42,7 @@ import { maskCashflow, maskPeriodStats, maskForecast } from '../../../../lib/acc
 // 10s function limit, which killed the request mid-read. 60s fixes it.
 export const maxDuration = 60;
 import { learnRule } from '../../../../lib/expense-rules-server'; // v55.83-PJ — bills remember vendor categories
+import { PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
 import { categoryForNewBill, loadBillRules, provenanceFields } from '../../../../lib/bill-rules-server'; // v55.83-WX — bill category rules first, then the vendor memory
 
 var API_BUILD_MARKER = 'v55.83-PB-bills';
@@ -1434,6 +1435,7 @@ export async function POST(req) {
       var txAv = await db.from('bank_transactions').select('id, direction, pending').eq('id', body.bank_transaction_id).maybeSingle();
       if (txAv.error || !txAv.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
       if (txAv.data.direction !== 'out') { return NextResponse.json({ error: 'An advance is MONEY OUT — that transaction is money in.' }, { status: 409 }); }
+      if (txAv.data.pending === true && body.clear !== true) { return NextResponse.json({ error: PENDING_REFUSAL, pending: true }, { status: 409 }); } // v55.83-XT
       var upAv = await db.from('bank_transactions').update({ advance_flag: body.clear !== true }).eq('id', body.bank_transaction_id).select('id');
       if (upAv.error) { return NextResponse.json({ error: upAv.error.message + (/advance_flag/.test(upAv.error.message || '') ? ' — run sql/v55-83-QF-advance-flag.sql first.' : '') }, { status: 400 }); }
       await audit(db, userId, body.clear === true ? 'advance_flag_cleared' : 'advance_flagged', 'bank_transaction', body.bank_transaction_id, null); // v55.83-QI
@@ -1526,8 +1528,9 @@ export async function POST(req) {
     }
 
     if (action === 'deposit_match_candidates') {
-      var txDm = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, wave_business_id, matched_invoice_id').eq('id', body.bank_transaction_id).maybeSingle();
+      var txDm = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, wave_business_id, matched_invoice_id, pending').eq('id', body.bank_transaction_id).maybeSingle();
       if (txDm.error || !txDm.data) { return NextResponse.json({ ok: false, error: 'Deposit not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      if (txDm.data.pending === true) { return NextResponse.json({ ok: false, error: PENDING_REFUSAL, pending: true, api_build_marker: API_BUILD_MARKER }, { status: 409 }); } // v55.83-XT
       var openDm = await loadOpenUsInvoices(db);
       var amtDm = r2(txDm.data.amount_abs);
       // v55.83-QF (Max 12:08): "have a search to search for something or

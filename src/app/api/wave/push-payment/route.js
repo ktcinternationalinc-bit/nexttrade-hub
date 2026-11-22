@@ -13,6 +13,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { resolveWaveBankAnchor, waveBankCashCandidates } from '../../../../lib/wave-bank-account-resolver';
+import { PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
@@ -136,10 +137,11 @@ export async function POST(req) {
     // Verify the bank transaction still exists (orphan guard) unless it was a manual payment.
     var payBtAccountId = null;
     if (pay.bank_transaction_id) {
-      var btRes = await db.from('bank_transactions').select('id, account_id').eq('id', pay.bank_transaction_id);
+      var btRes = await db.from('bank_transactions').select('id, account_id, pending').eq('id', pay.bank_transaction_id);
       if (!(btRes && btRes.data && btRes.data.length)) {
         return blocked('Bank deposit for this payment no longer exists (orphaned). Void it instead of pushing.', 400);
       }
+      if (btRes.data[0].pending === true) { return blocked(PENDING_REFUSAL, 409); } // v55.83-XT
       payBtAccountId = btRes.data[0].account_id || null;
     }
 

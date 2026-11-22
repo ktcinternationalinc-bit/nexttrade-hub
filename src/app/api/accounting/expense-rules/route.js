@@ -29,6 +29,7 @@ import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; /
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { realAccounts, realKeyOf, dupText, dupCents, dupDate } from '../../../../lib/duplicate-detect'; // v55.83-SO — the same REAL account can be in the Hub twice (reconnected bank)
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
+import { refusePending, PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
 
 var API_BUILD_MARKER = 'v55.83-PI-expense-rules';
 
@@ -235,9 +236,10 @@ export async function POST(req) {
       var want = !(body.payload && body.payload.verified === false);
       var txid = body.payload && body.payload.bank_transaction_id;
       if (!txid) { return NextResponse.json({ ok: false, error: 'bank_transaction_id required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var pre = await db.from('bank_transactions').select('id, classification, direction, review_status, matched_invoice_id').eq('id', txid);
+      var pre = await db.from('bank_transactions').select('id, classification, direction, review_status, matched_invoice_id, pending').eq('id', txid);
       var prow = pre.data && pre.data[0];
       if (!prow) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      if (want && prow.pending === true) { return NextResponse.json({ ok: false, error: PENDING_REFUSAL, pending: true, api_build_marker: API_BUILD_MARKER }, { status: 409 }); } // v55.83-XT
       if (want && !prow.classification) { return NextResponse.json({ ok: false, error: 'Pick a category first — verifying confirms the category.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var vp = { category_verified: want, category_verified_by: want ? by : null, category_verified_at: want ? new Date().toISOString() : null };
       // Verifying an EXPENSE also advances unreviewed → reviewed (so the
@@ -318,7 +320,7 @@ export async function POST(req) {
       var tt = /^\d{4}-\d{2}-\d{2}$/.test(String((body.payload && body.payload.to) || '')) ? body.payload.to : new Date().toISOString().substring(0, 10);
       var txR = await db.from('bank_transactions')
         .select('id, date, posted_date, amount_abs, direction, account_id, transfer_group_id')
-        .eq('wave_business_id', US_WAVE_BUSINESS_ID).not('transfer_group_id', 'is', null)
+        .eq('wave_business_id', US_WAVE_BUSINESS_ID).not('transfer_group_id', 'is', null).not('pending', 'is', true) // v55.83-XT
         .gte('date', tf).lte('date', tt).limit(2000);
       if (txR.error) { return NextResponse.json({ ok: false, error: txR.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var realR = realAccounts(await loadBankAccounts(db));
@@ -406,6 +408,9 @@ export async function POST(req) {
           return NextResponse.json({ ok: false, error: (prB.data.length === 1 && idsB.length === 1 ? 'This transaction is' : prB.data.length + ' of these are') + ' one side of a PAIRED transfer between your own accounts. Unpair it first (↔ Transfer → Unpair), then pick the category — otherwise the books would still count it as a transfer.', paired_ids: prB.data.map(function (r) { return r.id; }), api_build_marker: API_BUILD_MARKER }, { status: 409 });
         }
       }
+      // v55.83-XT — a pending bank line is never categorized (no rule is learned from it, nothing goes to Wave)
+      var pgB = await refusePending(db, idsB);
+      if (!pgB.ok) { return NextResponse.json({ ok: false, error: (idsB.length > 1 && pgB.pending_ids ? pgB.pending_ids.length + ' of these lines are still pending at the bank. ' : '') + pgB.error, pending_ids: pgB.pending_ids || [], api_build_marker: API_BUILD_MARKER }, { status: pgB.status }); }
       // WP — one line picked by a person: its exact state and its rule's state BEFORE the pick are read first
       var undoOn = idsB.length === 1 && !!(body.payload && body.payload.single_pick === true);
       var uBefore = undoOn ? await readLine(db, idsB[0]) : null; var uRuleBefore = uBefore ? await readRuleFor(db, uBefore) : null; var uLr = null; var uLook = []; var uWave = null;
@@ -635,6 +640,7 @@ export async function POST(req) {
         .eq('id', body.payload && body.payload.bank_transaction_id).maybeSingle();
       if (txq.error || !txq.data) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       var t0 = txq.data;
+      var pg0 = await refusePending(db, [t0.id]); if (!pg0.ok) { return NextResponse.json({ ok: false, error: pg0.error, pending: true, api_build_marker: API_BUILD_MARKER }, { status: pg0.status }); } // v55.83-XT
       var d0 = t0.posted_date || t0.date;
       // v55.83-QX (Max, Nov 8 11:39: "when we click on transfer it looks for
       // other transactions from other accounts... and if not allows the user
@@ -688,6 +694,7 @@ export async function POST(req) {
       var both = await db.from('bank_transactions').select('id, direction, amount_abs, account_id, transfer_group_id, wave_business_id, review_status').in('id', [idA, idB]);
       if (both.error || !both.data || both.data.length !== 2) { return NextResponse.json({ ok: false, error: 'Transactions not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       var A = both.data[0]; var B = both.data[1];
+      var pgP = await refusePending(db, [idA, idB]); if (!pgP.ok) { return NextResponse.json({ ok: false, error: pgP.error, pending: true, api_build_marker: API_BUILD_MARKER }, { status: pgP.status }); } // v55.83-XT
       if (A.transfer_group_id || B.transfer_group_id) { return NextResponse.json({ ok: false, error: 'One of them is already paired to another transfer.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
       if (A.direction === B.direction) { return NextResponse.json({ ok: false, error: 'A transfer pair needs one money-out and one money-in leg.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (Math.abs((Number(A.amount_abs) || 0) - (Number(B.amount_abs) || 0)) > 0.005) { return NextResponse.json({ ok: false, error: 'Amounts differ ($' + Number(A.amount_abs).toFixed(2) + ' vs $' + Number(B.amount_abs).toFixed(2) + ') — the two legs of one transfer are the same money, so they must match to the cent. A bank/wire fee is its own separate line: categorize it as Bank fees.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }

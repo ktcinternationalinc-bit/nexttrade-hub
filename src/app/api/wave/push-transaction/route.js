@@ -21,6 +21,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { resolveWaveBankAnchor, waveBankCashCandidates, categoryPushSafety } from '../../../../lib/wave-bank-account-resolver';
+import { PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
 
 var API_BUILD_MARKER = 'v55.83-MR-push-transaction-single-anchor';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
@@ -109,6 +110,7 @@ export async function POST(req) {
     var btRes = await db.from('bank_transactions').select('*').eq('id', hubId);
     var bt = (btRes && btRes.data && btRes.data.length) ? btRes.data[0] : null;
     if (!bt) { return blocked('Bank transaction not found.', 404); }
+    if (bt.pending === true) { return blocked(PENDING_REFUSAL, 409); } // v55.83-XT — a pending line never reaches Wave
     txCtx = bankTxnLogContext(bt);
     if (bt.wave_business_id && bt.wave_business_id !== waveBusinessId) { return blocked('This transaction belongs to a different silo.', 409); }
     if (bt.matched_invoice_id) { return blocked('This deposit is matched to an invoice — it reaches Wave as an invoice PAYMENT (Bank Review), not as a categorized transaction.', 400); }

@@ -229,7 +229,7 @@ export default function WaveSyncCenter(props) {
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       loadSyncLogRows(activeNow),
       fetchAllRows('accounting_invoice_payments', '*', 'payment_date', false),
-      fetchAllRows('bank_transactions', 'id, amount_abs, name, merchant_name, posted_date, date, direction, classification, wave_business_id, wave_account_id, wave_account_name, category_status'),
+      fetchAllRows('bank_transactions', 'id, amount_abs, name, merchant_name, posted_date, date, direction, classification, wave_business_id, wave_account_id, wave_account_name, category_status, pending'), // v55.83-XT — pending read so it is never queued
       // v55.83-HE — split lines categorized to a Wave account. Resilient: if the table is missing
       // the Wave columns (migration not yet run), default to [] so the Sync Center still loads.
       supabase.from('bank_transaction_splits').select('id, bank_transaction_id, split_amount, wave_business_id, wave_account_name, category_status').then(function (x) { return x; }).catch(function () { return { data: [] }; })
@@ -731,6 +731,7 @@ export default function WaveSyncCenter(props) {
     });
     bankTxns.forEach(function (bt) {
       if (!bt || bt.wave_business_id !== active) { return; }
+      if (bt.pending === true) { return; } // v55.83-XT — a pending line never goes to Wave
       var btStatus = String(bt.category_status || '');
       if (btStatus !== 'pending_wave_sync' && btStatus !== 'sync_failed' && btStatus !== 'failed') { return; }
       var btFailed = (btStatus === 'sync_failed' || btStatus === 'failed');

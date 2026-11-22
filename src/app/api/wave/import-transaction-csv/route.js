@@ -170,7 +170,7 @@ export async function POST(req) {
     // Hub candidates: this silo's non-invoice bank transactions. v55.83-MN intentionally includes
     // rows already marked synced or carrying a Wave transaction id, because a Wave export is the
     // source of truth for historical Wave-side categorizations and should refresh the Hub display.
-    var btRes = await db.from('bank_transactions').select('id, name, merchant_name, amount, amount_abs, posted_date, date, direction, wave_account_id, wave_account_name, category_source, category_status, matched_invoice_id, wave_transaction_id, wave_business_id').eq('wave_business_id', waveBusinessId);
+    var btRes = await db.from('bank_transactions').select('id, name, merchant_name, amount, amount_abs, posted_date, date, direction, wave_account_id, wave_account_name, category_source, category_status, matched_invoice_id, wave_transaction_id, wave_business_id').eq('wave_business_id', waveBusinessId).not('pending', 'is', true) /* v55.83-XT */;
     var cands = ((btRes && btRes.data) || []).filter(function (t) { return !t.matched_invoice_id; });
 
     // Wave categories for name->id resolution. v55.83-MS (Codex Round-2) — PAGINATE: Supabase caps a single

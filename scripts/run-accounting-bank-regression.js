@@ -12,6 +12,8 @@ var cp = require('child_process');
 var path = require('path');
 
 var MANIFEST = [
+  { f: 'test-v55-83-xt-pending-final-copy.js', label: 'new', why: 'XT a pending line is retired when its bank-linked final line came in through a second connection: exactly one live copy, same account/money/day/description, work and links protected, fail closed' },
+  { f: 'test-v55-83-xt-pending-never-counts.js', label: 'new', why: 'XT a pending bank line never counts, matches, teaches a rule or goes to Wave: server guard (fail closed), company totals, Bank tab totals, age flag, imports present' },
   { f: 'test-v55-83-wc-sync-route.js', label: 'new', why: 'WC real Plaid handlers with mocked bank/DB: posted refresh, existing link retained on same ID, repeated sync, partial failures logged and cleared on retry' },
   { f: 'test-v55-83-wd-pending-twins.js', label: 'new', why: 'WD reconnect pending suppression, preserved posted payments, ambiguity and same-bank/company safeguards' },
   { f: 'test-v55-83-wc-pending-repair.js', label: 'new', why: 'WC/WD pending repair preview and confirmation, verified super-admin restriction, authoritative bank identities and reconnect cleanup' },

@@ -12,6 +12,7 @@ import { createClient } from '@supabase/supabase-js';
 import { learnRule, waveAccountForCategory, applyRuleToAll, applyLookAlikes } from '../../../../lib/expense-rules-server'; // v55.83-PI/PZ — remember picks + Wave ride-along
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI — who did what, when (append-only, fail-soft)
 import { assertPermission } from '../../../../lib/server-permissions';
+import { refusePending } from '../../../../lib/pending-guard'; // v55.83-XT
 import { authorizeBankIdentity, bankSuperAdminIds, readBankJson, BankVisibilityError, bankVisibilityErrorResponse } from '../../../../lib/bank-visibility';
 import { classifyApplication, roundMoney, isPaymentVoid, bankAllocationStatus, summarizeBankAllocation } from '../../../../lib/payment-matching';
 
@@ -130,6 +131,14 @@ export async function POST(req) {
     try { verifiedSuper = bankSuperAdminIds(process.env).includes(access.authUserId); } catch (_) { /* keep ordinary operational grants independent */ }
     var gate = verifiedSuper ? { ok: true } : await assertPermission(db, by, permKey, req);
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, api_build_marker: API_BUILD_MARKER }, { status: gate.status }); }
+
+    // v55.83-XT — a pending bank line is never categorized, matched, split, parked, reviewed or pushed (Max 22 Nov).
+    // Unmatch / duplicate marking / silo moves stay open so a person can always undo.
+    var PENDING_GUARDED = { create_unapplied: 1, save_splits: 1, classify: 1, set_wave_category: 1, match_invoice: 1, update_match: 1 };
+    if (PENDING_GUARDED[action] || (action === 'set_status' && (body.status === 'reviewed' || body.status === 'approved'))) {
+      var pg = await refusePending(db, [body.bank_transaction_id, body.txn && body.txn.id]);
+      if (!pg.ok) { return NextResponse.json({ ok: false, error: pg.error, pending: true, api_build_marker: API_BUILD_MARKER }, { status: pg.status }); }
+    }
 
     // ── set_status: review status on a bank transaction ──
     if (action === 'set_status') {

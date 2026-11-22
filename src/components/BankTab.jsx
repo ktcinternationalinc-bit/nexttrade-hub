@@ -489,10 +489,12 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
     return true;
   });
 
-  const matchedCount = scopedTxns.filter(t => t.matched_invoice_id).length;
-  const unmatchedCount = scopedTxns.filter(t => !t.matched_invoice_id).length;
-  const totalIn = seeBankBalances ? scopedTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0) : null;
-  const totalOut = seeBankBalances ? scopedTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0) : null;
+  // v55.83-XT — pending lines and marked duplicate copies never count in these totals (they still show in the list, labelled)
+  const countedTxns = scopedTxns.filter(t => t.pending !== true && t.review_status !== 'duplicate');
+  const matchedCount = countedTxns.filter(t => t.matched_invoice_id).length;
+  const unmatchedCount = countedTxns.filter(t => !t.matched_invoice_id).length;
+  const totalIn = seeBankBalances ? countedTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0) : null;
+  const totalOut = seeBankBalances ? countedTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0) : null;
 
   const fmtMoney = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Math.abs(n || 0));
 

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { RefreshCw, Wrench, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
+import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
 
 export default function PendingBankRepair({ onChanged }) {
   var [open, setOpen] = useState(false);
@@ -61,7 +62,7 @@ export default function PendingBankRepair({ onChanged }) {
             <thead><tr className="border-b text-left"><th className="p-2">Select</th><th className="p-2">Bank record</th><th className="p-2 text-right">Amount</th><th className="p-2">Posted date</th><th className="p-2">Finding</th></tr></thead>
             <tbody>{records.map(function (r) { return <tr key={r.pending_id} className="border-b">
               <td className="p-2"><input type="checkbox" aria-label={'Repair ' + r.description} disabled={busy || (r.status !== 'replacement_found' && r.status !== 'reconnect_copy') || (!selected[r.pending_id] && count >= 25)} checked={!!selected[r.pending_id]} onChange={function (e) { var value = e.target.checked; setSelected(function (s) { return Object.assign({}, s, { [r.pending_id]: value }); }); }} /></td>
-              <td className="p-2" style={{ maxWidth: 280, overflowWrap: 'anywhere' }}><b>{r.description}</b><div>{r.date}</div>{r.account_label && <div>{r.account_label}</div>}</td>
+              <td className="p-2" style={{ maxWidth: 280, overflowWrap: 'anywhere' }}><b>{r.description}</b><div>{r.date}</div>{(function () { var pr = { pending: true, date: r.date }; return <div className="font-bold" style={{ color: isStalePending(pr) ? '#b45309' : '#64748b' }}>{pendingLabel(pr)}</div>; })()}{r.account_label && <div>{r.account_label}</div>}</td>
               <td className="p-2 text-right" style={{ whiteSpace: 'nowrap' }}>{r.currency} {Number(r.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
               <td className="p-2">{r.posted_date || (r.kept_pending ? 'Still pending' : '-')}</td><td className="p-2" style={{ minWidth: 220, overflowWrap: 'anywhere' }}>{r.explanation}{r.keep_id && <div className="mt-2"><b>Keep:</b> {r.kept_date} {r.kept_description}</div>}</td>
             </tr>; })}</tbody>
