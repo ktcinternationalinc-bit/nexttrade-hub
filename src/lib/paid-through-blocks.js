@@ -97,7 +97,8 @@ export function buildPaidThroughBlocks(o) {
         var fee = 0; (o.requests || []).forEach(function (w) { if (w.bank_transaction_id === t.id && w.status === 'attached' && w.funding_txn_id) { fee += Number(w.fee_amount) || 0; } });
         var spT = splits[t.id] || {}; var spFee = r2(spT.fee); var spAdv = r2(spT.advance); // v55.83-TX
         feesBooked = r2(feesBooked + fee + spFee);
-        waiting = r2(waiting + Math.max(0, r2(Number(t.amount) - used - fee - spFee - spAdv)));
+        var back = r2((o.refunds || {})[t.id]); // v55.83-XR — money back of this transfer in the same window (a negative payment line of the block)
+        waiting = r2(waiting + Math.max(0, r2(Number(t.amount) - used - fee - spFee - spAdv - back)));
       });
       var remainder = r2(payTotal - allocTotal);
       var twoEras = party.kind === 'affiliate' && !!party.provider_from;
@@ -111,7 +112,8 @@ export function buildPaidThroughBlocks(o) {
         fees_booked: feesBooked, waiting: waiting, remainder_other: r2(remainder - feesBooked - waiting), rows: rows,
         advance_held: advanceHeld, advance_applied: advApplied, explicit_fees: explicitFees, // v55.83-TX · VW
         // v55.83-VY — the transfers themselves, and how much of them nobody has marked with the company yet
-        lines: mine.map(function (t) { return { id: t.id, date: t.date, amount: r2(t.amount), who: t.who || '', marked: t.marked !== false }; }),
+        lines: mine.map(function (t) { return { id: t.id, date: t.date, amount: r2(t.amount), who: t.who || '', marked: t.marked !== false, money_back: t.money_back === true ? true : undefined }; }),
+        money_back: r2(mine.reduce(function (a, t) { return a + (t.money_back === true ? 0 - (Number(t.amount) || 0) : 0); }, 0)), // v55.83-XR
         unmarked_total: r2(mine.reduce(function (a, t) { return a + (t.marked === false ? Number(t.amount) || 0 : 0); }, 0)) };
       if (advApplied > 0) {
         var profKey = o.profKey || 'professional_fees';

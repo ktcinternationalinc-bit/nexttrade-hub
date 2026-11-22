@@ -1934,6 +1934,23 @@ export async function POST(req) {
         var spRows = [];
         var byCatIn = {}; var trfIn = { count: 0, total: 0 }; var uncIn = { count: 0, total: 0 }; var totIn = 0;
         var inRows = [];
+        // v55.83-XR (Max, 22 Nov 2026: "AS PER YOUR RECOMMENDATION" = Option 1) — MONEY BACK FROM RTM / NEXTTRADE. A money-in bank line
+        // recorded as a refund of a company transfer (party_money_entries kind 'refund', bank_transaction_id = that line) is the
+        // company returning unused money. In the tax view it REDUCES Professional fees (the key every transfer to the company was
+        // counted in) on the line's own bank date — "in the month it comes back" — whatever category the line carries. It is never
+        // revenue, other income or an uncategorized deposit. The company is the one named on the refund entry, never guessed from
+        // bank text. Read fail-soft: no table / column = no refunds yet; any other read error is said on the report (a note), and
+        // such lines then fall back to their own category exactly as before.
+        var moneyBack = {}; var mbNote = null; var mbLines = [];
+        var moneyBackTax = { count: 0, total: 0, by_party: {} };
+        try {
+          for (var mbPg = 0; mbPg < 100; mbPg++) {
+            var mbR = await db.from('party_money_entries').select('id, party, amount, bank_transaction_id, source_bank_transaction_id').eq('kind', 'refund').order('id', { ascending: true }).range(mbPg * 1000, mbPg * 1000 + 999);
+            if (mbR.error) { if (!/does not exist|schema cache|Could not find|source_bank_transaction_id/i.test(String(mbR.error.message || ''))) { mbNote = 'Money back from RTM / NextTrade could not be read (' + mbR.error.message + ') — any such deposit shows under its own category in this report.'; } moneyBack = {}; break; }
+            (mbR.data || []).forEach(function (eM) { if (eM.bank_transaction_id) { moneyBack[eM.bank_transaction_id] = { party: eM.party, transfer_id: eM.source_bank_transaction_id || null, entry_id: eM.id }; } });
+            if (!mbR.data || mbR.data.length < 1000) { break; }
+          }
+        } catch (eMb) { moneyBack = {}; mbNote = 'Money back from RTM / NextTrade could not be read — any such deposit shows under its own category in this report.'; }
         spTx.forEach(function (t6) {
           var d6 = t6.posted_date || t6.date;
           if (!(d6 >= pFrom && d6 <= pTo)) { return; }
@@ -1943,6 +1960,21 @@ export async function POST(req) {
             // income side: an invoice-matched deposit counts as sales even
             // when nobody also set a classification on it.
             totIn = r2(totIn + amt6);
+            var mb6 = moneyBack[t6.id] || null;
+            if (mb6) {
+              // XR — money back: shown on the income side as NOT income, and taken off Professional fees on the spending side
+              if (inRows.length < 3000) { inRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: '__party_money_back', paired: !!t6.transfer_group_id, money_back_from: mb6.party, bank_category: t6.classification || '' }); }
+              if (!byCatIn.__party_money_back) { byCatIn.__party_money_back = { key: '__party_money_back', label: 'Money back from RTM / NextTrade (taken off Professional fees; not income)', kind: 'not_pnl', count: 0, total: 0 }; }
+              byCatIn.__party_money_back.count++; byCatIn.__party_money_back.total = r2(byCatIn.__party_money_back.total + amt6);
+              if (!byCat[taxKeyP]) { byCat[taxKeyP] = { key: taxKeyP, label: catLabels[taxKeyP] || 'Professional fees', kind: taxKeyP === '__professional_fees_pt' ? 'expense' : kindOf(taxKeyP), count: 0, total: 0 }; }
+              byCat[taxKeyP].count++; byCat[taxKeyP].total = r2(byCat[taxKeyP].total - amt6);
+              byCat[taxKeyP].money_back = r2((byCat[taxKeyP].money_back || 0) + amt6);
+              moneyBackTax.count++; moneyBackTax.total = r2(moneyBackTax.total + amt6);
+              moneyBackTax.by_party[mb6.party] = r2((moneyBackTax.by_party[mb6.party] || 0) + amt6);
+              mbLines.push({ id: t6.id, date: d6, amount: amt6, payer: mb6.party, transfer_id: mb6.transfer_id, who: t6.merchant_name || t6.name || '' });
+              if (spRows.length < 3000) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: r2(0 - amt6), category: taxKeyP, paired: false, money_in: true, money_back_from: mb6.party, bank_category: t6.classification || '' }); }
+              return;
+            }
             // WO — a deposit a person categorized as a returned check is that, also when it is matched to an invoice: the match is
             // left alone (nothing is un-matched or marked paid here), but the deposit is not counted as a customer payment.
             var contraIn = !isTrf && isContraCat(t6.classification);
@@ -2077,6 +2109,10 @@ export async function POST(req) {
                 });
               }
             } catch (eId) {}
+            // v55.83-XR — money back in this window is a NEGATIVE payment of its company: the tax line carries transfers − money back,
+            // so the internal view takes out exactly that net (no second take-off); the transfer's own waiting money drops by it (refunds)
+            var ptRefunds = {};
+            mbLines.forEach(function (m) { ptLines.push({ id: m.id, date: m.date, amount: r2(0 - m.amount), classification: taxKeyP, payer: m.payer, marked: true, money_back: true, who: m.who }); if (m.transfer_id) { ptRefunds[m.transfer_id] = r2((ptRefunds[m.transfer_id] || 0) + m.amount); } });
             var ptReqs = [];
             try {
               var ptIds = ptLines.map(function (x) { return x.id; });
@@ -2085,7 +2121,7 @@ export async function POST(req) {
                 if (!wq.error) { ptReqs = ptReqs.concat(wq.data || []); }
               }
             } catch (eWq) { ptReqs = []; }
-            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, profKey: taxKeyP }); // TX: + extra fees · WF step C: the one tax key
+            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, refunds: ptRefunds, profKey: taxKeyP }); // TX: + extra fees · WF step C: the one tax key
             ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
           }
         } catch (eR9) { rtmBlk = null; ptBlocks = []; }
@@ -2135,11 +2171,13 @@ export async function POST(req) {
           deductible_spending: deductible, not_pnl_out: notPnlOut,
           in_categories: catRowsIn, in_transfers: trfIn, in_uncategorized: uncIn, total_in: totIn,
           real_income: r2(totIn - trfIn.total), in_rows: inRows,
-          taxable_income: taxable, not_pnl_in: notPnlIn, advance_note: advNote,
+          taxable_income: taxable, not_pnl_in: notPnlIn, advance_note: advNote, money_back_note: mbNote,
           // v55.83-WF step C — the tax presentation of money sent to RTM / NextTrade: one line, each transfer once, in full
           funds_sent_tax: { key: taxKeyP, label: catLabels[taxKeyP] || 'Professional fees', count: fundingTax.count, total: fundingTax.total, by_party: fundingTax.by_party, recategorized: fundingTax.recategorized, recategorized_total: fundingTax.recategorized_total,
             transfers_count: fundingTax.transfers_count, transfers_total: fundingTax.transfers_total, // v55.83-XO: count / total = transfers + starting-balance uses (1 June 2026 on)
-            from_starting_balance: fundingTax.from_starting_balance, from_starting_balance_count: fundingTax.from_starting_balance_count, from_starting_balance_by_party: fundingTax.from_starting_balance_by_party } };
+            from_starting_balance: fundingTax.from_starting_balance, from_starting_balance_count: fundingTax.from_starting_balance_count, from_starting_balance_by_party: fundingTax.from_starting_balance_by_party,
+            // v55.83-XR — money back in this window, already taken off that same line; net = what the line carries for the companies
+            money_back: { count: moneyBackTax.count, total: moneyBackTax.total, by_party: moneyBackTax.by_party }, net: r2(fundingTax.total - moneyBackTax.total) } };
       } catch (eSp) { spend = null; }
       if (xoStop) { return NextResponse.json({ ok: false, unavailable: 'starting_balances', error: 'Could not read ' + xoStop + '. Nothing is shown, so no tax total, P&L or accountant pack is built without them. Try again in a moment.' }, { status: 503 }); }
       if (xoRestrict) { spend = null; } // explicit: spending_restricted below says why — never figures recalculated without the balance

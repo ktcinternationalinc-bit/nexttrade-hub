@@ -19,8 +19,8 @@ export var STATUS_WORDS = {
   needs_reconciliation: { text: 'Needs reconciliation — not spendable yet', bg: '#fef3c7', fg: '#92400e' },
   to_confirm_identity: { text: 'Recognised from the bank text — mark it for the company first', bg: '#e0e7ff', fg: '#3730a3' },
 };
-// v55.83-WF (Codex 21 Nov 09:05): Money back is held from this release until Max decides how returned money shows in the tax report
-export var REFUNDS_ON = false;
+// v55.83-XR (Max 22 Nov, Option 1): Money back is ON — in the tax report it reduces Professional fees in the month the money comes back
+export var REFUNDS_ON = true;
 // what the person may do with one transfer right now (pure — tested)
 export function transferActions(t, o) {
   var can = !!(o && o.canManage) && !!(o && o.installed);

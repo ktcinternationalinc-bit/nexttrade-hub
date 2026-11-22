@@ -37,10 +37,11 @@ var OPENING_PAY_FROM = '2026-06-01'; // Max's (b): using a starting balance is a
 // (Codex 17:51 P2) NOT an instruction to install anything: the database step is released together with the screens that need it.
 var SQL_MISSING_WF = 'Confirming a transfer and marking services rendered are not switched on yet — they arrive with a later update. Nothing was changed.';
 var WRITES = { confirm: 1, unconfirm: 1, fee_mark: 1, fee_reverse: 1, refund: 1, record_paid: 1 };
-// v55.83-WF (Codex 21 Nov 09:05): Money back is HELD from this release — Max decides first how returned money shows in the tax
-// report (it still counts the full transfer). The database function stays (whole money-in line only); the Hub does not call it.
-var REFUNDS_ON = false;
-var REFUNDS_HELD = 'Money back is not switched on yet in this version: Max is still deciding how money returned by the company shows in the tax report. Nothing was changed.';
+// v55.83-XR (Max, 22 Nov 2026: "AS PER YOUR RECOMMENDATION" = Option 1) — Money back is ON. In the tax report the money that comes
+// back reduces Professional fees in the month it arrives (the money-in line's bank date); it is never income (bills route
+// period_stats). It still needs the WF database step (hub_party_refund, whole money-in line only), like every write here.
+var REFUNDS_ON = true;
+var REFUNDS_HELD = 'Money back is not switched on in this version. Nothing was changed.';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -165,6 +166,7 @@ export async function POST(req) {
     // KTC's books, settled, not a duplicate, not paired between own accounts, not matched to an invoice, not already a refund;
     // from the transfer's date on. Each line's own amount is shown (no totals). Private lines only for people who may see them.
     if ((action === 'refund_candidates' || action === 'refund') && !REFUNDS_ON) { return fail(REFUNDS_HELD, 409); }
+    if (action === 'refund_candidates' && !installed) { return fail(SQL_MISSING_WF, 409); } // v55.83-XR — Money back needs the WF database step, like every write
     // v55.83-WF (Codex 21 Nov 09:05) — the bills a person may record as ALREADY paid by the company out of a transfer (history,
     // before the transfer is confirmed): active, still open, not on an open wire, paid through this company or by nobody yet. Read-only.
     if (action === 'record_paid_candidates') {

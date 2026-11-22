@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XR',
+    date: '2026-11-22',
+    title: 'Money back from RTM / NextTrade is switched on — it lowers Professional fees in the month it comes back',
+    items: [
+      { text: '**Funds with RTM / NextTrade → Money back** can now be used (once the Funds database step is installed). When RTM Capital or NextTrade Industries sends unused money back to KTC, pick the transfer it belongs to and the money-in bank line it arrived on. What that transfer still holds goes down by that amount.' },
+      { text: '**Tax view (Stats → Income Statement) and the Accountant pack:** the money that came back is taken off **Professional fees** in the month it arrived in the bank (Max, 22 Nov: the recommended option). It is not counted as sales or other income, whatever category the bank line has.' },
+      { text: 'On the money-in side it shows as its own line, "Money back from RTM / NextTrade (taken off Professional fees; not income)". In the Accountant pack, file 7 shows it under the transfers line and file 8 lists it as a minus row.' },
+      { text: 'The real-cost view stays in step: the money back lowers what that company was paid and what is still waiting for bills, so nothing is taken off twice.' },
+      { superAdminOnly: true, text: 'Technical: NO new SQL (uses WF hub_party_refund; WF SQL still not installed, so the button stays hidden and refund_candidates / refund answer 409 until it is). REFUNDS_ON true (route + FundsHeldPanel). bills route period_stats reads party_money_entries kind=refund (paged, fail-soft, money_back_note on other errors): the money-in line → byCatIn __party_money_back (not_pnl) and −amount on taxKeyP on its bank date; spRows negative row; funds_sent_tax.money_back + net. paid-through blocks: money back = negative payment line of its company (refunds map lowers that transfer\'s waiting). tax-pack file 7 "less money back" line.' },
+    ],
+  },
+  {
     version: 'v55.83-XM',
     date: '2026-11-23',
     title: 'Customers overview: since 1 June, and colours for paid and partially paid',

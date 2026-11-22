@@ -35,6 +35,9 @@ export function spendingByCategoryCsv(spending, kindLabels) {
   var fstN = fst ? (fst.transfers_count !== undefined ? fst.transfers_count : fst.count) : 0; var fstT = fst ? (fst.transfers_total !== undefined ? fst.transfers_total : fst.total) : 0;
   if (fst && fstN > 0) { sp.push(q('  of which transfers to RTM / NextTrade (inside ' + (fst.label || 'Professional fees') + ')') + ',' + ',' + fstN + ',' + n2(fstT)); }
   if (fst && fstSb > 0.004) { sp.push(q('  of which bills paid from a starting balance with RTM / NextTrade, a new expense when used from 1 June 2026 (inside ' + (fst.label || 'Professional fees') + ')') + ',' + ',' + (fst.from_starting_balance_count || 0) + ',' + n2(fstSb)); }
+  // v55.83-XR (Max 22 Nov, Option 1) — money RTM / NextTrade sent back reduces that same line in the month it came back (file 8: a negative row)
+  var mbk = fst && fst.money_back;
+  if (mbk && mbk.count > 0) { sp.push(q('  less money back from RTM / NextTrade (already taken off ' + (fst.label || 'Professional fees') + '; not income)') + ',' + ',' + mbk.count + ',-' + n2(mbk.total)); }
   if (spending.uncategorized) { sp.push('"UNCATEGORIZED (needs review before filing)",' + spending.uncategorized.count + ',' + n2(taxPackUncOut(spending))); }
   if (spending.transfers) { sp.push('"TRANSFERS BETWEEN OWN ACCOUNTS (not deductible spending)",' + spending.transfers.count + ',' + n2(spending.transfers.total)); }
   sp.push('"REAL SPENDING (transfers excluded)",,' + n2(spending.real_spending));
