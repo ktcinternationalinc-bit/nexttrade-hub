@@ -40,6 +40,8 @@ function Q(name) {
 }
 function now() { return new Date(Date.now() + (seq++)).toISOString(); }
 function exec(st) {
+  // before Max runs the XB SQL: PostgREST's real answer for a table that is not there (PGRST205)
+  if (world.noSql && /^wc_/.test(st.name)) { world.noSqlHits = (world.noSqlHits || 0) + 1; return { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public." + st.name + "' in the schema cache" } }; }
   var rows = tbl(st.name);
   if (st.op === 'insert') {
     if (world.failInsert && world.failInsert[st.name]) { return { data: null, error: { message: world.failInsert[st.name] } }; }
@@ -64,6 +66,7 @@ var storage = { files: {} };
 var dbObj = {
   from: function (n) { return Q(n); },
   rpc: function (fn, args) {
+    if (world.noSql && /^wc_/.test(fn)) { return Promise.resolve({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.' + fn + '(p_items, p_report) in the schema cache' } }); }
     if (fn !== 'wc_save_report') { return Promise.resolve({ data: null, error: { message: 'unknown rpc' } }); }
     var y = new Date().getFullYear(); var n = tbl('wc_reports').length + 1; var id = uuid();
     tbl('wc_reports').push(Object.assign({ id: id, report_no: 'WC-' + y + '-' + String(n).padStart(4, '0'), run_at: now() }, args.p_report));
@@ -128,6 +131,16 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('…View without Validate cannot recheck the warehouse', r0c.status === 403 && world.feedCalls === 0);
   var r0d = await call({ action: 'map_save', vendor_name: 'NexPac Corporation', bill_description: 'Cambridge Seconds (LBS)', bill_unit: 'LBS', wh_product_type: '7' });
   check('…nor save a product mapping (Settings)', r0d.status === 403);
+
+  // ---- BEFORE THE SQL IS INSTALLED (the code is released first; Max runs the SQL later)
+  world.perms = STAFF; world.feed = 'ok'; world.noSql = true; world.noSqlHits = 0;
+  var callsBefore = world.feedCalls; var billsBefore = JSON.stringify(tbl('vendor_bills'));
+  var ns = [await call({ action: 'bill', bill_id: B1 }), await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31' }), await call({ action: 'reports' }), await call({ action: 'run_report', date_from: '2026-10-01', date_to: '2026-10-31' }), await call({ action: 'recheck', bill_id: B1 })];
+  check('NO SQL YET: every action answers 503 "needs its tables first: Max runs sql/v55-83-XB-weight-check.sql" (sql_missing), never a crash or a 500', ns.every(function (r) { return r.status === 503 && r.body.ok === false && r.body.sql_missing === true && /needs its tables first: Max runs sql\/v55-83-XB-weight-check\.sql/.test(r.body.error); }) && world.noSqlHits > 0, ns.map(function (r) { return r.status + ' ' + JSON.stringify(r.body).substring(0, 160); }));
+  check('…and nothing else is touched: bills unchanged, no report saved', JSON.stringify(tbl('vendor_bills')) === billsBefore && tbl('wc_reports').length === 0, world.feedCalls - callsBefore);
+  var boxSrc = fs.readFileSync(path.join(root, 'src/components/WarehouseCheckBox.jsx'), 'utf8');
+  check('SCREEN: the bill\'s Warehouse check box shows that answer as a calm yellow note (not a red error) and the bill view carries on', boxSrc.indexOf('{data.sql_missing ? <div') >= 0 && boxSrc.indexOf('!data.ok && !data.sql_missing') >= 0);
+  world.noSql = false;
 
   // ---- outage
   world.perms = STAFF; world.feed = 'down';
