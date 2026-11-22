@@ -176,7 +176,8 @@ var DOC = { printed_number: 'INV-1', doc_date: '2026-10-05', currency: 'USD', li
   check('the box says plainly it is counted nowhere', /not counted anywhere/.test(box));
   check('edit sends the version it was edited from', /base_version: ed\.base_version/.test(box));
   check('no delete anywhere in the box', !/action: 'delete'|\.delete\(/.test(box));
-  check('the badge is v55.83-XD and What\'s New has the XD entry on top', /v55\.83-XD<\/span>/.test(rd('src/app/page.jsx')) && /BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-XD'/.test(rd('src/components/WhatsNewWidget.jsx')));
+  // v55.83-XO: a later build moves the badge on — the XD entry stays in What's New, and the badge always names the top entry
+  check('What\'s New keeps the XD entry, and the badge names the newest entry on top (XD or a later build)', (function () { var wn = rd('src/components/WhatsNewWidget.jsx'); var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(wn); return wn.indexOf("version: 'v55.83-XD'") > 0 && !!top && rd('src/app/page.jsx').indexOf('>' + top[1] + '</span>') > 0; })());
 
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);

@@ -30,7 +30,11 @@ export function spendingByCategoryCsv(spending, kindLabels) {
     var ded = 0; cats.forEach(function (c) { if (c.kind !== 'not_pnl' && c.key !== 'transfer' && c.key !== 'uncategorized') { ded += Number(c.total) || 0; } });
     sp.push('"DEDUCTIBLE SPENDING (P&L categories only; every transfer to RTM / NextTrade is in Professional fees, once, in full)",,,' + n2(ded));
   }
-  if (spending.funds_sent_tax && spending.funds_sent_tax.count > 0) { sp.push(q('  of which transfers to RTM / NextTrade (inside ' + (spending.funds_sent_tax.label || 'Professional fees') + ')') + ',' + ',' + spending.funds_sent_tax.count + ',' + n2(spending.funds_sent_tax.total)); }
+  // v55.83-XO — the transfers line shows the transfers alone; bills paid from a starting balance (1 June 2026 on) get their own line
+  var fst = spending.funds_sent_tax; var fstSb = fst ? Number(fst.from_starting_balance) || 0 : 0;
+  var fstN = fst ? (fst.transfers_count !== undefined ? fst.transfers_count : fst.count) : 0; var fstT = fst ? (fst.transfers_total !== undefined ? fst.transfers_total : fst.total) : 0;
+  if (fst && fstN > 0) { sp.push(q('  of which transfers to RTM / NextTrade (inside ' + (fst.label || 'Professional fees') + ')') + ',' + ',' + fstN + ',' + n2(fstT)); }
+  if (fst && fstSb > 0.004) { sp.push(q('  of which bills paid from a starting balance with RTM / NextTrade, a new expense when used from 1 June 2026 (inside ' + (fst.label || 'Professional fees') + ')') + ',' + ',' + (fst.from_starting_balance_count || 0) + ',' + n2(fstSb)); }
   if (spending.uncategorized) { sp.push('"UNCATEGORIZED (needs review before filing)",' + spending.uncategorized.count + ',' + n2(taxPackUncOut(spending))); }
   if (spending.transfers) { sp.push('"TRANSFERS BETWEEN OWN ACCOUNTS (not deductible spending)",' + spending.transfers.count + ',' + n2(spending.transfers.total)); }
   sp.push('"REAL SPENDING (transfers excluded)",,' + n2(spending.real_spending));

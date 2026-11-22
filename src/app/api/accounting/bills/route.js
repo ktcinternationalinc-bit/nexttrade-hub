@@ -10,7 +10,7 @@
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
 import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
-import { FUNDING_DESTINATIONS, fundingIdentity } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule
+import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
 import { loadPartyFunds } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
 // v55.83-WF step C — periodAdjustments (the TX tax adjustments) is no longer used here: a transfer to RTM / NextTrade counts once, in full
 import { NextResponse } from 'next/server';
@@ -2020,6 +2020,19 @@ export async function POST(req) {
         // bill is "paid via". The unlinked remainder is labeled by the
         // company's kind: service_provider → its FEE; affiliate → an ADVANCE
         // awaiting its costs (NextTrade: never a fee by default).
+        // v55.83-XO — which bill payments were paid FROM A STARTING BALANCE (sql/v55-83-XO-starting-balance.sql). Read once: the
+        // internal-view blocks and the shared funds calculation below use these SAME rows. Before XO is installed: none.
+        // Only a payment whose starting balance is really on file carries it (the shared calculation counts only those too).
+        var xoPays = LS.pays || []; var xoOf = {}; var xoKnown = {};
+        try {
+          var xoOb = await db.from('party_opening_balances').select('id').limit(5000);
+          if (!xoOb.error) {
+            (xoOb.data || []).forEach(function (o0) { xoKnown[o0.id] = true; });
+            var xoRows = await fetchAll(function () { return db.from('vendor_bill_payments').select('id, party_opening_id').not('party_opening_id', 'is', null).order('id', { ascending: true }); });
+            (xoRows || []).forEach(function (x0) { xoOf[x0.id] = x0.party_opening_id; });
+          }
+        } catch (eXo) { xoOf = {}; xoKnown = {}; }
+        xoPays = xoPays.map(function (p0) { var oid = xoOf[p0.id] || p0.party_opening_id || null; if (oid && xoKnown[oid]) { return oid === p0.party_opening_id ? p0 : Object.assign({}, p0, { party_opening_id: oid }); } return p0.party_opening_id ? Object.assign({}, p0, { party_opening_id: null }) : p0; });
         var rtmBlk = null; var ptBlocks = [];
         try {
           var partiesP = await loadParties(db);
@@ -2057,7 +2070,7 @@ export async function POST(req) {
                 if (!wq.error) { ptReqs = ptReqs.concat(wq.data || []); }
               }
             } catch (eWq) { ptReqs = []; }
-            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: LS.pays || [], billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, profKey: taxKeyP }); // TX: + extra fees · WF step C: the one tax key
+            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, profKey: taxKeyP }); // TX: + extra fees · WF step C: the one tax key
             ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
           }
         } catch (eR9) { rtmBlk = null; ptBlocks = []; }
@@ -2068,11 +2081,34 @@ export async function POST(req) {
         try {
           // the reading lives in src/lib/party-funds-server.js (run for real in the test): company lines by mark or destination text,
           // wire packages by funding id OR attached bank line (Codex 13:37), each taken once
-          var pfLoaded = await loadPartyFunds(db, { fetchAll: fetchAll, businessId: US_WAVE_BUSINESS_ID, parties: await loadParties(db), pays: LS.pays || [], bills: billNameById, entries: (typeof pmE !== 'undefined' && pmE && pmE.data) || [], from: pFrom, to: pTo });
+          var pfLoaded = await loadPartyFunds(db, { fetchAll: fetchAll, businessId: US_WAVE_BUSINESS_ID, parties: await loadParties(db), pays: xoPays, bills: billNameById, entries: (typeof pmE !== 'undefined' && pmE && pmE.data) || [], from: pFrom, to: pTo });
           partyFunds = pfLoaded.funds;
           // the bill's own file, so the screen can open it (the storage rules decide who may)
           partyFunds.forEach(function (c7) { c7.transfers.forEach(function (t6) { ['lifetime_rows', 'as_of_rows'].forEach(function (k6) { (t6[k6] || []).forEach(function (r6) { var b6 = billNameById[r6.bill_id]; r6.attachment_path = (b6 && b6.attachment_path) || null; }); }); }); (c7.period.applied_rows || []).concat((c7.paid_without_a_transfer && c7.paid_without_a_transfer.period_rows) || []).forEach(function (r5) { var b5 = billNameById[r5.bill_id]; r5.attachment_path = (b5 && b5.attachment_path) || null; }); });
         } catch (ePf) { partyFunds = null; }
+        // v55.83-XO (Max's (b): "NEW EXPENSE WHEN USED AFTER 6/1/2026") — bills paid from a starting balance on or after 1 June
+        // 2026 are a new professional-fee expense in the TAX view, on their paid date. The amount is the shared calculation's own
+        // period.tax_from_starting_balance (the same figure inside party-funds tax_professional_fees), so the two tax figures can
+        // never disagree; only when that calculation could not be made do the blocks (same rows, same date rule) give it. It is
+        // not bank money out (total_out / real_spending do not move). The internal view takes it back out of this line (the
+        // blocks' from_starting_balance payments_by_cat) and shows the bills in their own categories.
+        var sbTaxBy = {}; var sbTaxTotal = 0; var sbTaxCount = 0;
+        if (partyFunds) {
+          partyFunds.forEach(function (c9) { var a9 = r2((c9.period && c9.period.tax_from_starting_balance) || 0); if (!a9) { return; } sbTaxBy[c9.party] = a9; sbTaxTotal = r2(sbTaxTotal + a9); sbTaxCount += ((c9.period && c9.period.from_starting_balance_rows) || []).filter(function (r9) { return r9.paid_date >= STARTING_BALANCE_TAX_FROM; }).length; });
+        } else {
+          ptBlocks.forEach(function (b9) { (b9.payments_by_cat || []).forEach(function (p9) { if (p9.from_starting_balance) { sbTaxBy[b9.payer] = r2((sbTaxBy[b9.payer] || 0) + p9.total); sbTaxTotal = r2(sbTaxTotal + p9.total); sbTaxCount += p9.count || 0; } }); });
+        }
+        fundingTax.transfers_count = fundingTax.count; fundingTax.transfers_total = fundingTax.total;
+        fundingTax.from_starting_balance = sbTaxTotal; fundingTax.from_starting_balance_count = sbTaxCount; fundingTax.from_starting_balance_by_party = sbTaxBy;
+        if (sbTaxTotal) {
+          var sbCat = catRows.filter(function (c9) { return c9.key === taxKeyP; })[0];
+          if (!sbCat) { sbCat = { key: taxKeyP, label: catLabels[taxKeyP] || 'Professional fees', kind: taxKeyP === '__professional_fees_pt' ? 'expense' : kindOf(taxKeyP), count: 0, total: 0 }; catRows.push(sbCat); }
+          sbCat.total = r2(sbCat.total + sbTaxTotal); sbCat.count += sbTaxCount; sbCat.from_starting_balance = sbTaxTotal;
+          if (sbCat.kind !== 'not_pnl') { deductible = r2(deductible + sbTaxTotal); } else { notPnlOut.total = r2(notPnlOut.total + sbTaxTotal); }
+          catRows.sort(function (a6, b6) { return b6.total - a6.total; });
+          fundingTax.count += sbTaxCount; fundingTax.total = r2(fundingTax.total + sbTaxTotal);
+          Object.keys(sbTaxBy).forEach(function (k9) { fundingTax.by_party[k9] = r2((fundingTax.by_party[k9] || 0) + sbTaxBy[k9]); });
+        }
         spend = { rtm: rtmBlk, paid_through: ptBlocks, party_funds: partyFunds, categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,
           real_spending: r2(totOut - trf.total), rows: spRows,
           returned_checks: contra, // WO — returns (money out) and the deposits netted against them (money in); categories carry the NET
@@ -2081,7 +2117,9 @@ export async function POST(req) {
           real_income: r2(totIn - trfIn.total), in_rows: inRows,
           taxable_income: taxable, not_pnl_in: notPnlIn, advance_note: advNote,
           // v55.83-WF step C — the tax presentation of money sent to RTM / NextTrade: one line, each transfer once, in full
-          funds_sent_tax: { key: taxKeyP, label: catLabels[taxKeyP] || 'Professional fees', count: fundingTax.count, total: fundingTax.total, by_party: fundingTax.by_party, recategorized: fundingTax.recategorized, recategorized_total: fundingTax.recategorized_total } };
+          funds_sent_tax: { key: taxKeyP, label: catLabels[taxKeyP] || 'Professional fees', count: fundingTax.count, total: fundingTax.total, by_party: fundingTax.by_party, recategorized: fundingTax.recategorized, recategorized_total: fundingTax.recategorized_total,
+            transfers_count: fundingTax.transfers_count, transfers_total: fundingTax.transfers_total, // v55.83-XO: count / total = transfers + starting-balance uses (1 June 2026 on)
+            from_starting_balance: fundingTax.from_starting_balance, from_starting_balance_count: fundingTax.from_starting_balance_count, from_starting_balance_by_party: fundingTax.from_starting_balance_by_party } };
       } catch (eSp) { spend = null; }
       var psPayload = {
         invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, collected_on_period: collectedCohort, collected_on_period_count: colCohortCount, still_open_from_period: stillOpen },

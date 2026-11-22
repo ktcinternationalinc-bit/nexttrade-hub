@@ -10,6 +10,7 @@
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 // v55.83-VY — WHICH company a bank line is money sent to is decided in ONE place: src/lib/party-funds.js (Codex 13:07).
 export { FUNDING_DESTINATIONS, fundingPayerOfText, fundingIdentity } from './party-funds';
+import { STARTING_BALANCE_TAX_FROM } from './party-funds'; // v55.83-XO — the one date rule for starting-balance uses
 export function partyKeyOf(x) { return String(x || '').trim().toLowerCase(); }
 
 // 'advance' = money sent ahead to a related company (not an expense until its bills are linked); 'provider' = one line
@@ -46,6 +47,7 @@ export function buildPaidThroughBlocks(o) {
       });
       var allocByCat = {}, allocTotal = 0, rows = [];
       (o.pays || []).forEach(function (p) {
+        if (p.party_opening_id) { return; } // v55.83-XO — paid from a starting balance: counted below, never from this period's transfers
         if (p.method !== 'rtm' || p.voided === true || !inP(p.paid_date)) { return; }
         var b = (o.billById || {})[p.bill_id];
         if (!b || partyKeyOf(b.paid_via || 'RTM Capital') !== pk || eraOf(party, p.paid_date) !== era) { return; }
@@ -66,7 +68,20 @@ export function buildPaidThroughBlocks(o) {
         advByCat[k].count++; advByCat[k].total = r2(advByCat[k].total + am); advApplied = r2(advApplied + am);
         if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: (b.bill_number || '—') + ' · from the advance', category: k, amount: am }); }
       });
-      if (!(payCount > 0 || allocTotal > 0 || advApplied > 0)) { return; }
+      // v55.83-XO (Max's (b)) — bills paid FROM A STARTING BALANCE on / after 1 June 2026: in the tax view they are professional
+      // fees on their paid date (the server adds them to that line, from the shared calculation); the real-cost view takes them
+      // back out of it (payments_by_cat) and puts the bills into their real categories — same as the advance above, totals never move
+      var sbByCat = {}, sbApplied = 0, sbCount = 0;
+      (o.pays || []).forEach(function (p) {
+        if (!p.party_opening_id || p.voided === true || !inP(p.paid_date) || String(p.paid_date) < STARTING_BALANCE_TAX_FROM) { return; }
+        var b = (o.billById || {})[p.bill_id];
+        if (!b || partyKeyOf(b.paid_via) !== pk || eraOf(party, p.paid_date) !== era) { return; }
+        var k = b.category || 'uncategorized'; var am = r2(p.amount);
+        if (!sbByCat[k]) { sbByCat[k] = { key: k, label: catLabels[k] || k, kind: kindOf(k), count: 0, total: 0 }; }
+        sbByCat[k].count++; sbByCat[k].total = r2(sbByCat[k].total + am); sbApplied = r2(sbApplied + am); sbCount++;
+        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: (b.bill_number || '—') + ' · from the starting balance', category: k, amount: am, bill_id: p.bill_id }); }
+      });
+      if (!(payCount > 0 || allocTotal > 0 || advApplied > 0 || sbApplied > 0)) { return; }
       // bills / service fee / waiting — line by line, only for lines from provider_from on
       // v55.83-VY (Max, Nov 20: "Only explicit Services rendered designation creates that fee expense") — every fee a person booked
       // on these transfers (on a request, or split off the payment), whichever date the line has. The rows of the Income
@@ -104,6 +119,15 @@ export function buildPaidThroughBlocks(o) {
         Object.keys(advByCat).forEach(function (k) {
           var hitA = blk.allocations_by_cat.filter(function (x) { return x.key === k; })[0];
           if (hitA) { hitA.total = r2(hitA.total + advByCat[k].total); hitA.count += advByCat[k].count; } else { blk.allocations_by_cat.push(advByCat[k]); }
+        });
+      }
+      blk.starting_balance_applied = sbApplied; // v55.83-XO
+      if (sbApplied > 0) {
+        var profKeyS = o.profKey || 'professional_fees';
+        blk.payments_by_cat.push({ key: profKeyS, label: catLabels[profKeyS] || 'Professional fees', total: sbApplied, count: sbCount, from_starting_balance: true });
+        Object.keys(sbByCat).forEach(function (k) {
+          var hitS = blk.allocations_by_cat.filter(function (x) { return x.key === k; })[0];
+          if (hitS) { hitS.total = r2(hitS.total + sbByCat[k].total); hitS.count += sbByCat[k].count; } else { blk.allocations_by_cat.push(sbByCat[k]); }
         });
       }
       out.push(blk);
