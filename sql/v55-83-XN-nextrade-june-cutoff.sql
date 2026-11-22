@@ -131,34 +131,6 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'action', v_action, 'bill_id', v_bill_id, 'bill_number', (SELECT bill_number FROM public.vendor_bills WHERE id = v_bill_id));
 END $$;
 REVOKE ALL ON FUNCTION public.hub_company_categorize(jsonb) FROM PUBLIC, anon, authenticated;
-
--- every UD click, kept for good: the same click again returns the first result; the same click id for anything else is refused
-CREATE TABLE IF NOT EXISTS public.hub_party_requests (
-  request_id text PRIMARY KEY, action text NOT NULL, party text NOT NULL, fingerprint text NOT NULL, result jsonb,
-  created_by uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
-);
-ALTER TABLE public.hub_party_requests ENABLE ROW LEVEL SECURITY;
-DROP TRIGGER IF EXISTS hub_party_requests_append_only ON public.hub_party_requests;
-CREATE TRIGGER hub_party_requests_append_only BEFORE UPDATE OR DELETE ON public.hub_party_requests FOR EACH ROW EXECUTE FUNCTION public.hub_party_money_append_only();
-
--- 2. the starting balance: a new kind of advance entry, who may see it, and which entry a correction corrects
-ALTER TABLE public.party_money_entries DROP CONSTRAINT IF EXISTS party_money_entries_kind_check;
-ALTER TABLE public.party_money_entries ADD CONSTRAINT party_money_entries_kind_check
-  CHECK (kind IN ('payment_split','apply_to_bill','advance_to_fee','fee_to_advance','opening_balance'));
-ALTER TABLE public.party_money_entries ADD COLUMN IF NOT EXISTS is_private boolean NOT NULL DEFAULT false;
-ALTER TABLE public.party_money_entries ADD COLUMN IF NOT EXISTS corrects_id uuid REFERENCES public.party_money_entries(id);
-
--- the pool rule from UB, plus: an entry the super admin marked private (a starting balance staff may not see) restricts the pool
-CREATE OR REPLACE FUNCTION public.hub_party_pool_restricted(p_party text, p_hidden_accounts text[]) RETURNS boolean
-LANGUAGE sql STABLE AS $$
-  SELECT EXISTS (SELECT 1 FROM public.party_money_entries e LEFT JOIN public.bank_transactions b ON b.id = e.bank_transaction_id
-      LEFT JOIN public.plaid_accounts a ON a.plaid_account_id = b.account_id
-    WHERE e.party = p_party AND e.bank_transaction_id IS NOT NULL
-      AND (b.id IS NULL OR b.account_id IS NULL OR a.plaid_account_id IS NULL OR b.account_id = ANY (coalesce(p_hidden_accounts, ARRAY[]::text[])) OR coalesce(a.is_private, false)))
-  OR EXISTS (SELECT 1 FROM public.party_money_entries e WHERE e.party = p_party AND e.is_private IS TRUE);
-$$;
-
-REVOKE ALL ON FUNCTION public.hub_company_categorize(jsonb) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.hub_company_categorize(jsonb) TO service_role;
 
 -- the button. p: { actor, company_id: 'NEXTRADE_BOOKS', on: true|false, cutoff_date: 'YYYY-MM-DD' (ON only) }
