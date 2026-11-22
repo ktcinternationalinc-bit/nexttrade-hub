@@ -48,10 +48,6 @@ export const BUILD_HISTORY = [
     ]
   },
   {
-    ]
-    ]
-  },
-  {
     version: 'v55.83-XO',
     date: '2026-11-22',
     title: 'Starting balance with NextTrade / RTM',
