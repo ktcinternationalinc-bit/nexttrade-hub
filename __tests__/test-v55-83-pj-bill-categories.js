@@ -47,7 +47,7 @@ ok('3a: category is a DROPDOWN from the shared list, with free-text fallback unt
   /placeholder="Category \(e\.g\. Freight\)"/.test(ui));
 ok('3b: ＋ add-a-category inline — saves via the shared route and selects the new category on the open bill',
   /action: 'save_category'/.test(ui) && /setAddingCat\(true\)/.test(ui) &&
-  /setEditing\(function \(ed\) \{ return ed \? Object\.assign\(\{\}, ed, \{ category: j\.category\.key \}\) : ed; \}\)/.test(ui));
+  /setEditing\(function \(ed\) \{ return ed \? Object\.assign\(\{\}, ed, \{ category: j\.category\.key, category_rule_id: null \}\) : ed; \}\)/.test(ui)); // superseded (v55.83-WX, Codex 09:18): choosing a category drops the rule pre-fill link
 ok('3c: import pre-fills the REMEMBERED category and says so (human still confirms every field)',
   /category: j\.draft\.category \|\| j\.suggested_category \|\| ''/.test(ui) &&
   /Category pre-filled from what you picked for this vendor before/.test(ui));

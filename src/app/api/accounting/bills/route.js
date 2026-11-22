@@ -545,13 +545,22 @@ export async function POST(req) {
       // product cost blocks a deducted category, and words that appear only on a line count
       var wxLines = Array.isArray(bl.lines) ? bl.lines.slice(0, 60).map(function (l, i) { var lx = l || {}; var tB = fields.bill_type || bl.bill_type || ''; var dk = (tB === 'trucking' || tB === 'shipping' || tB === 'bonded_brokerage') ? 'charge' : 'item'; return shapeLine(Object.assign({}, lx, { line_kind: lx.line_kind || (/commission/i.test(String(lx.description || '')) ? 'commission' : dk) }), i); }) : []; // the same shaping saveBillLines uses
       if (!fields.category || bl.category_rule_id) { wxPick = await categoryForNewBill(db, wxBill, wxLines); }
+      // (Codex 22 Nov 09:18 P2) category_rule_id travels ONLY with a category the import screen pre-filled from a rule and the person
+      // did not touch (the screen drops it as soon as the category is changed). Such a pre-fill is the rule's, not the person's: when
+      // the same rule no longer gives it (e.g. a line was corrected to a product cost), it is NOT kept — the bill gets what the rules
+      // give now (or no category, flagged), it is never called manual and it never teaches the vendor memory.
+      var wxPrefillDropped = null;
+      if (fields.category && bl.category_rule_id) {
+        var wxSame = wxPick && wxPick.source === 'rule' && wxPick.category === fields.category && String(wxPick.rule_id) === String(bl.category_rule_id);
+        if (!wxSame) { wxPrefillDropped = fields.category; fields.category = null; }
+      }
       if (!fields.category) {
         if (wxPick && wxPick.category) { autoCat = wxPick.category; fields.category = autoCat; }
         Object.assign(fields, provenanceFields(wxPick, wxPick && wxPick.ready));
+      } else if (bl.category_rule_id) {
+        Object.assign(fields, provenanceFields(wxPick, true)); autoCat = fields.category; // the untouched pre-fill still holds: set by rule
       } else {
-        var wxSame = wxPick && wxPick.source === 'rule' && wxPick.category === fields.category && String(wxPick.rule_id) === String(bl.category_rule_id);
-        Object.assign(fields, wxSame ? provenanceFields(wxPick, true) : provenanceFields({ source: 'manual' }, wxPick ? wxPick.ready : (await loadBillRules(db)).ready));
-        if (wxSame) { autoCat = fields.category; }
+        Object.assign(fields, provenanceFields({ source: 'manual' }, wxPick ? wxPick.ready : (await loadBillRules(db)).ready)); // picked or typed by the person
       }
       fields.created_by = userId;
       var ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle();
@@ -576,7 +585,7 @@ export async function POST(req) {
       if (fields.category && !autoCat) { learnedB = await learnRule(db, vendor, fields.category, userId); }
       await audit(db, userId, 'bill_created', 'vendor_bill', ins.data && ins.data.id, { vendor: vendor, amount: amt, category: fields.category || null, paid_via: fields.paid_via || null }); // v55.83-QI
       var lnC = ins.data && ins.data.id ? await linesAfterSave(ins.data.id, bl) : {};
-      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_category: autoCat, category_source: fields.category_source || null, category_conflict: wxPick && wxPick.source === 'rule_conflict' ? (wxPick.blocked || ('rules disagree: ' + (wxPick.conflict || []).map(function (r) { return r.name; }).join(' / '))) : undefined, rule_learned: learnedB, warning: lnC.warning || undefined, duplicate_warning: dupWarn || undefined, price_check: lnC.check || undefined });
+      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_category: autoCat, category_source: fields.category_source || null, category_prefill_removed: wxPrefillDropped ? ('The category pre-filled by a rule was not kept: ' + ((wxPick && wxPick.blocked) || 'that rule no longer gives it for this bill') + '. Pick the category on the bill if it is right.') : undefined, category_conflict: wxPick && wxPick.source === 'rule_conflict' ? (wxPick.blocked || ('rules disagree: ' + (wxPick.conflict || []).map(function (r) { return r.name; }).join(' / '))) : undefined, rule_learned: learnedB, warning: lnC.warning || undefined, duplicate_warning: dupWarn || undefined, price_check: lnC.check || undefined });
     }
 
     // ── void_bill (reversible record_status; nothing is deleted)

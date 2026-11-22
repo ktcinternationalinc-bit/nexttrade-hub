@@ -146,7 +146,7 @@ export default function BillsTab(props) {
       .then(function (r) { return r.json(); }).then(function (j) {
         if (j && j.ok) {
           toast.success('Category "' + label + '" added.'); setNewCatB(''); setAddingCat(false); loadCats();
-          if (j.category && j.category.key) { setEditing(function (ed) { return ed ? Object.assign({}, ed, { category: j.category.key }) : ed; }); }
+          if (j.category && j.category.key) { setEditing(function (ed) { return ed ? Object.assign({}, ed, { category: j.category.key, category_rule_id: null }) : ed; }); }
         } else { toast.error((j && j.error) || 'Could not add the category.'); }
       }).finally(function () { setBusy(false); });
   }
@@ -447,6 +447,8 @@ export default function BillsTab(props) {
         if (j.price_check && j.price_check.status === 'flagged') { toast.error('Bill saved — ⚠ PRICE CHECK FLAGGED: ' + j.price_check.flags[0].text + (j.price_check.flags.length > 1 ? ' (+' + (j.price_check.flags.length - 1) + ' more — open the bill)' : '')); }
         else { toast.success('Bill saved.' + (j.price_check && j.price_check.status === 'ok' ? ' ✅ Prices match the rules.' : '') + (j.warning ? ' ⚠ ' + j.warning : '')); }
         if (j.duplicate_warning) { toast.error('⚠ ' + j.duplicate_warning + ' — the row is highlighted in purple.'); }
+        if (j.category_prefill_removed) { toast.error('🏷 ' + j.category_prefill_removed, { duration: 12000 }); } // v55.83-WX (Codex 09:18)
+        else if (j.category_conflict) { toast.error('🏷 No category set: ' + j.category_conflict + ' — pick it on the bill.', { duration: 12000 }); }
         if (fileLost) { toast.error('⚠ The bill was saved, but its FILE DID NOT UPLOAD. Open the bill and use “＋ Attach the bill”.'); }
         setDupBlock(null);
         setEditing(null); setImportFile(null); setImportNotes([]); setPricePreview(null); load();
@@ -689,7 +691,7 @@ export default function BillsTab(props) {
         <label className="text-[10px] font-bold text-slate-600">Bill date<input className={inp + ' ml-1'} type="date" value={editing.bill_date || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { bill_date: e.target.value })); }} /></label>
         <label className="text-[10px] font-bold text-slate-600">Due<input className={inp + ' ml-1'} type="date" value={editing.due_date || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { due_date: e.target.value })); }} /></label>
         {cats ? <span className="inline-flex items-center gap-1">
-          <select className={inp} style={{ width: 170 }} value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value })); }}>
+          <select className={inp} style={{ width: 170 }} value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value, category_rule_id: null })); }}>
             <option value="">category…</option>
             {cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
             {editing.category && !cats.some(function (c) { return c.key === editing.category; }) && <option value={editing.category}>{editing.category}</option>}
@@ -701,7 +703,7 @@ export default function BillsTab(props) {
             <button onClick={function () { setAddingCat(false); setNewCatB(''); }} className="px-1.5 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕</button>
           </span>}
         </span> :
-        <input className={inp} style={{ width: 160 }} placeholder="Category (e.g. Freight)" value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value })); }} />}
+        <input className={inp} style={{ width: 160 }} placeholder="Category (e.g. Freight)" value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value, category_rule_id: null })); }} />}
         {/* v55.83-QB/QY (Max): another company pays this bill for us — RTM Capital (outside service) or NextTrade Industries (Texas warehouse) */}
         <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#9d174d' }} title="Another company pays this bill for us (RTM Capital, NextTrade Industries). It is tracked here but stays OUT of what-we-owe totals and cash forecasts. Link it to the payment you send that company: All Transactions → 🔗 on the money-out → 🏢 Payment to a paid-through company.">
           🏢 Paid via
@@ -939,7 +941,7 @@ export default function BillsTab(props) {
         <label className="text-[10px] font-bold text-slate-600">Bill date<input className={inp + ' ml-1'} type="date" value={editing.bill_date || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { bill_date: e.target.value })); }} /></label>
         <label className="text-[10px] font-bold text-slate-600">Due<input className={inp + ' ml-1'} type="date" value={editing.due_date || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { due_date: e.target.value })); }} /></label>
         {cats ? <span className="inline-flex items-center gap-1">
-          <select className={inp} style={{ width: 170 }} value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value })); }}>
+          <select className={inp} style={{ width: 170 }} value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value, category_rule_id: null })); }}>
             <option value="">category…</option>
             {cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
             {editing.category && !cats.some(function (c) { return c.key === editing.category; }) && <option value={editing.category}>{editing.category}</option>}
@@ -951,7 +953,7 @@ export default function BillsTab(props) {
             <button onClick={function () { setAddingCat(false); setNewCatB(''); }} className="px-1.5 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕</button>
           </span>}
         </span> :
-        <input className={inp} style={{ width: 160 }} placeholder="Category (e.g. Freight)" value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value })); }} />}
+        <input className={inp} style={{ width: 160 }} placeholder="Category (e.g. Freight)" value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value, category_rule_id: null })); }} />}
         {/* v55.83-QB/QY (Max): another company pays this bill for us — RTM Capital (outside service) or NextTrade Industries (Texas warehouse) */}
         <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#9d174d' }} title="Another company pays this bill for us (RTM Capital, NextTrade Industries). It is tracked here but stays OUT of what-we-owe totals and cash forecasts. Link it to the payment you send that company: All Transactions → 🔗 on the money-out → 🏢 Payment to a paid-through company.">
           🏢 Paid via

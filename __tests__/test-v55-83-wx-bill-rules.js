@@ -152,7 +152,7 @@ function audits(a) { return db.t.hub_audit_log.filter(function (h) { return h.ac
   var n4 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Example Partner Corporation', bill_number: 'EP-24', bill_date: '2026-10-01', total_amount: 1234.56, category: 'partner_fee', category_rule_id: R1.id } });
   var b24 = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'EP-24'; })[0];
   check('7e: the import screen pre-filled the rule\'s category and the person kept it → still "set by rule"', n4.ok && b24.category_source === 'rule' && b24.category_rule_id === R1.id, b24);
-  var n5 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Example Partner Corporation', bill_number: 'EP-25', bill_date: '2026-10-01', total_amount: 1234.56, category: 'office', category_rule_id: R1.id } });
+  var n5 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Example Partner Corporation', bill_number: 'EP-25', bill_date: '2026-10-01', total_amount: 1234.56, category: 'office', category_rule_id: null } }); // superseded (Codex 09:18): the form drops the rule link when the person changes the category
   var b25 = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'EP-25'; })[0];
   check('7f: …the person changed the pre-filled category → "manual"', n5.ok && b25.category === 'office' && b25.category_source === 'manual' && !b25.category_rule_id, b25);
   var n6 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Example Partner Corporation', bill_number: 'EP-26', bill_date: '2026-10-01', total_amount: 1234.56, bill_type: 'trucking', release_number: '1002-78', shipment_direction: 'outbound' } });
@@ -175,9 +175,21 @@ function audits(a) { return db.t.hub_audit_log.filter(function (h) { return h.ac
   var bLw = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'SM-3'; })[0];
   check('7m: a rule whose words appear ONLY on a line of the typed bill → applies', lw.ok && bLw.category === 'office' && bLw.category_source === 'rule', bLw);
   var mill = db.t.bill_category_rules.filter(function (r) { return r.name === 'Mill fee'; })[0];
-  var pf1 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Sample Mill Inc', bill_number: 'SM-4', bill_date: '2026-10-05', total_amount: 2222.22, bill_type: 'supplier', category: 'partner_fee', category_rule_id: mill.id, lines: [{ description: 'Roll Goods A', amount: 2222.22 }] } });
+  // (Codex 09:18) the import screen pre-filled Partner fee from the rule (a line said "Mill fee"); the person corrected the LINE to the
+  // product "Roll Goods A" and did NOT touch the category (category_rule_id still travels) → the pre-fill no longer holds
+  var learnedBeforePf = db.t.us_expense_rules.length; var learnedSnap = JSON.stringify(db.t.us_expense_rules);
+  var pf1 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Sample Mill Inc', bill_number: 'SM-4', bill_date: '2026-10-05', total_amount: 2222.22, bill_type: 'supplier', category: 'partner_fee', category_rule_id: mill.id, _imported: true, lines: [{ description: 'Roll Goods A', amount: 2222.22 }] } });
   var bPf1 = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'SM-4'; })[0];
-  check('7n: an import pre-fill kept by the person is re-checked with the same lines: the linked product line means it is NOT recorded as "set by rule"', pf1.ok && bPf1.category_source !== 'rule' && !bPf1.category_rule_id, bPf1);
+  check('7n: an UNTOUCHED import pre-fill that no longer holds (line corrected to a product cost) is NOT saved: no Partner fee, flagged, not "manual", the screen is told',
+    pf1.ok && bPf1.category === null && bPf1.category_source === 'rule_conflict' && /not kept/.test(pf1.category_prefill_removed || ''), { b: { category: bPf1.category, source: bPf1.category_source, rule: bPf1.category_rule_id }, msg: pf1.category_prefill_removed }); // the blocked rule stays noted with the "rules disagree" source
+  check('7n2: …and it teaches the vendor memory nothing (no learned rule written or changed)', !pf1.rule_learned && db.t.us_expense_rules.length === learnedBeforePf && JSON.stringify(db.t.us_expense_rules) === learnedSnap, pf1.rule_learned);
+  var pfLines = db.t.vendor_bill_lines.filter(function (l) { return l.bill_id === bPf1.id; });
+  check('7n3: …the bill and its corrected line are saved', pfLines.length === 1 && pfLines[0].description === 'Roll Goods A');
+  var pfM = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Sample Mill Inc', bill_number: 'SM-6', bill_date: '2026-10-06', total_amount: 2222.22, bill_type: 'supplier', category: 'partner_fee', category_rule_id: null, lines: [{ description: 'Roll Goods A', amount: 2222.22 }] } });
+  var bPfM = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'SM-6'; })[0];
+  check('7n4: CONTROL: the person PICKED the category on the bill (the screen drops the rule link on any category change) → kept, "manual"', pfM.ok && bPfM.category === 'partner_fee' && bPfM.category_source === 'manual' && !pfM.category_prefill_removed, bPfM);
+  var bt = fs.readFileSync(path.join(root, 'src/components/BillsTab.jsx'), 'utf8');
+  check('7n5: the bill form drops the rule link whenever the person changes the category (picker, typed box, a newly added category)', (bt.match(/category: e\.target\.value, category_rule_id: null/g) || []).length >= 2 && /category: j\.category\.key, category_rule_id: null/.test(bt));
   var pf2 = await call(billsRoute, 'u1', { action: 'save_bill', bill: { vendor_name: 'Sample Mill Inc', bill_number: 'SM-5', bill_date: '2026-10-05', total_amount: 2222.22, bill_type: 'supplier', category: 'partner_fee', category_rule_id: mill.id, lines: [{ description: 'Mill fee for November', amount: 2222.22 }] } });
   var bPf2 = db.t.vendor_bills.filter(function (b) { return b.bill_number === 'SM-5'; })[0];
   check('7o: …with a line that is not a product cost, the kept pre-fill stays "set by rule"', pf2.ok && bPf2.category === 'partner_fee' && bPf2.category_source === 'rule' && bPf2.category_rule_id === mill.id, bPf2);
