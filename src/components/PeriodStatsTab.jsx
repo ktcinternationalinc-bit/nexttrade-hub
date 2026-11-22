@@ -3,7 +3,7 @@
 // on for both invoices and bills to see stats". Default June 1, 2026 → today;
 // invoices and bills side by side; month-by-month table; CSV.
 import { remainderRows } from '../lib/paid-through-blocks'; // v55.83-SR
-import { spendingByCategoryCsv, spendingDetailCsv, incomeStatementCsv } from '../lib/tax-pack'; // v55.83-WF step C — the accountant pack's spending files
+import { spendingByCategoryCsv, spendingDetailCsv, incomeStatementCsv, taxPackBlocked } from '../lib/tax-pack'; // v55.83-WF step C — the accountant pack's spending files
 import React, { useState, useEffect } from 'react';
 import UndoPickBar from './UndoPickBar'; // v55.83-WP — undo the last category pick
 import { keepUndoBar, undoChangedSomething } from '../lib/undo-bar-state'; // v55.83-WS — the Undo bar stays only when the undo can be finished
@@ -231,6 +231,8 @@ export default function PeriodStatsTab(props) {
     return lines;
   }
   function taxPack() {
+    var blockedWhy = data && data.spending ? taxPackBlocked(data.spending) : null; // v55.83-XR — no definitive pack from an incomplete report
+    if (blockedWhy) { toast.error('The accountant pack is not available: this report is incomplete — ' + blockedWhy + ' Reload and try again.', { duration: 12000 }); return; }
     if (data && data.totals_masked) { toast.error('The accountant pack needs the "Accounting: See Money Totals" permission — totals are hidden for your account.'); return; } // v55.83-QI
     if (data && data.spending_restricted) { toast.error('The accountant pack is not available for these dates: ' + (data.spending_restricted.words || 'the figures include a starting balance only the super admin may see.')); return; } // v55.83-XO (Codex 14:52 P1) — never a pack without its spending files
     // v55.83-PQ (Max, Nov 7 05:09): "need to make sure we have the reports
@@ -399,6 +401,8 @@ export default function PeriodStatsTab(props) {
       {/* v55.83-PQ (Max): "categorizing etc should affect the underlying reports" */}
       {data.spending_restricted && <div className="mt-3 rounded-lg p-2 text-[12px] font-bold" style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d' }}>{'🔒 ' + (data.spending_restricted.words || 'Spending, tax and P&L figures for these dates are withheld.')}</div>}
       {data.spending && <div className="mt-3 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+        {data.spending.incomplete && <div className="mb-2 rounded p-2 text-[11px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fca5a5' }}>
+          ⚠ This report is INCOMPLETE: {data.spending.incomplete.reason} Professional fees and income by category may be wrong, taxable income and deductible spending are not shown, and the Accountant pack cannot be downloaded until this is fixed. Reload to try again.</div>}
         <div className="text-xs font-extrabold mb-1" style={{ color: '#0f172a' }}>💸 Spending by category — {from} → {to}</div>
         {ptBlocks().map(function (pb) {
           var onP = ptIsOn(pb);
@@ -444,7 +448,7 @@ export default function PeriodStatsTab(props) {
               <td className="py-1 pr-2 text-right font-extrabold tabular-nums">${fmt(data.spending.not_pnl_out.total)}</td><td /></tr>}
             {data.spending.deductible_spending !== undefined && <tr style={{ color: '#0f172a' }}>
               <td className="py-1 pr-2 font-extrabold">DEDUCTIBLE SPENDING (P&L categories only)</td><td />
-              <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#7f1d1d' }}>${fmt(data.spending.deductible_spending)}</td><td /></tr>}
+              <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#7f1d1d' }}>{data.spending.deductible_spending === null ? 'not available (incomplete)' : '$' + fmt(data.spending.deductible_spending)}</td><td /></tr>}
             <tr style={{ borderTop: '2px solid #cbd5e1', color: '#0f172a' }}>
             <td className="py-1.5 pr-2 font-extrabold">Real spending (transfers excluded)</td>
             <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">{(data.spending.total_out ? '' : '')}</td>
@@ -501,7 +505,7 @@ export default function PeriodStatsTab(props) {
                 <td className="py-1 pr-2 text-right font-extrabold tabular-nums">${fmt(data.spending.not_pnl_in.total)}</td><td /></tr>}
               {data.spending.taxable_income !== undefined && <tr style={{ color: '#0f172a' }}>
                 <td className="py-1 pr-2 font-extrabold">TAXABLE INCOME (P&L categories only)</td><td />
-                <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>${fmt(data.spending.taxable_income)}</td><td /></tr>}
+                <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>{data.spending.taxable_income === null ? 'not available (incomplete)' : '$' + fmt(data.spending.taxable_income)}</td><td /></tr>}
               <tr style={{ borderTop: '2px solid #cbd5e1', color: '#0f172a' }}>
               <td className="py-1.5 pr-2 font-extrabold">Real money in (transfers excluded)</td><td />
               <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>${fmt(data.spending.real_income)}</td><td /></tr></tfoot>

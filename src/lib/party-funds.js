@@ -117,7 +117,7 @@ export function partyFundsBreakdown(o) {
   var billById = {}; if (Array.isArray(o.bills)) { o.bills.forEach(function (b) { billById[b.id] = b; }); } else { billById = o.bills || {}; }
   var obAll = Array.isArray(o.openings) ? o.openings : []; var obKnown = {}; obAll.forEach(function (b) { obKnown[b.id] = true; }); // v55.83-XO
   return (o.parties || []).map(function (party) {
-    var pk = key(party.name);
+    var pk = key(party.name); var refundDateFallback = false; // v55.83-XR
     // v55.83-XO — this company's starting balances, each with its corrections folded in (same date, same visibility)
     var starting = obAll.filter(function (b) { return !b.corrects_id && key(b.party) === pk && Number(b.amount) > 0; })
       .sort(function (a, b) { return day(a.as_of) < day(b.as_of) ? -1 : day(a.as_of) > day(b.as_of) ? 1 : String(a.id) < String(b.id) ? -1 : 1; })
@@ -200,7 +200,18 @@ export function partyFundsBreakdown(o) {
     });
     (o.entries || []).forEach(function (e) {
       // v55.83-WF B2 — MONEY BACK from the company (a refund) lowers what its transfer holds; it is never a fee and never a bill
-      if (key(e.party) === pk && e.bucket === 'refund' && e.kind === 'refund') { var tR = tById[e.source_bank_transaction_id] || null; if (tR) { tR.lifetime_refund_rows.push({ transfer_id: tR.id, date: day(e.entry_date || e.created_at), amount: r2(e.amount), incoming_line: e.bank_transaction_id || null, id: 'entry:' + e.id, why: e.reason || 'money back' }); } return; }
+      // v55.83-XR (Codex 09:01 / 09:54 P2) — a refund is DATED by the money-in bank line it arrived on (posted_date, else date): the same
+      // date the cash report uses, so period / opening / as-of balances agree with it. The date a person typed stays as `entered`
+      // (audit). Only when that bank date could not be read does the typed date stand in, and the result says so (refund_date_basis).
+      if (key(e.party) === pk && e.bucket === 'refund' && e.kind === 'refund') {
+        var tR = tById[e.source_bank_transaction_id] || null;
+        if (tR) {
+          var bankD = e.bank_transaction_id && o.refundLineDates ? o.refundLineDates[e.bank_transaction_id] : null;
+          if (!bankD) { refundDateFallback = true; }
+          tR.lifetime_refund_rows.push({ transfer_id: tR.id, date: day(bankD || e.entry_date || e.created_at), entered: day(e.entry_date || e.created_at), date_basis: bankD ? 'bank' : 'entered', amount: r2(e.amount), incoming_line: e.bank_transaction_id || null, id: 'entry:' + e.id, why: e.reason || 'money back' });
+        }
+        return;
+      }
       if (key(e.party) !== pk || e.bucket !== 'fee') { return; }
       if (e.wire_package_id) { return; } // v55.83-WF: an entry that points at a wire is a NOTE about that wire's fee — the wire carries the fee, once (same rule as the database)
       var t = tById[e.source_bank_transaction_id || e.bank_transaction_id] || null;
@@ -275,7 +286,8 @@ export function partyFundsBreakdown(o) {
         starting_balance_added: sbAdded, starting_balance_added_rows: sbPer.added_rows,      // v55.83-XO: a starting balance as of a date in the period (held, never sent)
         from_starting_balance: sbUsed, from_starting_balance_rows: sbPer.use_rows,            // v55.83-XO: bills paid from a starting balance in the period
         tax_from_starting_balance: sbTax,                                                     // v55.83-XO: the part dated on / after 1 June 2026 (Max's (b))
-        tax_professional_fees: r2(per.funds_sent + sbTax) }, // TAX presentation: the full original transfers of the period, once + (XO) starting-balance uses on / after 1 June 2026
+        // TAX presentation (Max 20 Nov + 22 Nov Option 1): the full transfers of the period, once, + (XO) starting-balance uses on / after 1 June 2026, LESS money the company returned in the period (XR, dated by its money-in bank line)
+        tax_professional_fees: r2(per.funds_sent + sbTax - refunds), tax_transfers_sent: per.funds_sent, tax_money_back: refunds },
       // AS OF the end of `to`: dated records only. held = funds sent − applied to bills − services rendered (+ starting balances left; reservations are NOT in here)
       as_of: { date: to, funds_sent: asOf.funds_sent, refunds: asOf.refunds, applied_to_bills: asOf.applied_to_bills, services_rendered: asOf.services_rendered, held: asOfHeld,
         starting_balance: sbAsOf.amount, from_starting_balance: sbAsOf.used, starting_balance_held: r2(sbAsOf.amount - sbAsOf.used) },
@@ -283,6 +295,7 @@ export function partyFundsBreakdown(o) {
       current: { funds_sent: cur.funds_sent, refunds: cur.refunds, applied_to_bills: cur.applied_to_bills, services_rendered: cur.services_rendered, reserved: cur.reserved,
         unused: r2(cur.funds_sent - cur.refunds - cur.applied_to_bills - cur.services_rendered - cur.reserved + sbCur.amount - sbCur.used),
         starting_balance: sbCur.amount, from_starting_balance: sbCur.used, starting_balance_held: r2(sbCur.amount - sbCur.used) },
+      refund_date_basis: refundDateFallback ? 'entered_where_bank_date_missing' : 'bank', // v55.83-XR
       arithmetic_ok: Math.abs(r2(closing - asOfHeld)) < 0.005,   // the sums agree with each other — says NOTHING about whether the records are right
       // transfers recognized only from the bank's text (not stamped by a person): counted as money sent, and listed here to be confirmed
       identity_to_confirm: byText,

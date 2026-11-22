@@ -139,6 +139,16 @@ export async function POST(req) {
     var chosenCat = null; var ci; for (ci = 0; ci < allCats.length; ci++) { if (allCats[ci].wave_account_id === categoryAcct) { chosenCat = allCats[ci]; break; } }
     var catSafety = categoryPushSafety(chosenCat || { wave_account_name: bt.wave_account_name });
     if (catSafety.block) { return blocked('The Wave category "' + (bt.wave_account_name || categoryAcct) + '" cannot be used for a money transaction — it is ' + catSafety.reason, 400); }
+    // v55.83-XR (Codex 09:01 point 5) — MONEY BACK from RTM / NextTrade: the Hub takes this deposit off Professional fees (Max 22 Nov,
+    // Option 1). Wave must not receive it as sales or any other category: only a Professional fees category is accepted; otherwise
+    // only THIS line is held with a plain message. Nothing is mapped automatically and nothing already in Wave is changed. If the
+    // refund records cannot be read, the line is held too (never pushed on a guess).
+    var mbChk = await db.from('party_money_entries').select('id, party').eq('kind', 'refund').eq('bank_transaction_id', hubId).limit(1);
+    if (mbChk && mbChk.error && !/does not exist|schema cache|Could not find/i.test(String(mbChk.error.message || ''))) { return blocked('Not sent to Wave: could not check whether this deposit is money back from RTM / NextTrade (' + mbChk.error.message + '). Try again.', 503); }
+    var mbRow = mbChk && !mbChk.error && mbChk.data && mbChk.data.length ? mbChk.data[0] : null;
+    if (mbRow && !/professional/i.test(String((chosenCat && (chosenCat.wave_account_name || chosenCat.name)) || bt.wave_account_name || ''))) {
+      return blocked('Not sent to Wave: this deposit is money back from ' + (mbRow.party || 'RTM / NextTrade') + '. The Hub counts it as a reduction of Professional fees, so in Wave it must use your Professional fees category, not "' + (bt.wave_account_name || categoryAcct) + '". Pick the Professional fees Wave category for this line, then send it again.', 409);
+    }
 
     // BANK-SIDE ANCHOR — match THIS txn's bank account to its Wave bank account (shared resolver; suffix-
     // tolerant mask, single-bank, then silo default). A silo can have many accounts; nobody picks one per txn.

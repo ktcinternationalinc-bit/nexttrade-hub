@@ -87,6 +87,15 @@ export async function loadPartyFunds(db, o) {
       (op || []).forEach(function (p) { if (!seenPay[p.id] && p.voided !== true) { pays.push(p); } });
     }
   }
-  var funds = partyFundsBreakdown({ parties: o.parties, bankLines: lines, pays: pays, bills: o.bills || {}, requests: requests, entries: o.entries || [], billLines: billLines, openings: openings, from: o.from, to: o.to });
+  // v55.83-XR — the bank date of each money-in line a refund arrived on (posted_date, else date): refunds are dated by it. A failed read
+  // leaves the map empty; the calculation then uses the typed date and says so (refund_date_basis) — never a silent guess.
+  var refundLineDates = {}; var rIds = [];
+  (o.entries || []).forEach(function (e) { if (e && e.kind === 'refund' && e.bank_transaction_id && rIds.indexOf(e.bank_transaction_id) < 0) { rIds.push(e.bank_transaction_id); } });
+  for (var r = 0; r < rIds.length; r += 200) {
+    var rq = await db.from('bank_transactions').select('id, date, posted_date').in('id', rIds.slice(r, r + 200));
+    if (rq.error) { refundLineDates = {}; break; }
+    (rq.data || []).forEach(function (x) { refundLineDates[x.id] = String(x.posted_date || x.date || '').substring(0, 10) || null; });
+  }
+  var funds = partyFundsBreakdown({ parties: o.parties, bankLines: lines, pays: pays, bills: o.bills || {}, requests: requests, entries: o.entries || [], billLines: billLines, refundLineDates: refundLineDates, openings: openings, from: o.from, to: o.to });
   return { funds: funds, lines: lines, requests: requests, openings: openings, openings_installed: openingsInstalled };
 }

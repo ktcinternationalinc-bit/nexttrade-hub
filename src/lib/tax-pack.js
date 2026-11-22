@@ -8,6 +8,13 @@
 // Pure. Safe on server and browser. SWC-safe.
 function q(s) { return '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"'; }
 function n2(x) { return (Number(x) || 0).toFixed(2); }
+// v55.83-XR (Codex 09:54 P2) — an amount shown as a cost: the SIGNED number (a refund-only month makes the cost negative, so its
+// cell is positive) — never a "-" glued in front of an already negative number ("--200.00")
+function neg(x) { var v = Number(x) || 0; return Math.abs(v) < 0.005 ? '-0.00' : n2(0 - v); }
+// v55.83-XR (Codex 09:01 / 09:54 P2) — when the money back could not be read the spending / income figures are not complete: no
+// definitive pack file is produced (the screen refuses the download and says why)
+export function taxPackBlocked(spending) { var inc = spending && spending.incomplete; return inc ? (inc.reason || 'Some figures could not be read.') : null; }
+function blockedCsv(why) { return ['line,amount_usd', q('NOT AVAILABLE - this report is incomplete: ' + why + ' Reload and try again; nothing in this file may be used for filing.') + ',']; }
 
 // the categories the pack prints: the server's, with a stray "uncategorized" category folded into the ⚠ Uncategorized line
 export function taxPackCats(cats) {
@@ -23,6 +30,7 @@ export function taxPackUncOut(spending) {
 
 // tax-pack-7-spending-by-category
 export function spendingByCategoryCsv(spending, kindLabels) {
+  if (taxPackBlocked(spending)) { return blockedCsv(taxPackBlocked(spending)); }
   var KL = kindLabels || {}; var sp = ['category,type,transactions,total_usd']; var cats = taxPackCats(spending.categories);
   cats.forEach(function (c) { sp.push(q(c.label) + ',' + (KL[c.kind] || c.kind || 'Expense') + ',' + c.count + ',' + n2(c.total)); });
   if (spending.not_pnl_out && spending.not_pnl_out.count > 0) { sp.push('"NOT P&L - loan principal / owner (NOT deductible)",,' + spending.not_pnl_out.count + ',' + n2(spending.not_pnl_out.total)); }
@@ -37,7 +45,7 @@ export function spendingByCategoryCsv(spending, kindLabels) {
   if (fst && fstSb > 0.004) { sp.push(q('  of which bills paid from a starting balance with RTM / NextTrade, a new expense when used from 1 June 2026 (inside ' + (fst.label || 'Professional fees') + ')') + ',' + ',' + (fst.from_starting_balance_count || 0) + ',' + n2(fstSb)); }
   // v55.83-XR (Max 22 Nov, Option 1) — money RTM / NextTrade sent back reduces that same line in the month it came back (file 8: a negative row)
   var mbk = fst && fst.money_back;
-  if (mbk && mbk.count > 0) { sp.push(q('  less money back from RTM / NextTrade (already taken off ' + (fst.label || 'Professional fees') + '; not income)') + ',' + ',' + mbk.count + ',-' + n2(mbk.total)); }
+  if (mbk && mbk.count > 0) { sp.push(q('  less money back from RTM / NextTrade (already taken off ' + (fst.label || 'Professional fees') + '; not income)') + ',' + ',' + mbk.count + ',' + neg(mbk.total)); }
   if (spending.uncategorized) { sp.push('"UNCATEGORIZED (needs review before filing)",' + spending.uncategorized.count + ',' + n2(taxPackUncOut(spending))); }
   if (spending.transfers) { sp.push('"TRANSFERS BETWEEN OWN ACCOUNTS (not deductible spending)",' + spending.transfers.count + ',' + n2(spending.transfers.total)); }
   sp.push('"REAL SPENDING (transfers excluded)",,' + n2(spending.real_spending));
@@ -46,6 +54,7 @@ export function spendingByCategoryCsv(spending, kindLabels) {
 
 // tax-pack-8-spending-detail — one row per bank line, with the SAME category the summary counted it in
 export function spendingDetailCsv(spending) {
+  if (taxPackBlocked(spending)) { return blockedCsv(taxPackBlocked(spending)); }
   var det = ['date,who,amount,category,paired_transfer'];
   (spending.rows || []).forEach(function (r) { det.push(r.date + ',' + q(r.who) + ',' + n2(r.amount) + ',' + (r.category || 'UNCATEGORIZED') + ',' + (r.paired ? 'yes' : '')); });
   return det;
@@ -53,17 +62,18 @@ export function spendingDetailCsv(spending) {
 
 // tax-pack-12-income-statement-cash-basis
 export function incomeStatementCsv(spending) {
+  if (taxPackBlocked(spending)) { return blockedCsv(taxPackBlocked(spending)); }
   var rev = 0, cogs = 0, exp = 0, oin = 0, oex = 0;
   (spending.in_categories || []).forEach(function (c) { if (c.kind === 'income') { rev += c.total; } else if (c.kind === 'other_income') { oin += c.total; } });
   taxPackCats(spending.categories).forEach(function (c) { if (c.kind === 'cogs') { cogs += c.total; } else if (c.kind === 'other_expense') { oex += c.total; } else if (c.kind !== 'not_pnl') { exp += c.total; } });
   var out = ['line,amount_usd'];
   out.push('"Revenue (cash received)",' + n2(rev));
-  out.push('"Cost of goods sold",-' + n2(cogs));
+  out.push('"Cost of goods sold",' + neg(cogs));
   out.push('"GROSS PROFIT",' + n2(rev - cogs));
-  out.push('"Operating expenses",-' + n2(exp));
+  out.push('"Operating expenses",' + neg(exp));
   out.push('"OPERATING PROFIT",' + n2(rev - cogs - exp));
   out.push('"Other income",' + n2(oin));
-  out.push('"Other expenses",-' + n2(oex));
+  out.push('"Other expenses",' + neg(oex));
   out.push('"NET PROFIT (cash basis)",' + n2(rev - cogs - exp + oin - oex));
   if (spending.in_uncategorized && spending.in_uncategorized.total > 0.005) { out.push('"WARNING: uncategorized deposits OUTSIDE this statement",' + n2(spending.in_uncategorized.total)); }
   var u = taxPackUncOut(spending); if (u > 0.005) { out.push('"WARNING: uncategorized spending OUTSIDE this statement",' + n2(u)); }
