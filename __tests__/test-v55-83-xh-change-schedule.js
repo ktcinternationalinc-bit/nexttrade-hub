@@ -50,7 +50,8 @@ ok(cj.cases.some(c => c.repo === 'warehouse') && cj.cases.some(c => c.repo === '
 ok(cj.cases.every(c => ['lint', 'governance', 'behavioral', 'manual'].includes(c.kind)), 'every QA case is labelled lint/governance/manual (source lint is not behavioral QA)');
 
 // Badge + What's New
-ok(page.includes('>v55.83-XH</span>'), 'badge bumped to v55.83-XH');
+ok(/version: 'v55\.83-XH'/.test(whatsnew), "What's New keeps the v55.83-XH entry");
+ok((function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(whatsnew); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })(), 'badge names the newest What\'s New entry (v55.83-XH or later)');
 ok(/version: 'v55\.83-XH'/.test(whatsnew), "What's New has a v55.83-XH entry");
 
 console.log('\nXH change-schedule: ' + pass + '/' + pass + ' checks passed');
