@@ -113,15 +113,20 @@ export function buildReminderRows(input) {
     if (limited) { blocks = [LIMITED_WORDS]; warnings = []; fields = Object.assign({}, fields, { total: null, received: null, remaining: null, releases: [] }); if (rem.last) { rem.last = Object.assign({}, rem.last, { total: null, received: null, remaining: null }); } }
     rows.push({ order_id: Number(o.id), release_number: o.release_number || null, release_key: rk, customer: o.customer_name || null, hub_customer: cust ? (cust.company_name || cust.contact_name || null) : null,
       warehouse: o.warehouse_name || null, country: o.country || null, container: o.container || null, status: o.status, arrival_date: arrival, days: days, phase: phase, slot: slot, slot_sent: slotSent, slot_unconfirmed: slotUnconfirmed, slot_failed_auto: slotFailedAuto, limited: limited,
+      // v55.83-XY rev 2 (Max 23 Nov: "Why is it still showing in this here that it's urgent to release it? It's already paid.") — an order
+      // whose invoices are KNOWN to be fully paid has no payment stage. No invoice, another currency or a withheld balance is NOT "paid".
+      paid_in_full: !limited && bal.ok === true && bal.paid_in_full === true,
       language: langOf(cust && cust.correspondence_language), language_chosen: !!(cust && cust.correspondence_language), email: hubEmail, email_from: hubEmail ? 'hub' : null, recipients: hb.list, recipients_bad: hb.bad, whatsapp: o.customer_whatsapp || null,
       invoices: limited ? [] : invs.map(function (i) { return { id: i.id, number: i.number, total: i.total, paid: i.paid }; }), invoice_count: invs.length, balance: bal.ok ? { total: bal.total, received: bal.received, remaining: bal.remaining, overpaid: bal.overpaid } : null,
       pol: polR.certain ? polR.pol : null, pol_needs_confirm: !polR.certain, pol_suggestion: polR.certain ? null : (o.warehouse_name || null), release_prefix: polR.prefix,
       fields: fields, blocks: blocks, warnings: warnings, reminders: rem });
   });
   rows.forEach(function (r) { r.auto = r.limited ? null : autoCheck(r); }); // what the morning schedule would do with this order (not told to a person limited by the history window)
-  rows.sort(function (a, b) { return (a.days - b.days) || String(a.release_number || '').localeCompare(String(b.release_number || '')); });
-  var counts = { friendly: 0, firmer: 0, urgent: 0, overdue: 0, ready: 0, blocked: 0 };
-  rows.forEach(function (r) { counts[r.phase]++; if (r.blocks.length) { counts.blocked++; } else { counts.ready++; } });
+  // the orders that still owe come first (most urgent first); the ones paid in full are listed after them
+  rows.sort(function (a, b) { return ((a.paid_in_full ? 1 : 0) - (b.paid_in_full ? 1 : 0)) || (a.days - b.days) || String(a.release_number || '').localeCompare(String(b.release_number || '')); });
+  // a paid order is in none of the reminder counts: not in a stage, not "ready", not "cannot be sent"
+  var counts = { friendly: 0, firmer: 0, urgent: 0, overdue: 0, ready: 0, blocked: 0, paid: 0 };
+  rows.forEach(function (r) { if (r.paid_in_full) { counts.paid++; return; } counts[r.phase]++; if (r.blocks.length) { counts.blocked++; } else { counts.ready++; } });
   return { rows: rows, counts: counts };
 }
 

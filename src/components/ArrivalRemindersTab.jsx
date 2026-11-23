@@ -30,8 +30,9 @@ export function ArrivalRemindersView(p) {
           <td className="px-2 py-1.5">{r.customer || '—'}{!r.limited && <div style={{ fontSize: 10, fontWeight: 800, color: r.language_chosen ? SUB : '#9a3412' }}>{(LANG_NAMES[r.language] || 'English') + (r.language_chosen ? '' : ' — language not chosen yet')}</div>}{!r.limited && !r.email && <div style={{ fontSize: 10, fontWeight: 800, color: '#991b1b' }}>no e-mail on the Hub customer</div>}{r.hub_customer && r.hub_customer !== r.customer && <div style={{ color: SUB, fontSize: 10 }}>{'Hub invoice: ' + r.hub_customer}</div>}</td>
           <td className="px-2 py-1.5">{(r.pol || '?') + ' → ' + (r.country || '?')}{r.pol_needs_confirm && <div style={{ color: '#9a3412', fontSize: 10, fontWeight: 800 }}>{'Port of loading to confirm (release ' + (r.release_prefix || 'has no prefix') + ')'}</div>}<div style={{ color: SUB, fontSize: 10 }}>{'Container ' + (r.container || '—')}</div></td>
           <td className="px-2 py-1.5">{r.arrival_date}</td>
-          <td className="px-2 py-1.5 font-extrabold" style={{ color: look[1], background: look[2] }}>{counterWords(r.days)}</td>
-          <td className="px-2 py-1.5"><span className="px-1.5 py-0.5 rounded font-extrabold" style={{ color: look[1], background: look[2] }}>{look[0]}</span></td>
+          {/* v55.83-XY rev 2 — paid in full = no payment stage: no coloured day counter, a green "Paid in full" instead of the stage */}
+          <td className="px-2 py-1.5 font-extrabold" style={r.paid_in_full ? { color: SUB } : { color: look[1], background: look[2] }}>{counterWords(r.days)}</td>
+          <td className="px-2 py-1.5"><span className="px-1.5 py-0.5 rounded font-extrabold" style={r.paid_in_full ? { color: '#065f46', background: '#d1fae5' } : { color: look[1], background: look[2] }}>{r.paid_in_full ? 'Paid in full' : look[0]}</span></td>
           <td className="px-2 py-1.5 text-right tabular-nums">{r.limited ? 'not shown' : (r.balance ? fmt(r.balance.total) : '—')}</td>
           <td className="px-2 py-1.5 text-right tabular-nums">{r.limited ? 'not shown' : (r.balance ? fmt(r.balance.received) : '—')}</td>
           <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.balance && r.balance.remaining > 0 ? '#991b1b' : '#065f46' }}>{r.limited ? 'not shown' : (r.balance ? fmt(r.balance.remaining) : '—')}</td>
@@ -40,10 +41,10 @@ export function ArrivalRemindersView(p) {
             {r.reminders && r.reminders.unconfirmed && <div className="mt-1 px-1.5 py-0.5 rounded font-extrabold" style={{ color: '#7c2d12', background: '#fed7aa', border: '1px solid #ea580c', fontSize: 10 }}>{'Delivery unconfirmed — ' + when(r.reminders.unconfirmed.at) + (r.reminders.unconfirmed.sent_to ? ' to ' + r.reminders.unconfirmed.sent_to : '') + '. It may have reached the customer.'}</div>}
             {r.reminders && (r.reminders.sent > 0 || r.reminders.unconfirmed) && p.onHistory && <button onClick={function () { p.onHistory(r); }} className="mt-1 underline font-bold" style={{ color: '#1d4ed8', fontSize: 11 }}>History</button>}</td>
           <td className="px-2 py-1.5 text-right">
-            {r.blocks.length > 0
+            {r.paid_in_full ? <span style={{ color: '#065f46', fontWeight: 800, fontSize: 11 }}>Paid in full — no reminder</span> : r.blocks.length > 0
               ? <span title={r.blocks.join(' ')} style={{ color: '#991b1b', fontWeight: 800, fontSize: 11 }}>{'Cannot send: ' + r.blocks[0]}</span>
               : <button onClick={function () { p.onPrepare(r); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Prepare reminder</button>}
-            {r.auto && !r.slot_sent && <div title={r.auto.reasons.join(' ')} style={{ fontSize: 10, marginTop: 2, fontWeight: 800, color: r.auto.eligible ? '#065f46' : '#9a3412' }}>{r.auto.eligible ? (p.autoOn ? 'Automatic: goes out at the next morning run' : 'Automatic: would go out by itself (switch is OFF)') : 'Automatic: needs a person — ' + r.auto.reasons[0]}</div>}
+            {r.auto && !r.slot_sent && !r.paid_in_full && <div title={r.auto.reasons.join(' ')} style={{ fontSize: 10, marginTop: 2, fontWeight: 800, color: r.auto.eligible ? '#065f46' : '#9a3412' }}>{r.auto.eligible ? (p.autoOn ? 'Automatic: goes out at the next morning run' : 'Automatic: would go out by itself (switch is OFF)') : 'Automatic: needs a person — ' + r.auto.reasons[0]}</div>}
           </td>
         </tr>; })}
       {rows.length === 0 && <tr><td colSpan={11} className="px-2 py-3" style={{ color: SUB }}>No shipped, open order has an arrival date 21 days away or less.</td></tr>}
@@ -199,7 +200,7 @@ export default function ArrivalRemindersTab(props) {
       <div className="flex items-center gap-3 flex-wrap">
         <div className="text-[15px] font-extrabold">📨 Arrival & final-payment reminders</div>
         <button onClick={load} disabled={busy} className="px-3 py-1 rounded-lg text-[12px] font-bold" style={{ background: '#e2e8f0', color: INK }}>{busy ? 'Reading…' : 'Refresh'}</button>
-        {data && <span className="text-[11px]" style={{ color: SUB }}>{'Warehouse: ' + (data.source === 'nextrade-live' ? 'LIVE' : 'staging copy') + ' · today ' + data.today + ' (New York) · ' + data.counts.ready + ' ready, ' + data.counts.blocked + ' cannot be sent'}</span>}
+        {data && <span className="text-[11px]" style={{ color: SUB }}>{'Warehouse: ' + (data.source === 'nextrade-live' ? 'LIVE' : 'staging copy') + ' · today ' + data.today + ' (New York) · ' + data.counts.ready + ' ready, ' + data.counts.blocked + ' cannot be sent, ' + (data.counts.paid || 0) + ' paid in full (listed last)'}</span>}
       </div>
       <div className="text-[12px] mt-1" style={{ color: SUB }}>Shipped, open orders arriving in 21 days or less. Each reminder tells the customer the expected arrival and asks for the final payment, with the invoice total, what was received and what is still owed. <b>Nothing is sent automatically</b> — you see the message and press Send.</div>
       {data && !data.log_ready && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #d97706' }}>{data.sql_hint}</div>}

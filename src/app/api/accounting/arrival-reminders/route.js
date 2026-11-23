@@ -246,7 +246,7 @@ export async function GET(req) {
     if (all.error) { return finish(all.error + ' Nothing was sent.', 503); }
     if (all.cfg.source !== 'nextrade-live') { return finish('The Hub is reading the ' + all.cfg.source + ' copy of the warehouse, not the live one — automatic reminders are never sent from a test copy.', 200); }
     if (!all.logReady) { return finish(SQL_HINT, 503); }
-    run.needs_person = all.rows.filter(function (r) { return !r.auto || !r.auto.eligible; }).filter(function (r) { return !r.slot_sent; }).length;
+    run.needs_person = all.rows.filter(function (r) { return !r.paid_in_full && (!r.auto || !r.auto.eligible); }).filter(function (r) { return !r.slot_sent; }).length; // a paid order waits for nobody
     var todo = all.rows.filter(function (r) { return r.auto && r.auto.eligible; });
     for (var i = 0; i < todo.length; i++) {
       var row = todo[i]; var tag = { order_id: row.order_id, release: row.release_number, slot: row.slot };
