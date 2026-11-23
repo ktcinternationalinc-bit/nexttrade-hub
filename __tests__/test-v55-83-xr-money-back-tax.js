@@ -172,7 +172,7 @@ function incomeCat(sp, key) { return cat(sp.in_categories, key); }
   var xfAt = wn.indexOf("version: 'v55.83-XR'"); var xfEnd = wn.indexOf('\n  },\n', xfAt); var xfText = xfAt > 0 && xfEnd > xfAt ? wn.substring(xfAt, xfEnd) : '';
   check('the XR release note is the newest entry and carries NO money amount', xfAt > 0 && xfAt < wn.indexOf("version: 'v55.83-WD'") && xfText.length > 200 && !/\$\s?[0-9]/.test(xfText) && !/[0-9][0-9,]{3,}\.[0-9]{2}/.test(xfText));
   var pg = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8');
-  check('badge = v55.83-XR', pg.indexOf('v55.83-XR') > 0 && pg.indexOf('v55.83-WD') < 0);
+  check('What\'s New keeps the XR entry and the badge names the newest entry (XR or later)', (function () { var wnT = require('fs').readFileSync(require('path').join(__dirname, '..', 'src/components/WhatsNewWidget.jsx'), 'utf8'); var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(wnT); return /version: 'v55\.83-XR'/.test(wnT) && !!top && pg.indexOf('>' + top[1] + '</span>') > 0; })());
 
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
