@@ -449,6 +449,8 @@ export async function POST(req) {
         if (cAlloc && (!cAlloc.complete || cAlloc.overAllocated)) { delete cPatch.review_status; delete cPatch.reviewed_by; delete cPatch.reviewed_at; autoReviewStripped = true; }
         else { cPatch.reviewed_by = by; cPatch.reviewed_at = new Date().toISOString(); } // v55.83-JP (audit) — a reviewed txn must record who/when, like set_status
       }
+      // v55.83-YC — what the line was BEFORE, for the audit trail ("category: Utilities → Phone"); a failed read never blocks the save
+      var cBefore = null; try { var cbR = await db.from('bank_transactions').select('classification, wave_account_id').eq('id', body.bank_transaction_id).maybeSingle(); cBefore = (cbR && !cbR.error) ? cbR.data : null; } catch (eCB) { cBefore = null; }
       var cRes = await db.from('bank_transactions').update(cPatch).eq('id', body.bank_transaction_id).select();
       if (cRes && cRes.error) { return NextResponse.json({ ok: false, error: cRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (!(cRes && cRes.data && cRes.data.length)) { return NextResponse.json({ ok: false, error: 'No row updated (transaction not found).', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
@@ -474,7 +476,7 @@ export async function POST(req) {
           } catch (eLA) { lookAlikes = { error: (eLA && eLA.message) || 'not applied' }; } // the save itself already succeeded
         }
       }
-      await audit(db, by, 'bank_classify', 'bank_transaction', body.bank_transaction_id, { classification: cPatch.classification, wave_account_id: cPatch.wave_account_id || null }); // v55.83-QI
+      await audit(db, by, 'bank_classify', 'bank_transaction', body.bank_transaction_id, Object.assign({ classification: cPatch.classification, wave_account_id: cPatch.wave_account_id || null }, cBefore ? { before_classification: cBefore.classification === undefined ? null : cBefore.classification, before_wave_account_id: cBefore.wave_account_id || null } : {})); // v55.83-QI (YC: + before)
       return NextResponse.json({ ok: true, row: cRes.data[0], auto_review_stripped: autoReviewStripped, rule_learned: learn, look_alikes: lookAlikes ? { updated: lookAlikes.applied || 0, left_people: lookAlikes.left_people || 0, matches: lookAlikes.matches || 0, error: lookAlikes.error || null } : null, wave_auto_category: waveAuto, api_build_marker: API_BUILD_MARKER });
     }
 

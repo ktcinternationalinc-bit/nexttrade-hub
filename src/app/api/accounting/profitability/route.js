@@ -410,9 +410,11 @@ export async function POST(req) {
       var part = (body.part === 'trucking' || body.part === 'freight' || body.part === 'bond' || body.part === 'other') ? body.part : null; if (!part) { return bad('Choose trucking, freight, bond or other.'); }
       var pv = null;
       if (body.amount !== '' && body.amount !== null && body.amount !== undefined) { pv = Number(String(body.amount).replace(/[$,\s]/g, '')); if (isNaN(pv) || pv < 0) { return bad('The amount must be a number, zero or more.'); } }
+      // v55.83-YC — the amount BEFORE, for the audit trail ("trucking cost: $741.00 → $1,500.00"); a failed read never blocks the save
+      var wasP; try { var wpR = await db.from('pl_release_part_estimates').select('amount').eq('release_key', pk).eq('part', part).maybeSingle(); if (wpR && !wpR.error) { wasP = wpR.data ? (wpR.data.amount === undefined ? null : wpR.data.amount) : null; } } catch (eWP) { wasP = undefined; }
       var upP = await db.from('pl_release_part_estimates').upsert({ release_key: pk, part: part, amount: pv, note: String(body.note || '').substring(0, 300) || null, updated_by: userId, updated_at: now }, { onConflict: 'release_key,part' });
       if (upP.error) { if (/part_check|violates check constraint/i.test(String(upP.error.message)) && (part === 'bond' || part === 'other')) { return bad('NOT SAVED — the database does not accept “' + part + '” yet. Run sql/v55-83-WH-shipping-parts.sql in Supabase once, then save again.'); } return /pl_release_part_estimates/.test(String(upP.error.message)) ? bad('Run sql/v55-83-TL-trucking-freight.sql in Supabase first.') : fail(upP.error); }
-      await audit(db, userId, 'pl_part_estimate_set', 'release', pk, { part: part, amount: pv, note: body.note || null });
+      await audit(db, userId, 'pl_part_estimate_set', 'release', pk, Object.assign({ part: part, amount: pv, note: body.note || null }, wasP !== undefined ? { was: wasP === null ? null : Number(wasP) } : {})); // YC: + amount before
       return NextResponse.json({ ok: true, api_build_marker: API_BUILD_MARKER });
     }
     if (action === 'set_estimate') {

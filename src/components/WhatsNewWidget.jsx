@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YC',
+    date: '2026-11-23',
+    title: 'Audit Trail in plain words',
+    items: [
+      { text: '**Accounting → Audit Trail:** every row now says, in plain words, who did what, when, to which bill / bank line / invoice / release / person, and exactly what changed. Example: "Set the trucking cost for release 1001-1622 to $1,500.00 · Trucking cost: $741.00 → $1,500.00".' },
+      { text: 'Deleted, voided, removed, cancelled and undone are always said in words. A category reads as its name ("Phone"), a Wave category by its Wave name, a person by their name.' },
+      { text: 'Rows saved before today did not always record the value before a change; those say "set to …" and never guess the old value. From today a category pick, a bank-line category and a trucking / freight cost also record what they were before.' },
+      { text: 'The search box also finds the plain words. The raw record ("show the full record") is still there for the super admin.' },
+      { superAdminOnly: true, text: 'Technical: src/lib/audit-words.js describeAudit(row, ctx) — own sentence for every action seen on live (counted 23 Nov) + category_removed, shipping_markup_override, invoice_shipping_terms_set, party_starting_balance*, arrival_reminder_*, bill events (file_ingested, disputed, dispute_resolved, dup_dismissed); fallback = action in words + changeLines (from/to, before/after, field:{from,to}) + plain facts, ids / fingerprints / bookkeeping hidden, never JSON. src/lib/audit-subjects-server.js: + people, product groups, invoice lines, both lines of a transfer pair, the line of a one-line bulk pick, accounting_invoices plural; auditContext = expense + company category labels and Wave account names. /api/accounting/audit returns ctx and searches the sentence. AuditTrailTab: describeAudit(r, data.ctx); raw record only for the super admin. Writers (going forward, extra keys only): bulk_categorized + lines, ids (≤20), before (one line); bank_classify + before_classification, before_wave_account_id; pl_part_estimate_set + was. No SQL. Test: test-v55-83-yc-audit-plain-words.js.' }
+    ]
+  },
+  {
     version: 'v55.83-YA',
     date: '2026-11-23',
     title: 'Orders and reminders say plainly when the warehouse list cannot be read',

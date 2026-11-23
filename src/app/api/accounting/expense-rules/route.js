@@ -479,7 +479,7 @@ export async function POST(req) {
       }
       // WS — the undo can only run once the ledger check is installed: the screen is told so instead of offering a button that fails
       var undoReady = false; if (undoId) { undoReady = (await ledgerPosted(db, [idsB[0]])).known === true; }
-      await audit(db, by, 'bulk_categorized', 'bank_transactions', String(rowsB.length) + ' rows', { classification: clsB, rules_learned: learnedB2, look_alikes_updated: lookB, wave_updated: waveSet, reviewed: reviewedB.length }); // v55.83-QI
+      await audit(db, by, 'bulk_categorized', 'bank_transactions', String(rowsB.length) + ' rows', Object.assign({ classification: clsB, rules_learned: learnedB2, look_alikes_updated: lookB, wave_updated: waveSet, reviewed: reviewedB.length, lines: rowsB.length, ids: rowsB.slice(0, 20).map(function (xI) { return xI.id; }) }, uBefore ? { before: uBefore.classification === undefined ? null : uBefore.classification } : {})); // v55.83-QI (YC: + which lines, and the category before for one picked line)
       return NextResponse.json({ ok: true, updated: rowsB.length, rules_learned: learnedB2, look_alikes_updated: lookB, look_alikes_left_people: leftPeopleB, look_alikes_error: lookErrB, wave_updated: waveSet, wave_how: waveHow, reviewed: reviewedB.length, undo_id: undoId, undo_hours: undoId ? UNDO_HOURS : undefined, undo_ready: undoId ? undoReady : undefined, api_build_marker: API_BUILD_MARKER });
     }
 

@@ -226,7 +226,7 @@ export default function AccountingTab(props) {
       {alive('all_txns') && <div className="p-3" style={shown('all_txns')}><AllTransactionsTab {...props} onGo={goFrom} /></div>}
       {sub === 'clickbooks_reports' && reportsEnabled && canClickbooks && <ClickBooksUSReports {...props} onGo={goFrom} />}
       {sub === 'clickbooks_admin' && clickbooksEnabled && <ClickBooksAdmin workflowsEnabled={workflowsEnabled} cutoverEnabled={cutoverEnabled} canClickbooks={canClickbooks} />}
-      {sub === 'audit' && <div className="p-3"><AuditTrailTab userProfile={userProfile} /></div>}
+      {sub === 'audit' && <div className="p-3"><AuditTrailTab userProfile={userProfile} isSuperAdmin={isSuper} /></div>}
       {sub === 'company' && <CompanyProfileTab {...props} />}
       {alive('arhistory') && <div style={shown('arhistory')}><AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} onGo={goFrom} /></div>}
       {sub === 'ledger' && <CustomerLedger key={'acct-led|' + waveKey} {...props} />}

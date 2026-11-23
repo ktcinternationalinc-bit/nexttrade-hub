@@ -9,7 +9,8 @@ import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ �
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
-import { addAuditSubjects } from '../../../../lib/audit-subjects-server'; // v55.83-TH — plain names instead of ids
+import { addAuditSubjects, auditContext } from '../../../../lib/audit-subjects-server'; // v55.83-TH — plain names instead of ids (YC: + labels)
+import { describeAudit } from '../../../../lib/audit-words'; // v55.83-YC — the search also finds the plain sentence
 
 function db() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -77,13 +78,17 @@ export async function POST(req) {
     rows.forEach(function (r) { r.who = r.actor_id ? (names[r.actor_id] || r.actor_id) : 'The Hub (automatic)'; });
     try { await addAuditSubjects(d, rows); } catch (eS) { /* names are a nicety — the record still shows */ }
 
+    // v55.83-YC — the category labels and Wave account names the plain sentences need (fail-soft: a missing name shows the key in words)
+    var ctx = { cat: {}, wave: {} };
+    try { ctx = await auditContext(d, rows); } catch (eC) { /* names are a nicety */ }
     var q = String(body.q || '').trim().toLowerCase();
     if (q) {
       rows = rows.filter(function (r) {
-        return (String(r.action).replace(/_/g, ' ') + ' ' + String(r.who) + ' ' + String(r.subject || '') + ' ' + String(r.entity_id || '') + ' ' + JSON.stringify(r.details || {}) + ' ' + JSON.stringify(r.refs || {})).toLowerCase().indexOf(q) >= 0;
+        var dw = { sentence: '', facts: [] }; try { dw = describeAudit(r, ctx); } catch (eD) { /* search the raw text only */ }
+        return (dw.sentence + ' ' + dw.facts.join(' ') + ' ' + String(r.action).replace(/_/g, ' ') + ' ' + String(r.who) + ' ' + String(r.subject || '') + ' ' + String(r.entity_id || '') + ' ' + JSON.stringify(r.details || {}) + ' ' + JSON.stringify(r.refs || {})).toLowerCase().indexOf(q) >= 0;
       });
     }
-    return NextResponse.json({ ok: true, rows: rows, count: rows.length });
+    return NextResponse.json({ ok: true, rows: rows, count: rows.length, ctx: ctx });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || 'Server error' }, { status: 500 });
   }
