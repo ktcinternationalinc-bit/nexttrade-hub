@@ -14,7 +14,7 @@ import { canDeleteInvoices, INVOICE_DELETE_DENIED } from '../lib/invoice-delete-
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-UM — signed-in token on lifecycle calls
 import { dbDelete } from '../lib/supabase';
 import { invoiceLifecycle, proformaLifecycle, archivePatch, voidPatch, restorePatch } from '../lib/record-lifecycle';
-import { SHIPPING_TERMS, SHIPPING_TERMS_WORDS, checkShippingTerms, minShippingCharge } from '../lib/shipping-terms'; // v55.83-TG
+import { SHIPPING_TERMS, SHIPPING_TERMS_WORDS, checkShippingTerms, minShippingCharge, MARKUP_NOTE_MIN } from '../lib/shipping-terms'; // v55.83-TG (+ XV)
 import { isTransportLine } from '../lib/profitability'; // v55.83-TG
 import ProformaLinkBox, { proformaLinksApi } from './ProformaLinkBox'; // v55.83-VZ — proforma ↔ invoice links + signed proforma
 import ProformaPeek from './ProformaPeek';
@@ -398,7 +398,7 @@ export default function AccountingInvoicesTab(props) {
     if (!invId) { return; }
     hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_shipping_terms', invoice_id: invId, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
-      .then(function (j) { if (j && j.ok) { cb({ shipping_terms: j.shipping_terms || '', shipping_cost_estimate: j.shipping_cost_estimate === null || j.shipping_cost_estimate === undefined ? '' : String(j.shipping_cost_estimate) }); } })
+      .then(function (j) { if (j && j.ok) { cb({ shipping_terms: j.shipping_terms || '', shipping_cost_estimate: j.shipping_cost_estimate === null || j.shipping_cost_estimate === undefined ? '' : String(j.shipping_cost_estimate), markup_override_note: j.markup_override_note || '' /* v55.83-XV */ }); } })
       .catch(function () {});
   }
   function startEdit(row) {
@@ -426,7 +426,7 @@ export default function AccountingInvoicesTab(props) {
     var e0 = isInvoice() ? row.due_date : row.valid_until;
     var span = (d0 && e0) ? Math.round((Date.parse(e0) - Date.parse(d0)) / 86400000) : null;
     var newEnd = (span != null && span >= 0) ? new Date(Date.parse(today) + span * 86400000).toISOString().substring(0, 10) : '';
-    if (isInvoice()) { setHdr({ invoice_number: '', release_number: row.release_number || '', accounting_customer_id: row.accounting_customer_id || '', invoice_date: today, due_date: newEnd, notes: row.notes || '', terms: row.terms || '', shipping_terms: '', shipping_cost_estimate: '' }); loadShippingTerms(row.id, function (t) { setHdr(function (h) { return Object.assign({}, h, t); }); }); }
+    if (isInvoice()) { setHdr({ invoice_number: '', release_number: row.release_number || '', accounting_customer_id: row.accounting_customer_id || '', invoice_date: today, due_date: newEnd, notes: row.notes || '', terms: row.terms || '', shipping_terms: '', shipping_cost_estimate: '' }); loadShippingTerms(row.id, function (t) { setHdr(function (h) { return Object.assign({}, h, t, { markup_override_note: '' /* v55.83-XV — a copy needs its own reason */ }); }); }); }
     else { setHdr({ proforma_number: '', accounting_customer_id: row.accounting_customer_id || '', proforma_date: today, valid_until: newEnd, notes: row.notes || '', terms: row.terms || '' }); }
     setEditing('new'); setItems([blankItem()]);
     supabase.from(tbl).select('*').eq(key, row.id).order('sort_order', { ascending: true }).then(function (r) {
@@ -524,7 +524,11 @@ export default function AccountingInvoicesTab(props) {
       shipCheck = checkShippingTerms(hdr.shipping_terms, hdr.shipping_cost_estimate, clean.map(function (it) { return { description: it.description, amount: itemTotal(it) }; }), isTransportLine);
       if (!shipCheck.ok) { toast.error(shipCheck.error); setSaveBlock(shipCheck.error); return; } // TZ — also shown by the Save button
       setSaveBlock('');
-      if (shipCheck.warnings.length && typeof window !== 'undefined' && !window.confirm('Please check before saving:\n\n- ' + shipCheck.warnings.join('\n- ') + '\n\nSave anyway? (It will also show on the profit report as a warning.)')) { return; }
+      // v55.83-XV (Max, Nov 23) — below cost + 7% is saved only with a written reason (kept on the audit trail by the server)
+      var mk7 = shipCheck.markup || null; var mkNote = String(hdr.markup_override_note || '').replace(/\s+/g, ' ').trim();
+      if (mk7 && mkNote.length < MARKUP_NOTE_MIN) { var m7 = 'The shipping line(s) total $' + mk7.charged.toFixed(2) + ', below our shipping cost + 7% ($' + mk7.need.toFixed(2) + '). To save it anyway, type the reason in the red box under the shipping cost (at least ' + MARKUP_NOTE_MIN + ' characters).'; toast.error(m7); setSaveBlock(m7); return; }
+      var otherW = shipCheck.warnings.filter(function (w) { return !(mk7 && w === mk7.warning); });
+      if (otherW.length && typeof window !== 'undefined' && !window.confirm('Please check before saving:\n\n- ' + otherW.join('\n- ') + '\n\nSave anyway? (It will also show on the profit report as a warning.)')) { return; }
     }
     setBusy(true);
     var tbl = isInvoice() ? 'accounting_invoices' : 'accounting_proformas';
@@ -575,7 +579,7 @@ export default function AccountingInvoicesTab(props) {
       });
     }).then(function (docId) {
       if (!shipCheck) { return docId; }
-      return hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_shipping_terms', invoice_id: docId, shipping_terms: shipCheck.value.shipping_terms, shipping_cost_estimate: shipCheck.value.shipping_cost_estimate, user_id: userProfile && userProfile.id }) })
+      return hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_shipping_terms', invoice_id: docId, shipping_terms: shipCheck.value.shipping_terms, shipping_cost_estimate: shipCheck.value.shipping_cost_estimate, markup_override_note: shipCheck.markup ? String(hdr.markup_override_note || '') : '' /* v55.83-XV */, user_id: userProfile && userProfile.id }) })
         .then(function (r) { return r.json(); })
         .then(function (j) { if (!(j && j.ok)) { throw { termsFailed: true, docId: docId, msg: (j && j.error) || 'unknown error' }; } return docId; }, function () { throw { termsFailed: true, docId: docId, msg: 'network' }; });
     }).then(function (docId) {
@@ -1010,6 +1014,12 @@ export default function AccountingInvoicesTab(props) {
                 {/* v55.83-WH — the internal breakdown; saved for the release through the Profitability route, never into the invoice */}
                 <ShippingPartsBox key={'spb-' + (shipFocus ? 'open' : 'closed')} initialOpen={shipFocus} releaseText={hdr.release_number} charged={shipAmt} terms={st} userId={userProfile && userProfile.id} toast={toast} disabled={false} />
                 {(st === 'CNF_SEPARATE' || (st === 'EXW' && shipAmt > 0)) && c > 0 && <div className="text-[11px] mt-1" style={{ color: shipAmt + 0.005 >= minShippingCharge(c) ? '#86efac' : '#fca5a5' }}>{'Shipping line(s) must total at least $' + minShippingCharge(c).toFixed(2) + ' (cost + 7%). Now: $' + shipAmt.toFixed(2)}</div>}
+                {/* v55.83-XV — the override: a written reason, required to save below cost + 7%, kept on the audit trail */}
+                {(st === 'CNF_SEPARATE' || (st === 'EXW' && shipAmt > 0)) && c > 0 && shipAmt > 0 && shipAmt + 0.005 < minShippingCharge(c) && <div id="nt-ship-override" className="rounded-lg p-2 mt-2" style={{ background: '#fef2f2', border: '2px solid #dc2626', color: '#450a0a' }}>
+                  <div className="text-[12px] font-extrabold" style={{ color: '#7f1d1d' }}>{'Below cost + 7% by $' + (minShippingCharge(c) - shipAmt).toFixed(2) + ' — to save it anyway, write the reason'}</div>
+                  <textarea value={hdr.markup_override_note || ''} disabled={locked(editing)} onChange={function (e) { uh('markup_override_note', e.target.value); }} rows={2} maxLength={500} placeholder="Why is the shipping charged below our cost + 7%? (for example: price agreed with the customer before the freight went up)" aria-label="Reason for charging shipping below cost plus 7 percent" className="nt-light w-full mt-1 px-2 py-1 rounded text-[12px]" style={{ background: '#ffffff', color: '#0f172a', border: '1px solid #dc2626' }} />
+                  <div className="text-[11px] mt-1" style={{ color: '#7f1d1d' }}>{'Required to save (at least ' + MARKUP_NOTE_MIN + ' characters). Saved on the audit trail with your name, the cost, the amount charged and the shortfall. The invoice still shows as a warning on the profit report.'}</div>
+                </div>}
               </div>);
           })()}
           <div className="text-[11px] font-bold text-slate-200 mb-1">Line items</div>

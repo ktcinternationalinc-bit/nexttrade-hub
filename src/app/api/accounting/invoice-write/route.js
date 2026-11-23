@@ -11,7 +11,8 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { readInvoiceFromBase64 } from '../../../../lib/invoice-extract-server'; // v55.83-PQ
-import { SHIPPING_TERMS, basisOfTerms } from '../../../../lib/shipping-terms'; // v55.83-TG
+import { SHIPPING_TERMS, basisOfTerms, markupShortfall, markupOverrideNote } from '../../../../lib/shipping-terms'; // v55.83-TG (+ XV override)
+import { isTransportLine } from '../../../../lib/profitability'; // v55.83-XV — the same shipping-line test the invoice screen and the profit report use
 import { audit } from '../../../../lib/audit-server'; // v55.83-TG
 
 // v55.83-QO — AI document reads need more than Vercel's default 10s.
@@ -120,7 +121,10 @@ export async function POST(req) {
       var gt = await db.from('pl_invoice_terms').select('*').eq('invoice_id', invoiceId).maybeSingle();
       if (gt.error) { return NextResponse.json({ ok: false, error: gt.error.message, api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
       var d0 = gt.data || {};
-      return NextResponse.json({ ok: true, shipping_terms: d0.shipping_terms || null, shipping_cost_estimate: d0.shipping_cost_estimate === undefined ? null : d0.shipping_cost_estimate, ready: !gt.data || Object.prototype.hasOwnProperty.call(gt.data, 'shipping_terms'), api_build_marker: API_BUILD_MARKER });
+      // v55.83-XV — the last written reason for charging below cost + 7% (shown again in the form; read failure = none shown)
+      var lastO = null;
+      try { var qo = await db.from('hub_audit_log').select('details, at').eq('entity', 'accounting_invoice').eq('entity_id', String(invoiceId)).eq('action', 'shipping_markup_override').order('at', { ascending: false }).limit(1); if (!qo.error && qo.data && qo.data.length) { lastO = qo.data[0]; } } catch (eO) { lastO = null; }
+      return NextResponse.json({ ok: true, shipping_terms: d0.shipping_terms || null, shipping_cost_estimate: d0.shipping_cost_estimate === undefined ? null : d0.shipping_cost_estimate, ready: !gt.data || Object.prototype.hasOwnProperty.call(gt.data, 'shipping_terms'), markup_override_note: lastO && lastO.details && lastO.details.reason ? String(lastO.details.reason) : '', markup_override_at: lastO ? lastO.at : null, api_build_marker: API_BUILD_MARKER });
     }
     if (action === 'set_shipping_terms') {
       var sg = await assertPermission(db, by, 'invoices.edit', req);
@@ -132,6 +136,20 @@ export async function POST(req) {
       if (stt !== 'EXW' && !(sc > 0)) { return NextResponse.json({ ok: false, error: 'CNF needs the shipping cost we expect to pay.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var inv0 = await db.from('accounting_invoices').select('id').eq('id', invoiceId).maybeSingle();
       if (inv0.error || !inv0.data) { return NextResponse.json({ ok: false, error: 'Invoice not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      // v55.83-XV — cost + 7%: the server reads the SAVED lines itself. Below the minimum → refused unless a written reason came with
+      // the request; the reason is written to the audit trail FIRST, and if that write fails nothing is saved.
+      var liS = await db.from('accounting_invoice_items').select('description, quantity, unit_price, line_total').eq('invoice_id', invoiceId);
+      if (liS.error) { return NextResponse.json({ ok: false, error: 'Could not read the invoice lines to check the shipping charge, so the shipping terms were not saved: ' + liS.error.message, api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
+      var linesS = (liS.data || []).map(function (it) { var ltS = (it.line_total !== null && it.line_total !== undefined && Number(it.line_total) !== 0) ? Number(it.line_total) : (Number(it.quantity) || 0) * (Number(it.unit_price) || 0); return { description: it.description, amount: ltS }; });
+      var shortS = markupShortfall(stt, sc, linesS, isTransportLine);
+      var overrideS = null;
+      if (shortS) {
+        var noteS = markupOverrideNote(body.markup_override_note);
+        if (!noteS.ok) { return NextResponse.json({ ok: false, code: 'markup_note_needed', error: 'The shipping line(s) total $' + shortS.charged.toFixed(2) + ', below our shipping cost + 7% ($' + shortS.need.toFixed(2) + '). ' + noteS.error + ' The shipping terms were not saved.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+        overrideS = { rule: 'shipping charged must be at least our shipping cost + 7%', overridden: true, reason: noteS.note, shipping_terms: stt, shipping_cost: shortS.cost, minimum_required: shortS.need, shipping_charged: shortS.charged, short_by: shortS.short };
+        var auS = await db.from('hub_audit_log').insert({ actor_id: by, action: 'shipping_markup_override', entity: 'accounting_invoice', entity_id: String(invoiceId), details: overrideS });
+        if (auS.error) { return NextResponse.json({ ok: false, error: 'The reason could not be written to the audit trail, so the shipping terms were not saved: ' + auS.error.message, api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
+      }
       var prevS = await db.from('pl_invoice_terms').select('*').eq('invoice_id', invoiceId).maybeSingle();
       var nowS = new Date().toISOString();
       var rowS = { invoice_id: invoiceId, basis: basisOfTerms(stt), shipping_terms: stt, shipping_cost_estimate: sc, updated_by: by, updated_at: nowS };
@@ -143,7 +161,7 @@ export async function POST(req) {
       }
       if (!(upS.data && upS.data.length && upS.data[0].shipping_terms === stt)) { return NextResponse.json({ ok: false, error: 'Shipping terms did not read back — not saved.', api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
       try { await audit(db, by, 'invoice_shipping_terms_set', 'accounting_invoice', invoiceId, { from: prevS && prevS.data ? { shipping_terms: prevS.data.shipping_terms || null, shipping_cost_estimate: prevS.data.shipping_cost_estimate === undefined ? null : prevS.data.shipping_cost_estimate, basis: prevS.data.basis || null } : null, to: { shipping_terms: stt, shipping_cost_estimate: sc, basis: rowS.basis } }); } catch (eA) {}
-      return NextResponse.json({ ok: true, saved: upS.data[0], api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, saved: upS.data[0], markup_override: overrideS ? { short_by: overrideS.short_by, minimum_required: overrideS.minimum_required, shipping_charged: overrideS.shipping_charged } : null, api_build_marker: API_BUILD_MARKER });
     }
 
     return NextResponse.json({ ok: false, error: 'Unknown action "' + action + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 });

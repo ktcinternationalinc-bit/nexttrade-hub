@@ -156,6 +156,7 @@ var MANIFEST = [
   { f: 'test-v55-83-sj-bills-payable.js', label: 'new', why: 'Accounting priority 1 (Max Nov 13): validated bills go on the ledger on the bill date (accounts payable), payment clears the debt; additive, OFF until a start date; what-we-owe-by-age report' },
   { f: 'test-v55-83-si-waiting-for-me.js', label: 'new', why: 'Master plan build 2 (Max Nov 12 13:00): 🔔 Waiting for me — per-person list of bills / wires that need them, stuck items marked; read-only' },
   { f: 'test-v55-83-xl-waiting-open-bill.js', label: 'new', why: 'v55.83-XL (Max Nov 23): Waiting for me opens the exact bill (validation opened when it still needs it); Back returns to the list.' },
+  { f: 'test-v55-83-xv-shipping-markup-override.js', label: 'new', why: 'v55.83-XV (Max Nov 23): shipping below cost + 7% saves only with a written reason; the server checks the saved lines, writes the audit row first, refuses without it.' },
   { f: 'test-v55-83-sh-reconnect-continues.js', label: 'new', why: 'Max Nov 12 10:30: a reconnected bank continues from the last transaction on the Hub (no full re-pull, no doubled overlap); scheduled sync includes production' },
   { f: 'test-v55-83-sg-sync-answer-on-the-bank.js', label: 'new', why: 'Max Nov 12 10:09: the sync answer (done / failed + why) is shown on the bank that was synced; failed banks say so on their card' },
   { f: 'test-v55-83-sd-pre-wire.js', label: 'new', why: 'Max Nov 12 09:44: a new wire is a PRE-WIRE the preparer can change or delete until both signatures' },

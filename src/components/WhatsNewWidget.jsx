@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XV',
+    date: '2026-11-23',
+    title: 'Invoices: charge shipping below cost + 7% — with a written reason',
+    items: [
+      { text: '**The cost + 7% rule can now be overridden.** When the shipping line on an invoice is less than our shipping cost + 7%, a red box appears under the shipping cost. Write the reason there (at least 10 characters) and the invoice saves.' },
+      { text: '**The reason is kept on the audit trail** with your name, the date, our shipping cost, the amount charged and how much it is short. Without a reason the invoice is not saved.' },
+      { text: 'The reason is shown again when the invoice is opened. A copy of an invoice does not carry the reason over — it needs its own. The invoice still shows as a warning on the profit report.' },
+      { superAdminOnly: true, text: 'Technical: no SQL (uses hub_audit_log, action shipping_markup_override, entity accounting_invoice). invoice-write set_shipping_terms now reads the saved lines, refuses a shortfall without a reason (code markup_note_needed) and writes the audit row before it saves; shipping-terms.js markupShortfall / markupOverrideNote.' },
+    ]
+  },
+  {
     version: 'v55.83-XZ',
     date: '2026-11-23',
     title: 'Reminder box: the Send-to address is readable',

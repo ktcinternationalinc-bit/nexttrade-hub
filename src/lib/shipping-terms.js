@@ -44,7 +44,7 @@ export function isSurchargeOnlyLine(description) { var d = String(description ||
 export function isOverweightOnlyLine(description) { var d = String(description || ''); return /over[\s-]?weight/i.test(d) && !FREIGHT_WORDS.test(d); }
 
 export function checkShippingTerms(terms, cost, lines, isShippingLine) {
-  var warnings = [];
+  var warnings = []; var markup = null; // v55.83-XV — set when the shipping charged is below cost + 7%
   if (SHIPPING_TERMS.indexOf(terms) < 0) { return { ok: false, error: 'Pick the shipping terms: EXW, CNF in the price, or CNF with a separate shipping line.' }; }
   var c = num(cost);
   if (c !== null && (isNaN(c) || c < 0 || c > 10000000)) { return { ok: false, error: 'The shipping cost must be a number, zero or more.' }; }
@@ -52,7 +52,10 @@ export function checkShippingTerms(terms, cost, lines, isShippingLine) {
   var charged = Math.round(shipLines.reduce(function (t, l) { return t + (Number(l.amount) || 0); }, 0) * 100) / 100;
   function markupWarn() {
     var need = minShippingCharge(c);
-    if (c > 0 && charged < need - 0.005) { warnings.push('The shipping line(s) total $' + charged.toFixed(2) + ', but must be at least $' + need.toFixed(2) + ' (our shipping cost $' + c.toFixed(2) + ' + 7%).'); }
+    if (c > 0 && charged < need - 0.005) {
+      var w7 = 'The shipping line(s) total $' + charged.toFixed(2) + ', but must be at least $' + need.toFixed(2) + ' (our shipping cost $' + c.toFixed(2) + ' + 7%).';
+      warnings.push(w7); markup = { cost: c, charged: charged, need: need, short: Math.round((need - charged) * 100) / 100, warning: w7 };
+    }
   }
   if (terms === 'EXW') {
     // Max: EXW = no shipping by us, so no shipping included — or, if we DO add a separate shipping line, it must cover cost + 7%
@@ -67,7 +70,7 @@ export function checkShippingTerms(terms, cost, lines, isShippingLine) {
     }
     if (c === null || !(c > 0)) { return { ok: false, error: 'EXW with a separate shipping line: type the shipping cost we expect to pay, so the line can be checked (cost + 7% at least).' }; }
     markupWarn();
-    return { ok: true, warnings: warnings, value: { shipping_terms: 'EXW', shipping_cost_estimate: c } };
+    return { ok: true, warnings: warnings, markup: markup, value: { shipping_terms: 'EXW', shipping_cost_estimate: c } };
   }
   if (c === null || !(c > 0)) { return { ok: false, error: 'CNF: type the shipping cost (freight + trucking) we expect to pay. It is an estimate; the bills replace it when they arrive.' }; }
   if (terms === 'CNF_SEPARATE') {
@@ -75,13 +78,28 @@ export function checkShippingTerms(terms, cost, lines, isShippingLine) {
     else { markupWarn(); }
   }
   if (terms === 'CNF_INCLUDED' && shipLines.some(function (l) { return !isSurchargeOnlyLine(l.description); })) { /* UE: a surcharge on CNF-included is extra transport income, no warning */ warnings.push('CNF in the price, but a line looks like a separate shipping charge (“' + shipLines[0].description + '”). Should it be “CNF with a separate line”?'); }
-  return { ok: true, warnings: warnings, value: { shipping_terms: terms, shipping_cost_estimate: c } };
+  return { ok: true, warnings: warnings, markup: markup, value: { shipping_terms: terms, shipping_cost_estimate: c } };
 }
 
 // Max 16 Nov: on CNF with a separate shipping line (and on EXW when we add a shipping line) the customer pays at least
 // our shipping cost + 7%.
 export var SHIPPING_MARKUP_MIN = 0.07;
 export function minShippingCharge(cost) { return Math.round((Number(cost) || 0) * (1 + SHIPPING_MARKUP_MIN) * 100) / 100; }
+
+// v55.83-XV (Max, Nov 23: "need to have ability to override the 7% requirement with a note that is saved in the audit clearly")
+// The rule stays; a person may save BELOW cost + 7% only with a written reason. The screen asks for it, and the SERVER checks the
+// saved lines itself, refuses without the reason, and writes the reason to the audit trail before it saves anything.
+export var MARKUP_NOTE_MIN = 10;
+export function markupOverrideNote(note) {
+  var n = String(note === null || note === undefined ? '' : note).replace(/\s+/g, ' ').trim();
+  if (n.length < MARKUP_NOTE_MIN) { return { ok: false, error: 'Type the reason for charging less than our shipping cost + 7% (at least ' + MARKUP_NOTE_MIN + ' characters). It is kept on the audit trail with your name.' }; }
+  return { ok: true, note: n.substring(0, 500) };
+}
+// null = the rule is met or does not apply · otherwise { cost, charged, need, short } for these terms, cost and lines
+export function markupShortfall(terms, cost, lines, isShippingLine) {
+  var r = checkShippingTerms(terms, cost, lines, isShippingLine);
+  return r && r.ok && r.markup ? { cost: r.markup.cost, charged: r.markup.charged, need: r.markup.need, short: r.markup.short } : null;
+}
 
 // For the profit report: per release, the shipping-cost estimate typed on its invoices (used only when there is no bill,
 // no typed release estimate and no warehouse figure). Several invoices on one release with different estimates → the
