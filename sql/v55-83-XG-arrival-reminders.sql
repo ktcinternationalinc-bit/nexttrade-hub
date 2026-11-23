@@ -50,5 +50,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_arrival_reminders_auto_slot
 
 -- Read and written only by the Hub server (the screen asks the server; nobody reads the table directly).
 ALTER TABLE public.arrival_reminders ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.arrival_reminders FROM PUBLIC, anon, authenticated;
+-- service_role is in the list on purpose: Supabase gives it EVERY right on a new table by default (delete and truncate too),
+-- so those are taken away first and only read / add / update are given back.
+REVOKE ALL ON public.arrival_reminders FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE ON public.arrival_reminders TO service_role;
