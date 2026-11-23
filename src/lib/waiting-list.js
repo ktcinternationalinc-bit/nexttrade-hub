@@ -19,7 +19,7 @@ export function waitingFor(input) {
   function sec(key, title, hint, go, items) { if (items.length) { items.sort(function (a, b) { return (b.stuck ? 1 : 0) - (a.stuck ? 1 : 0) || (b.age || 0) - (a.age || 0); }); out.push({ key: key, title: title, hint: hint, go: go, items: items }); } }
   function billItem(b, since, limit, extra) {
     var age = days(since, today);
-    return { id: b.id, title: b.vendor_name + ' · bill ' + (b.bill_number || '—'), detail: (extra ? extra + ' · ' : '') + (b.due_date ? 'due ' + b.due_date : 'no due date'), amount: money(b.open != null ? b.open : b.total_amount), age: age, stuck: limit != null && age != null && age >= limit };
+    return { id: b.id, title: b.vendor_name + ' · bill ' + (b.bill_number || '—'), detail: (extra ? extra + ' · ' : '') + (b.due_date ? 'due ' + b.due_date : 'no due date'), amount: money(b.open != null ? b.open : b.total_amount), age: age, stuck: limit != null && age != null && age >= limit, kind: 'bill', bill_number: b.bill_number || '' }; // v55.83-XL — the row can open this exact bill
   }
   function wireItem(w, since, limit, extra) {
     var age = days(since, today);

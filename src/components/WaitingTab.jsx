@@ -46,6 +46,8 @@ export default function WaitingTab(props) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function go(k) { if (props.onGo) { props.onGo(k); } }
+  // v55.83-XL (Max, Nov 23: "open to that specific bill that needs to be updated and then a back button to take you back to the list")
+  function openBill(x, s) { if (props.onOpenBill) { props.onOpenBill({ id: x.id, bill_number: x.bill_number || '', title: x.title, section: s.key }); } }
   var btn = { background: '#ffffff', color: INK, border: '1px solid #94a3b8' };
 
   return <div className="nt-paper rounded-2xl p-4" style={{ background: '#ffffff', border: '1px solid ' + LINE, color: INK }}>
@@ -83,6 +85,7 @@ export default function WaitingTab(props) {
             </div>
             <div className="text-[13px] font-extrabold tabular-nums" style={{ color: INK }}>{x.amount}</div>
             <span className="rounded-full px-2 py-0.5 text-[11px] font-extrabold" style={x.stuck ? { background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5' } : { background: '#f1f5f9', color: SUB, border: '1px solid ' + LINE }}>{x.chip ? x.chip : (x.stuck ? 'stuck · ' : '') + (x.age == null ? '—' : x.age === 0 ? 'today' : x.age + ' day' + (x.age === 1 ? '' : 's'))}</span>
+            {x.kind === 'bill' && props.onOpenBill && <button onClick={function () { openBill(x, s); }} title="Opens this exact bill in Bills. A Back button brings you back to this list." className="rounded-lg px-3 py-1.5 text-[12px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', border: '1px solid #1d4ed8' }}>Open this bill →</button>}
           </div>;
         })}
         {s.items.length > 25 && <div className="px-4 py-2 text-[12px] font-bold" style={{ color: SUB, borderTop: '1px solid #f1f5f9' }}>{'+ ' + (s.items.length - 25) + ' more — open the screen to see them all.'}</div>}

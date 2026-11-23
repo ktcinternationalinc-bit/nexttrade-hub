@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XL',
+    date: '2026-11-23',
+    title: 'Waiting for me: open the exact bill, then go straight back to the list',
+    items: [
+      { text: '**New button on every bill in 🔔 Waiting for me: “Open this bill →”.** It takes you to Bills with that one bill found and opened for you. If the bill still needs validating and you are allowed to validate, its validation checks open right away.' },
+      { text: '**“← Back to the Waiting list”** sits at the top of that screen. One click returns you to the list where you were, and the list refreshes so a bill you just finished is gone from it.' },
+      { text: 'Nothing about the bill changes just by opening it. Wires in the list still open through “Open Wires →” for now.' },
+      { superAdminOnly: true, text: 'Technical: no SQL. waiting-list.js bill items carry kind + bill_number; WaitingTab onOpenBill → AccountingTab openBillFrom (billTarget + the existing SO goFrom / goBack) → BillsTab openBillTarget effect (showBillInList + openValidationFor, once per click, after the list loads).' },
+    ]
+  },
+  {
     version: 'v55.83-XP',
     date: '2026-11-22',
     title: 'The warehouse can read product costs from the Hub (Advanced P&L)',

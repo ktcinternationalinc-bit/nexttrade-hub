@@ -70,12 +70,15 @@ export default function AccountingTab(props) {
   }
   function goBack() {
     var b0 = back; if (!b0) { return; }
-    setBack(null); setSub(b0.sub);
+    setBack(null); setBillTarget(null); setSub(b0.sub);
     setTimeout(function () {
       try { window.scrollTo(0, b0.y || 0); window.dispatchEvent(new CustomEvent('nt-acct-returned', { detail: { sub: b0.sub } })); } catch (e2) {}
     }, 60);
   }
-  function pickTab(k) { setBack(null); setSub(k); }
+  function pickTab(k) { setBack(null); setBillTarget(null); setSub(k); }
+  // v55.83-XL — "Open this bill" from Waiting for me: Bills opens on that exact bill; the Back button (SO) returns to the list
+  var [billTarget, setBillTarget] = useState(null); // { id, bill_number, title, section, n } | null
+  function openBillFrom(t) { if (!t || !t.id) { return; } setBillTarget(Object.assign({}, t, { n: Date.now() })); goFrom('bills'); }
   function alive(k) { return sub === k || (back && back.sub === k); }
   function shown(k) { return { display: sub === k ? 'block' : 'none' }; }
   var [waveKey, setWaveKey] = useState('');
@@ -210,12 +213,12 @@ export default function AccountingTab(props) {
       </div>}
       {alive('dashboard') && <div style={shown('dashboard')}><AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { goFrom('review'); }} /></div>}
       {alive('books_home') && <div className="p-3" style={shown('books_home')}><BooksHomeTab {...props} onGo={goFrom} /></div>}
-      {alive('waiting') && <div className="p-3" style={shown('waiting')}><WaitingTab {...props} onGo={goFrom} /></div>}
+      {alive('waiting') && <div className="p-3" style={shown('waiting')}><WaitingTab {...props} onGo={goFrom} onOpenBill={openBillFrom} /></div>}
       {sub === 'monthend' && <div className="p-3"><MonthEndTab /></div>}
       {sub === 'journals' && <div className="p-3"><JournalEntriesTab /></div>}
       {sub === 'nextrade' && <div className="p-3"><CompanyBooksTab key="nextrade" company="nextrade" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.nextrade.manage'] === true} /></div>}
       {sub === 'rtm' && <div className="p-3"><CompanyBooksTab key="rtm" company="rtm" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.rtm.manage'] === true} /></div>}
-      {sub === 'bills' && <div className="p-3"><BillsTab {...props} /></div>}
+      {sub === 'bills' && <div className="p-3"><BillsTab {...props} openBillTarget={back && back.sub === 'waiting' ? billTarget : null} onBackFromBill={back && back.sub === 'waiting' ? goBack : null} /></div>}
       {sub === 'wires' && <div className="p-3"><WiresTab {...props} /></div>}
       {alive('forecast') && <div className="p-3" style={shown('forecast')}><CashForecastTab {...props} onGo={goFrom} /></div>}
       {alive('period_stats') && <div className="p-3" style={shown('period_stats')}><PeriodStatsTab {...props} onGo={goFrom} /></div>}

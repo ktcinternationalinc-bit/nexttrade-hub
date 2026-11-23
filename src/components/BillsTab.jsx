@@ -131,6 +131,22 @@ export default function BillsTab(props) {
       if (j && j.ok) { setData(j); setLoadErr(''); } else { setLoadErr((j && j.error) || 'Could not load bills.'); toast.error((j && j.error) || 'Could not load bills.'); }
     }).finally(function () { setBusy(false); });
   }
+  // v55.83-XL (Max, Nov 23) — arriving from "Open this bill" in Waiting for me: show that exact bill (filters cleared, row scrolled to,
+  // View bill open) and, when it still needs validating and this person may validate, open its validation checks. Only what is SHOWN changes.
+  var xlDone = useRef(0);
+  var sXl = useState(null); var fromWaiting = sXl[0]; var setFromWaiting = sXl[1]; // { title, validating, missing } | null
+  var xlN = props.openBillTarget ? props.openBillTarget.n : 0;
+  useEffect(function () {
+    var t = props.openBillTarget; if (!t || !t.id) { if (fromWaiting) { setFromWaiting(null); } return; }
+    if (!data || xlDone.current === t.n) { return; }
+    xlDone.current = t.n;
+    var b = (data.bills || []).filter(function (x) { return x.id === t.id; })[0];
+    if (!b) { setFromWaiting({ title: t.title || 'that bill', missing: true }); return; }
+    showBillInList(b);
+    var needsV = (t.section === 'bill_validate' || t.section === 'bill_flags') && canManage && b.record_status === 'active' && b.validation_status !== 'validated';
+    if (needsV) { openValidationFor(b); }
+    setFromWaiting({ title: (b.vendor_name || '') + ' · bill ' + (b.bill_number || '—'), validating: needsV });
+  }, [xlN, data]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(function () { if (canView) { load(); loadCats(); api({ action: 'paid_through_parties' }).then(function (jp) { if (jp && jp.ok && (jp.parties || []).length) { setParties(jp.parties); } }).catch(function () {}); } }, []); // eslint-disable-line
   function loadCats() {
     // v55.83-PJ (Max): "categories for bills should be a dropdown to select
@@ -397,11 +413,13 @@ export default function BillsTab(props) {
     var c = map[st] || map.VOID;
     return <span className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: c[0], color: c[1] }}>{st}</span>;
   }
+  // v55.83-XL — the validation opener as one function (the PENDING chip and "Open this bill" from Waiting for me both use it)
+  function openValidationFor(b) { closePanels(); var dr = b.validation_draft || {}; var v0 = { bill: b, checks: dr.checks || {}, notes: dr.notes || '', price_resolution: dr.price_resolution || '', warehouse_reference: dr.warehouse_reference || '', dir: (b.shipment_direction === 'inbound' || b.shipment_direction === 'outbound') ? b.shipment_direction : (b.default_direction || ''), dirDefault: !b.shipment_direction && !!b.default_direction, btype: BILL_TYPE_LABEL[b.bill_type] ? b.bill_type : '' }; vRef.current = v0; setVSaved(dr.at ? 'Picked up where ' + (dr.by_name || 'someone') + ' left off (' + String(dr.at).substring(0, 16).replace('T', ' ') + ')' : ''); setValidating(v0); }
   function valChip(b) {
     if (b.validation_status === 'validated') {
       return <span><span className="px-2 py-0.5 rounded text-[10px] font-extrabold" title={'Validated ' + (b.validated_at ? String(b.validated_at).substring(0, 10) : '') + (b.validation_notes ? ' — ' + b.validation_notes : '')} style={{ background: '#d1fae5', color: '#065f46' }}>✓ VALIDATED</span>{canManage && b.record_status === 'active' && <button onClick={function () { closePanels(); setRowAsk({ kind: 'reopen', bill: b, text: '' }); }} title="Reopen the validation to fix this bill (it must be validated again before it can be wired)" className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>↩ Reopen</button>}</span>;
     }
-    return <button onClick={function () { if (canManage) { closePanels(); var dr = b.validation_draft || {}; var v0 = { bill: b, checks: dr.checks || {}, notes: dr.notes || '', price_resolution: dr.price_resolution || '', warehouse_reference: dr.warehouse_reference || '', dir: (b.shipment_direction === 'inbound' || b.shipment_direction === 'outbound') ? b.shipment_direction : (b.default_direction || ''), dirDefault: !b.shipment_direction && !!b.default_direction, btype: BILL_TYPE_LABEL[b.bill_type] ? b.bill_type : '' }; vRef.current = v0; setVSaved(dr.at ? 'Picked up where ' + (dr.by_name || 'someone') + ' left off (' + String(dr.at).substring(0, 16).replace('T', ' ') + ')' : ''); setValidating(v0); } }}
+    return <button onClick={function () { if (canManage) { openValidationFor(b); } }}
       className="px-2 py-0.5 rounded text-[10px] font-extrabold" title="Click to run the validation checks"
       style={{ background: '#ffedd5', color: '#431407', border: '1px dashed #fdba74' }}>{b.validation_draft && b.validation_draft.at ? 'PENDING · started' : 'PENDING'}</button>;
   }
@@ -515,6 +533,10 @@ export default function BillsTab(props) {
     {loadErr && <div className="rounded-lg px-3 py-2 mb-2 text-[13px] font-extrabold flex gap-2 items-center flex-wrap" style={{ background: '#fef2f2', color: '#991b1b', border: '2px solid #fca5a5' }}>
       <span>{'⛔ The bills did not load: ' + loadErr}</span>
       <button onClick={load} className="px-2 py-1 rounded text-[12px] font-extrabold" style={{ background: '#991b1b', color: '#ffffff' }}>Try again</button></div>}
+    {fromWaiting && props.openBillTarget && <div id="nt-from-waiting" className="rounded-xl px-3 py-2 mb-2 flex items-center gap-2 flex-wrap" style={{ background: '#eff6ff', color: '#0f172a', border: '2px solid #1d4ed8' }}>
+      {props.onBackFromBill && <button onClick={props.onBackFromBill} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', border: '1px solid #1d4ed8' }}>← Back to the Waiting list</button>}
+      <span className="text-[12px] font-bold" style={{ color: '#0f172a' }}>{fromWaiting.missing ? 'Opened from 🔔 Waiting for me, but ' + fromWaiting.title + ' is no longer in the Bills list (it may have been voided or changed). Go back and press ↻ Refresh.' : 'Opened from 🔔 Waiting for me: ' + fromWaiting.title + (fromWaiting.validating ? ' — its validation checks are open below.' : ' — it is shown below.')}</span>
+    </div>}
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900 mr-1">💸 Bills — what we owe</div>
       <span className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>Open: ${fmt(totals.open)} ({totals.open_count})</span>
