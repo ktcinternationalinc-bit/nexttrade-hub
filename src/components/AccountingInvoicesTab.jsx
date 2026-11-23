@@ -649,12 +649,12 @@ export default function AccountingInvoicesTab(props) {
       .then(function (aj) {
         if (!aj || !aj.ok) { throw new Error('Could not approve the amended invoice: ' + ((aj && aj.error) || 'unknown error')); }
         toast.success('Amended invoice approved — replacing the Wave copy…');
-        return fetch('/api/wave/replace-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, confirm_replace: true, user_id: uid }) }).then(function (r) { return r.json(); });
+        return hubFetch('/api/wave/replace-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, confirm_replace: true, user_id: uid }) }).then(function (r) { return r.json(); });
       })
       .then(function (rj) {
         if (!rj || rj.ok !== true) { throw new Error((rj && rj.error) || 'Wave did not delete the old copy — nothing was changed.'); }
         toast.success('Old Wave copy removed — pushing the amended invoice…');
-        return fetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
+        return hubFetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
       })
       .then(function (pj) {
         // Same result reading as approveAndPushInvoice in the Sync Center: never

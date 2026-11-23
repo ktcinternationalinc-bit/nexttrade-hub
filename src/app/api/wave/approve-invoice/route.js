@@ -10,6 +10,7 @@
 // reports Wave's accepted fields. SWC-safe: var + concat.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { waveCaller } from '../../../../lib/wave-caller'; // v55.83-XK
 import { assertPermission } from '../../../../lib/server-permissions';
 
 var API_BUILD_MARKER = 'v55.83-IN-approve-invoice';
@@ -46,7 +47,7 @@ export async function POST(req) {
     var body = await req.json();
     var waveBusinessId = body.wave_business_id;
     var hubId = body.hub_record_id;
-    var by = body.user_id || null;
+    var by = body.user_id || null; var _vc = await waveCaller(req, by); if (_vc.error) { return Response.json({ ok: false, error: _vc.error }, { status: _vc.status }); } by = _vc.userId; // v55.83-XK — verified sign-in (or the CRON job), never the id in the request
     var _gate = await assertPermission(db, by, 'wave.invoices.push', req);
     if (!_gate.ok) { return NextResponse.json({ ok: false, error: _gate.error, api_build_marker: API_BUILD_MARKER }, { status: _gate.status }); }
     if (!waveBusinessId || !hubId) { return NextResponse.json({ error: 'wave_business_id and hub_record_id are required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }

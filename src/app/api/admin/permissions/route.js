@@ -13,6 +13,7 @@ import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { permFamily } from '../../../../lib/permission-aliases';
 import { audit } from '../../../../lib/audit-server';
+import { researcherConflicts, researcherGuardInstalled, isResearcher, isConflictName, isRevenueName, SQL_MISSING_XK } from '../../../../lib/revenue-researcher-gate'; // v55.83-XK
 
 export const dynamic = 'force-dynamic'; // Next.js route config (the one const the build needs)
 var OWN_ROUTE = { 'bank.view_account_balances': 1, 'Bank: View Account Balances': 1, 'bank_balances.view': 1, 'dashboard.full': 1, 'Full dashboard access': 1, 'Banking information access': 1 };
@@ -49,6 +50,21 @@ export async function POST(req) {
     var t = tRow.data && tRow.data[0];
     if (!t) { return fail('That person is not in the Hub.', 404); }
     if (t.role === 'super_admin') { return fail('A super admin already has every permission; their switches are not changed.', 409); }
+
+    // v55.83-XK — a revenue researcher ("P&L: See sales & revenue" OFF) is a validated configuration (Codex 23 Nov):
+    //   • switching it OFF needs the database step installed and NO switch that leads to the same figures (listed back);
+    //   • while it is OFF, none of those switches can be turned ON. Switching revenue back ON is always allowed.
+    if (isRevenueName(name) && want === false) {
+      if (!(await researcherGuardInstalled(db))) { return fail(SQL_MISSING_XK, 409); }
+      var cf = await researcherConflicts(db, target);
+      if (cf.error) { return fail(cf.error, cf.status); }
+      if (cf.conflicts.length) { return NextResponse.json({ ok: false, error: 'Not changed — turn these OFF for this person first (they show sales or customer money): ' + cf.conflicts.join(', ') + (cf.role && cf.role !== 'team' ? ' (some may come from the role "' + cf.role + '" — change the role if they cannot be switched off).' : '.'), conflicts: cf.conflicts }, { status: 409, headers: { 'Cache-Control': 'private, no-store' } }); }
+    }
+    if (want === true && isConflictName(name)) {
+      var rr = await isResearcher(db, target);
+      if (rr.error) { return fail(rr.error, rr.status); }
+      if (rr.off) { return fail('Not changed — this person has "P&L: See sales & revenue" switched OFF (a revenue researcher), and this switch shows sales or customer money. Switch revenue ON first if they should see it.', 409); }
+    }
 
     var fam = permFamily(name); if (fam.indexOf(name) < 0) { fam.unshift(name); }
     var cur = await db.from('module_permissions').select('id, module_name, has_access').eq('user_id', target).in('module_name', fam);

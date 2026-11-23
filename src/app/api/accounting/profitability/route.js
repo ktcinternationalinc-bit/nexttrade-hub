@@ -22,6 +22,7 @@ import { audit } from '../../../../lib/audit-server';
 import { termsOfBasis } from '../../../../lib/shipping-terms'; // v55.83-TG
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TG
 import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
+import { revenueScope, stripRevenue, REVENUE_REFUSAL } from '../../../../lib/revenue-visibility'; // v55.83-XK — researcher: no revenue
 import { nameKey, relKey, PRICING_BASES, DEFAULT_UNIT_FACTORS, unitKey } from '../../../../lib/profitability';
 import { buildInboundTrucking } from '../../../../lib/inbound-trucking'; // v55.83-VR — tracking only
 import { assembleProfitability } from '../../../../lib/profitability-assemble';
@@ -78,6 +79,11 @@ export async function POST(req) {
     // v55.83-UD (Codex 12:00 P1) — employees see ONLY the permitted history window; super admin sees all-time. Fails closed.
     var vwin = await windowFloorFor(db, pv.ctx); if (vwin.error) { return bad(vwin.error, 503); }
     body.date_from = clampFrom(body.date_from, vwin.floor);
+    // v55.83-XK — one permission read for this whole answer: a researcher ("P&L: See sales & revenue" off) gets no sale / revenue
+    // figure and no profit or margin; a failed read refuses
+    var rs = await revenueScope(db, userId); if (rs.error) { return bad(rs.error, rs.status); }
+    var REV_ONLY = { customer_balances: 1, set_terms: 1, set_customer_basis: 1 }; // customer money, or a write of a revenue-side setting
+    if (!rs.canSee && REV_ONLY[action]) { return bad(REVENUE_REFUSAL + (action === 'customer_balances' ? '' : ' Pricing basis and the transportation inside the price change revenue — nothing was saved.'), 403); }
 
     if (action === 'report') {
       // v55.83-UD — the data is loaded by the shared loader (the P&L uses the very same one), unchanged from before
@@ -90,6 +96,7 @@ export async function POST(req) {
       var seeM = await assertPermission(db, userId, MARGIN_PERMISSION, req); var marginOk = !!(seeM && seeM.ok === true);
       // v55.83-YD (Codex 23 Nov) — vendor credits applied in these dates are NOT counted in these figures yet: said, as a pending adjustment
       var vcPend = await creditsPendingInWindow(db, body.date_from || null, body.date_to || null);
+      if (!rs.canSee) { return NextResponse.json(stripRevenue(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), bills_note: billsNote, warehouse_note: whNote, window_floor: vwin.floor, vendor_credits_pending: vcPend, api_build_marker: API_BUILD_MARKER }, out))); } // XK
       return NextResponse.json(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), can_see_margin: marginOk, bills_note: billsNote, warehouse_note: whNote, window_floor: vwin.floor, vendor_credits_pending: vcPend, api_build_marker: API_BUILD_MARKER }, marginOk ? out : stripProfit(out)));
     }
 
@@ -291,6 +298,7 @@ export async function POST(req) {
       if (!pvK.ok) { return bad(pvK.error); }
       if (action === 'keep_preview') {
         var seeK = await assertPermission(db, userId, MARGIN_PERMISSION, req);
+        if (!rs.canSee) { return NextResponse.json({ ok: true, preview: stripRevenue(pvK), revenue_hidden: true, api_build_marker: API_BUILD_MARKER }); } // XK
         return NextResponse.json({ ok: true, preview: (seeK && seeK.ok === true) ? pvK : stripProfit(pvK), api_build_marker: API_BUILD_MARKER });
       }
       var keysK = pvK.names.map(function (n) { return nameKey(n.name); });

@@ -38,6 +38,7 @@ import { verifiedCaller } from '../../../../lib/verified-caller';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts // v55.83-TO (Codex P1: verified identity for money actions)
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 import { maskCashflow, maskPeriodStats, maskForecast } from '../../../../lib/accounting-access'; // v55.83-RE — unified accounting permissions
+import { revenueScope } from '../../../../lib/revenue-visibility'; // v55.83-XK
 
 // v55.83-QO (Max 15:53: "attempted to add bill from document and nothing
 // happened") — the AI read of a multi-page PDF outlives Vercel's DEFAULT
@@ -2236,7 +2237,12 @@ export async function POST(req) {
         // drill rows: every card's exact underlying records ("show where these numbers came from")
         drills: { invoiced: rowsInvoiced, collected: rowsCollected, collected_on_period: rowsCollectedCohort, open_invoices: rowsOpenInv,
                   billed: rowsBilled, bills_paid: rowsBillsPaid, open_bills: rowsOpenBills } };
+      // v55.83-XK — a researcher ("P&L: See sales & revenue" off) never gets invoice, collected or income figures, whatever the
+      // view switches say (they are refused for that person anyway); a failed permission read refuses the whole answer
+      var rsPs = await revenueScope(db, userId); if (rsPs.error) { return NextResponse.json({ ok: false, error: rsPs.error }, { status: rsPs.status }); }
+      if (!rsPs.canSee) { vis = Object.assign({}, vis, { inv: false, fin: false }); }
       psPayload = maskPeriodStats(psPayload, vis); // v55.83-RE — invoice figures P3, bank/financial P2, bills owed P1
+      if (!rsPs.canSee) { psPayload.revenue_restricted = true; }
       if (xoRestrict) { psPayload.spending = null; psPayload.spending_restricted = { reason: xoRestrict.reason, hidden_starting_balances: xoRestrict.hidden_starting_balances, words: 'Spending, tax and P&L figures for these dates are withheld: they ' + xoRestrict.reason + '. Ask the super admin.' }; } // v55.83-XO
       psPayload.totals_masked = !canTotals; psPayload.rows_visible = canRows; psPayload.vis = vis; psPayload.date_filters_locked = pLocked;
       psPayload.from = pFrom; psPayload.to = pTo; psPayload.ok = true; psPayload.marker = API_BUILD_MARKER;

@@ -508,7 +508,7 @@ export default function WaveSyncCenter(props) {
     fetch('/api/wave/import-customers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: active, userId: uid }) })
       .then(function (r) { return r.json(); })
       .then(function (cust) {
-        return fetch('/api/wave/import-invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: active, userId: uid }) })
+        return hubFetch('/api/wave/import-invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: active, userId: uid }) })
           .then(function (r2) { return r2.json(); })
           .then(function (inv) { return { cust: cust, inv: inv }; });
       })
@@ -818,7 +818,7 @@ export default function WaveSyncCenter(props) {
     if (!invoiceId) { return; }
     if (!canPushInvoice) { toast.error('You do not have the Wave: Invoice push permission.'); return; }
     setBusy(true);
-    fetch('/api/wave/approve-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: invoiceId, user_id: (userProfile && userProfile.id) || null }) })
+    hubFetch('/api/wave/approve-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: invoiceId, user_id: (userProfile && userProfile.id) || null }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (j && j.success) { toast.success('Invoice approved in Wave (' + (j.wave_status || 'SAVED') + ') — it can now accept payments.'); load(); }
@@ -845,7 +845,7 @@ export default function WaveSyncCenter(props) {
       .then(function (aj) {
         if (!aj || !aj.ok) { throw new Error('Could not approve the invoice: ' + ((aj && aj.error) || 'unknown error')); }
         toast.success('Invoice approved — pushing to Wave…');
-        return fetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: invoiceId, dry_run: false, user_id: (userProfile && userProfile.id) || null }) }).then(function (r) { return r.json(); });
+        return hubFetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: invoiceId, dry_run: false, user_id: (userProfile && userProfile.id) || null }) }).then(function (r) { return r.json(); });
       })
       .then(function (pj) {
         // v55.83-MS (gap-finder HIGH) — honor the server's explicit failure shapes. A DRAFT-stuck push returns
@@ -937,7 +937,7 @@ export default function WaveSyncCenter(props) {
   var [probeResult, setProbeResult] = useState(null);
   function runPaymentReadback() {
     setProbeBusy(true); setProbeResult(null);
-    fetch('/api/wave/payment-readback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, user_id: userProfile && userProfile.id }) })
+    hubFetch('/api/wave/payment-readback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (d) { setProbeResult(d); setProbeBusy(false); if (!d || (!d.ok && !d.payments_found)) { toast.error((d && d.error) || 'Read-back failed.'); } else { toast.success('Wave shows ' + (d.payments_found || 0) + ' payment(s) across ' + (d.invoices_scanned || 0) + ' invoice(s).'); } })
       .catch(function (e) { setProbeBusy(false); toast.error((e && e.message) || 'Read-back failed.'); });
@@ -948,7 +948,7 @@ export default function WaveSyncCenter(props) {
   var [prefillResult, setPrefillResult] = useState(null);
   function runPrefillLinks(apply) {
     setPrefillBusy(true); setPrefillResult(null);
-    fetch('/api/wave/prefill-payment-links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, dry_run: !apply, user_id: userProfile && userProfile.id }) })
+    hubFetch('/api/wave/prefill-payment-links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, dry_run: !apply, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         setPrefillResult(d); setPrefillBusy(false);

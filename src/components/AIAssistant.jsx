@@ -568,7 +568,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         } else {
           setLoading(true);
           try {
-            const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: currentPending, userId: myId }) });
+            const res = await hubFetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: currentPending, userId: myId }) });
             const data = await res.json();
             setMessages(prev => [...prev, { role: 'ai', text: data.answer || 'Done.' }]);
             speak(data.answer || 'Done');
@@ -619,7 +619,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         setLoading(false);
         return;
       }
-      const res = await fetch('/api/ask', {
+      const res = await hubFetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -648,7 +648,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     }
     setLoading(true);
     try {
-      const res = await fetch('/api/ask', {
+      const res = await hubFetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: pendingAction, userId: myId }),

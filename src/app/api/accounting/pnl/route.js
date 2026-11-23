@@ -20,6 +20,7 @@ import { NextResponse } from 'next/server';
 import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server'; // v55.83-UD: employees see only their history window
 import { assertPermission } from '../../../../lib/server-permissions';
 import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
+import { revenueScope, stripRevenue } from '../../../../lib/revenue-visibility'; // v55.83-XK
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TG
 import { createClient } from '@supabase/supabase-js';
 import { normalizeProductKey, pickCost, groupCosts } from '../../../../lib/product-cost';
@@ -93,6 +94,14 @@ export async function POST(req) {
     // v55.83-UD (Codex 12:00 P1) — employees see ONLY the permitted history window; super admin sees all-time. Fails closed.
     var vwin = await windowFloorFor(db, pv.ctx); if (vwin.error) { return NextResponse.json({ error: vwin.error }, { status: 503 }); }
     body.date_from = clampFrom(body.date_from, vwin.floor);
+    // v55.83-XK — one permission read for the answer; a researcher gets no revenue, profit or margin (a failed read refuses)
+    var rsP = await revenueScope(db, userId); if (rsP.error) { return NextResponse.json({ error: rsP.error }, { status: rsP.status }); }
+    // report_typed's invoice rows carry the customer's shipping charge under the plain name "shipping" — removed by contract here
+    function researcherView(o) {
+      var c = Object.assign({}, o);
+      if (Array.isArray(c.invoices)) { c.invoices = c.invoices.map(function (i) { var x = Object.assign({}, i); delete x.shipping; return x; }); }
+      return stripRevenue(c);
+    }
 
     var costRowsAll = await fetchAll(function () { return db.from('product_costs').select('id, product_key, product_label, cost_per_unit, effective_from, notes, created_at').order('effective_from', { ascending: false }); });
     var costsByKey = groupCosts(costRowsAll);
@@ -142,6 +151,7 @@ export async function POST(req) {
         totals: views.all.totals, uncosted_products: uncP, bills_note: ld.billsNote, warehouse_note: ld.whNote,
         source: 'Profitability cost engine: costs from the purchase bills (+ commission, inbound allowance, brokerage, bonded); CNF shipping taken out of the price; a P&L-typed cost only where no bill cost exists · CONFIRMED = bill costs + the standard allowances (inbound per lb, $200 bonded per Houston container), no estimate or missing data; TENTATIVE = something missing or estimated · margin on COSTED revenue only',
         api_build_marker: API_BUILD_MARKER };
+      if (!rsP.canSee) { return NextResponse.json(researcherView(outE)); } // XK
       return NextResponse.json(marginE ? outE : stripProfit(outE));
     }
 
@@ -262,7 +272,8 @@ export async function POST(req) {
         source: 'accounting_invoices ' + inv.length + ' live invoices in period · costs effective-dated per invoice date · margin computed on COSTED revenue only · shipping excluded from COGS',
         api_build_marker: API_BUILD_MARKER
       };
-      return NextResponse.json(marginOk2 ? pnlOut : stripProfit(pnlOut));
+      if (!rsP.canSee) { return NextResponse.json(researcherView(pnlOut)); } // XK
+    return NextResponse.json(marginOk2 ? pnlOut : stripProfit(pnlOut));
     }
 
     return NextResponse.json({ error: 'Unknown action.' }, { status: 400 });

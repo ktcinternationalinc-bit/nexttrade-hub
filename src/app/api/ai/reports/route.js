@@ -24,6 +24,7 @@ import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ â
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { revenueScope, AI_REFUSAL } from '../../../../lib/revenue-visibility'; // v55.83-XK
 
 var API_BUILD_MARKER = 'v55.83-NL-ai-reports';
 var MAX_ROWS = 20000;   // absolute safety cap per tool call
@@ -270,6 +271,9 @@ export async function POST(req) {
     var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
     if (whoWQ.error) { return NextResponse.json({ error: whoWQ.error }, { status: whoWQ.status || 401 }); }
     var userId = whoWQ.userId;
+    // v55.83-XK â€” AI reports read sales and customer money: never for a researcher; a failed permission read refuses
+    var rsAI = await revenueScope(db, userId); if (rsAI.error) { return NextResponse.json({ error: rsAI.error }, { status: rsAI.status }); }
+    if (!rsAI.canSee) { return NextResponse.json({ error: AI_REFUSAL }, { status: 403 }); }
     var question = String(body.question || '').trim();
     var history = Array.isArray(body.history) ? body.history.slice(-10) : [];
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }

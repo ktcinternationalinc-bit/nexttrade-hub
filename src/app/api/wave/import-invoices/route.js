@@ -5,6 +5,7 @@
 // wave_imported_paid (NO phantom payment rows), stamps sync fields, writes a
 // report + wave_sync_log. Server-side service-role client. SWC-safe.
 import { createClient } from '@supabase/supabase-js';
+import { waveCaller } from '../../../../lib/wave-caller'; // v55.83-XK
 import { assertPermission } from '../../../../lib/server-permissions';
 
 function num(m) { if (!m || m.value == null) { return 0; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? 0 : v; }
@@ -65,7 +66,7 @@ export async function POST(request) {
   var body = null;
   try { body = await request.json(); } catch (e) { body = {}; }
   var businessId = body && body.businessId;
-  var userId = (body && body.userId) || null;
+  var userId = (body && body.userId) || null; var _vc = await waveCaller(request, userId); if (_vc.error) { return Response.json({ ok: false, error: _vc.error }, { status: _vc.status }); } userId = _vc.userId; // v55.83-XK — verified sign-in (or the CRON job), never the id in the request
   if (!businessId) { return Response.json({ ok: false, error: 'Missing businessId.' }); }
 
   var admin = createClient(supaUrl, serviceKey, { auth: { persistSession: false } });

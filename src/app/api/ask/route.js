@@ -10,6 +10,8 @@ import { runDecisionEngine, detectIntent } from '../../../lib/decision-engine';
 // requireUser validates the supabase session cookie; checkRateLimit
 // caps cost-runaway at 120 ask-calls per user per hour.
 import { requireUser } from '../../../lib/phone-auth';
+import { verifiedCaller } from '../../../lib/verified-caller'; // v55.83-XK — hard sign-in (was soft mode)
+import { revenueScope, AI_REFUSAL } from '../../../lib/revenue-visibility'; // v55.83-XK
 import { checkRateLimit } from '../../../lib/rate-limit';
 // Phase 2 / S13 — Morning briefing engine. Computes top 3 things needing
 // attention when the user logs in for the first time today. See
@@ -205,6 +207,16 @@ export async function POST(request) {
     var action = body.action;
     var userId = body.userId;
     if (!question && !action) return Response.json({ answer: 'No question received' });
+
+    // v55.83-XK (Codex 22 Nov: AI paths are an alternate route to sales figures) — the assistant now acts ONLY for the verified
+    // signed-in person (the screens send the sign-in token through hubFetch); the old soft mode (no session = served anyway) is gone.
+    // A researcher ("P&L: See sales & revenue" off) gets no assistant at all; a failed permission read refuses.
+    var whoXK = await verifiedCaller(request, { user_id: userId || null }, createClient);
+    if (whoXK.error) return Response.json({ answer: 'Please sign in again — the assistant could not confirm who you are.', error: whoXK.error }, { status: whoXK.status || 401 });
+    userId = whoXK.userId;
+    var rsXK = await revenueScope(supabase, userId);
+    if (rsXK.error) return Response.json({ answer: rsXK.error, error: rsXK.error }, { status: rsXK.status });
+    if (!rsXK.canSee) return Response.json({ answer: AI_REFUSAL, error: AI_REFUSAL }, { status: 403 });
 
     // v55.81 QA-14 (Max May 9 2026): authenticate the request and verify
     // body.userId matches the session. Without this, a user could call

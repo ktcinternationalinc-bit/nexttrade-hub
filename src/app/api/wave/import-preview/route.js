@@ -3,10 +3,15 @@
 // imported. Writes NOTHING. Token stays server-side.
 import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ
+import { revenueScope, REVENUE_REFUSAL } from '../../../../lib/revenue-visibility'; // v55.83-XK
 export async function GET(request) {
   // v55.83-WQ (Codex 21 Nov, F3) — answers only a verified, signed-in Hub user (this route had no sign-in check)
   var whoWQ = await verifiedCaller(request, null, createClient);
   if (whoWQ.error) { return Response.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+  // v55.83-XK — Wave invoice totals / paid / due: never for a researcher ("P&L: See sales & revenue" off); fails closed
+  var rsXK = await revenueScope(createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }), whoWQ.userId);
+  if (rsXK.error) { return Response.json({ ok: false, error: rsXK.error }, { status: rsXK.status }); }
+  if (!rsXK.canSee) { return Response.json({ ok: false, error: REVENUE_REFUSAL }, { status: 403 }); }
   var token = process.env.WAVE_ACCESS_TOKEN;
   if (!token) {
     return Response.json({ ok: false, configured: false, error: 'No Wave token configured. Add WAVE_ACCESS_TOKEN in Vercel and redeploy.' });

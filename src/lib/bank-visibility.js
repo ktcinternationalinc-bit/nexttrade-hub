@@ -1,6 +1,7 @@
 // Independent server-only dashboard and bank balance authorities. Operational transactions, invoice payments,
 // bills and categorization retain their own permissions. Neither a legacy role
 // nor a writable module_permissions row can grant account balances.
+import { effectiveSwitch } from './permission-aliases'; // v55.83-XK — the researcher check (no import of server-permissions: no cycle)
 export class BankVisibilityError extends Error {
   constructor(message, status) { super(message); this.name = 'BankVisibilityError'; this.status = status; }
 }
@@ -176,6 +177,16 @@ export function createBankVisibilityHandlers(createClient, env) {
       var target = targets[0];
       if (bankSuperAdminIds(env).includes(target.auth_user_id.toLowerCase()) || (await roleSuperProfileIds(access.db))[target.profile_id] === true)
         reject('A super admin always sees everything — their access is not changed here.', 409);
+      // v55.83-XK (Codex 23 Nov) — a revenue researcher ("P&L: See sales & revenue" OFF) can never be given bank balances or the full
+      // dashboard here either (both rebuild money received). Removing access is always allowed. Fails closed on a failed read.
+      if ((hasDashboard && body.canViewFullDashboard === true) || (hasBank && body.canViewBankBalances === true)) {
+        var mpX = await access.db.from('module_permissions').select('module_name, has_access').eq('user_id', target.profile_id);
+        if (mpX.error) reject('The person’s switches could not be read — nothing was changed.', 503);
+        var onX = {}, offX = {};
+        (mpX.data || []).forEach(function (r) { if (r.has_access === true) onX[r.module_name] = true; else if (r.has_access === false) offX[r.module_name] = true; });
+        if (effectiveSwitch(onX, offX, 'pnl.view_revenue') === false)
+          reject('Not changed — this person has "P&L: See sales & revenue" switched OFF (a revenue researcher); bank balances and the full dashboard show customer money. Switch revenue ON first.', 409);
+      }
       // One database transaction changes the grant and appends its audit event.
       // Re-resolve the profile within that transaction to reject changed targets.
       var saved = await access.db.rpc('bank_visibility_set_grant', {

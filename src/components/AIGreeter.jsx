@@ -2163,7 +2163,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, closedTic
           // with "something went wrong" before the user has even said hi.
           try { console.log('[nadia] greeting fetch failed (' + res.status + '), retrying once'); } catch (e) {}
           await new Promise(function(r) { setTimeout(r, 1500); });
-          var res2 = await fetch(endpoint, {
+          var res2 = await hubFetch(endpoint, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
@@ -2219,7 +2219,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, closedTic
       // much better than silently shortening Nadia's output.
       if (!aiText) {
         try {
-          var res2 = await fetch(endpoint, {
+          var res2 = await hubFetch(endpoint, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });

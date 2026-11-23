@@ -19,6 +19,7 @@
 // SWC-safe: var + string concat only.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { waveCaller } from '../../../../lib/wave-caller'; // v55.83-XK
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { roundMoney, isPaymentVoid } from '../../../../lib/payment-matching';
@@ -46,7 +47,7 @@ export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
-    var by = body.user_id || null;
+    var by = body.user_id || null; var _vc = await waveCaller(req, by); if (_vc.error) { return Response.json({ ok: false, error: _vc.error }, { status: _vc.status }); } by = _vc.userId; // v55.83-XK — verified sign-in (or the CRON job), never the id in the request
     var waveBusinessId = body.wave_business_id || null;
     var isDry = body.dry_run !== false; // DEFAULT dry-run; must pass dry_run:false to write
     var windowDays = Number(body.date_window_days); if (!(windowDays >= 0)) { windowDays = 0; }

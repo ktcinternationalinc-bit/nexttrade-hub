@@ -23,6 +23,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { scanForAlerts } from '../../../../lib/decision-engine';
+import { loadUserPermissions, revenueSwitchedOff } from '../../../../lib/server-permissions'; // v55.83-XK
 import * as briefingEngine from '../../../../lib/briefing-engine';
 
 var supabase = createClient(
@@ -92,9 +93,14 @@ async function runWatch(specificUserId) {
   for (var i = 0; i < userIds.length; i++) {
     summary.users_scanned++;
     var uid = userIds[i];
+    // v55.83-XK — the money alerts (customer balances, collections, overdue amounts) are never written for a person whose
+    // "P&L: See sales & revenue" is off, nor when that cannot be checked (fail closed). The Gmail scan is not money and stays.
+    var moneyOk = false;
+    try { var ctxR = await loadUserPermissions(supabase, uid); moneyOk = !ctxR.readError && !revenueSwitchedOff(ctxR); } catch (eR) { moneyOk = false; }
+    if (!moneyOk) { summary.revenue_skipped = (summary.revenue_skipped || 0) + 1; }
 
     // SCAN 1 — original decision engine alerts
-    try {
+    if (moneyOk) try {
       var alerts = await scanForAlerts(uid);
       if (alerts && alerts.length > 0) {
         var insRes = await supabase.from('ai_alerts')
@@ -112,7 +118,7 @@ async function runWatch(specificUserId) {
     } catch (e) { summary.errors.push('scanForAlerts ' + uid + ': ' + e.message); }
 
     // SCAN 2 — Phase 2 briefing engine. Top 3 become alerts.
-    try {
+    if (moneyOk) try {
       var ctx = await loadUserBusinessContext(uid);
       var briefing = briefingEngine.buildBriefing(ctx);
       if (briefing && briefing.top3 && briefing.top3.length > 0) {

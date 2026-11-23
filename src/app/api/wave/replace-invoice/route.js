@@ -34,6 +34,7 @@
 // SWC-safe: var + string concatenation only.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { waveCaller } from '../../../../lib/wave-caller'; // v55.83-XK
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
@@ -77,7 +78,7 @@ export async function POST(req) {
     var waveBusinessId = body.wave_business_id;
     var hubId = body.hub_record_id;
     var dryRun = body.dry_run === true;
-    var by = body.user_id || null;
+    var by = body.user_id || null; var _vc = await waveCaller(req, by); if (_vc.error) { return Response.json({ ok: false, error: _vc.error }, { status: _vc.status }); } by = _vc.userId; // v55.83-XK — verified sign-in (or the CRON job), never the id in the request
 
     var _gate = await assertPermission(db, by, 'wave.invoices.push', req);
     if (!_gate.ok) { return NextResponse.json({ ok: false, error: _gate.error }, { status: _gate.status }); }

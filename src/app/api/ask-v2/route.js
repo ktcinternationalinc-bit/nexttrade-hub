@@ -26,6 +26,7 @@ import { getToolsForAPI, validateToolCall } from '../../../lib/nadia-tools';
 import { sanitizeErr } from '../../../lib/sanitize-error';
 import { verifiedCaller } from '../../../lib/verified-caller'; // v55.83-WQ
 import { assertPermission } from '../../../lib/server-permissions'; // v55.83-WQ
+import { revenueScope, AI_REFUSAL } from '../../../lib/revenue-visibility'; // v55.83-XK
 
 var supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -341,6 +342,9 @@ export async function POST(request) {
     var whoWQ = await verifiedCaller(request, { user_id: body.userId || null }, createClient);
     if (whoWQ.error) return Response.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 });
     var userId = whoWQ.userId;
+    // v55.83-XK — the assistant reads sales, invoices and customer money: never for a researcher ("P&L: See sales & revenue" off)
+    var rsAI = await revenueScope(supabase, userId); if (rsAI.error) return Response.json({ ok: false, error: rsAI.error }, { status: rsAI.status });
+    if (!rsAI.canSee) return Response.json({ ok: false, error: AI_REFUSAL }, { status: 403 });
     var totWQ = await assertPermission(supabase, userId, 'accounting.view_totals', request);
 
     if (!question) return Response.json({ ok: false, error: 'missing question' });

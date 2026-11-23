@@ -47,7 +47,7 @@ export default function WaveReconciliationCenter(props) {
   function runCompare() {
     if (!waveBiz) { toast.error('Select a Wave business first.'); return; }
     setLoading(true); setReport(null); setChoices({}); setResults({});
-    fetch('/api/wave/reconcile-detail', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: waveBiz, userId: (userProfile && userProfile.id) || null }) })
+    hubFetch('/api/wave/reconcile-detail', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: waveBiz, userId: (userProfile && userProfile.id) || null }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (!j || j.ok !== true) { toast.error('Compare failed: ' + ((j && j.error) || 'unknown')); return; }
@@ -98,15 +98,15 @@ export default function WaveReconciliationCenter(props) {
         if (act.kind === 'push') {
           var ap = await hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: d.hub_id, status: 'approved', user_id: uid }) }).then(function (r) { return r.json(); });
           if (!ap || !ap.ok) { throw new Error('approve failed: ' + ((ap && ap.error) || '?')); }
-          var pj = await fetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
+          var pj = await hubFetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
           if (pj && (pj.success === true || pj.ok === true) && pj.currency_mismatch !== true) { setRowResult(k, 'done', 'Pushed to Wave' + (pj.needs_approval ? ' (still DRAFT in Wave — approve it in the Sync Center)' : '')); }
           else { throw new Error((pj && pj.error) || 'push refused'); }
         } else if (act.kind === 'replace_push') {
           var ap2 = await hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: d.hub_id, status: 'approved', user_id: uid }) }).then(function (r) { return r.json(); });
           if (!ap2 || !ap2.ok) { throw new Error('approve failed: ' + ((ap2 && ap2.error) || '?')); }
-          var rj = await fetch('/api/wave/replace-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, confirm_replace: true, user_id: uid }) }).then(function (r) { return r.json(); });
+          var rj = await hubFetch('/api/wave/replace-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, confirm_replace: true, user_id: uid }) }).then(function (r) { return r.json(); });
           if (!rj || rj.ok !== true) { throw new Error((rj && rj.error) || 'Wave refused the replace — nothing changed on this line'); }
-          var pj2 = await fetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
+          var pj2 = await hubFetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
           if (pj2 && (pj2.success === true || pj2.ok === true) && pj2.currency_mismatch !== true) { setRowResult(k, 'done', 'Wave now matches the Hub version'); }
           else { throw new Error('old copy removed but re-push failed: ' + ((pj2 && pj2.error) || '?') + ' — invoice is in Pending Sync, push it from the Sync Center'); }
         } else if (act.kind === 'delete_hub') {
@@ -124,7 +124,7 @@ export default function WaveReconciliationCenter(props) {
           var okCount = 0; var failMsg = null;
           for (var pi2 = 0; pi2 < (d.unpushed_payments || []).length; pi2++) {
             var pay = d.unpushed_payments[pi2];
-            var ppj = await fetch('/api/wave/push-payment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: pay.id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
+            var ppj = await hubFetch('/api/wave/push-payment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: pay.id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
             if (ppj && (ppj.success === true || ppj.ok === true)) { okCount += 1; }
             else { failMsg = (ppj && ppj.error) || 'payment push refused'; break; }
           }
@@ -150,7 +150,7 @@ export default function WaveReconciliationCenter(props) {
     // mismatched, touches nothing else).
     if (needsImport) {
       try {
-        var ij = await fetch('/api/wave/import-invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: waveBiz, userId: uid }) }).then(function (r) { return r.json(); });
+        var ij = await hubFetch('/api/wave/import-invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: waveBiz, userId: uid }) }).then(function (r) { return r.json(); });
         var iok = !!(ij && (ij.ok === true || ij.report));
         keys.forEach(function (kk) {
           if (results[kk] && results[kk].status !== 'queued_import') { return; }

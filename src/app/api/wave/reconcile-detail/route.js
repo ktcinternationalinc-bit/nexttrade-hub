@@ -33,6 +33,7 @@
 //
 // SWC-safe: var + string concatenation only.
 import { createClient } from '@supabase/supabase-js';
+import { waveCaller } from '../../../../lib/wave-caller'; // v55.83-XK
 import { assertPermission } from '../../../../lib/server-permissions';
 
 var API_BUILD_MARKER = 'v55.83-ND-reconcile-detail';
@@ -100,7 +101,7 @@ export async function POST(request) {
   if (!businessId) { return Response.json({ ok: false, error: 'Missing businessId.' }); }
 
   var admin = createClient(supaUrl, serviceKey, { auth: { persistSession: false } });
-  var userId = (body && body.userId) || (body && body.user_id) || null;
+  var userId = (body && body.userId) || (body && body.user_id) || null; var _vc = await waveCaller(request, userId); if (_vc.error) { return Response.json({ ok: false, error: _vc.error }, { status: _vc.status }); } userId = _vc.userId; // v55.83-XK — verified sign-in (or the CRON job), never the id in the request
   var _gate = await assertPermission(admin, userId, 'wave.import.run', request);
   if (!_gate.ok) { return Response.json({ ok: false, error: _gate.error }, { status: _gate.status }); }
 

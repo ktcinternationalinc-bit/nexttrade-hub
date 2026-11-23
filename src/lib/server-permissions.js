@@ -78,24 +78,54 @@ export async function loadUserPermissions(db, userId) {
   var role = null;
   var mpMap = {}; var denyMap = {};
   if (!userId) { return { role: null, isSuperAdmin: false, mp: mpMap, deny: denyMap }; }
+  // v55.83-XK (Codex 22 Nov 19:38 / 23 Nov) — a FAILED read is remembered (readError) and denies everything below the super admin:
+  // with an explicit OFF switch in play (P&L: See sales & revenue) a missing OFF row must never be read as "no OFF row".
+  var readError = null;
   try {
     var uRes = await db.from('users').select('id, role').eq('id', userId).limit(1);
+    if (uRes && uRes.error) { readError = 'users: ' + (uRes.error.message || 'error'); }
     var u = uRes && uRes.data && uRes.data[0];
     role = u ? u.role : null;
-  } catch (eU) { role = null; }
+  } catch (eU) { role = null; readError = 'users: ' + ((eU && eU.message) || 'error'); }
   try {
     var mpRes = await db.from('module_permissions').select('module_name, has_access').eq('user_id', userId);
+    if (mpRes && mpRes.error) { readError = 'module_permissions: ' + (mpRes.error.message || 'error'); }
     var rows = (mpRes && mpRes.data) || [];
     var i;
     for (i = 0; i < rows.length; i++) { if (rows[i].has_access === true) { mpMap[rows[i].module_name] = true; } else if (rows[i].has_access === false) { denyMap[rows[i].module_name] = true; } }
-  } catch (eM) { mpMap = {}; denyMap = {}; }
-  return { role: role, isSuperAdmin: role === 'super_admin', mp: mpMap, deny: denyMap };
+  } catch (eM) { mpMap = {}; denyMap = {}; readError = 'module_permissions: ' + ((eM && eM.message) || 'error'); }
+  return { role: role, isSuperAdmin: role === 'super_admin', mp: mpMap, deny: denyMap, readError: readError };
 }
+
+// v55.83-XK (Max, 22 Nov: "build a permission that hides revenue too") — 'P&L: See sales & revenue'. ON for everyone who has
+// P&L: View unless the super admin switched it OFF for that person (an explicit OFF row, under any of its names, wins for staff,
+// owner and admin alike). OFF = a RESEARCHER: no sale price, invoiced amount, revenue, profit or margin anywhere, and none of the
+// switches that lead to the same figures (REVENUE_CONFLICT_*) — the resolver refuses those too, whatever their own rows say.
+export var REVENUE_PERMISSION = 'pnl.view_revenue';
+export var ROLE_DEFAULTS_FOR_GATE = ROLE_DEFAULTS; // read-only use by the researcher gate (what a role grants by itself)
+export var REVENUE_CONFLICT_PREFIXES = ['invoice.', 'invoices.', 'ar.', 'payments.', 'commercial.', 'accounting.customers.', 'customers.', 'dashboard.', 'bank_balances.'];
+export var REVENUE_CONFLICT_KEYS = { 'pnl.view_margin': 1, 'accounting.view_invoicing': 1, 'accounting.view_totals': 1, 'wave.invoices.push': 1, 'wave.payments.push': 1, 'wave.customers.push': 1, 'reports.sales': 1, 'sales.view': 1 };
+// v55.83-XK (inventory 23 Nov: ClickBooks, Wave, orders, reconciliation and bank routes also return customer money under their own
+// switches) — a researcher is an ALLOW-LIST: among the accounting & banking switches only these three; every other one conflicts.
+export var RESEARCHER_ALLOWED = { 'pnl.view': 1, 'pnl.edit_costs': 1, 'pnl.view_revenue': 1 };
+export function isRevenueConflict(perm) {
+  var p = String(perm || ''); if (RESEARCHER_ALLOWED[p] === 1) { return false; }
+  if (REVENUE_CONFLICT_KEYS[p] === 1) { return true; }
+  if (isAccountingPerm(p)) { return true; }
+  for (var i = 0; i < REVENUE_CONFLICT_PREFIXES.length; i++) { if (p.indexOf(REVENUE_CONFLICT_PREFIXES[i]) === 0) { return true; } }
+  return false;
+}
+// true only for a person the super admin switched OFF (never for the super admin)
+export function revenueSwitchedOff(ctx) { return !!(ctx && ctx.isSuperAdmin !== true && effectiveSwitch(ctx.mp, ctx.deny, REVENUE_PERMISSION) === false); }
 
 export function userHasPermission(ctx, perm) {
   if (!ctx) { return false; }
   if (perm === 'bank_balances.view') { return ctx.bankVisibility?.canViewBankBalances === true; }
   if (ctx.isSuperAdmin === true) { return true; }       // super_admin = all
+  if (ctx.readError) { return false; }                  // v55.83-XK — a failed permission read grants nothing (fail closed)
+  // v55.83-XK — revenue: default ON with P&L: View, an explicit OFF wins; OFF also refuses every switch that leads to revenue
+  if (perm === REVENUE_PERMISSION) { return !revenueSwitchedOff(ctx) && userHasPermission(ctx, 'pnl.view'); }
+  if (revenueSwitchedOff(ctx) && isRevenueConflict(perm)) { return false; }
   // v55.83-UG (Codex QA 18:06) — the canonical key counts too, and an OFF under any name of the switch wins (same rule as the Settings page)
   var eff = effectiveSwitch(ctx.mp, ctx.deny, perm);
   if (eff === true) { return true; }
@@ -118,6 +148,12 @@ export async function assertPermission(db, userId, perm, request) {
       // actual bearer explicitly, so a supplied userId cannot select identity.
       var bank = await authorizeBankVisibility(request, function () { return db; }, process.env);
       if (!bank.canViewBankBalances) return { ok: false, status: 403, error: 'You do not have bank balance access.' };
+      // v55.83-XK — a revenue researcher never sees bank balances (balances rebuild money received), whatever the grant says
+      if (!bank.isVerifiedSuperAdmin) {
+        var ctxB = await loadUserPermissions(db, bank.profileId || userId);
+        if (ctxB.readError) return { ok: false, status: 503, error: 'Permissions could not be read — nothing shown.' };
+        if (revenueSwitchedOff(ctxB)) return { ok: false, status: 403, error: 'Bank balances are not shown to a person with "P&L: See sales & revenue" switched off.' };
+      }
       return { ok: true, via: bank.isVerifiedSuperAdmin ? 'verified_super_admin' : 'bank_balance_grant',
         ctx: { bankVisibility: { canViewBankBalances: true }, authUserId: bank.authUserId, profileId: bank.profileId } };
     } catch (error) {
@@ -132,6 +168,7 @@ export async function assertPermission(db, userId, perm, request) {
 
   if (!userId) { return { ok: false, status: 403, error: 'Unauthorized — this action requires the "' + perm + '" permission (no user provided).' }; }
   var ctx = await loadUserPermissions(db, userId);
+  if (ctx.readError && ctx.isSuperAdmin !== true) { return { ok: false, status: 503, error: 'Permissions could not be read right now — nothing was shown or changed. Try again.' }; } // v55.83-XK
   if (userHasPermission(ctx, perm)) { return { ok: true, via: ctx.isSuperAdmin ? 'super_admin' : 'permission', ctx: ctx }; }
   return { ok: false, status: 403, error: 'You do not have permission to perform this action ("' + perm + '").' };
 }

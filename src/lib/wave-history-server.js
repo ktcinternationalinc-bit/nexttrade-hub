@@ -1,6 +1,7 @@
 import 'server-only';
 import { createClient } from '@supabase/supabase-js';
 import { requireUser } from './phone-auth';
+import { loadUserPermissions, revenueSwitchedOff } from './server-permissions'; // v55.83-XK
 import { buildWaveComparison, comparisonPeriods, currencyScale, WaveHistoryError, waveCurrency } from './wave-history';
 
 export const WAVE_HISTORY_BUSINESS = 'nextrade';
@@ -19,6 +20,15 @@ export async function authorizeWaveHistory(request) {
   // Use an archive-owned grant. Hub roles and module permissions are editable via the main Data API.
   const grant = await waveHistoryRpc(db, 'wave_history_access', { p_user_id: user.id });
   if (!grant) throw new WaveHistoryError('You do not have access to Wave History.', 403);
+  // v55.83-XK — archived income by month is revenue: never for a researcher ("P&L: See sales & revenue" off). The sign-in is mapped
+  // to the Hub profile; a failed lookup refuses (fails closed); a sign-in with no Hub profile cannot be a researcher.
+  const prof = await db.rpc('bank_visibility_profile_for_identity', { p_auth_user_id: user.id });
+  if (prof.error) throw new WaveHistoryError('Permissions could not be read right now — nothing was shown.', 503);
+  for (const row of (prof.data || [])) {
+    const ctx = await loadUserPermissions(db, row.profile_id);
+    if (ctx.readError) throw new WaveHistoryError('Permissions could not be read right now — nothing was shown.', 503);
+    if (revenueSwitchedOff(ctx)) throw new WaveHistoryError('Wave History shows income, and "P&L: See sales & revenue" is off for you — ask the super admin.', 403);
+  }
   return {
     db,
     actor: user.id,

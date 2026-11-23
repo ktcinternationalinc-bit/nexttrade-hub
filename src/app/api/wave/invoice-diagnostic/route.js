@@ -4,6 +4,7 @@
 // current DB row, so we can see exactly which Wave field holds the real total.
 import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ
+import { revenueScope, REVENUE_REFUSAL } from '../../../../lib/revenue-visibility'; // v55.83-XK
 
 function num(m) { if (!m || m.value == null) { return null; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? null : v; }
 
@@ -18,6 +19,11 @@ export async function POST(request) {
   // v55.83-WQ (Codex 21 Nov, F3) — answers only a verified, signed-in Hub user (this route had no sign-in check)
   var whoWQ = await verifiedCaller(request, body, createClient);
   if (whoWQ.error) { return Response.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
+  // v55.83-XK — Wave invoice totals / amounts paid / due: never for a researcher ("P&L: See sales & revenue" off); fails closed
+  var dbXK = createClient(supaUrl, serviceKey, { auth: { persistSession: false } });
+  var rsXK = await revenueScope(dbXK, whoWQ.userId);
+  if (rsXK.error) { return Response.json({ ok: false, error: rsXK.error }, { status: rsXK.status }); }
+  if (!rsXK.canSee) { return Response.json({ ok: false, error: REVENUE_REFUSAL }, { status: 403 }); }
   var businessId = body && body.businessId;
   if (!businessId) { return Response.json({ ok: false, error: 'Missing businessId.' }); }
 

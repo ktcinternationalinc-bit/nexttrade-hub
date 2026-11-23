@@ -23,6 +23,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { authorizeBankIdentity } from '../../../../lib/bank-visibility';
 import { audit } from '../../../../lib/audit-server';
+import { revenueScope, dropInvoiceTotals } from '../../../../lib/revenue-visibility'; // v55.83-XK
 import { buildRecords, matchInvoices, compareBills, comparable, rowComparable, diffComparable, toRow, BACKFILL_FROM } from '../../../../lib/warehouse-shipping';
 import { warehouseFeedConfig } from '../../../../lib/warehouse-feed-config'; // v55.83-UU — approved warehouse addresses only
 import { readFeedBody } from '../../../../lib/warehouse-feed-read'; // v55.83-YA
@@ -187,6 +188,9 @@ export async function POST(req) {
     var userId = who.userId;
     var pv = await assertPermission(db, userId, 'pnl.view', req);
     if (!pv || pv.ok !== true) { return bad('This needs the "P&L: View" permission — grant it in Settings → Module Access.', 403); }
+    // v55.83-XK — the stored rows (and their history) name each matched invoice WITH its total: removed for a researcher
+    var rsW = await revenueScope(db, userId); if (rsW.error) { return bad(rsW.error, rsW.status); }
+    function forViewer(v) { return rsW.canSee ? v : dropInvoiceTotals(v); }
 
     if (action === 'list') {
       var active; var rows;
@@ -199,7 +203,7 @@ export async function POST(req) {
       var st = await setting(db, 'use_in_pnl', false);
       var canEdit = await assertPermission(db, userId, 'pnl.edit_costs', req);
       var two = new Date(); two.setFullYear(two.getFullYear() - 2); var twoIso = two.toISOString().substring(0, 10);
-      return NextResponse.json({ ok: true, rows: rows, active_source: active.value, open_from: twoIso, backfill_from: BACKFILL_FROM, runs: runs.data || [], last_success: (lastOk.data || [])[0] || null,
+      return NextResponse.json({ ok: true, rows: forViewer(rows), revenue_hidden: rsW.canSee ? undefined : true, active_source: active.value, open_from: twoIso, backfill_from: BACKFILL_FROM, runs: runs.data || [], last_success: (lastOk.data || [])[0] || null,
         use_in_pnl: st.value === true, use_in_pnl_changed: st.updated_at ? { by: st.updated_by, at: st.updated_at } : null,
         can_edit: !!(canEdit && canEdit.ok === true), feed_host: feedConfig().host || null, api_build_marker: API_BUILD_MARKER });
     }
@@ -207,7 +211,7 @@ export async function POST(req) {
       if (!body.record_id) { return bad('record_id required'); }
       var hr = await db.from('pl_warehouse_shipping_history').select('id, run_id, changed_by, changed_at, kind, changes').eq('record_id', body.record_id).order('changed_at', { ascending: false }).limit(100);
       if (hr.error) { return bad(hr.error.message); }
-      return NextResponse.json({ ok: true, history: hr.data || [], api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, history: forViewer(hr.data || []), api_build_marker: API_BUILD_MARKER });
     }
 
     // ── everything below changes something: P&L: Edit Product Costs ──

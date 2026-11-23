@@ -34,6 +34,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { businessOfInvoice } from '../../../../lib/business-of';
 import { createClient } from '@supabase/supabase-js';
 import { audit } from '../../../../lib/audit-server';
+import { revenueScope, REVENUE_REFUSAL } from '../../../../lib/revenue-visibility'; // v55.83-XK
 import { reconLines, reconProgress, reconNext } from '../../../../lib/order-recon'; // v55.83-RG
 
 var API_BUILD_MARKER = 'v55.83-NM-nexttrade-reconcile';
@@ -150,6 +151,9 @@ export async function POST(req) {
     if (whoWQ.error) { return NextResponse.json({ error: whoWQ.error }, { status: whoWQ.status || 401 }); }
     var userId = whoWQ.userId;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
+    // v55.83-XK — order reconciliation lists invoice totals, open balances and Egypt sales: never for a researcher; fails closed
+    var rsN = await revenueScope(db, userId); if (rsN.error) { return NextResponse.json({ error: rsN.error }, { status: rsN.status }); }
+    if (!rsN.canSee) { return NextResponse.json({ error: REVENUE_REFUSAL }, { status: 403 }); }
     // v55.83-OI (Max): entering a release number is quick data entry — ANY team
     // member does it. Only the heavier actions stay Owner/Admin.
     var OPEN_ACTIONS = { set_release: true, list_missing: true };

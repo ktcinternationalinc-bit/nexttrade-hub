@@ -133,7 +133,7 @@ export default function WaveImportTab(props) {
     var blkI = importBlockReason(); if (blkI) { window.alert(blkI); return; }
     if (!window.confirm('Import ALL invoices (and their line items) from the selected Wave business into the Hub? Safe and re-runnable — it matches on Wave invoice ID, so re-running updates instead of duplicating. Make sure you imported customers first.')) return;
     setImportingInv(true); setInvReport(null);
-    fetch('/api/wave/import-invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
+    hubFetch('/api/wave/import-invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (d) { setInvReport(d && d.report ? d.report : { errors: [d && d.error ? d.error : 'Unknown error'] }); })
       .catch(function (e) { setInvReport({ errors: ['Request failed: ' + ((e && e.message) || 'unknown')] }); })
@@ -145,7 +145,7 @@ export default function WaveImportTab(props) {
     var blkE = importBlockReason(); if (blkE) { window.alert(blkE); return; }
     if (!window.confirm('Import ALL estimates from the selected Wave business into the Hub as Proformas? Safe and re-runnable — matches on Wave estimate ID. Import customers first.')) return;
     setImportingEst(true); setEstReport(null);
-    fetch('/api/wave/import-estimates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
+    hubFetch('/api/wave/import-estimates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (d) { setEstReport(d && d.report ? d.report : { errors: [d && d.error ? d.error : 'Unknown error'] }); })
       .catch(function (e) { setEstReport({ errors: ['Request failed: ' + ((e && e.message) || 'unknown')] }); })
@@ -198,7 +198,7 @@ export default function WaveImportTab(props) {
   function runPaymentReadback() {
     if (!bizId) { window.alert('Choose a Wave business first.'); return; }
     setProbeBusy(true); setProbeResult(null);
-    fetch('/api/wave/payment-readback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, user_id: userProfile && userProfile.id }) })
+    hubFetch('/api/wave/payment-readback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (d) { setProbeResult(d); })
       .catch(function (e) { setProbeResult({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
@@ -208,7 +208,7 @@ export default function WaveImportTab(props) {
   function runPrefillLinks(apply) {
     if (!bizId) { window.alert('Choose a Wave business first.'); return; }
     setPrefillBusy(true); setPrefillResult(null);
-    fetch('/api/wave/prefill-payment-links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, dry_run: !apply, user_id: userProfile && userProfile.id }) })
+    hubFetch('/api/wave/prefill-payment-links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, dry_run: !apply, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (d) { setPrefillResult(d); })
       .catch(function (e) { setPrefillResult({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
@@ -222,7 +222,7 @@ export default function WaveImportTab(props) {
   function runReconcile() {
     if (!bizId) { return; }
     setReconBusy(true); setRecon(null);
-    fetch('/api/wave/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
+    hubFetch('/api/wave/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { setRecon(j); })
       .catch(function (e) { setRecon({ ok: false, error: String(e) }); })
