@@ -6,7 +6,7 @@
 // shipment (release): trucking, freight, other — and the bond amount inside the charge, for information. It is saved for the
 // release through the Profitability route (its own permission), NOT into the invoice: the invoice, its PDF and what is sent to
 // Wave never see it. A trucking bill later replaces only the trucking figure; the others stay.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
 // Pure: what was TYPED for one release — nothing else. (Codex 17:40: this box is for entering costs. It shows NO margin and NO
@@ -64,13 +64,14 @@ export default function ShippingPartsBox(props) {
   useEffect(function () { if (open) { load(); } }, [open, rels.join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
   // v55.83-XV — whenever the saved parts are read (opening the box, after each Save), hand the total to the invoice form
   var agg = data ? aggregateTyped(data.parts, rels) : { complete: false, total: 0, releases: rels.length };
-  useEffect(function () { if (data && agg.complete && props.onTotal) { props.onTotal(agg.total); } }, [data, agg.complete, agg.total]); // eslint-disable-line react-hooks/exhaustive-deps
+  var savedNow = useRef(false); // true between a successful Save here and the re-read that follows it
+  useEffect(function () { var fromSave = savedNow.current; savedNow.current = false; if (data && agg.complete && props.onTotal) { props.onTotal(agg.total, { fromSave: fromSave }); } }, [data, agg.complete, agg.total]); // eslint-disable-line react-hooks/exhaustive-deps
   function save(rel, part) {
     var k = relKey(rel) + ':' + part; var v = draft[k]; var nk = k + ':note';
     setBusy(true);
     call({ action: 'set_part_estimate', release: rel, part: part, amount: v === undefined ? '' : v, note: part === 'other' ? (draft[nk] || '') : '' }).then(function (j) {
       setBusy(false);
-      if (j && j.ok) { toast.success((part === 'bond' ? 'Bond amount noted' : 'Saved') + ' for release ' + rel + '. The invoice itself is not changed.'); var o = Object.assign({}, draft); delete o[k]; delete o[nk]; setDraft(o); load(); }
+      if (j && j.ok) { toast.success((part === 'bond' ? 'Bond amount noted' : 'Saved') + ' for release ' + rel + '. The invoice itself is not changed.'); var o = Object.assign({}, draft); delete o[k]; delete o[nk]; setDraft(o); savedNow.current = true; load(); }
       else { toast.error((j && j.error) || 'Not saved.'); setErr((j && j.error) || 'Not saved.'); }
     });
   }
@@ -95,7 +96,7 @@ export default function ShippingPartsBox(props) {
           <div className="text-[11px] text-slate-400">This is not the final shipping cost and no profit is shown here. The cost the report uses (bills that arrived, a combined amount) and the shipping profit are in Accounting → Profitability.</div>
           {m.bond !== null && <div className="text-[11px] text-slate-400">{'Bond / brokerage inside this charge: $' + fmt(m.bond) + ' — noted for information. The bond cost is already counted with the goods (per Houston container), so it is not counted a second time as a shipping cost.'}</div>}
         </div>; })}
-      {data && <div className="text-[11px] font-bold mt-1" style={{ color: agg.complete ? '#86efac' : '#fde047' }}>{agg.complete ? ('Total of the parts: $' + fmt(agg.total) + (props.onTotal ? ' — put in the “Our shipping cost” box above for you.' : '.')) : 'Type BOTH trucking and freight' + (rels.length > 1 ? ' for every release' : '') + ' (0 if there was none) and Save each: the total then goes into the “Our shipping cost” box above by itself.'}</div>}
+      {data && <div className="text-[11px] font-bold mt-1" style={{ color: agg.complete ? '#86efac' : '#fde047' }}>{agg.complete ? ('Total of the parts: $' + fmt(agg.total) + (props.onTotal ? ' — put in the “Our shipping cost” box above for you; after a Save here it also goes into the shipping line of this invoice.' : '.')) : 'Type BOTH trucking and freight' + (rels.length > 1 ? ' for every release' : '') + ' (0 if there was none) and Save each: the total then goes into the “Our shipping cost” box above by itself.'}</div>}
       {data && !data.can_edit && <div className="text-[11px] text-slate-400">You can see these figures; changing them needs “Invoices: Edit” or “P&L: Edit Product Costs”.</div>}
       <div className="text-[10px] text-slate-500">Leave a part empty if you do not know it; 0 means there was none. While only ONE of trucking / freight is typed, a combined shipping amount (the box above, or one typed for the release) stays the cost — typing one part, also 0, never wipes it out; both parts typed replace it. A trucking bill replaces only the trucking figure, a freight bill only the freight figure. Empty + Save clears a figure. The “Our shipping cost (freight + trucking)” box above is the combined amount for invoices that are not broken down.</div>
     </div>}

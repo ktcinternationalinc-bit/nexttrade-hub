@@ -95,6 +95,25 @@ export function markupOverrideNote(note) {
   if (n.length < MARKUP_NOTE_MIN) { return { ok: false, error: 'Type the reason for charging less than our shipping cost + 7% (at least ' + MARKUP_NOTE_MIN + ' characters). It is kept on the audit trail with your name.' }; }
   return { ok: true, note: n.substring(0, 500) };
 }
+// v55.83-XV (Max, Nov 23: "Fill charge line too") — put the breakdown total into the invoice's shipping CHARGE line (the form only;
+// nothing is saved until the person saves the invoice). One shipping line → its quantity becomes 1 and its price the total.
+// No shipping line → one is added, only on "CNF with a separate shipping line". Several shipping lines → nothing is changed (the
+// Hub cannot know which one). A surcharge-only line (overweight, fuel surcharge) is never treated as THE shipping line.
+// Returns { items, changed, why, count }.
+export function fillShippingLine(items, total, terms, isShippingLine, blankItem) {
+  var list = items || []; var t = Math.round((Number(total) || 0) * 100) / 100;
+  if (!(t > 0)) { return { items: list, changed: false, why: 'no_total' }; }
+  var idx = []; list.forEach(function (it, i) { if (isShippingLine && isShippingLine(it.description) && !isSurchargeOnlyLine(it.description)) { idx.push(i); } });
+  if (idx.length > 1) { return { items: list, changed: false, why: 'several_lines', count: idx.length }; }
+  if (idx.length === 1) {
+    var cur = list[idx[0]];
+    if (Number(cur.quantity) === 1 && Number(cur.unit_price) === t) { return { items: list, changed: false, why: 'same' }; }
+    var c1 = list.slice(); c1[idx[0]] = Object.assign({}, cur, { quantity: '1', unit_price: String(t) });
+    return { items: c1, changed: true, why: 'updated' };
+  }
+  if (terms !== 'CNF_SEPARATE') { return { items: list, changed: false, why: 'no_line_for_these_terms' }; }
+  return { items: list.concat([Object.assign({}, blankItem ? blankItem() : {}, { description: 'Shipping Costs', quantity: '1', unit_price: String(t) })]), changed: true, why: 'added' };
+}
 // null = the rule is met or does not apply · otherwise { cost, charged, need, short } for these terms, cost and lines
 export function markupShortfall(terms, cost, lines, isShippingLine) {
   var r = checkShippingTerms(terms, cost, lines, isShippingLine);
