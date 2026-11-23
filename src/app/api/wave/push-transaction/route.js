@@ -159,6 +159,12 @@ export async function POST(req) {
     }
     var bankCandidates = waveBankCashCandidates(allCats);
     var resolved = resolveWaveBankAnchor({ waveBankAccts: bankCandidates, txnMask: txnMask, globalAcct: globalAcct, globalName: globalName });
+    // v55.83-YF — a line of the Hub's Cash on Hand account is anchored on Wave's "Cash on Hand" account (exactly one), never a bank by default
+    if (bt.account_id === 'manual-acct-cash-on-hand-us') {
+      var cashA = allCats.filter(function (c) { return String(c.wave_account_name || c.name || '').trim().toLowerCase() === 'cash on hand'; });
+      if (cashA.length !== 1) { return blocked(cashA.length ? 'Wave has more than one account called "Cash on Hand" — keep one, then send again.' : 'This is a Cash on Hand line: create a "Cash on Hand" account in Wave (Cash and Bank), sync the Wave accounts, then send again.', 400); }
+      resolved = { acct: cashA[0].wave_account_id, name: cashA[0].wave_account_name || 'Cash on Hand', via: 'cash_on_hand' };
+    }
     var anchorAcct = resolved.acct; var anchorName = resolved.name; var anchorVia = resolved.via;
     if (!anchorAcct) {
       var why = resolved.reason;

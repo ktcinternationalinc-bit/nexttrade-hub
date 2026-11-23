@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YF',
+    date: '2026-11-23',
+    title: 'Cash on Hand: invoices received in cash, bills paid in cash, cash taken to the bank',
+    items: [
+      { text: '**Accounting → 💵 Cash on Hand** (once the database step is installed): the cash box of KTC USA with its balance and every movement. It is a private account: only the super admin, or someone with “See private accounts”, sees it.' },
+      { text: '**＋ Cash received for an invoice:** pick the invoice, the amount, the date, who took the cash and a receipt number. The invoice shows as paid (or partly paid) like a bank payment, and can go to Wave — to Wave’s “Cash on Hand” account.' },
+      { text: '**− Pay a bill in cash:** the bill is paid from the box. The usual rules apply (never more than the bill still owes), and the box can never go below zero.' },
+      { text: '**🏦 Cash taken to the bank:** the cash leaves the box and is paired with the bank’s deposit line (now, or when it arrives), as a move between our own accounts — so the same money is never counted as income twice.' },
+      { text: 'Every entry needs who handled the cash and a receipt number or note. **Undo** is always there with a reason: the record stays, crossed out, and the invoice or bill owes again. Undo is refused when it would leave the box below zero on any day, or when the payment is already in Wave.' },
+      { text: 'Recording cash needs the new switch **“Cash on Hand: record”** (off for everyone; only the super admin can switch it on). A cash count (opening float, a shortfall) is for the super admin only.' },
+      { superAdminOnly: true, text: 'Technical: NEEDS SQL sql/v55-83-YF-cash-on-hand.sql (re-runnable, deletes nothing): private account manual-acct-cash-on-hand-us (own manual connection) + bank_ledger_map → the existing ledger account “Cash on Hand” (only if exactly one); cash_entries + request fingerprints; hub_cash_receive_invoice / pay_bill / deposit / deposit_pair / adjust / undo (service_role, box lock, invoice / bank-line locks, closed month, never below zero on any date, audit); hub_cash_line_guard + hub_cash_link_guard (cash lines only through these functions, never deleted); hub_guard_cash_grant (cash.manage super-admin only). Route /api/accounting/cash; CashOnHandPanel; Wave push-payment / push-transaction anchor cash on Wave “Cash on Hand”.' },
+    ],
+  },
+  {
     version: 'v55.83-YD',
     date: '2026-11-23',
     title: 'Vendor credit memos: record a credit from a vendor and apply it to their bills',

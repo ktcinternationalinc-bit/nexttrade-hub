@@ -13,6 +13,7 @@ import AccountingCustomersTab from './AccountingCustomersTab';
 import AccountingInvoicesTab from './AccountingInvoicesTab';
 import NexttradeReconciliation from './NexttradeReconciliation';
 import OpenBalancesTab from './OpenBalancesTab';
+import CashOnHandPanel from './CashOnHandPanel'; // v55.83-YF — Cash on Hand
 import CustomersOverviewTab from './CustomersOverviewTab'; // v55.83-VN — every customer: invoiced, paid, received, owed, by period
 import SalesReportTab from './SalesReportTab';
 import PnLTab from './PnLTab';
@@ -152,6 +153,8 @@ export default function AccountingTab(props) {
   var mp = props.modulePerms || {};
   var userProfile = props.userProfile; // v55.83-RG — was referenced (Audit Trail tab, wires gate) but never declared
   var isSuper = props.isSuperAdmin === true || (props.userProfile && props.userProfile.role === 'super_admin');
+  // v55.83-YF — Cash on Hand is a PRIVATE account: the tab shows for the super admin or "Bank: See private accounts" (the server decides again)
+  if (isSuper || mp['bank.view_private'] === true) { tabs.splice(tabs.findIndex(function (t) { return t[0] === 'balances'; }) + 1, 0, ['cash', '💵 Cash on Hand']); }
   // v55.83-SA (Max, Nov 12 07:27: "Why are people not seeing bills when they have permission") — owner / admin = every switch
   // (the permissions box says "always (admin)" and the server already agrees); the screen gates now say the same.
   var bossA = isSuper; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
@@ -249,6 +252,7 @@ export default function AccountingTab(props) {
       {sub === 'recon' && <NexttradeReconciliation {...props} />}
       {sub === 'customers_overview' && <CustomersOverviewTab {...props} onGo={goFrom} />}
       {sub === 'balances' && <OpenBalancesTab {...props} />}
+      {sub === 'cash' && <div className="p-3"><CashOnHandPanel userProfile={props.userProfile} toast={props.toast} /></div>}
       {sub === 'sales_report' && <SalesReportTab {...props} />}
       {sub === 'pnl' && <PnLTab {...props} />}
       {alive('orders') && <div className="p-3" style={shown('orders')}><OrderMonitorTab {...props} onGo={goFrom} /></div>}

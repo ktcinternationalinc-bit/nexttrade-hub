@@ -517,6 +517,7 @@ const ACTION_PERMS = [
   { key: 'bank.view_all_accounts',      label: 'Bank: View All Accounts',        desc: 'See/switch to any bank account in the silo (and the "All accounts" view) and see all bank connections. Without this, the user is locked to the silo default account.' },
   { key: 'bank.view_private',            label: 'Bank: See private accounts 🔒',  desc: 'See the transactions of bank accounts the super admin marked PRIVATE (Bank → account → Make private). Only the super admin can switch this on.' }, // v55.83-TP
   { key: 'payroll.view',                 label: 'Payroll / salaries: view 🔒',     desc: 'See warehouse salary (payroll) amounts. Without it payroll shows as "Warehouse staff" with 🔒 instead of the amount. Today this covers the Nextrade books and Nextrade bills; Bills, wires and P&L follow. Only the super admin can switch this on.' }, // v55.83-XE
+  { key: 'cash.manage',                  label: 'Cash on Hand: record 💵', desc: 'Record cash received for an invoice, a bill paid in cash, cash taken to the bank, and undo them (Accounting → Cash on Hand). Seeing the cash box also needs “Bank: See private accounts”. Only the super admin can switch this on.' }, // v55.83-YF
   { key: 'bank.add_transactions',        label: 'Bank: Add transactions by hand 🔒', desc: 'Add a single bank transaction by hand (All Transactions → ➕ Add transaction) when the bank or a statement does not have it. Only the super admin can switch this on.' }, // v55.83-TQ
   { key: 'bank.connections',            label: 'Bank: Manage Connections',       desc: 'Connect/reconnect banks via Plaid, Deep re-pull history, archive duplicate links, move accounts between silos. Super admins always can. (v55.83-QB)' },
   { key: 'accounting.view_underlying',  label: 'Accounting: Open Cards (rows only) — RETIRED', desc: 'No longer used (v55.83-RE). Card navigation now follows the card\'s own group: P1 cards (Expected, Bills Due, Late, Overdue) and P3 cards (Invoiced, Paid, Still Open, Collected) open their records; P2 cards need P2.' },
@@ -552,7 +553,7 @@ const ACTION_PERMS = [
 ];
 
 // v55.83-TP (Max, Nov 17) — SENSITIVE switches: only the super admin can switch them ON (the database refuses anyone else too)
-const SENSITIVE_PERMS_UI = { 'advances.manage': true, 'pnl.view_margin': true, 'accounting.view_totals': true, 'bank.view_private': true, 'permissions.grant_sensitive': true, 'bank.add_transactions': true, 'invoice.delete': true, 'payroll.view': true }; // v55.83-UM · XE
+const SENSITIVE_PERMS_UI = { 'advances.manage': true, 'pnl.view_margin': true, 'accounting.view_totals': true, 'bank.view_private': true, 'permissions.grant_sensitive': true, 'bank.add_transactions': true, 'invoice.delete': true, 'payroll.view': true, 'cash.manage': true }; // v55.83-UM · XE
 // v55.83-TP — one click sets a person up as ACCOUNTING STAFF: enter + validate invoices and bills, see what is owed, see bank lines
 // (amounts included) to match and prepare wires. Never: profit / margin, money totals, bank balances, private accounts, undo matches.
 const ACCOUNTING_STAFF_PRESET = ['accounting.clickbooks.access', 'accounting.wavehub.access', 'accounting.view_invoicing', 'invoice.view', 'invoice.create',

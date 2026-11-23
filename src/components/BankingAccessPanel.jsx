@@ -37,6 +37,7 @@ export var BANKING_GROUPS = [
     { key: 'bank.view_all_accounts', label: 'See every bank account', desc: 'Switch between accounts and see “All accounts”.' },
     { key: 'bank.classify', label: 'Categorize transactions', desc: 'Needed for ClickBooks → All Transactions and Categories & Rules.' },
     { key: 'bank.view_private', label: 'See private accounts 🔒', desc: 'Bank accounts the super admin marked private (Bank → account → 🔒 Make private). Only the super admin can switch this on.', sensitive: true },
+    { key: 'cash.manage', label: 'Cash on Hand: record 💵', desc: 'Record cash received for invoices, bills paid in cash and cash taken to the bank (Accounting → Cash on Hand). Seeing the box also needs “See private accounts”. Only the super admin can switch this on.', sensitive: true }, // v55.83-YF
     { key: 'bank.add_transactions', label: 'Add transactions by hand 🔒', desc: 'All Transactions → ➕ Add transaction, when the bank or a statement does not have it. Only the super admin can switch this on.', sensitive: true },
     { key: 'bank.connections', label: 'Connect / reconnect banks', desc: 'Plaid connections, re-pull history, archive duplicates.' },
   ] },

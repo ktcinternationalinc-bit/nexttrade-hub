@@ -163,6 +163,13 @@ export async function POST(req) {
     while (pcGuard < 60) { pcGuard++; var pcPg = await db.from('wave_categories').select('*').eq('wave_business_id', waveBusinessId).range(pcFrom, pcFrom + 999); var pcPgRows = (pcPg && pcPg.data) || []; payCatsAll = payCatsAll.concat(pcPgRows); if (pcPgRows.length < 1000) { break; } pcFrom += 1000; }
     var payCatsRes = { data: payCatsAll };
     var payResolved = resolveWaveBankAnchor({ waveBankAccts: waveBankCashCandidates((payCatsRes && payCatsRes.data) || []), txnMask: payMask, globalAcct: globalPayAcct, globalName: globalPayName });
+    // v55.83-YF — a payment received in CASH (its line is on the Hub's Cash on Hand account) goes to Wave's "Cash on Hand" account, never to a bank
+    // account by default. Exactly one Wave account of that name is required; otherwise the push stops with what to do.
+    if (payBtAccountId === 'manual-acct-cash-on-hand-us') {
+      var cashW = (payCatsAll || []).filter(function (c) { return String(c.wave_account_name || c.name || '').trim().toLowerCase() === 'cash on hand'; });
+      if (cashW.length !== 1) { return blocked(cashW.length ? 'Wave has more than one account called "Cash on Hand" — keep one, then push again.' : 'This payment was received in cash: create a "Cash on Hand" account in Wave (Cash and Bank), sync the Wave accounts, then push again.', 400); }
+      payResolved = { acct: cashW[0].wave_account_id, name: cashW[0].wave_account_name || 'Cash on Hand', via: 'cash_on_hand' };
+    }
     var paymentAccountId = payResolved.acct;
     if (!paymentAccountId) { return blocked('No Wave bank/deposit account could be resolved for this payment. Set a default in Wave Sync > Settings, or add a Wave Cash/Bank account matching this deposit\x27s bank.', 400, { needs_payment_account: true }); }
     // v55.83-MP — Max directive: do NOT block on the per-account "feed owner" firewall. The owner explicitly
