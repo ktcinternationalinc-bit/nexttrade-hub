@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YA',
+    date: '2026-11-23',
+    title: 'Orders and reminders say plainly when the warehouse list arrives incomplete',
+    items: [
+      { text: 'When the warehouse is too slow and its order list is still arriving after 40 seconds, **Orders**, **Arrival reminders** and the shipping-cost sync now say so in plain words: “the order list … came in incomplete — the warehouse is sending it too slowly”, instead of “The warehouse feed answered 200”.' },
+      { text: 'If the warehouse sends a web page (sign-in, error or maintenance) instead of the list, the message says that too. Nothing in the Hub is changed in either case — try again later.' },
+      { superAdminOnly: true, text: 'Technical (no SQL): new server helper src/lib/warehouse-feed-read.js readFeedBody(res, ctl, secs) reads text, then JSON; an abort or a JSON body that stops part-way = incomplete message, a non-JSON body = kind + length only (never the body text or the token). Used by order-monitor and arrival-reminders fetchFeed and the warehouse-shipping sync. Cause found 23 Nov: staging feed ≈10 MB, not gzip-compressed, sent at ~60–100 KB/s by the host; the real fix is compression on the staging site (Max’s call).' },
+    ],
+  },
+  {
     version: 'v55.83-XC',
     date: '2026-11-21',
     title: 'Wires: one place for all the bank confirmations',

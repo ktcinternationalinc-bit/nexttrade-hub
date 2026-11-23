@@ -17,6 +17,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { audit } from '../../../../lib/audit-server';
 import { warehouseFeedConfig, feedIdentityProblem } from '../../../../lib/warehouse-feed-config';
+import { readFeedBody } from '../../../../lib/warehouse-feed-read'; // v55.83-YA
 import { windowFloorFor } from '../../../../lib/visibility-window-server'; // the history window: employees see only the permitted window, in every figure (Max's rule)
 import { isEmail } from '../../../../lib/commercial-mail';
 import { composeReminder, htmlOf, langOf, todayInNewYork, LANGS, PHASE_WORDS } from '../../../../lib/arrival-reminders';
@@ -36,7 +37,9 @@ async function fetchFeed(cfg) {
   var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
   try {
     var res = await fetch(cfg.url + '?shipped_since=2024-01-01', { headers: { 'X-Hub-Feed-Token': cfg.token, Accept: 'application/json' }, signal: ctl.signal, cache: 'no-store', redirect: 'error' });
-    var j = await res.json().catch(function () { return null; });
+    var rd = await readFeedBody(res, ctl, 40); // v55.83-YA — a list cut off by the time limit says so plainly (not "answered 200")
+    if (res.ok && rd.error) { throw new Error(rd.error); }
+    var j = rd.json || null;
     if (!res.ok || !j || j.ok !== true) { throw new Error('The warehouse feed answered ' + res.status + (j && j.error ? ': ' + j.error : '')); }
     var idp = feedIdentityProblem(j, cfg); if (idp) { throw new Error(idp); }
     return j;

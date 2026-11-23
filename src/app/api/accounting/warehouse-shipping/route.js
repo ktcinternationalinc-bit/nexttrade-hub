@@ -25,6 +25,7 @@ import { authorizeBankIdentity } from '../../../../lib/bank-visibility';
 import { audit } from '../../../../lib/audit-server';
 import { buildRecords, matchInvoices, compareBills, comparable, rowComparable, diffComparable, toRow, BACKFILL_FROM } from '../../../../lib/warehouse-shipping';
 import { warehouseFeedConfig } from '../../../../lib/warehouse-feed-config'; // v55.83-UU — approved warehouse addresses only
+import { readFeedBody } from '../../../../lib/warehouse-feed-read'; // v55.83-YA
 
 var API_BUILD_MARKER = 'v55.83-TG-warehouse-shipping';
 var PAGE = 1000; var MAX_ROWS = 40000; var STALE_RUN_MINUTES = 10;
@@ -93,7 +94,9 @@ async function runSync(db, trigger, userId) {
       var res = await fetch(cfg.url, { headers: { 'X-Hub-Feed-Token': cfg.token, 'Accept': 'application/json' }, signal: ctl.signal, cache: 'no-store', redirect: 'error' }); // UU (Codex 06:13) — no redirect carries the token
       clearTimeout(tm);
       if (!res.ok) { return await failRun('The warehouse answered HTTP ' + res.status + (res.status === 401 ? ' (the token was refused)' : '') + '.'); }
-      feed = await res.json();
+      var rdF = await readFeedBody(res, ctl, 40); // v55.83-YA — an incomplete or non-list answer is named plainly
+      if (rdF.error) { return await failRun(rdF.error); }
+      feed = rdF.json;
     } catch (eF) { return await failRun('Could not read the warehouse feed (' + ((eF && eF.name === 'AbortError') ? 'no answer within 40 seconds' : ((eF && eF.message) || 'network error')) + ').'); }
     if (!feed || feed.ok !== true || !Array.isArray(feed.orders) || !Array.isArray(feed.stages)) { return await failRun('The warehouse feed answered, but not in the expected shape.'); }
     if (feed.source !== cfg.source) { return await failRun('The feed says it is "' + (feed.source || 'unknown') + '", not the expected "' + cfg.source + '" — refused.'); }

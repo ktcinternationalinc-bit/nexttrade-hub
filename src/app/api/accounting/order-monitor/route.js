@@ -18,6 +18,7 @@ import { evaluateOrder, releasesOf, alertEmail, stageRank, ALERT_RECIPIENTS_DEFA
 import { relKey, isTransportLine } from '../../../../lib/profitability';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 import { warehouseFeedConfig, feedIdentityProblem } from '../../../../lib/warehouse-feed-config'; // v55.83-UU — approved warehouse addresses only
+import { readFeedBody } from '../../../../lib/warehouse-feed-read'; // v55.83-YA
 
 export const maxDuration = 60;
 var API_BUILD_MARKER = 'v55.83-UU-order-monitor';
@@ -42,7 +43,9 @@ async function fetchFeed(cfg) {
   var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
   try {
     var res = await fetch(cfg.url + '?shipped_since=2024-01-01', { headers: { 'X-Hub-Feed-Token': cfg.token, Accept: 'application/json' }, signal: ctl.signal, cache: 'no-store', redirect: 'error' }); // UU (Codex 06:13) — a redirect never carries the token elsewhere
-    var j = await res.json().catch(function () { return null; });
+    var rd = await readFeedBody(res, ctl, 40); // v55.83-YA — a list cut off by the time limit says so plainly (not "answered 200")
+    if (res.ok && rd.error) { throw new Error(rd.error); }
+    var j = rd.json || null;
     if (!res.ok || !j || j.ok !== true) { throw new Error('The warehouse feed answered ' + res.status + (j && j.error ? ': ' + j.error : '')); }
     var idp = feedIdentityProblem(j, cfg); if (idp) { throw new Error(idp); } // UU — a feed that does not name its copy is refused
     return j;
