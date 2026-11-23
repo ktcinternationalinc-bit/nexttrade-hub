@@ -42,7 +42,7 @@ ok(!/opens the staging\s*\n?\s*copy in a NEW TAB/.test(page) && page.indexOf('NE
 
 // Badge + What's New.
 // v55.83-XE: a later build moves the badge on; the badge always names the newest What's New entry (XJ or later).
-ok((function () { var top = /BUILD_HISTORY = [s*{s*version: '(v55.83-[A-Z]+)'/.exec(whatsnew); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })(), 'badge names the newest What's New entry (v55.83-XJ or later)');
+ok((function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(whatsnew); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })(), 'badge names the newest What\'s New entry (v55.83-XI or a later build)');
 ok(/version: 'v55\.83-XJ'/.test(whatsnew), "What's New has a v55.83-XJ entry");
 
 console.log('\nXJ warehouse-iframe-scroll: ' + pass + '/' + pass + ' checks passed');
