@@ -135,7 +135,7 @@ export default function CustomersOverviewTab(props) {
     <div className="flex items-center gap-2 flex-wrap text-[11px] mb-2" style={{ color: INK }}>
       <span className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#86efac', color: '#052e16', border: '1px solid #15803d' }}>Green = arrived and fully paid</span>
       <span className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#fde047', color: '#422006', border: '1px solid #a16207' }}>Yellow = partially paid</span>
-      <span className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#dc2626', color: '#ffffff' }}>Red date = arrived, not paid ($200 or more still owed)</span>
+      <span className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#dc2626', color: '#ffffff' }}>Red date = arrived, not paid (more than $200 still owed)</span>
       <span style={{ color: SUB }}>A customer row is green only when every invoice in the period arrived and is fully paid.</span>
     </div>
     {err && <div className="text-[12px] font-bold rounded-lg p-2 mb-2" style={{ color: '#991b1b', background: '#fee2e2', border: '1px solid #fca5a5' }}>{err}</div>}

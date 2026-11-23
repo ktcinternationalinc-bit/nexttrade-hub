@@ -116,7 +116,7 @@ export function buildCustomersOverview(o) {
         arrival_date: arr.date, arrival_partial: arr.date ? !arr.all : false, arrived: arrived, arrival_red: false });
       return;
     }
-    var small = open && cur === 'USD' && bal < SMALL_OPEN_USD * 100; // cents
+    var small = open && cur === 'USD' && bal <= SMALL_OPEN_USD * 100; // cents
     r.invoice_count += 1; r.invoiced += total; r.paid_on_those += paid; r.paid_in_wave_undated += wave; r.received += rec;
     if (open) { r.open_count += 1; r.owed += bal; if (od > 0) { r.overdue += bal; r.overdue_count += 1; } if (arrived && !small) { r.arrived_unpaid += 1; } }
     r.invoices.push({ id: inv.id, number: inv.invoice_number || '', release: inv.release_number || '', invoice_date: d, due_date: due || null,
@@ -169,7 +169,7 @@ export var SINCE_JUNE = '2026-06-01';
 // v55.83-XM rev 2 (Max, Nov 23, on the live screen: "anything due under $200 should be kept notated in red but the Arrived and not
 // paid should not be there and just state Arrived") — a small remainder in DOLLARS stays owed and stays red in 'Left to pay', it
 // still counts in owed / overdue / open, but it no longer turns the arrival red and is not counted as 'arrived, not paid'.
-export var SMALL_OPEN_USD = 200; // strictly under this many dollars
+export var SMALL_OPEN_USD = 200; // this many dollars OR LESS (Max, same day: "anything owed $200 or under does not require a red flag")
 export function invoiceTone(v) {
   if (!v) { return ''; }
   if (v.status === 'partial') { return 'yellow'; }
