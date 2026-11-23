@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YG',
+    date: '2026-11-23',
+    title: 'Wave History: NextTrade cash history, with its categories mapped',
+    items: [
+      { text: '**New under Accounting → Wave History: “Cash history & mappings”.** Upload NextTrade’s multi-year Wave export (Account Transactions, cash basis). The Hub checks it, shows a preview, and keeps every entry exactly as Wave has it.' },
+      { text: 'Each Wave account can be matched to a NextTrade category and to a KTC category. Every change to a match is kept with who made it and what it was before.' },
+      { text: 'Uploading the same file twice changes nothing. A different file covering dates already saved is refused, so nothing is counted twice.' },
+      { text: '**This is for research only.** It does not change any existing bank line, bill, category or the P&L.' },
+      { superAdminOnly: true, text: 'Technical: built by Codex (commit e78907ae), integrated by the coordinator. Needs supabase/wave-cash-history.sql after the Wave History foundation. Private: only people with the Wave History grants can read or manage it. /api/wave-history/cash; wave_history.cash_imports / cash_entries / cash_mappings / cash_mapping_history.' },
+    ]
+  },
+  {
     version: 'v55.83-YC',
     date: '2026-11-23',
     title: 'Audit Trail in plain words',
