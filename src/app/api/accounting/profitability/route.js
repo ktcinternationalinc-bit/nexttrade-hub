@@ -62,7 +62,17 @@ export async function POST(req) {
     if (who.error) { return bad(who.error, who.status); }
     var userId = who.userId;
     var pv = await assertPermission(db, userId, 'pnl.view', req);
-    if (!pv || pv.ok !== true) { return bad('This needs the "P&L: View" permission — grant it in Settings → Module Access.', 403); }
+    // v55.83-XV (Max, Nov 23: "only invoicing permissioning needed to enter inside the shipping data. should not block the user")
+    // The two shipping-breakdown actions of the invoice form (read the parts of a release, type one part) also work with the
+    // invoicing permission 'invoices.edit' — the same one that already lets a person type the shipping cost on the invoice.
+    // Every other action of this route still needs "P&L: View"; nothing else of the profit report opens to an invoicing user.
+    var partsAction = action === 'release_parts' || action === 'set_part_estimate';
+    var invEd = null;
+    if (partsAction) { invEd = await assertPermission(db, userId, 'invoices.edit', req); }
+    var invEdOk = !!(invEd && invEd.ok === true);
+    var pnlViewOk = !!(pv && pv.ok === true);
+    if (!pnlViewOk && !(partsAction && invEdOk)) { return bad(partsAction ? 'Typing the shipping breakdown needs the invoicing permission (Invoices: Edit) or "P&L: View" — grant one in Settings → Module Access.' : 'This needs the "P&L: View" permission — grant it in Settings → Module Access.', 403); }
+    if (!pnlViewOk) { pv = invEd; } // the window below is read from the grant that let this person in
 
     // v55.83-UD (Codex 12:00 P1) — employees see ONLY the permitted history window; super admin sees all-time. Fails closed.
     var vwin = await windowFloorFor(db, pv.ctx); if (vwin.error) { return bad(vwin.error, 503); }
@@ -111,7 +121,7 @@ export async function POST(req) {
       var outRP = {}; keysRP.forEach(function (k1) { outRP[k1] = {}; });
       (rpQ.data || []).forEach(function (r1) { if (outRP[r1.release_key]) { outRP[r1.release_key][r1.part] = { amount: r1.amount === null || r1.amount === undefined ? null : Number(r1.amount), note: r1.note || null, updated_at: r1.updated_at || null }; } });
       var canRP = await assertPermission(db, userId, 'pnl.edit_costs', req);
-      return NextResponse.json({ ok: true, parts: outRP, can_edit: !!(canRP && canRP.ok === true), api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, parts: outRP, can_edit: !!(canRP && canRP.ok === true) || invEdOk, api_build_marker: API_BUILD_MARKER });
     }
     if (action === 'inbound_trucking') {
       if (body.date_from && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.date_from))) { return bad('The start date is not a date.', 400); }
@@ -128,7 +138,7 @@ export async function POST(req) {
 
     // ── everything below changes the REPORT SET-UP only ──
     var pe = await assertPermission(db, userId, 'pnl.edit_costs', req);
-    if (!pe || pe.ok !== true) { return bad('This needs the "P&L: Edit Product Costs" permission — grant it in Settings → Module Access.', 403); }
+    if ((!pe || pe.ok !== true) && !(action === 'set_part_estimate' && invEdOk)) { return bad('This needs the "P&L: Edit Product Costs" permission — grant it in Settings → Module Access.', 403); } // XV: one shipping part of a release may also be typed with invoices.edit
     var now = new Date().toISOString();
     function fail(e) {
       var m = String((e && e.message) || '');

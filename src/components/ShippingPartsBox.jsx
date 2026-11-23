@@ -19,6 +19,18 @@ export function typedParts(parts) {
   var t = num(p.trucking); var f = num(p.freight); var o = num(p.other);
   return { typed: Math.round(((t || 0) + (f || 0) + (o || 0)) * 100) / 100, known: [t, f, o].filter(function (v) { return v !== null; }).length, bond: num(p.bond) };
 }
+// v55.83-XV (Max, Nov 23: "in the entry of shipping it should automatically aggregate value and put it in the shipping line fields")
+// The total of what is typed for the invoice's releases, for the "Our shipping cost (freight + trucking)" box. It follows the rule
+// already written under the box: the parts REPLACE the combined amount only when BOTH trucking and freight are typed (0 counts as
+// typed) — for EVERY release on the invoice. Until then `complete` is false and the box is left alone. Bond is information only
+// (it is counted with the goods), so it is never added. partsByKey = { RELEASEKEY: { trucking: { amount }, ... } }.
+export function aggregateTyped(partsByKey, rels) {
+  var list = rels || []; if (!list.length) { return { complete: false, total: 0, releases: 0 }; }
+  function has(x) { return !!x && x.amount !== null && x.amount !== undefined && x.amount !== '' && !isNaN(Number(x.amount)); }
+  var total = 0; var complete = true;
+  list.forEach(function (rel) { var pr = (partsByKey || {})[relKey(rel)] || {}; if (!(has(pr.trucking) && has(pr.freight))) { complete = false; } total += typedParts(pr).typed; });
+  return { complete: complete, total: Math.round(total * 100) / 100, releases: list.length };
+}
 // v55.83-XS (Max, Nov 21: AMERICA 1771 "1002-1176 & 1002-1177" — "why is it not being read?") — the SAME split as Profitability,
 // Orders and the customer overview (splitReleases / releasesOf): , ; / & + and the word "and". Before, "&" made ONE made-up release
 // here, so figures typed in the box went to a release no other screen reads. Same release written twice = one row.
@@ -50,6 +62,9 @@ export default function ShippingPartsBox(props) {
   }
   function load() { if (!rels.length) { setData(null); return; } call({ action: 'release_parts', releases: rels }).then(function (j) { if (j && j.ok) { setData(j); setErr(''); } else { setData(null); setErr((j && j.error) || 'Could not be loaded.'); } }); }
   useEffect(function () { if (open) { load(); } }, [open, rels.join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-XV — whenever the saved parts are read (opening the box, after each Save), hand the total to the invoice form
+  var agg = data ? aggregateTyped(data.parts, rels) : { complete: false, total: 0, releases: rels.length };
+  useEffect(function () { if (data && agg.complete && props.onTotal) { props.onTotal(agg.total); } }, [data, agg.complete, agg.total]); // eslint-disable-line react-hooks/exhaustive-deps
   function save(rel, part) {
     var k = relKey(rel) + ':' + part; var v = draft[k]; var nk = k + ':note';
     setBusy(true);
@@ -61,7 +76,7 @@ export default function ShippingPartsBox(props) {
   }
   if (!rels.length) { return <div className="mt-2 text-[11px] text-slate-400">To break the shipping down internally (trucking / freight / bond / other), type the Release # above first.</div>; }
   return <div className="mt-2 rounded p-2" style={{ border: '1px dashed #64748b' }}>
-    <button type="button" onClick={function () { setOpen(!open); }} className="text-[11px] font-bold text-slate-200" style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }}>{(open ? '▾ ' : '▸ ') + 'Inside the shipping — our cost, part by part (INTERNAL: never printed, never sent to the customer or to Wave)'}</button>
+    <button type="button" onClick={function () { setOpen(!open); }} className="text-[12px] font-extrabold" title="Click to open or close the shipping breakdown" style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', color: '#fde047', textDecoration: 'underline', textUnderlineOffset: '3px' }}>{(open ? '▾ ' : '▸ ') + (open ? '' : 'Click to enter: ') + 'Inside the shipping — our cost, part by part (INTERNAL: never printed, never sent to the customer or to Wave)'}</button>
     {open && <div className="mt-1">
       {err && <div className="text-[11px] font-bold" style={{ color: '#fca5a5' }}>{err}</div>}
       {!data && !err && <div className="text-[11px] text-slate-400">Loading…</div>}
@@ -80,7 +95,8 @@ export default function ShippingPartsBox(props) {
           <div className="text-[11px] text-slate-400">This is not the final shipping cost and no profit is shown here. The cost the report uses (bills that arrived, a combined amount) and the shipping profit are in Accounting → Profitability.</div>
           {m.bond !== null && <div className="text-[11px] text-slate-400">{'Bond / brokerage inside this charge: $' + fmt(m.bond) + ' — noted for information. The bond cost is already counted with the goods (per Houston container), so it is not counted a second time as a shipping cost.'}</div>}
         </div>; })}
-      {data && !data.can_edit && <div className="text-[11px] text-slate-400">You can see these figures; changing them needs “P&L: Edit Product Costs”.</div>}
+      {data && <div className="text-[11px] font-bold mt-1" style={{ color: agg.complete ? '#86efac' : '#fde047' }}>{agg.complete ? ('Total of the parts: $' + fmt(agg.total) + (props.onTotal ? ' — put in the “Our shipping cost” box above for you.' : '.')) : 'Type BOTH trucking and freight' + (rels.length > 1 ? ' for every release' : '') + ' (0 if there was none) and Save each: the total then goes into the “Our shipping cost” box above by itself.'}</div>}
+      {data && !data.can_edit && <div className="text-[11px] text-slate-400">You can see these figures; changing them needs “Invoices: Edit” or “P&L: Edit Product Costs”.</div>}
       <div className="text-[10px] text-slate-500">Leave a part empty if you do not know it; 0 means there was none. While only ONE of trucking / freight is typed, a combined shipping amount (the box above, or one typed for the release) stays the cost — typing one part, also 0, never wipes it out; both parts typed replace it. A trucking bill replaces only the trucking figure, a freight bill only the freight figure. Empty + Save clears a figure. The “Our shipping cost (freight + trucking)” box above is the combined amount for invoices that are not broken down.</div>
     </div>}
   </div>;

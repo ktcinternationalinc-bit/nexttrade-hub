@@ -24,13 +24,17 @@ check('6: a real reason is accepted, tidied, and cut at 500 characters', S.marku
 
 // ── Part 2: the real route with stand-ins ──
 var state;
-function fresh(o) { state = Object.assign({ items: [{ description: 'STOCK PVC ROLLS', quantity: 24581.43, unit_price: 0.99, line_total: 24335.62 }, { description: 'Shipping Costs', quantity: 1, unit_price: 3966, line_total: 3966 }], itemsError: null, auditFail: false, audit: [], terms: null, log: [] }, o || {}); }
+function fresh(o) { state = Object.assign({ items: [{ description: 'STOCK PVC ROLLS', quantity: 24581.43, unit_price: 0.99, line_total: 24335.62 }, { description: 'Shipping Costs', quantity: 1, unit_price: 3966, line_total: 3966 }], itemsError: null, auditFail: false, audit: [], terms: null, log: [], perms: {}, parts: [], partRows: [] }, o || {}); }
 function run(st, single) {
   if (st.table === 'accounting_invoices') { return { data: { id: 'inv-1' }, error: null }; }
   if (st.table === 'accounting_invoice_items') { state.log.push('read-lines'); return state.itemsError ? { data: null, error: { message: state.itemsError } } : { data: state.items, error: null }; }
   if (st.table === 'hub_audit_log') {
     if (st.op === 'insert') { if (state.auditFail && st.row.action === 'shipping_markup_override') { state.log.push('audit-FAILED'); return { data: null, error: { message: 'audit table is down' } }; } state.audit.push(st.row); state.log.push('audit:' + st.row.action); return { data: null, error: null }; }
     return { data: state.audit.filter(function (a) { return a.action === st.filters.action && a.entity_id === st.filters.entity_id; }).slice(-1).map(function (a) { return { details: a.details, at: '2026-11-23T18:00:00Z' }; }), error: null };
+  }
+  if (st.table === 'pl_release_part_estimates') {
+    if (st.op === 'upsert') { state.partRows.push(st.row); state.log.push('save-part'); return { data: null, error: null }; }
+    return { data: state.parts, error: null };
   }
   if (st.table === 'pl_invoice_terms') {
     if (st.op === 'upsert') { state.terms = st.row; state.log.push('save-terms'); return { data: [st.row], error: null }; }
@@ -40,7 +44,7 @@ function run(st, single) {
 }
 function q(table) {
   var st = { table: table, op: 'select', filters: {} };
-  var b = { select: function () { return b; }, eq: function (k, v) { st.filters[k] = v; return b; }, order: function () { return b; }, limit: function () { return b; },
+  var b = { select: function () { return b; }, eq: function (k, v) { st.filters[k] = v; return b; }, in: function (k, v) { st.filters[k] = v; return b; }, order: function () { return b; }, limit: function () { return b; },
     insert: function (row) { st.op = 'insert'; st.row = row; return b; }, upsert: function (row) { st.op = 'upsert'; st.row = row; return b; },
     maybeSingle: function () { return Promise.resolve(run(st, true)); }, then: function (res, rej) { return Promise.resolve(run(st, false)).then(res, rej); } };
   return b;
@@ -56,6 +60,16 @@ Module._load = function (request, parent, isMain) {
 };
 var route = require(path.join(root, 'src/app/api/accounting/invoice-write/route.js'));
 Module._load = realLoad;
+// the Profitability route (shipping breakdown actions): same database stand-in; here the PERMISSION stand-in answers from state.perms
+function stub(rel, exportsObj) { var p = require.resolve(path.join(root, rel)); require.cache[p] = { id: p, filename: p, loaded: true, exports: exportsObj }; }
+stub('src/lib/verified-caller.js', { verifiedCaller: function () { return Promise.resolve({ userId: 'user-1' }); } });
+stub('src/lib/server-permissions.js', { assertPermission: function (db, uid, perm) { return Promise.resolve(state.perms[perm] ? { ok: true, ctx: { isSuperAdmin: false, mp: state.perms } } : { ok: false, status: 403, error: 'no ' + perm }); }, loadUserPermissions: function () { return Promise.resolve({ isSuperAdmin: false, mp: state.perms }); }, userHasPermission: function (ctx, perm) { return !!(ctx && ctx.mp && ctx.mp[perm]); } });
+stub('src/lib/visibility-window-server.js', { windowFloorFor: function () { return Promise.resolve({ floor: null }); }, clampFrom: function (x) { return x; } });
+var supaP = require.resolve('@supabase/supabase-js', { paths: [root] });
+require.cache[supaP] = { id: supaP, filename: supaP, loaded: true, exports: { createClient: function () { return { from: q }; } } };
+var PR = require(path.join(root, 'src/app/api/accounting/profitability/route.js'));
+function pcall(body) { return PR.POST(new Request('http://x/api', { method: 'POST', body: JSON.stringify(Object.assign({ user_id: 'user-1' }, body)), headers: { 'content-type': 'application/json' } })).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); }); }
+var SP = require(path.join(root, 'src/components/ShippingPartsBox.jsx'));
 function call(body) { return route.POST({ json: function () { return Promise.resolve(Object.assign({ invoice_id: 'inv-1' }, body)); }, headers: { get: function () { return null; } } }); }
 function setTerms(extra) { return call(Object.assign({ action: 'set_shipping_terms', shipping_terms: 'CNF_SEPARATE', shipping_cost_estimate: 3966 }, extra || {})); }
 var REASON = 'Price agreed with the customer before the freight went up';
@@ -85,11 +99,37 @@ var REASON = 'Price agreed with the customer before the freight went up';
   fresh(); var j = await call({ action: 'get_shipping_terms' });
   check('18: an invoice with no override gives an empty reason', j.status === 200 && j.body.markup_override_note === '' && j.body.markup_override_at === null, j.body);
 
+  // ── Part 2b: "Inside the shipping" works with the invoicing permission (real Profitability route) ──
+  var PARTS = [{ release_key: '10011622', part: 'trucking', amount: 1500, note: null, updated_at: null }];
+  fresh({ perms: {}, parts: PARTS }); var p1 = await pcall({ action: 'release_parts', releases: ['1001-1622'] });
+  check('23: no invoicing and no P&L permission → the breakdown is refused, and the message names the invoicing permission', p1.status === 403 && p1.body.ok === false && /Invoices: Edit/.test(p1.body.error), p1);
+  fresh({ perms: { 'invoices.edit': true }, parts: PARTS }); var p2 = await pcall({ action: 'release_parts', releases: ['1001-1622'] });
+  check('24: invoicing permission ONLY → the breakdown opens and can be typed (no P&L permission needed)', p2.status === 200 && p2.body.ok === true && p2.body.can_edit === true && p2.body.parts['10011622'].trucking.amount === 1500, p2);
+  fresh({ perms: { 'invoices.edit': true } }); var p3 = await pcall({ action: 'set_part_estimate', release: '1001-1622', part: 'freight', amount: '2466' });
+  check('25: invoicing permission ONLY → a part is saved for the release, and the change is on the audit trail', p3.status === 200 && p3.body.ok === true && state.partRows.length === 1 && state.partRows[0].release_key === '10011622' && state.partRows[0].part === 'freight' && state.partRows[0].amount === 2466 && state.partRows[0].updated_by === 'user-1' && state.audit.some(function (x) { return x.action === 'pl_part_estimate_set' && x.entity_id === '10011622'; }), [p3, state.partRows, state.audit]);
+  fresh({ perms: { 'invoices.edit': true } }); var p4 = await pcall({ action: 'report' }); var p5 = await pcall({ action: 'set_estimate', release: '1001-1622', amount: '5' }); var p5b = await pcall({ action: 'inbound_trucking' });
+  check('26: invoicing permission ONLY opens NOTHING else of the profit report (report, other set-up, inbound trucking all refused; nothing written)', p4.status === 403 && /P&L: View/.test(p4.body.error) && p5.status === 403 && p5b.status === 403 && state.partRows.length === 0 && state.audit.length === 0, [p4, p5, p5b]);
+  fresh({ perms: { 'pnl.view': true }, parts: PARTS }); var p6 = await pcall({ action: 'release_parts', releases: ['1001-1622'] }); var p7 = await pcall({ action: 'set_part_estimate', release: '1001-1622', part: 'freight', amount: '1' });
+  check('27: "P&L: View" alone still only READS the breakdown (as before): can_edit false, typing refused', p6.status === 200 && p6.body.can_edit === false && p7.status === 403 && state.partRows.length === 0, [p6, p7]);
+  fresh({ perms: { 'pnl.view': true, 'invoices.edit': true } }); var p8 = await pcall({ action: 'set_part_estimate', release: '1001-1622', part: 'trucking', amount: '0' }); var p9 = await pcall({ action: 'set_estimate', release: '1001-1622', amount: '5' });
+  check('28: with invoicing + "P&L: View": a part can be typed (0 is a value), but the other set-up actions still need "P&L: Edit Product Costs"', p8.status === 200 && state.partRows.length === 1 && state.partRows[0].amount === 0 && p9.status === 403 && /Edit Product Costs/.test(p9.body.error), [p8, p9]);
+
+  // ── Part 2c: the breakdown adds itself up (real function) ──
+  function pp(t, f2, o, bnd) { var x = {}; if (t !== undefined) { x.trucking = { amount: t }; } if (f2 !== undefined) { x.freight = { amount: f2 }; } if (o !== undefined) { x.other = { amount: o }; } if (bnd !== undefined) { x.bond = { amount: bnd }; } return x; }
+  var g1 = SP.aggregateTyped({ '10011622': pp(1500, 2466, 34, 250) }, ['1001-1622']);
+  check('29: trucking 1500 + freight 2466 + other 34 = 4000 for the cost box; bond 250 is NOT added', g1.complete === true && g1.total === 4000, g1);
+  check('30: only ONE of trucking / freight typed → not complete, the cost box is left alone', SP.aggregateTyped({ '10011622': pp(1500) }, ['1001-1622']).complete === false && SP.aggregateTyped({ '10011622': pp(undefined, 2466, 10) }, ['1001-1622']).complete === false && SP.aggregateTyped({}, ['1001-1622']).complete === false && SP.aggregateTyped({ '10011622': pp(1, 2) }, []).complete === false);
+  check('31: 0 counts as typed (there was none): trucking 0 + freight 2466 = 2466', (function () { var x = SP.aggregateTyped({ '10011622': pp(0, 2466) }, ['1001-1622']); return x.complete === true && x.total === 2466; })());
+  check('32: an invoice on two releases is complete only when BOTH have trucking and freight; then the two are added', SP.aggregateTyped({ '10021176': pp(100, 200), '10021177': pp(50) }, ['1002-1176', '1002-1177']).complete === false && (function () { var x = SP.aggregateTyped({ '10021176': pp(100, 200), '10021177': pp(50, 25.5) }, ['1002-1176', '1002-1177']); return x.complete === true && x.total === 375.5; })());
+
   // ── Part 3: source checks of the screen ──
   var tab = fs.readFileSync(path.join(root, 'src/components/AccountingInvoicesTab.jsx'), 'utf8');
   check('19 (source): the screen stops the save without a reason, before anything is written, and no longer offers a bare "Save anyway" for this rule', tab.indexOf("if (mk7 && mkNote.length < MARKUP_NOTE_MIN) {") > 0 && tab.indexOf("var otherW = shipCheck.warnings.filter(function (w) { return !(mk7 && w === mk7.warning); });") > 0 && tab.indexOf("if (mk7 && mkNote.length < MARKUP_NOTE_MIN)") < tab.indexOf('setBusy(true);', tab.indexOf('var mk7 = shipCheck.markup')));
   check('20 (source): the red reason box is shown only while the shipping is below cost + 7%, and the reason goes to the server', tab.indexOf('id="nt-ship-override"') > 0 && tab.indexOf("shipAmt > 0 && shipAmt + 0.005 < minShippingCharge(c) && <div id=\"nt-ship-override\"") > 0 && tab.indexOf("markup_override_note: shipCheck.markup ? String(hdr.markup_override_note || '') : ''") > 0);
   check('21 (source): a copy of an invoice does not inherit the reason', tab.indexOf("Object.assign({}, h, t, { markup_override_note: ''") > 0);
+  var box = fs.readFileSync(path.join(root, 'src/components/ShippingPartsBox.jsx'), 'utf8');
+  check('33 (source): the box hands the total to the invoice form only when complete; the form fills the cost box unless the invoice is locked or EXW without a shipping line', box.indexOf('if (data && agg.complete && props.onTotal) { props.onTotal(agg.total); }') > 0 && tab.indexOf('onTotal={function (tot) { if (locked(editing) || noLineExw) { return; }') > 0 && tab.indexOf("Object.assign({}, h, { shipping_cost_estimate: String(tot) })") > 0);
+  check('34 (source): the heading is coloured and says it can be clicked', box.indexOf("color: '#fde047', textDecoration: 'underline'") > 0 && box.indexOf("(open ? '' : 'Click to enter: ') + 'Inside the shipping") > 0);
   var WN = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8'); var PG = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8');
   check('22 (source): What\'s New has the XV entry and the badge names the newest entry (XV or later)', /version: 'v55\.83-XV'/.test(WN) && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(WN); return !!top && PG.indexOf('>' + top[1] + '</span>') > 0; })());
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
