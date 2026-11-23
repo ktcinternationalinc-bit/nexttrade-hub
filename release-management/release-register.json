@@ -1,0 +1,164 @@
+{
+  "updated": "2026-11-22",
+  "updatedBy": "release-governance session",
+  "intro": "What's live on production, what's waiting on fix staging, and what each change still needs before it moves. Production currently holds the baseline plus the Hub-embed change only. This file is hand-editable — edit it directly, or the deploy/rollback scripts append to it. The Change Schedule screen in the Hub reads this file.",
+  "legend": [
+    {
+      "key": "prod",
+      "label": "On production",
+      "color": "prod"
+    },
+    {
+      "key": "stage",
+      "label": "On staging (waiting)",
+      "color": "stage"
+    },
+    {
+      "key": "codex",
+      "label": "Needs Codex pass",
+      "color": "codex"
+    },
+    {
+      "key": "max",
+      "label": "Needs Max's go",
+      "color": "max"
+    },
+    {
+      "key": "data",
+      "label": "Data change",
+      "color": "data"
+    }
+  ],
+  "items": [
+    {
+      "id": "wh-embed-enablement",
+      "title": "Hub embed enablement",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "cPanel config (live)",
+      "date": "2026-11-22",
+      "where": "production",
+      "status": "live",
+      "needsCodex": false,
+      "needsMax": false,
+      "dataChange": false,
+      "meta": "22 Nov · Max ran it via cPanel",
+      "desc": "Cookie SameSite=None + .htaccess CSP frame-ancestors, so the Hub can show the warehouse inside it.",
+      "files": "config/session.php, .htaccess",
+      "backup": "~/code-backups/embed-20261122/ (session.php.bak, htaccess.bak) on live",
+      "rollback": "restore those 2 files + php artisan config:clear"
+    },
+    {
+      "id": "wh-skin-b-charts",
+      "title": "Warehouse look (B, refined) + inventory flow charts",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "6c40a66",
+      "date": "2026-11-22",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": true,
+      "needsMax": true,
+      "dataChange": false,
+      "meta": "build 6c40a66 · 22 Nov",
+      "desc": "New skin (fonts, outlines, bigger logo/titles, colour-coded order status), click-a-tile inbound/outbound charts (monthly + by-year + multi-select), commas, full grade names.",
+      "files": "ktc-skin.css, app.blade.php, dashboard/index.blade.php, inventory summaries, DashboardController.php (gradeFlow, read-only), routes/web.php",
+      "backup": "staging ~/code-backups/skin-B-20261122, ktc-skin-20261119/before.tar, grade-flow-20261122",
+      "rollback": "restore those tars + remove ktc-skin.css + php artisan view:clear"
+    },
+    {
+      "id": "wh-order-queue",
+      "title": "Order Queue rebuild",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "",
+      "date": "2026-11-15",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": false,
+      "needsMax": true,
+      "dataChange": false,
+      "meta": "15 Nov",
+      "desc": "USA/Canada sections, kept reservations (no double-deduction), release-with-reason, save & create picking PDF.",
+      "files": "order queue views + controllers",
+      "backup": "staging backup bundle",
+      "rollback": "restore bundle + php artisan view:clear"
+    },
+    {
+      "id": "wh-bug-001",
+      "title": "BUG-001 — empty pallet unit fixed",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "",
+      "date": "2026-11-15",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": false,
+      "needsMax": true,
+      "dataChange": false,
+      "meta": "15 Nov",
+      "desc": "~2,685 pallets that had dropped out of the Inventory Summary are restored (unit derived from the skew number).",
+      "files": "inventory summary logic",
+      "backup": "staging backup bundle",
+      "rollback": "restore bundle + php artisan view:clear"
+    },
+    {
+      "id": "wh-bug-002",
+      "title": "BUG-002 — future shipped-date guard",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "",
+      "date": "2026-11-15",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": false,
+      "needsMax": true,
+      "dataChange": false,
+      "meta": "15 Nov",
+      "desc": "Blocks shipped dates in the future, no silent today fallback, 12-hour display fix.",
+      "files": "shipped-date validation + display",
+      "backup": "staging backup bundle",
+      "rollback": "restore bundle + php artisan view:clear"
+    },
+    {
+      "id": "wh-stage-rules",
+      "title": "Order stage checklist rules + ACID (Egypt/Kenya) + Hub feed",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "",
+      "date": "2026-11",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": false,
+      "needsMax": true,
+      "dataChange": false,
+      "meta": "various · Nov",
+      "desc": "Stage requirement rules, the read-only shipping-cost feed to the Hub, close-order. (Owned by the orders/lifecycle session.)",
+      "files": "App\\Services\\OrderStageRules, HubFeedController",
+      "backup": "staging backup bundle",
+      "rollback": "restore bundle + php artisan view:clear"
+    },
+    {
+      "id": "wh-receipt-1325",
+      "title": "Receipt 1325 date fix",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "data fix",
+      "date": "2026-11-22",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": false,
+      "needsMax": true,
+      "dataChange": true,
+      "meta": "data · 22 Nov",
+      "desc": "1984-11-06 → 2024-10-11 (year typo). Backed up to zz_fix1325 table. Would be re-applied on live as a 1-row update with a backup.",
+      "files": "scan_in_inventories id=1325 created_at",
+      "backup": "table zz_fix1325_scan_in_inventories_before_20261122 (never dropped)",
+      "rollback": "restore created_at from that table"
+    }
+  ],
+  "protocol": [
+    "Works on staging → Codex passes it → you name the change (\"yes, put X on production\").",
+    "Back up first — the exact files to ~/code-backups/<topic>-<date>/ and any data to a zz_<topic>_<table>_before_<date> table (never dropped).",
+    "Deploy the build, clear caches, verify the change and that nothing breaks.",
+    "Rollback if needed = restore those backups + clear caches. Data is never deleted, and rolling back code never touches the database — so no order, scan or bond row is ever lost."
+  ],
+  "protocolNote": "Once the live SSH key is authorized, steps 2–4 become one automated command (deploy a build, or roll back to a build), with the backups taken for you. Until then every production move is done by Max in cPanel, backups first, with his named go.",
+  "deployAutomation": {
+    "status": "key-authorized-automation-safe-mode",
+    "detail": "The ktc-live-deploy key is now authorized on the live cPanel (22 Nov 2026; host premium224.web-hosting.com, user nextueoa, SSH port 21098). The deploy/rollback scripts stay in safe mode (manual cPanel steps only, nothing changed) until the private key path is confirmed on the deploy machine AND the live-execution block has had its Codex re-review and is enabled deliberately. Every production move still needs Codex PASS + Max's named go per change; data is never deleted."
+  }
+}

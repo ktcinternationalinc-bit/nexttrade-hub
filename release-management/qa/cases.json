@@ -1,0 +1,236 @@
+{
+  "meta": {
+    "updated": "2026-11-22",
+    "note": "Editable QA cases for the release gate. Run: node release-management/qa/run-qa.js -> writes qa-result.json. Each case asserts a RULE still holds in the source, in plain English under why. kind: lint = source present/absent/count on PHP/JS (useful lint, NOT executed behavioral/PHP QA); governance = Hub wiring + JSON validity we can actually check here; manual = a human reminder, never fails the gate. Types: present/absent/count/json_ok. A /slashes/ needle is a regex. repo:warehouse cases skip (not fail) when the warehouse repo is absent. A release whose cases are only lint/manual reports LINT-ONLY, never PASS, because source lint cannot certify PHP/staging behavior (that comes from Codex + a PHP/staging run).",
+    "repos": {
+      "hub": ".",
+      "warehouse": "../nextrade_WAREHOUSE/nextrade-app"
+    }
+  },
+  "cases": [
+    {
+      "id": "stage-acid-countries",
+      "title": "ACID applies to Egypt and Kenya only",
+      "area": "warehouse-orders",
+      "release": "wh-stage-rules",
+      "repo": "warehouse",
+      "file": "app/Services/OrderStageRules.php",
+      "type": "present",
+      "needle": "const ACID_COUNTRIES = ['egypt', 'kenya'];",
+      "why": "The ACID Received / ACID Number / cargoX stage fields are required only for Egypt and Kenya. If this list changes, those fields would wrongly apply (or stop applying) to other countries.",
+      "kind": "lint"
+    },
+    {
+      "id": "stage-blank-country-missing",
+      "title": "Blank country keeps the stage fields required (not N/A)",
+      "area": "warehouse-orders",
+      "release": "wh-stage-rules",
+      "repo": "warehouse",
+      "file": "app/Services/OrderStageRules.php",
+      "type": "present",
+      "needle": "/if \\(\\$c === ''\\) \\{\\s*return 'missing';/",
+      "why": "A missing country must NOT silently make ACID fields N/A — it stays 'missing' so the field is still required and the user is told to set the country. Without this, a blank-country order could be shipped past a required ACID check.",
+      "kind": "lint"
+    },
+    {
+      "id": "stage-blank-country-not-na",
+      "title": "Blank country never maps straight to N/A",
+      "area": "warehouse-orders",
+      "release": "wh-stage-rules",
+      "repo": "warehouse",
+      "file": "app/Services/OrderStageRules.php",
+      "type": "present",
+      "needle": "in_array($c, self::ACID_COUNTRIES, true) ? 'required' : 'na'",
+      "why": "Only a known non-ACID country becomes N/A; the blank case is handled before this line. Confirms the required/na decision runs after the blank guard.",
+      "kind": "lint"
+    },
+    {
+      "id": "stage-bl-unknown-missing",
+      "title": "Unknown BL / bank doc type is 'missing', never N/A",
+      "area": "warehouse-orders",
+      "release": "wh-stage-rules",
+      "repo": "warehouse",
+      "file": "app/Services/OrderStageRules.php",
+      "type": "count",
+      "needle": "return $t === 'swb' ? 'na' : 'missing';",
+      "min": 1,
+      "why": "Only the two known values decide BL/bank state; anything else is 'missing' (still required), so an unrecognised doc type can't skip a required check.",
+      "kind": "lint"
+    },
+    {
+      "id": "bug002-future-block",
+      "title": "BUG-002: a future shipped date is blocked",
+      "area": "warehouse-orders",
+      "release": "wh-bug-002",
+      "repo": "warehouse",
+      "file": "app/Services/OrderDateGuard.php",
+      "type": "present",
+      "needle": "$shipped->gt(Carbon::now()->endOfDay())",
+      "why": "The shipped date is the day the shipment left, so it cannot be later than today. This is the guard that stops a future date (usually a wrong year) from being saved.",
+      "kind": "lint"
+    },
+    {
+      "id": "bug002-unreadable-block",
+      "title": "BUG-002: an unreadable shipped date is blocked, not guessed",
+      "area": "warehouse-orders",
+      "release": "wh-bug-002",
+      "repo": "warehouse",
+      "file": "app/Services/OrderDateGuard.php",
+      "type": "present",
+      "needle": "The shipped date could not be read",
+      "why": "A date that cannot be parsed is blocked with a clear message — it is never silently treated as today.",
+      "kind": "lint"
+    },
+    {
+      "id": "bug002-no-silent-today",
+      "title": "BUG-002: no silent 'today' fallback for the shipped date",
+      "area": "warehouse-orders",
+      "release": "wh-bug-002",
+      "repo": "warehouse",
+      "file": "app/Http/Controllers/Admin/OrderController.php",
+      "type": "present",
+      "needle": "Please enter the shipped date (the day the shipment left). Nothing was saved.",
+      "why": "When no shipped date and no usable load date exist, the save is refused and the user is asked for the date — the code must not quietly stamp Carbon::now().",
+      "kind": "lint"
+    },
+    {
+      "id": "bug002-future-loaddate-block",
+      "title": "BUG-002: a future load date can't stand in as the shipped date",
+      "area": "warehouse-orders",
+      "release": "wh-bug-002",
+      "repo": "warehouse",
+      "file": "app/Http/Controllers/Admin/OrderController.php",
+      "type": "present",
+      "needle": "The load date of this order is in the future, so it cannot be used as the shipped date",
+      "why": "If the shipped date is taken from the load date, a future load date must still be refused — the same future-date rule, applied to the fallback path.",
+      "kind": "lint"
+    },
+    {
+      "id": "gradeflow-read-only",
+      "title": "Inventory flow chart query is read-only",
+      "area": "warehouse-charts",
+      "release": "wh-skin-b-charts",
+      "repo": "warehouse",
+      "file": "app/Http/Controllers/Admin/DashboardController.php",
+      "type": "absent",
+      "scope": "gradeFlow",
+      "needle": "/->(insert|update|delete)\\s*\\(/",
+      "why": "The grade-flow chart only reads movement totals. It must never write to the database. This checks the gradeFlow method contains no insert/update/delete.",
+      "kind": "lint"
+    },
+    {
+      "id": "gradeflow-in-out-source",
+      "title": "Chart totals: inbound from scan-in weight, outbound from shipped date",
+      "area": "warehouse-charts",
+      "release": "wh-skin-b-charts",
+      "repo": "warehouse",
+      "file": "app/Http/Controllers/Admin/DashboardController.php",
+      "type": "present",
+      "needle": "DATE_FORMAT(scan_out_inventories.shipped_date, '%Y-%m')",
+      "why": "Outbound is grouped by the actual shipped date; inbound by the receipt weight. Confirms the chart still reads the agreed columns (Thirds USA should read ~16.08M in / ~15.84M out, Jun21–Nov26).",
+      "kind": "lint"
+    },
+    {
+      "id": "chart-totals-reference",
+      "title": "REFERENCE: Thirds USA chart totals and no 1984 bar",
+      "area": "warehouse-charts",
+      "release": "wh-skin-b-charts",
+      "repo": "warehouse",
+      "file": "app/Http/Controllers/Admin/DashboardController.php",
+      "type": "present",
+      "manual": true,
+      "needle": "gradeFlow",
+      "why": "Human check on staging: Thirds USA inbound ~16,080,000 lb / outbound ~15,840,000 lb across Jun 2021–Nov 2026, with NO stray 1984 bar. Codex flagged (22 Nov 11:49) that the >18-month leading-gap drop removes legitimate old movement from 'all-time' totals — that fix is owned by the warehouse-skin session and must land before this item moves to production.",
+      "kind": "manual"
+    },
+    {
+      "id": "bug001-pallet-unit",
+      "title": "BUG-001: empty-pallet unit is derived (pallets restored to Inventory Summary)",
+      "area": "warehouse-inventory",
+      "release": "wh-bug-001",
+      "repo": "warehouse",
+      "file": "app/Http/Controllers/Admin/InventoryController.php",
+      "type": "present",
+      "manual": true,
+      "needle": "pallet",
+      "why": "Human check on staging: the ~2,685 pallets that had dropped out of the Inventory Summary are back, the unit derived from the skew number. Owned by the inventory session; this is a reminder, not a blocking source assertion.",
+      "kind": "manual"
+    },
+    {
+      "id": "hub-releases-tab-gated",
+      "title": "Hub: Change Schedule tab is permission-gated",
+      "area": "hub",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "src/app/page.jsx",
+      "type": "present",
+      "needle": "if (t.id === 'releases') { return modulePerms['releases.access'] === true; }",
+      "why": "Only super admin (handled earlier) and anyone given releases.access can see the Change Schedule tab. Without this gate the release register would be visible to everyone.",
+      "kind": "governance"
+    },
+    {
+      "id": "hub-releases-route-readonly",
+      "title": "Hub: the /api/releases route is GET-only (no writes)",
+      "area": "hub",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "src/app/api/releases/route.js",
+      "type": "absent",
+      "needle": "/export async function (POST|PUT|DELETE|PATCH)/",
+      "why": "The release register is read-only to the Hub. The screen must never be able to deploy or edit; only GET exists.",
+      "kind": "governance"
+    },
+    {
+      "id": "hub-releases-perm-key",
+      "title": "Hub: releases.access permission exists in Settings",
+      "area": "hub",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "src/components/SettingsTab.jsx",
+      "type": "present",
+      "needle": "key: 'releases.access'",
+      "why": "Max can only grant the Change Schedule tab if the permission key is wired into Settings.",
+      "kind": "governance"
+    },
+    {
+      "id": "hub-xf-panel-no-token",
+      "title": "Hub: NT Warehouse panel carries no Hub token",
+      "area": "hub",
+      "release": "hub-ntwarehouse-xf",
+      "repo": "hub",
+      "file": "src/app/page.jsx",
+      "type": "present",
+      "needle": "src=\"https://nextradeindustries.com/admin\" title=\"NT Warehouse\"",
+      "why": "The in-Hub warehouse panel is a plain iframe of the live warehouse with no Hub session/profile/token passed across origins (XF).",
+      "kind": "governance"
+    },
+    {
+      "id": "hub-badge-bumped",
+      "title": "Hub: version badge is current",
+      "area": "hub",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "src/app/page.jsx",
+      "type": "present",
+      "needle": ">v55.83-XH</span>",
+      "why": "House rule: the visible version badge is bumped every build so Max can tell which build is live.",
+      "kind": "governance"
+    },
+    {
+      "id": "register-parses",
+      "title": "Governance: the release register is valid JSON",
+      "area": "governance",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "release-management/release-register.json",
+      "type": "json_ok",
+      "keys": [
+        "items",
+        "protocol",
+        "legend"
+      ],
+      "why": "The Change Schedule screen and the deploy scripts both read this file. A bad hand-edit must be caught here before it blanks the screen.",
+      "kind": "governance"
+    }
+  ]
+}

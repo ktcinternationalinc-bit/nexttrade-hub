@@ -25,6 +25,7 @@ import CalendarTab from '../components/CalendarTab';
 import DailyLogTab from '../components/DailyLogTab';
 import AdminTab from '../components/AdminTab';
 import SettingsTab from '../components/SettingsTab';
+import ChangeScheduleTab from '../components/ChangeScheduleTab'; // v55.83-XH — release-governance: Change Schedule (Releases) tab
 import CustomsTab from '../components/CustomsTab';
 import SocialContentTab from '../components/SocialContentTab';
 import BrandLearningTab from '../components/BrandLearningTab';
@@ -190,7 +191,7 @@ import {
   LayoutDashboard, DollarSign, Users, FileText, Landmark, Building2, Banknote,
   FileCheck, AlertTriangle, BookOpen, BarChart3, Warehouse, Package, Stamp,
   Ship, Handshake, Ticket, Bug, Mail, Calendar, Notebook, Crown, Bot,
-  Megaphone, Brain, Search, Settings, Download, Circle
+  Megaphone, Brain, Search, Settings, Download, Circle, CalendarClock
 } from 'lucide-react';
 
 // ============================================
@@ -231,6 +232,8 @@ const TABS = [
   { id: 'seo', label: 'SEO Audit / تحسين', icon: '🔍' },
   { id: 'settings', label: 'Settings / إعدادات', icon: '⚙️' },
   { id: 'import', label: 'Import / استيراد', icon: '📥' },
+  // v55.83-XH — Change Schedule (Releases): super-admin + anyone given 'releases.access'.
+  { id: 'releases', label: 'Change Schedule / جدول', icon: '🗓️' },
 ];
 
 // v55.83-H — monochrome line-icon map for the sidebar, keyed by tab id.
@@ -242,6 +245,7 @@ const TAB_ICONS = {
   inventory: Package, customs: Stamp, shipping: Ship, crm: Handshake, tickets: Ticket,
   systemtickets: Bug, comms: Mail, calendar: Calendar, dailylog: Notebook, admin: Crown,
   ai: Bot, social: Megaphone, brand: Brain, seo: Search, settings: Settings, import: Download,
+  releases: CalendarClock, // v55.83-XH
 };
 
 // ============================================
@@ -2004,7 +2008,7 @@ function HubApp() {
   const toast = _toastRaw || HUB_TOAST_FALLBACK;
 
   // Breadcrumb — shows current location
-  const TAB_GROUPS = { dashboard:'Overview', sales:'Egypt Finance', treasury:'Egypt Finance', checks:'Egypt Finance', debts:'Egypt Finance', egyptbank:'Egypt Finance', bank:'USA Finance', accounting:'USA Finance', quotes:'Egypt Finance', openaccounts:'Open Accounts', reports:'Reports', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System' };
+  const TAB_GROUPS = { dashboard:'Overview', sales:'Egypt Finance', treasury:'Egypt Finance', checks:'Egypt Finance', debts:'Egypt Finance', egyptbank:'Egypt Finance', bank:'USA Finance', accounting:'USA Finance', quotes:'Egypt Finance', openaccounts:'Open Accounts', reports:'Reports', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System', releases:'System' };
   const currentTabLabel = TABS.find(t => t.id === tab)?.label?.split(' / ')[0] || tab;
   const currentGroup = TAB_GROUPS[tab] || '';
 
@@ -2054,6 +2058,8 @@ function HubApp() {
       }
       // v55.83-SV — the Sourcing desk shows only for people given its switch (Max: "Super admin. And those permissioned")
       if (t.id === 'sourcing') { return modulePerms['commercial.access'] === true; }
+      // v55.83-XH — Change Schedule (Releases): super admin handled above; others only with the switch.
+      if (t.id === 'releases') { return modulePerms['releases.access'] === true; }
       const moduleName = TAB_MODULE_MAP[t.id];
       // If permission explicitly set, use it
       if (moduleName && modulePerms[moduleName] !== undefined) return modulePerms[moduleName];
@@ -5603,7 +5609,7 @@ function HubApp() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-XG</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-XH</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -5991,7 +5997,7 @@ function HubApp() {
               { group: 'REPORTS', items: ['reports'] },
               { group: 'OPERATIONS', items: ['warehouse', 'inventory', 'customs', 'shipping', 'sourcing'] },
               { group: 'PEOPLE', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
-              { group: 'SYSTEM', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
+              { group: 'SYSTEM', items: ['admin', 'ai', 'settings', 'import', 'systemtickets', 'releases'] },
             ].map(g => {
               const groupTabs = g.items.map(id => visibleTabs.find(t => t.id === id)).filter(Boolean);
               if (!groupTabs.length) return null;
@@ -14746,6 +14752,11 @@ function HubApp() {
               </div>
             </div>
           </SafeSection>
+        )}
+
+        {/* v55.83-XH — Change Schedule (Releases): the release register for Max. */}
+        {tab === 'releases' && (
+          <SafeSection label="Change Schedule"><ChangeScheduleTab /></SafeSection>
         )}
 
         {/* ==========================================

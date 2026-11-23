@@ -1,0 +1,35 @@
+{
+  "_comment": "Editable deploy config for the live Nextrade warehouse. The ktc-live-deploy PUBLIC key is now AUTHORIZED on the server (22 Nov 2026). The scripts still stay in SAFE MODE until (a) key.privateKeyPath below points at the real private key on this machine, AND (b) the live-execution block in deploy.js/rollback.js has had its Codex re-review and is deliberately enabled. sshAuthorized=false keeps the scripts from attempting any live connection until those are done; they print the manual cPanel steps instead. Nothing reaches live without Codex PASS + Max's named go per change.",
+  "sshAuthorized": false,
+  "live": {
+    "host": "premium224.web-hosting.com",
+    "siteDomain": "nextradeindustries.com",
+    "sshUser": "nextueoa",
+    "sshPort": 21098,
+    "publicHtml": "public_html",
+    "backupRoot": "~/code-backups",
+    "appName": "Nextrade warehouse (live)",
+    "hostingNote": "Namecheap Stellar Plus shared hosting. cPanel user only, no root. Port 21098 (Namecheap shared), NOT 22 — confirm before relying on it. Web root is the nextradeindustries.com docroot under the nextueoa home; confirm the exact app path before any deploy."
+  },
+  "staging": {
+    "host": "fix.nextrade-staging.com",
+    "note": "staging is the test copy; it is where every change is proven before a production move"
+  },
+  "repo": {
+    "warehousePath": "../nextrade_WAREHOUSE",
+    "appSubdir": "nextrade-app"
+  },
+  "key": {
+    "type": "ed25519",
+    "public": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAcKsvA3sVnlslrTUtoNEZDgsI3fNH2vSzWaxklLEeYo ktc-live-deploy",
+    "comment": "ktc-live-deploy",
+    "authorizedOnServer": true,
+    "authorizedOn": "2026-11-22",
+    "privateKeyPath": "CONFIRM-ON-THIS-PC — the ktc-live-deploy private key was generated on this machine in an earlier session; locate and confirm its exact path, keep it OFF any repo/commit, then set it here"
+  },
+  "caches": {
+    "always": ["php artisan view:clear"],
+    "ifConfigChanged": ["php artisan config:clear"],
+    "ifRoutesChanged": ["php artisan route:clear"]
+  }
+}

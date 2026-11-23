@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XH',
+    date: '2026-11-22',
+    title: 'Change Schedule — see every warehouse release',
+    items: [
+      { text: 'A new **Change Schedule** screen (under SYSTEM) shows, in plain English, what is **live on production**, what is **waiting on the test site**, and what each change still needs before it moves — a Codex pass, your go, and a flag if it changes data. It also spells out how a move happens and how it rolls back.' },
+      { text: 'Only you (super admin) and anyone you give the **System: Change Schedule** switch can see it. It is **view-only** — nothing can be deployed from the screen. The list is kept in one plain file you can edit by hand, and the deploy tools write to that same file.' },
+      { superAdminOnly: true, text: 'Technical (release-governance session; revised to Codex pre-build feedback 12:23): NEW tab “releases” in SYSTEM. The screen is a maintained PLAN/snapshot (as-of a date, labelled NOT a live feed) — the fs-read JSON is a Hub build snapshot, so it refreshes on the next Hub deploy. NEW route /api/releases is AUTHENTICATED (verifiedCaller + assertPermission releases.access, fails closed, super admin always), GET-only, fixed-path (no caller input/traversal), returns no credentials. ChangeScheduleTab sends the sign-in bearer. SettingsTab ACTION_PERMS gains releases.access. release-management/qa: one-command run-qa.js + editable cases.json -> qa-result.json; cases labelled lint vs governance — a warehouse release reads LINT-ONLY (source lint ≠ executed PHP/staging QA), never a PASS implying Codex approval. release-management/deploy: backup-first deploy/rollback per CHANGE-MANAGEMENT.md A–F, DEFAULT DRY-RUN, HARD-GATED in SSH safe mode. The gate (lib/gate.js, shared by deploy.js AND register.markVerifiedLive) compares each item\'s RECORDED evidence to the exact candidate: codexRef{sha,target,feedbackRef} + a SEPARATE recorded behavioralQa{sha,target,result} (run-qa.js is source-lint only, never behavioral) + maxApproval matched by --confirm (never manufactured); deploy resolves the real git HEAD, not a --sha string; markVerifiedLive validates against the stored item before any write and preserves recorded approval; markVerifiedLive is production-only (refuses a non-production target before any write) and an unavailable git HEAD is a gate failure (Codex 19:45). Unique per-release backup ids, no auto restore SQL, data never deleted, atomic+locked register writes, side-effect-free dry-run. badge XF->XH. Tests xh-change-schedule + xh-release-gate + xh-deploy-head-guard. (Letter XH: XG was taken by the arrival-reminders session.)' },
+    ]
+  },
+  {
     version: 'v55.83-XG',
     date: '2026-11-23',
     title: 'Arrival & final-payment reminders (e-mail, sent by hand)',
