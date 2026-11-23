@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { currencyScale, MAX_WAVE_CSV_BYTES } from '../lib/wave-history';
+import WaveCashHistory from './WaveCashHistory';
 
 const panel = 'rounded-xl border border-slate-700 bg-slate-900/70 p-4 sm:p-5';
 const inputClass = 'mt-1 w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-slate-100';
@@ -334,12 +335,13 @@ export default function WaveHistoryTab({ mayManage: initialManage }) {
         <h2 className="text-2xl font-semibold text-slate-100">NextTrade Wave History</h2>
         <p className="mt-1 text-sm text-slate-300">Historical costs, category trends, and year-over-year comparisons.</p>
       </div>
-      <div role="group" aria-label="Wave History sections" className="flex gap-2">
+      <div role="group" aria-label="Wave History sections" className="flex flex-wrap gap-2">
+        <button type="button" aria-pressed={view === 'cash'} className={view === 'cash' ? primary : button} onClick={() => setView('cash')}>Cash history &amp; mappings</button>
         <button type="button" aria-pressed={view === 'report'} className={view === 'report' ? primary : button} onClick={() => setView('report')}>Category reports</button>
         {mayManage && <button type="button" aria-pressed={view === 'import'} className={view === 'import' ? primary : button} onClick={() => setView('import')}>Import a month</button>}
       </div>
     </div>
-    {view === 'import' && mayManage ? <WaveMonthImport onImported={applyFilters} /> : <>
+    {view === 'cash' ? <WaveCashHistory mayManage={mayManage} /> : view === 'import' && mayManage ? <WaveMonthImport onImported={applyFilters} /> : <>
       <form className={panel + ' grid items-end gap-3 sm:grid-cols-[1fr_1.5fr_1fr_auto]'} onSubmit={event => {
         event.preventDefault();
         applyFilters({ ...draft, currency: draft.currency.trim().toUpperCase() });

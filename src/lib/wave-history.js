@@ -43,7 +43,7 @@ export function readWaveMinor(value, currency, label, allowBlank = false) {
   return amount;
 }
 
-function parseCsv(csv) {
+export function parseCsv(csv) {
   const rows = [];
   const source = csv.replace(/^\uFEFF/, '');
   let row = [];
@@ -85,7 +85,7 @@ function parseCsv(csv) {
   return rows;
 }
 
-function parseDate(value) {
+export function parseDate(value) {
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
   const named = /^([a-z]{3,9})\.? (\d{1,2}),? (\d{4})$/i.exec(value);

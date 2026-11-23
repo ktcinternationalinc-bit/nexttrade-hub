@@ -29,7 +29,12 @@ export async function authorizeWaveHistory(request) {
 
 export async function waveHistoryRpc(db, name, args) {
   const { data, error } = await db.rpc(name, args);
-  if (error?.code === '40001') throw new WaveHistoryError('The archived month changed. Run a new preview before saving.', 409);
+  if (name.startsWith('wave_cash_') && ['42P01', 'PGRST202'].includes(error?.code)) {
+    throw new WaveHistoryError('Cash history needs the database update supabase/wave-cash-history.sql. Nothing was changed.', 503);
+  }
+  if (error?.code === '40001') throw new WaveHistoryError(name === 'wave_cash_map'
+    ? 'This category mapping changed. Reload cash history before saving again.'
+    : 'The archived month changed. Run a new preview before saving.', 409);
   if (error?.code === '22023') throw new WaveHistoryError(error.message, 422);
   if (error) {
     console.error('[wave-history] database call failed', name, error.code);
