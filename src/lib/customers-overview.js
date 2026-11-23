@@ -116,12 +116,13 @@ export function buildCustomersOverview(o) {
         arrival_date: arr.date, arrival_partial: arr.date ? !arr.all : false, arrived: arrived, arrival_red: false });
       return;
     }
+    var small = open && cur === 'USD' && bal < SMALL_OPEN_USD * 100; // cents
     r.invoice_count += 1; r.invoiced += total; r.paid_on_those += paid; r.paid_in_wave_undated += wave; r.received += rec;
-    if (open) { r.open_count += 1; r.owed += bal; if (od > 0) { r.overdue += bal; r.overdue_count += 1; } if (arrived) { r.arrived_unpaid += 1; } }
+    if (open) { r.open_count += 1; r.owed += bal; if (od > 0) { r.overdue += bal; r.overdue_count += 1; } if (arrived && !small) { r.arrived_unpaid += 1; } }
     r.invoices.push({ id: inv.id, number: inv.invoice_number || '', release: inv.release_number || '', invoice_date: d, due_date: due || null,
       total: total / 100, paid: paid / 100, balance: (open ? bal : 0) / 100, overpaid: (bal < 0 ? -bal : 0) / 100, status: status, days_overdue: od,
       received_in_period: rec / 100, paid_in_wave_undated: wave / 100,
-      arrival_date: arr.date, arrival_partial: arr.date ? !arr.all : false, arrived: arrived, arrival_red: arrived && open });
+      arrival_date: arr.date, arrival_partial: arr.date ? !arr.all : false, arrived: arrived, arrival_red: arrived && open && !small, small_open: small });
   });
   var F = ['invoiced', 'paid_on_those', 'paid_in_wave_undated', 'received', 'received_on_older', 'received_on_other', 'owed', 'overdue'];
   var totals = { customers: 0, invoice_count: 0, open_count: 0, limited_count: 0, overdue_count: 0, arrived_unpaid: 0 }; F.forEach(function (f) { totals[f] = 0; });
@@ -165,6 +166,10 @@ export function owesOrUnknown(row) { return !!row && ((Number(row.owed) || 0) > 
 //             green  = it has invoices in the period, EVERY one of them arrived and is fully paid, and no balance is withheld
 // Anything else keeps its normal colour. A withheld amount ('limited') is never called paid.
 export var SINCE_JUNE = '2026-06-01';
+// v55.83-XM rev 2 (Max, Nov 23, on the live screen: "anything due under $200 should be kept notated in red but the Arrived and not
+// paid should not be there and just state Arrived") — a small remainder in DOLLARS stays owed and stays red in 'Left to pay', it
+// still counts in owed / overdue / open, but it no longer turns the arrival red and is not counted as 'arrived, not paid'.
+export var SMALL_OPEN_USD = 200; // strictly under this many dollars
 export function invoiceTone(v) {
   if (!v) { return ''; }
   if (v.status === 'partial') { return 'yellow'; }

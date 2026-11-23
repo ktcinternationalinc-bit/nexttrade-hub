@@ -40,6 +40,7 @@ export const BUILD_HISTORY = [
       { text: '**New date button: “Since 1 June 2026”.** One click shows every customer from 1 June 2026 to today.' },
       { text: '**Green** = the goods arrived and the invoice is fully paid. **Yellow** = partially paid. The red arrival date (arrived, not paid) is unchanged. The colours are on each invoice when you open a customer.' },
       { text: 'A customer line turns yellow when one of its invoices in the period is partially paid, and green only when every invoice in the period arrived and is fully paid.' },
+      { text: '**Small remainders:** when less than $200 is still owed on an invoice, the amount stays in red under “Left to pay”, but the arrival no longer shows as a red “ARRIVED, not paid” — it just says arrived, and it is not counted in the red “arrived, not paid” number next to the customer.' },
       { superAdminOnly: true, text: 'Technical: no SQL, no server change. customers-overview.js presetRange(\'june\') = 2026-06-01 → today; invoiceTone / customerTone (pure, tested) decide the colour; a withheld balance is never shown green.' },
     ]
   },
