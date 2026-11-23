@@ -16,6 +16,7 @@ import OpenBalancesTab from './OpenBalancesTab';
 import CustomersOverviewTab from './CustomersOverviewTab'; // v55.83-VN — every customer: invoiced, paid, received, owed, by period
 import SalesReportTab from './SalesReportTab';
 import PnLTab from './PnLTab';
+import ArrivalRemindersTab from './ArrivalRemindersTab'; // v55.83-XG — arrival + final-payment reminders (Max, 22 Nov)
 import OrderMonitorTab from './OrderMonitorTab'; // v55.83-TI — order lifecycle, exceptions, deposits, 30-hour deadline
 import ProfitabilityTab from './ProfitabilityTab'; // v55.83-SY — profitability by product / customer / invoice (not the cash report)
 import BusinessBooksTab from './BusinessBooksTab';
@@ -112,6 +113,7 @@ export default function AccountingTab(props) {
     ['customers', '👤 Customers'],
     ['invoices', '🧾 Invoices'],
     ['orders', '🚚 Orders — stage & what is missing'], // v55.83-TI (Max, Nov 16)
+    ['arrival_reminders', '📨 Arrival & final-payment reminders'], // v55.83-XG (Max, 22 Nov)
     ['recon', '🔎 Order Reconciliation'], // v55.83-NV — moved from Admin: it is accounting work
     ['customers_overview', '👥 Customers overview (invoiced · paid · owed)'], // v55.83-VN (Max, Nov 19)
     ['balances', '💰 Open Balances'], // v55.83-OJ — who owes what, overdue in orange
@@ -145,7 +147,7 @@ export default function AccountingTab(props) {
   // 11:19). Same tabs, same permissions — only the arrangement changed.
   var TAB_GROUPS = [
     ['📥 DAILY WORK — handle the money', ['books_home', 'all_txns', 'review', 'categories']],
-    ['🧾 SELLING — customers & what they owe', ['orders', 'invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'customers_overview', 'balances']],
+    ['🧾 SELLING — customers & what they owe', ['orders', 'arrival_reminders', 'invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'customers_overview', 'balances']],
     ['🛒 BUYING — vendors & what we owe', ['waiting', 'bills', 'wires', 'purchaseorders']],
     ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'profitability', 'pnl']],
     ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast', 'monthend']],
@@ -233,6 +235,7 @@ export default function AccountingTab(props) {
       {sub === 'sales_report' && <SalesReportTab {...props} />}
       {sub === 'pnl' && <PnLTab {...props} />}
       {alive('orders') && <div className="p-3" style={shown('orders')}><OrderMonitorTab {...props} onGo={goFrom} /></div>}
+      {sub === 'arrival_reminders' && <div className="p-3"><ArrivalRemindersTab {...props} /></div>}
       {sub === 'profitability' && <div className="p-3"><ProfitabilityTab {...props} onGo={goFrom} /></div>}
       {alive('all_invoices') && <div style={shown('all_invoices')}><BusinessBooksTab {...props} onGo={goFrom} /></div>}
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}

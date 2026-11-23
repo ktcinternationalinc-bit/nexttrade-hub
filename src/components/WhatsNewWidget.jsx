@@ -33,6 +33,22 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XG',
+    date: '2026-11-23',
+    title: 'Arrival & final-payment reminders (e-mail, sent by hand)',
+    items: [
+      { text: '**Accounting → SELLING → 📨 Arrival & final-payment reminders.** Every shipped, open warehouse order arriving in 21 days or less, with its invoice total, what was received and what is still owed (from the Hub\u2019s invoices and payments, joined by release number).' },
+      { text: '**Prepare reminder** shows the exact message for the order\u2019s stage — friendly (15–21 days), firmer (8–14), urgent (0–7), beyond urgent (past the arrival date) — in English, Spanish, French or Arabic. Subject: Release # · KTC · Port of Loading → Destination · Container #.' },
+      { text: '**Port of Loading** comes from the release number: 1002 = Houston, 1001 = Canada. For any other release (1003 and so on) the Hub does not guess — it shows the warehouse on the order and you confirm the port before the message is written.' },
+      { text: '**Nothing is sent automatically.** You read the message, check the address and press Send. It goes from info@ktcus.com, and every send is logged with its text and the balance it stated. "Send a test to myself" sends the same message to your own address only.' },
+      { text: '**If the mail server does not answer,** the reminder is marked **Delivery unconfirmed** — it may have reached the customer. It is never sent again by itself: open **History** on the order, check, and tick "I checked — send another one" if it is still right. A clear refusal by the mail server stays "Not sent" and can simply be sent again.' },
+      { text: '**One invoice for several releases:** the message lists every release on that invoice and gives the totals of the whole invoice (nothing is split per release).' },
+      { text: '**History window:** a person limited to a history window sees no figure, text or logged message of an order whose invoice or payments are older than their window, and cannot send its reminder (the super admin can). Invoices dated before 1 April 2026 are never reminded about.' },
+      { text: 'A reminder is refused when there is no invoice on the release, the invoice is paid in full, a field is missing, or the figures changed after you looked. A warning you must tick appears when the warehouse and Hub customer names differ or an invoice covers several releases.' },
+      { superAdminOnly: true, text: 'Technical: NEW sql/v55-83-XG-arrival-reminders.sql (one new table arrival_reminders, service-role only, no delete right) — must be installed before anything can be sent. NEW route /api/accounting/arrival-reminders (list / preview / send / history; no GET, no cron), src/lib/arrival-reminders.js + arrival-reminders-server.js, ArrivalRemindersTab. Mailbox = COMMERCIAL_MAIL_USER / COMMERCIAL_MAIL_PASSWORD (Hostinger SMTP). Permissions: ar.view_invoice_balances to see, ar.send_reminders to send. WhatsApp, the automatic schedule and the status shown in the warehouse are later phases.' },
+    ]
+  },
+  {
     version: 'v55.83-XE',
     date: '2026-11-22',
     title: 'Warehouse salaries: only for people Max allows (step 1: Nextrade books)',
