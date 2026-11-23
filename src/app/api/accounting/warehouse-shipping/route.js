@@ -88,16 +88,20 @@ async function runSync(db, trigger, userId) {
     if (active.value !== cfg.source) { return await failRun('The feed is ' + cfg.source + ' but the Hub is set to read ' + active.value + '. Change one of them on purpose first.'); }
 
     // 1. the warehouse feed
-    var feed;
+    // v55.83-YA rev2 (Codex 23 Nov 22:15) — ONE 40-second limit covers the headers AND the whole body read; the timer is cleared
+    // in finally on every path (non-200, thrown fetch, success), and failRun runs only after it, well inside maxDuration 60.
+    var feed = null; var feedFail = null;
+    var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
     try {
-      var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
       var res = await fetch(cfg.url, { headers: { 'X-Hub-Feed-Token': cfg.token, 'Accept': 'application/json' }, signal: ctl.signal, cache: 'no-store', redirect: 'error' }); // UU (Codex 06:13) — no redirect carries the token
-      clearTimeout(tm);
-      if (!res.ok) { return await failRun('The warehouse answered HTTP ' + res.status + (res.status === 401 ? ' (the token was refused)' : '') + '.'); }
-      var rdF = await readFeedBody(res, ctl, 40); // v55.83-YA — an incomplete or non-list answer is named plainly
-      if (rdF.error) { return await failRun(rdF.error); }
-      feed = rdF.json;
-    } catch (eF) { return await failRun('Could not read the warehouse feed (' + ((eF && eF.name === 'AbortError') ? 'no answer within 40 seconds' : ((eF && eF.message) || 'network error')) + ').'); }
+      if (!res.ok) { feedFail = 'The warehouse answered HTTP ' + res.status + (res.status === 401 ? ' (the token was refused)' : '') + '.'; }
+      else {
+        var rdF = await readFeedBody(res, ctl, 40); // v55.83-YA — an incomplete or non-list answer is named plainly
+        if (rdF.error) { feedFail = rdF.error; } else { feed = rdF.json; }
+      }
+    } catch (eF) { feedFail = 'Could not read the warehouse feed (' + ((eF && eF.name === 'AbortError') ? 'no answer within 40 seconds' : ((eF && eF.message) || 'network error')) + ').'; }
+    finally { clearTimeout(tm); }
+    if (feedFail) { return await failRun(feedFail); }
     if (!feed || feed.ok !== true || !Array.isArray(feed.orders) || !Array.isArray(feed.stages)) { return await failRun('The warehouse feed answered, but not in the expected shape.'); }
     if (feed.source !== cfg.source) { return await failRun('The feed says it is "' + (feed.source || 'unknown') + '", not the expected "' + cfg.source + '" — refused.'); }
     if (!feed.orders.length) { return await failRun('The warehouse feed returned NO orders — treated as a failure, not as "nothing changed".'); }

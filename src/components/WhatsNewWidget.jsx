@@ -35,11 +35,12 @@ export const BUILD_HISTORY = [
   {
     version: 'v55.83-YA',
     date: '2026-11-23',
-    title: 'Orders and reminders say plainly when the warehouse list arrives incomplete',
+    title: 'Orders and reminders say plainly when the warehouse list cannot be read',
     items: [
-      { text: 'When the warehouse is too slow and its order list is still arriving after 40 seconds, **Orders**, **Arrival reminders** and the shipping-cost sync now say so in plain words: “the order list … came in incomplete — the warehouse is sending it too slowly”, instead of “The warehouse feed answered 200”.' },
-      { text: 'If the warehouse sends a web page (sign-in, error or maintenance) instead of the list, the message says that too. Nothing in the Hub is changed in either case — try again later.' },
-      { superAdminOnly: true, text: 'Technical (no SQL): new server helper src/lib/warehouse-feed-read.js readFeedBody(res, ctl, secs) reads text, then JSON; an abort or a JSON body that stops part-way = incomplete message, a non-JSON body = kind + length only (never the body text or the token). Used by order-monitor and arrival-reminders fetchFeed and the warehouse-shipping sync. Cause found 23 Nov: staging feed ≈10 MB, not gzip-compressed, sent at ~60–100 KB/s by the host; the real fix is compression on the staging site (Max’s call).' },
+      { text: 'When the warehouse order list cannot be read, **Orders**, **Arrival reminders** and the shipping-cost sync now say what happened in plain words, instead of “The warehouse feed answered 200”: the list was **still arriving after 40 seconds and was cut off** (the warehouse may be sending it slowly), the **connection broke** while it was arriving, or it **arrived incomplete or damaged**.' },
+      { text: 'If the warehouse sends a web page (sign-in, error or maintenance) instead of the list, the message says that too. In every case nothing in the Hub is changed — try again later.' },
+      { text: 'The shipping-cost sync now stops waiting after 40 seconds even when the list starts arriving and then crawls, records the failed sync, and keeps the figures already in the Hub. The next sync can start straight away.' },
+      { superAdminOnly: true, text: 'Technical (no SQL): new server helper src/lib/warehouse-feed-read.js readFeedBody(res, ctl, secs) reads text, then JSON. Three messages: a real abort (ctl.signal.aborted) = “still arriving after N seconds and was cut off”; a body read that fails without an abort = “connection broke”; JSON that stops part-way or is malformed = “arrived incomplete or damaged”; a non-JSON body = kind + length only (never the body text or the token). Used by order-monitor and arrival-reminders fetchFeed and the warehouse-shipping sync. rev2 (Codex 23 Nov 22:15): the shipping sync’s 40-second timer now runs through fetch AND the body read and is cleared in finally on every path (before, it was cleared when the headers arrived, so a slow body was never cut off and maxDuration 60 could end the request before failRun). Observation on 23 Nov (one measurement, not a cause claimed for every failure): the staging feed was ≈10 MB, not gzip-compressed and arriving at ~60–100 KB/s. This build does not change the feed’s speed; compression on the staging site is a separate change awaiting Max.' },
     ],
   },
   {
