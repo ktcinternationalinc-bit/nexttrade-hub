@@ -82,6 +82,32 @@ export function expenseColumns(cats, uncategorized) {
   return out;
 }
 
+// v55.83-XQ (Max, Nov 22: "show that number so I know it ... it won't fit into the calculation of the P&L because it's already
+// been taken"; Codex 23 Nov 12:09 + 18:46 scoped FAILs on XP). The figure must count EVERY bill RTM / NextTrade settled for KTC
+// in the period, from ALL THREE of the shared funds calculation's DISJOINT period sources:
+//   period.applied_to_bills              — bills paid from a named funding transfer
+//   period.from_starting_balance         — bills paid from a starting balance (v55.83-XO)
+//   paid_without_a_transfer.period_total — bills paid through the company with no transfer named yet
+// Each bill is counted once. `unlinked` returns ONLY the last source (so the screen can label it "funding transfer not linked");
+// the starting-balance source is counted in the total but is NOT part of `unlinked`. Nothing else is added here — not the
+// starting balance's own amount, not held money, not fees, not any lifetime / as-of value. Moving a payment between the three
+// sources (e.g. naming a starting balance on an unlinked payment) leaves the TOTAL unchanged; only the breakdown moves.
+// It is NOT a column and is NEVER taken off the profit: each of those bills is already counted once under its own category
+// (goods / transport / warehouse), so held funds, allocations, category expenses and the final / tax P&L are untouched.
+export function paidThroughBreakdown(sp) {
+  var out = { total: 0, unlinked: 0 };
+  if (!sp) { return out; }
+  if (Array.isArray(sp.party_funds)) {
+    sp.party_funds.forEach(function (f) { var p = f.period || {}; var pw = f.paid_without_a_transfer || {}; var u = cents(pw.period_total); out.total += cents(p.applied_to_bills) + cents(p.from_starting_balance) + u; out.unlinked += u; });
+    return out;
+  }
+  (sp.paid_through || (sp.rtm ? [sp.rtm] : [])).forEach(function (b) { out.total += cents(b.allocations_total); });
+  return out;
+}
+// The total only (bills RTM / NextTrade settled this period). A FLOW: the Total row sums it across periods, unlike `held`
+// (a balance). NextTrade rides on the same paid-through engine, so its bills fold in here too.
+export function paidThroughBillsCents(sp) { return paidThroughBreakdown(sp).total; }
+
 // The final figure of a period: total profit − the four expense columns. It is only COMPLETE when nothing is left unassigned
 // and no sale line is missing a cost; otherwise it is the known part and says so.
 export function finalPnl(profitCents, cols, incompleteLines) {
@@ -195,6 +221,7 @@ export function readExpenseAnswer(j, req, adjust, fold) {
   var rc = realCostCategories(j.spending, adjust, fold);
   var colsR = expenseColumns(rc.cats, rc.uncategorized);
   if (rc.funds) { colsR.unconfirmed = rc.funds.unconfirmed; colsR.duplicates = rc.funds.duplicates; colsR.funds_need_reconciliation = rc.funds.needs_reconciliation; colsR.held_is_balance = true; }
+  var ptb = paidThroughBreakdown(j.spending); colsR.paid_through_cents = ptb.total; colsR.paid_through_unlinked_cents = ptb.unlinked; // v55.83-XQ — view-only: bills RTM / NextTrade settled this period (linked + unlinked); never added to the P&L
   return { status: 'ok', cols: colsR, detail: expenseDetail(j.spending, rc), from: j.from, to: j.to, partial: !!req.partial };
 }
 
@@ -229,6 +256,8 @@ export function totalExpenses(keys, cache, scope) {
     // held is a BALANCE at the end of each period (not a flow): the total row shows the latest period's, never a sum of balances
     if (e.cols.held_is_balance) { t.cols.held.cents = e.cols.held.cents; t.cols.held_is_balance = true; } else { t.cols.held.cents += e.cols.held.cents; }
     t.cols.duplicates = (t.cols.duplicates || 0) + (e.cols.duplicates || 0); t.cols.total += e.cols.total; t.cols.unconfirmed = (t.cols.unconfirmed || 0) + (e.cols.unconfirmed || 0);
+    t.cols.paid_through_cents = (t.cols.paid_through_cents || 0) + (e.cols.paid_through_cents || 0); // v55.83-XQ — a flow: summed across periods (not a balance)
+    t.cols.paid_through_unlinked_cents = (t.cols.paid_through_unlinked_cents || 0) + (e.cols.paid_through_unlinked_cents || 0);
   });
   return t;
 }

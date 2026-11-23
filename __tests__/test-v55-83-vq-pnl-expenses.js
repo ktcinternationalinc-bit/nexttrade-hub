@@ -11,6 +11,7 @@ global.React = require('react');
 var X = require(path.join(root, 'src/lib/pnl-expenses.js'));
 var P = require(path.join(root, 'src/lib/pnl-period.js'));
 var PS = require(path.join(root, 'src/components/PeriodStatsTab.jsx'));
+var F = require(path.join(root, 'src/lib/party-funds.js')); // v55.83-XQ — drive the REAL funds engine for the paid-through figure
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 900))); }
 console.log('VQ — P&L by period: expense columns and the final P&L');
@@ -140,7 +141,78 @@ function runner(scope) { var st = { cache: {}, gen: 1 }; st.run = function (reqs
   check('a new report, grouping or person drops the kept answers and bumps the run number so late answers are ignored', tab.indexOf('useEffect(function () { expGen.current += 1; setPExp({}); }, [data, pGran, userProfile && userProfile.id]);') > 0 && tab.indexOf('isCurrent: function () { return expGen.current === gen; },') > 0 && tab.indexOf('put: function (k, res) { if (expGen.current !== gen) { return; }') > 0);
   check('the table has a row for every period of the report, also one with no sales; the Total row\'s final figure is not shown until every period has its expenses', pv.indexOf('bucketsBetween(effFrom, effTo, pGran).forEach(function (b0) { if (!by[b0.key]) { by[b0.key] = blank(b0.key, b0.label); } });') > 0 && pv.indexOf('var totalExp = totalExpenses(expKeys, pExp, expScope);') > 0 && pv.indexOf("if (r.key === 'total' && !e.complete) { return <span") > 0 && pv.indexOf('not shown until every period has its expenses') > 0 && pv.indexOf("function expOf(r) { return r.key === 'total' ? totalExp : pExp[expScope + '|' + r.key]; }") > 0);
   check('a row that covers only part of its period says which days', pv.indexOf("{expOf(r).from + ' → ' + expOf(r).to + ' only'}") > 0);
-  check('the CSV carries the expense columns and the final figure with the same rules as the screen (empty and explained when not shown), plus the expense dates', pv.indexOf("'Expense dates', 'A Warehouse / Office', 'C Partner fee', 'D Payroll', 'E Taxes', 'Uncategorized expenses (not taken off)', 'Held with RTM / NextTrade at the end of the period (not an expense)', 'FINAL P&L (total profit − A − C − D − E)', 'Final P&L complete?'];") > 0 && pv.indexOf("var f = (hidden || (isTot && !e.complete)) ? { cents: null, complete: false } : finalPnl(r.profit, e.cols, (r.incomplete || 0) + (r.uncounted || 0));") > 0 && pv.indexOf("expOn ? (e ? (e.why || e.status) : 'not loaded') : expOff.short") > 0);
+  check('the CSV carries the expense columns and the final figure with the same rules as the screen (empty and explained when not shown), plus the expense dates', pv.indexOf("'Expense dates', 'A Warehouse / Office', 'C Partner fee', 'D Payroll', 'E Taxes', 'Uncategorized expenses (not taken off)', 'Held with RTM / NextTrade at the end of the period (not an expense)', 'Paid through RTM / NextTrade (bills they settled — information only, not deducted; recognition follows the underlying bills and allocations)', 'FINAL P&L (total profit − A − C − D − E)', 'Final P&L complete?'];") > 0 && pv.indexOf("var f = (hidden || (isTot && !e.complete)) ? { cents: null, complete: false } : finalPnl(r.profit, e.cols, (r.incomplete || 0) + (r.uncounted || 0));") > 0 && pv.indexOf("expOn ? (e ? (e.why || e.status) : 'not loaded') : expOff.short") > 0);
+  // v55.83-XQ — the view-only "paid through RTM / NextTrade" figure: EVERY bill they settled (linked to a transfer or not),
+  // summed across periods, NEVER added to a column or the final P&L. Codex 23 Nov scoped FAIL on XP fixed: unlinked bills were dropped.
+  (function () {
+    var spPT = { categories: [], uncategorized: { total: 0 }, paid_through: [{ payer: 'RTM', allocations_total: 5000 }, { payer: 'NextTrade', allocations_total: 2000 }] };
+    check('XQ: paidThroughBillsCents sums the bills each paid-through BLOCK settled (5000 + 2000 = 7000); null = 0', X.paidThroughBillsCents(spPT) === 700000 && X.paidThroughBreakdown(spPT).unlinked === 0 && X.paidThroughBillsCents(null) === 0);
+    // the shared funds calculation keeps TWO disjoint lists: period.applied_to_bills (from a named transfer) and paid_without_a_transfer.period_total (no transfer yet). BOTH are bills they settled.
+    var linkedOnly = { party_funds: [{ period: { applied_to_bills: 500 }, paid_without_a_transfer: { period_total: 0 } }] };
+    // mixed/unlinkedOnly also go through readExpenseAnswer (expenseDetail), so they carry the period/current fields a real answer always has
+    var unlinkedOnly = { categories: [], uncategorized: { total: 0 }, party_funds: [{ party: 'RTM', period: { applied_to_bills: 0, closing_held: 0, fee_deduction: 0 }, paid_without_a_transfer: { period_total: 300 }, current: { unused: 0, reserved: 0 } }] };
+    var mixed = { categories: [], uncategorized: { total: 0 }, party_funds: [{ party: 'RTM', period: { applied_to_bills: 500, closing_held: 0, fee_deduction: 0 }, paid_without_a_transfer: { period_total: 300 }, current: { unused: 0, reserved: 0 } }] };
+    check('XQ linked-only: total = applied_to_bills (500), nothing unlinked', X.paidThroughBreakdown(linkedOnly).total === 50000 && X.paidThroughBreakdown(linkedOnly).unlinked === 0);
+    check('XQ unlinked-only (the Codex FAIL): the no-transfer bills ARE counted (300) and flagged as unlinked', X.paidThroughBreakdown(unlinkedOnly).total === 30000 && X.paidThroughBreakdown(unlinkedOnly).unlinked === 30000);
+    check('XQ mixed: total = linked + unlinked (500 + 300 = 800), unlinked part = 300', X.paidThroughBreakdown(mixed).total === 80000 && X.paidThroughBreakdown(mixed).unlinked === 30000);
+    check('XQ linking a payment later only MOVES it between the lists — the total does not change (200 linked + 300 unlinked == 500 linked + 0)', X.paidThroughBreakdown({ party_funds: [{ period: { applied_to_bills: 200 }, paid_without_a_transfer: { period_total: 300 } }] }).total === X.paidThroughBreakdown({ party_funds: [{ period: { applied_to_bills: 500 }, paid_without_a_transfer: { period_total: 0 } }] }).total);
+    check('XQ out-of-period: only the PERIOD fields are summed, never as_of / lifetime (party-funds already date-scopes them) → 100 + 50 = 150', X.paidThroughBreakdown({ party_funds: [{ period: { applied_to_bills: 100 }, as_of: { applied_to_bills: 999 }, paid_without_a_transfer: { period_total: 50, as_of_total: 999, lifetime_total: 999 } }] }).total === 15000);
+    check('XQ partial payments add up to the cent (33.33 + 66.67 = 100.00)', X.paidThroughBreakdown({ party_funds: [{ period: { applied_to_bills: 33.33 }, paid_without_a_transfer: { period_total: 66.67 } }] }).total === 10000);
+    var ePT = X.readExpenseAnswer({ ok: true, from: '2026-06-01', to: '2026-06-30', spending: mixed }, { from: '2026-06-01', to: '2026-06-30' }, PS.rtmAdjust, PS.foldUnc);
+    check('XQ: the figure rides on the period answer (paid_through_cents 800, unlinked 300) and is in NO counted column and not in cols.total', ePT.cols.paid_through_cents === 80000 && ePT.cols.paid_through_unlinked_cents === 30000 && ePT.cols.total === 0 && ePT.cols.A.cents === 0 && ePT.cols.C.cents === 0);
+    var eUn = X.readExpenseAnswer({ ok: true, from: '2026-06-01', to: '2026-06-30', spending: unlinkedOnly }, { from: '2026-06-01', to: '2026-06-30' }, PS.rtmAdjust, PS.foldUnc);
+    check('XQ unlinked-only still SHOWS: cols.paid_through_cents > 0 so the >0 gate no longer hides an all-unlinked period', eUn.cols.paid_through_cents === 30000 && eUn.cols.paid_through_unlinked_cents === 30000);
+    var tPT = X.totalExpenses(['p1', 'p2'], { 's|p1': ePT, 's|p2': ePT }, 's');
+    check('XQ: the Total row SUMS both across periods (a flow: 800+800 = 1600; unlinked 300+300 = 600), unlike held (a balance)', tPT.cols.paid_through_cents === 160000 && tPT.cols.paid_through_unlinked_cents === 60000 && tPT.cols.total === 0);
+  })();
+  // v55.83-XQ (Codex 23 Nov 18:46 scoped FAIL) — driven by the REAL funds engine (partyFundsBreakdown), the figure must count the
+  // THIRD disjoint source too: bills paid from a starting balance (period.from_starting_balance, v55.83-XO), alongside linked
+  // applications and unlinked payments. Moving a payment between the three leaves the TOTAL unchanged; `unlinked` is only the last source.
+  (function () {
+    var NT = 'NextTrade Industries', RTM = 'RTM Capital';
+    function scn(pays, openAmt) {
+      return F.partyFundsBreakdown({
+        parties: [{ name: NT }, { name: RTM }], from: '2026-06-01', to: '2026-06-30', requests: [], entries: [],
+        bankLines: [{ id: 'T1', date: '2026-06-02', amount_abs: 5000, third_party_payer: NT, direction: 'out', name: 'WIRE T1' }],
+        bills: [{ id: 'b1', vendor_name: 'Kronos', bill_number: 'K1', bill_date: '2026-06-02', category: 'trucking', total_amount: 1000, paid_via: NT },
+          { id: 'b2', vendor_name: 'Rent', bill_number: 'R1', bill_date: '2026-06-03', category: 'rent', total_amount: 300, paid_via: NT },
+          { id: 'b3', vendor_name: 'Ocean', bill_number: 'O1', bill_date: '2026-06-04', category: 'freight', total_amount: 2000, paid_via: NT }],
+        openings: [{ id: 'O1', party: NT, amount: openAmt === undefined ? 1000 : openAmt, as_of: '2026-05-15', reason: 'NT statement', visible_to_staff: true, corrects_id: null }],
+        pays: pays })[0];
+    }
+    var linked = { id: 'p1', bill_id: 'b1', amount: 1000, paid_date: '2026-06-06', bank_transaction_id: 'T1', voided: false, method: 'rtm' };          // applied_to_bills
+    var fromSb = { id: 'p2', bill_id: 'b2', amount: 300, paid_date: '2026-06-10', bank_transaction_id: null, party_opening_id: 'O1', voided: false, method: 'rtm' }; // from_starting_balance
+    var unlinked = { id: 'p3', bill_id: 'b3', amount: 2000, paid_date: '2026-06-12', bank_transaction_id: null, voided: false, method: 'rtm' };         // paid_without_a_transfer
+    function pt(nt) { return X.paidThroughBreakdown({ party_funds: [nt] }); }
+    function sumThree(nt) { return Math.round((nt.period.applied_to_bills + nt.period.from_starting_balance + nt.paid_without_a_transfer.period_total) * 100); }
+
+    var mix = scn([linked, fromSb, unlinked]);
+    check('XQ three sources (REAL engine): the scenario really exercises linked 1000 + from-starting 300 + unlinked 2000', mix.period.applied_to_bills === 1000 && mix.period.from_starting_balance === 300 && mix.paid_without_a_transfer.period_total === 2000, mix.period);
+    check('XQ three sources: total = all three (3300), and = the engine’s own sum; unlinked = only the no-transfer source (2000)', pt(mix).total === 330000 && pt(mix).total === sumThree(mix) && pt(mix).unlinked === 200000);
+
+    var sbOnly = scn([fromSb]);
+    check('XQ starting-balance-only period: total = from_starting_balance (300), unlinked 0', pt(sbOnly).total === 30000 && pt(sbOnly).unlinked === 0 && sbOnly.period.from_starting_balance === 300);
+
+    // the SAME $2,000, now named against the starting balance (O1 raised to cover it): the total does not move, the breakdown does
+    var reassigned = scn([linked, fromSb, { id: 'p3', bill_id: 'b3', amount: 2000, paid_date: '2026-06-12', bank_transaction_id: null, party_opening_id: 'O1', voided: false, method: 'rtm' }], 3000);
+    check('XQ linking a payment to the starting balance leaves the TOTAL unchanged (3300); unlinked 2000->0, from-starting 300->2300', pt(reassigned).total === pt(mix).total && pt(reassigned).total === 330000 && pt(reassigned).unlinked === 0 && reassigned.period.from_starting_balance === 2300);
+
+    // prior (May), future (July) and voided payments are outside the June figure
+    var edge = scn([{ id: 'pv', bill_id: 'b1', amount: 999, paid_date: '2026-06-06', bank_transaction_id: 'T1', voided: true, method: 'rtm' },
+      { id: 'pf', bill_id: 'b2', amount: 888, paid_date: '2026-07-10', bank_transaction_id: null, party_opening_id: 'O1', voided: false, method: 'rtm' },
+      { id: 'pp', bill_id: 'b3', amount: 777, paid_date: '2026-05-20', bank_transaction_id: null, voided: false, method: 'rtm' }]);
+    check('XQ prior / future / voided payments are NOT in the June figure (0)', pt(edge).total === 0 && pt(edge).unlinked === 0);
+
+    var partial = scn([{ id: 'pa', bill_id: 'b1', amount: 33.33, paid_date: '2026-06-06', bank_transaction_id: 'T1', voided: false, method: 'rtm' },
+      { id: 'pb', bill_id: 'b3', amount: 66.67, paid_date: '2026-06-12', bank_transaction_id: null, voided: false, method: 'rtm' }]);
+    check('XQ partial payments add to the cent (33.33 + 66.67 = 100.00); portions, not whole bill totals', pt(partial).total === 10000);
+
+    // through the real period answer: view-only — the three-source total rides on cols, and nothing is deducted (held/expense/final untouched)
+    var eMix = X.readExpenseAnswer({ ok: true, from: '2026-06-01', to: '2026-06-30', spending: { categories: [], uncategorized: { total: 0 }, party_funds: [mix] } }, { from: '2026-06-01', to: '2026-06-30' }, PS.rtmAdjust, PS.foldUnc);
+    check('XQ real answer: cols.paid_through_cents=3300 + unlinked 2000 ride on the period, and A/C/D/E + cols.total stay 0 (nothing deducted)', eMix.cols.paid_through_cents === 330000 && eMix.cols.paid_through_unlinked_cents === 200000 && eMix.cols.A.cents === 0 && eMix.cols.C.cents === 0 && eMix.cols.D.cents === 0 && eMix.cols.E.cents === 0 && eMix.cols.total === 0);
+    var tMix = X.totalExpenses(['q1', 'q2'], { 's|q1': eMix, 's|q2': eMix }, 's');
+    check('XQ real answer: the Total row sums paid_through across periods (6600) and still deducts nothing (total 0)', tMix.cols.paid_through_cents === 660000 && tMix.cols.total === 0);
+  })();
     // ── Codex 22:50: profit permission on an EMPTY period, no start date, provisional figures — the real period view, rendered
   check('profit hidden by the server\'s own answer applies to a period with NO sales too: breakdown and lines-to-fix are hidden, no profit of 0 is produced', P.periodBreakdown([], true).hidden === true && P.periodBreakdown([], true).total.profit === null && P.periodBreakdown([], true).categories.filter(function (c) { return c.kind === 'profit'; }).every(function (c) { return c.cents === null; }) && P.linesToFix([], true).hidden === true && P.periodBreakdown([], false).hidden === false && P.periodBreakdown([]).total.profit === 0);
   check('the screen takes the permission from the server answer first (can_see_margin false), keeps the missing-field check as a second lock, and passes it to the breakdown and the fix list', pv.indexOf('var hidden = (data && data.can_see_margin === false) || cells.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; });') > 0 && pv.indexOf('var bd = periodBreakdown(cs, hidden);') > 0 && pv.indexOf('var fx = linesToFix(cs, hidden);') > 0);

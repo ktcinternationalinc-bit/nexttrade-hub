@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XQ',
+    date: '2026-11-23',
+    title: 'See what RTM / NextTrade handled for you each month',
+    items: [
+      { superAdminOnly: true, text: 'In **Profitability → P&L by period**, under the **A · Warehouse / Office** figure of each month, a blue line now shows **“(… paid through RTM / NextTrade)”** — the total of the bills RTM (and, once you associate bills to it, NextTrade) actually settled for you that month: trucking, inbound, fees, the costs they take care of. It counts **every** such bill — whether or not it is tied to a specific money transfer yet.' },
+      { superAdminOnly: true, text: 'It is there **only so you can see it** — it is **never added into the P&L**. Every one of those bills is already counted once in the columns, each under its own category (goods / transport / warehouse), so adding this total would double-count. Open a month to see the same figure spelled out (with any amount whose funding transfer is not linked yet shown on its own line), and it is in the CSV too. Shown to super-admin only.' },
+      { superAdminOnly: true, text: 'Technical (XQ, Codex 23 Nov two scoped FAILs on XP fixed): `paidThroughBreakdown(spending)` in pnl-expenses.js counts all THREE disjoint period sources of the shared funds engine — period.applied_to_bills (from a named transfer) + period.from_starting_balance (XO starting-balance) + paid_without_a_transfer.period_total (no transfer yet) — else paid_through[].allocations_total for the old block shape. Returns {total, unlinked} where unlinked = only the no-transfer source; readExpenseAnswer sets cols.paid_through_cents + cols.paid_through_unlinked_cents; a FLOW, totalExpenses sums both across periods (unlike held). Moving a payment between the three sources leaves the total unchanged. Nothing else added (not the starting balance amount, held, fees, lifetime/as-of). ProfitabilityTab: bracket under the A cell, a summary line in the opened period ("Information only; not deducted again here. Cost recognition follows the underlying bills and allocations.") with the unlinked part on its own line, and a CSV column — all super-admin only (isSuper). View-only, no column, no deduction, no server/SQL change. badge XI->XQ. Tests xq-paid-through drive the REAL partyFundsBreakdown: starting-balance-only / three-sources mixed / linking-later-unchanged / prior-future-void excluded / partial cents / Total + held + final unchanged.' },
+    ]
+  },
+  {
     version: 'v55.83-XR',
     date: '2026-11-22',
     title: 'Money back from RTM / NextTrade is switched on — it lowers Professional fees in the month it comes back',
