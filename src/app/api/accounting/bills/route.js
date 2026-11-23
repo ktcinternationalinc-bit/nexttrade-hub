@@ -20,6 +20,7 @@ import { businessOfInvoice, US_WAVE_BUSINESS_ID } from '../../../../lib/business
 import { isArEligible } from '../../../../lib/ar-eligibility';
 import { isPaymentVoid } from '../../../../lib/payment-matching';
 import { billOpenBalance, billStatus, cashflowSummary } from '../../../../lib/cashflow';
+import { loadBillCredits } from '../../../../lib/vendor-credits-server'; // v55.83-YD
 import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
 import { readBillFromBase64, insertImportedBill, vendorBillType, findExactSameBill, exactDupMessage } from '../../../../lib/bill-extract-server';
 import { exactSameWords } from '../../../../lib/bill-dup-scan'; // v55.83-UQ
@@ -137,14 +138,19 @@ async function loadBills(db) {
   // v55.83-RY — a DELETED bill is gone from the Hub (its row + audit trail stay in the database)
   var delIds = {}; bills = (bills || []).filter(function (b) { if (b.record_status === 'deleted') { delIds[b.id] = true; return false; } return true; });
   pays = (pays || []).filter(function (p) { return !delIds[p.bill_id]; });
-  return { bills: bills, pays: pays };
+  // v55.83-YD — vendor credits applied to bills lower what each still owes (not a payment). Read in full; a failed read stops the
+  // caller (never shown as fully owed or paid). Before the database step: no credits.
+  var credits = await loadBillCredits(db, bills.map(function (b) { return b.id; }));
+  if (credits.error) { throw new Error(credits.error); }
+  return { bills: bills, pays: pays, credits: credits.byBill };
 }
-function decorate(bills, pays) {
+function decorate(bills, pays, credits) {
   return bills.map(function (b) {
-    var bal = billOpenBalance(b, pays);
-    var st = billStatus(b, pays);
+    var cr = (credits && credits[b.id]) || 0; // v55.83-YD
+    var bal = billOpenBalance(b, pays, cr);
+    var st = billStatus(b, pays, cr);
     if (b.disputed === true && st !== 'VOID') { st = 'DISPUTED'; }
-    return Object.assign({}, b, { paid: bal.paid, open: bal.open, status: st });
+    return Object.assign({}, b, { paid: bal.paid, credited: bal.credited, open: bal.open, status: st });
   });
 }
 // v55.83-QZ2 (review fix) — see record_payment. Returns { category, reviewed } or null.
@@ -358,7 +364,7 @@ export async function POST(req) {
     // ── list: bills with status + payments
     if (action === 'list') {
       var L = await loadBills(db); var enrichWarn = []; // v55.83-WT
-      var rows = decorate(L.bills, L.pays);
+      var rows = decorate(L.bills, L.pays, L.credits);
       var totals = { open: 0, overdue: 0, open_count: 0 };
       var today = new Date().toISOString().substring(0, 10);
       rows.forEach(function (b) {
@@ -682,9 +688,10 @@ export async function POST(req) {
       } catch (eWp) { /* RH SQL not run yet — nothing to guard */ }
       var exPays = await db.from('vendor_bill_payments').select('id, bill_id, amount, voided').eq('bill_id', billId);
       if (exPays.error) { return readFail('what is already paid on this bill', exPays.error); } // TO — fail closed
-      var bal = billOpenBalance(bRow.data, exPays.data || []);
+      var credB = await loadBillCredits(db, [billId]); if (credB.error) { return NextResponse.json({ error: credB.error + ' Nothing was recorded.' }, { status: 503 }); } // v55.83-YD — fail closed
+      var bal = billOpenBalance(bRow.data, exPays.data || [], credB.byBill[billId] || 0);
       if (pAmt > bal.open + 0.005) {
-        return NextResponse.json({ error: 'That overpays the bill — open balance is ' + bal.open.toFixed(2) + '.' }, { status: 409 });
+        return NextResponse.json({ error: 'That overpays the bill — open balance is ' + bal.open.toFixed(2) + (bal.credited ? ' (after vendor credits of ' + bal.credited.toFixed(2) + ')' : '') + '.' }, { status: 409 });
       }
       var bankId = body.bank_transaction_id || null;
       // v55.83-TH (Max, Nov 16: "cannot pay something in past without it being matched to a bank transaction") — every bill payment
@@ -817,7 +824,8 @@ export async function POST(req) {
       try { var wlP = pIdsP.length ? await db.from('wire_package_lines').select('bill_id, package_id').in('bill_id', pIdsP).eq('is_open', true) : { data: [] }; if (wlP.error && !missingRel(wlP.error)) { return readFail('the wires these bills are on', wlP.error); } var wpIds = ((wlP && wlP.data) || []).map(function (x) { return x.package_id; }); var wpR = wpIds.length ? await db.from('wire_packages').select('id, seq, status').in('id', wpIds) : { data: [] }; if (wpR.error && !missingRel(wpR.error)) { return readFail('the wires these bills are on', wpR.error); } var wpBy = {}; ((wpR && wpR.data) || []).forEach(function (w) { wpBy[w.id] = w; }); ((wlP && wlP.data) || []).forEach(function (x) { var w = wpBy[x.package_id]; if (w && w.status !== 'cancelled') { onWireP[x.bill_id] = 'WP-' + String(w.seq || 0).padStart(4, '0'); } }); } catch (eWP) { /* RH SQL not run */ }
       var billByP = {}; ((bRowsP && bRowsP.data) || []).forEach(function (b) { billByP[b.id] = b; });
       var paysByP = {}; ((bPaysP && bPaysP.data) || []).forEach(function (x) { (paysByP[x.bill_id] = paysByP[x.bill_id] || []).push(x); });
-      var rowsP = picksP.map(function (x) { var b = billByP[x.bill_id]; var open = b ? billOpenBalance(b, paysByP[x.bill_id] || []).open : 0; return { bill_id: x.bill_id, amount: r2(x.amount), open: open, active: !!b && b.record_status === 'active', on_wire: onWireP[x.bill_id] || null, label: b ? billName(b) : 'A bill that was not found' }; });
+      var credP = await loadBillCredits(db, pIdsP); if (credP.error) { return NextResponse.json({ error: credP.error + ' Nothing was recorded.' }, { status: 503 }); } // v55.83-YD — fail closed
+      var rowsP = picksP.map(function (x) { var b = billByP[x.bill_id]; var open = b ? billOpenBalance(b, paysByP[x.bill_id] || [], credP.byBill[x.bill_id] || 0).open : 0; return { bill_id: x.bill_id, amount: r2(x.amount), open: open, active: !!b && b.record_status === 'active', on_wire: onWireP[x.bill_id] || null, label: b ? billName(b) : 'A bill that was not found' }; });
       var chkP = checkBankPayment({ amount_abs: bk.data.amount_abs, direction: bk.data.direction, pending: bk.data.pending }, bkRem.used, rowsP);
       if (!chkP.ok) { return NextResponse.json({ error: chkP.errors.join(' '), errors: chkP.errors }, { status: 409 }); }
       var paidOnP = isDate(body.paid_date) ? body.paid_date : String(bk.data.posted_date || bk.data.date || '').substring(0, 10);
@@ -898,7 +906,7 @@ export async function POST(req) {
       });
       var openInvs = await loadOpenUsInvoices(db);
       var L2 = await loadBills(db);
-      var openBills = decorate(L2.bills, L2.pays).filter(isPayable);
+      var openBills = decorate(L2.bills, L2.pays, L2.credits).filter(isPayable);
       var summary = cashflowSummary({ from: fromD, to: toD, today: today2, bankTx: bankTx, invoices: openInvs, openBills: openBills });
       var dueBills = openBills
         .filter(function (b) { var d = b.due_date || b.bill_date; return d >= fromD && d <= toD; })
@@ -1085,7 +1093,7 @@ export async function POST(req) {
     if (action === 'due_through') {
       var thru = /^\d{4}-\d{2}-\d{2}$/.test(String(body.through || '')) ? body.through : new Date().toISOString().substring(0, 10);
       var LT = await loadBills(db);
-      var all = decorate(LT.bills, LT.pays);
+      var all = decorate(LT.bills, LT.pays, LT.credits);
       // v55.83-QR (Max, Nov 8 00:41: "able to request amount of bills due for a
       // specific vendor up to a certain period of time") — optional vendor
       // filter, exact name (case/space-insensitive) so a pick never fuzzes
@@ -1416,7 +1424,7 @@ export async function POST(req) {
     if (action === 'rtm_open_bills') {
       var LR = await loadBills(db);
       var payerQ = partyKey(body.payer); // v55.83-QY — only THAT company's bills
-      var rowsR = decorate(LR.bills, LR.pays).filter(function (b) {
+      var rowsR = decorate(LR.bills, LR.pays, LR.credits).filter(function (b) {
         return b.record_status === 'active' && b.paid_via && b.open > 0.005 && (!payerQ || partyKey(b.paid_via) === payerQ);
       }).map(function (b) {
         return { id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date,
@@ -1654,7 +1662,7 @@ export async function POST(req) {
       if (txBm.error || !txBm.data) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       if (txBm.data.direction !== 'out') { return NextResponse.json({ ok: false, error: 'Bills are paid by money OUT — this is a deposit.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var LBm = await loadBills(db);
-      var openBm = decorate(LBm.bills, LBm.pays).filter(function (b0) { return isPayable(b0); });
+      var openBm = decorate(LBm.bills, LBm.pays, LBm.credits).filter(function (b0) { return isPayable(b0); });
       var amtBm = r2(txBm.data.amount_abs);
       // v55.83-QF — same search for bills: vendor, bill number, amount digits.
       var qBm = String(body.q || '').trim().toLowerCase();
@@ -1730,7 +1738,7 @@ export async function POST(req) {
         exCount++; exSum = Math.round((exSum + v.open_balance) * 100) / 100; return false;
       });
       var LF = await loadBills(db);
-      var openBillsF = decorate(LF.bills, LF.pays).filter(isPayable);
+      var openBillsF = decorate(LF.bills, LF.pays, LF.credits).filter(isPayable);
       var buckets = forecastBuckets(openInvsF, openBillsF, todayF);
       var rows = tagRows(openInvsF, openBillsF, todayF);
       var unrevOut = await db.from('bank_transactions').select('id', { count: 'exact', head: true })
@@ -1879,7 +1887,7 @@ export async function POST(req) {
       });
       // Bills side
       var LS = await loadBills(db);
-      var allB = decorate(LS.bills, LS.pays);
+      var allB = decorate(LS.bills, LS.pays, LS.credits);
       var billed = 0, billCount = 0, billsOpen = 0, billsDisputed = 0;
       var rowsBilled = []; var rowsOpenBills = []; var rowsBillsPaid = [];
       var billNameById = {}; allB.forEach(function (b) { billNameById[b.id] = b; });

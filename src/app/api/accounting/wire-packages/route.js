@@ -31,6 +31,7 @@ import { readWireConfirmation } from '../../../../lib/wire-confirmation-server';
 import { todayET } from '../../../../lib/et-time';
 import { handleInbox, inboxPathLinkedTo, linkedConfirmation } from '../../../../lib/wire-inbox-server'; // v55.83-XC — the bank-confirmation inbox
 import { nextradeBillIds, markNextradeBills } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills: no validation step on a NextTrade wire
+import { loadBillCredits } from '../../../../lib/vendor-credits-server'; // v55.83-YD — vendor credits applied lower what a bill still owes
 var SP_HINT = ' — run sql/v55-83-SP-funded-requests.sql in Supabase first.';
 function spMissing(m) { return /funding_txn_id|planned_send_date|wire_request_|wire_funding_|schema cache/i.test(String(m || '')); }
 
@@ -171,6 +172,7 @@ export async function POST(req) {
       var ids = mine.map(function (b) { return b.id; });
       var pays = ids.length ? await inChunks(db, 'vendor_bill_payments', 'bill_id, amount, voided', 'bill_id', ids) : [];
       var paidBy = {}; pays.forEach(function (p) { if (p.voided !== true) { paidBy[p.bill_id] = r2((paidBy[p.bill_id] || 0) + (Number(p.amount) || 0)); } });
+      var credO = await loadBillCredits(db, ids); if (credO.error) { return fail(credO.error + ' Nothing shown.', 503); } var credBy = credO.byBill; // v55.83-YD
       var openLines = ids.length ? await inChunks(db, 'wire_package_lines', 'package_id, bill_id, amount, is_open', 'bill_id', ids) : [];
       // v55.83-US (Max: "i partially wired a bill. the bill should remain in queue with the remaining amount to be used on another wire")
       // a bill on another open wire is still offered for what is LEFT: total − paid − every other open wire's amount for it
@@ -183,9 +185,9 @@ export async function POST(req) {
       // On a wire to RTM or a vendor, Nextrade bills are not offered at all (saving one is refused anyway).
       var nbO = await nextradeBillIds(db, ids);
       var rowsO = mine.map(function (b) {
-        var open = r2((Number(b.total_amount) || 0) - (paidBy[b.id] || 0) - (resv[b.id] || 0));
+        var open = r2((Number(b.total_amount) || 0) - (paidBy[b.id] || 0) - (resv[b.id] || 0) - (credBy[b.id] || 0)); // v55.83-YD: − vendor credits applied
         return { id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, release_number: b.release_number || null, bill_date: b.bill_date, due_date: b.due_date,
-          category: b.category, total_amount: r2(b.total_amount), paid: paidBy[b.id] || 0, open: open, disputed: b.disputed === true,
+          category: b.category, total_amount: r2(b.total_amount), paid: paidBy[b.id] || 0, credited: credBy[b.id] || 0, open: open, disputed: b.disputed === true,
           validation_status: b.validation_status || null, on_package: onPkg[b.id] ? onPkg[b.id].map(function (x) { return '$' + x.amount.toFixed(2) + ' on ' + (pkLab[x.pkg] || 'another wire'); }).join(', ') : null, reserved_elsewhere: resv[b.id] || 0,
           paid_via: b.paid_via || null, needs_mark: kindO !== 'vendor' && !b.paid_via, release_optional: kindO === 'affiliate',
           other_reference: b.other_reference || null, shipment_direction: b.shipment_direction || null, bill_type: b.bill_type || null,
@@ -278,6 +280,7 @@ export async function POST(req) {
       var alreadyOn = {};
       if (body.id) { var aoR = await db.from('wire_package_lines').select('bill_id, is_open').eq('package_id', body.id); ((aoR && aoR.data) || []).forEach(function (l) { if (l.is_open) { alreadyOn[l.bill_id] = true; } }); }
       var pS = await inChunks(db, 'vendor_bill_payments', 'bill_id, amount, voided', 'bill_id', clean.map(function (c) { return c.bill_id; }));
+      var credS = await loadBillCredits(db, clean.map(function (c) { return c.bill_id; })); if (credS.error) { return fail(credS.error + ' Nothing was saved.', 503); } // v55.83-YD
       var bSBy = {}; bS.forEach(function (b) { bSBy[b.id] = b; });
       // a vendor wire: the bills decide the vendor (all must be ONE vendor)
       if (kindS === 'vendor') {
@@ -310,7 +313,7 @@ export async function POST(req) {
           else if (!samePayee(bb.paid_via, payeeS)) { return fail(whoB + ' is paid through ' + bb.paid_via + ' — it goes on THAT company\'s wire. Untick it.', 409); }
         } else if (bb.paid_via) { return fail(whoB + ' is paid through ' + bb.paid_via + ' — it goes on ' + bb.paid_via + '\'s wire, not straight to the vendor. Untick it.', 409); }
         var paidS = 0; pS.forEach(function (p) { if (p.bill_id === bb.id && p.voided !== true) { paidS += Number(p.amount) || 0; } });
-        var openS = r2((Number(bb.total_amount) || 0) - paidS);
+        var openS = r2((Number(bb.total_amount) || 0) - paidS - (credS.byBill[bb.id] || 0)); // v55.83-YD: − vendor credits applied
         if (clean[ci].amount > openS + 0.005) { return fail(whoB + ': $' + clean[ci].amount.toFixed(2) + ' is more than what is still owed ($' + openS.toFixed(2) + ').' + (openS <= 0.005 ? ' It is already paid — untick it.' : ''), 409); }
       }
       // v55.83-SP — a request drawn from a transfer already sent to RTM / NextTrade: bills + service fee can never
@@ -340,7 +343,7 @@ export async function POST(req) {
       for (var cj = 0; cj < clean.length; cj++) {
         var bj = bSBy[clean[cj].bill_id] || {}; if (!resvS[bj.id]) { continue; }
         var paidJ = 0; pS.forEach(function (p) { if (p.bill_id === bj.id && p.voided !== true) { paidJ += Number(p.amount) || 0; } });
-        var leftJ = r2((Number(bj.total_amount) || 0) - paidJ - resvS[bj.id]);
+        var leftJ = r2((Number(bj.total_amount) || 0) - paidJ - resvS[bj.id] - (credS.byBill[bj.id] || 0)); // v55.83-YD
         if (clean[cj].amount > leftJ + 0.005) {
           var cps = await db.from('wire_packages').select('id, seq').in('id', resvPk[bj.id]);
           var labs = ((cps && cps.data) || []).map(function (x) { return packageLabel(x); }).join(', ');
@@ -441,6 +444,7 @@ export async function POST(req) {
       if (!cleanPW.length) { return fail('Tick the bills that wire paid.'); }
       var bPW = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, total_amount, record_status, paid_via', 'id', cleanPW.map(function (c) { return c.bill_id; }));
       var pPW = await inChunks(db, 'vendor_bill_payments', 'bill_id, amount, voided', 'bill_id', cleanPW.map(function (c) { return c.bill_id; }));
+      var credPW = await loadBillCredits(db, cleanPW.map(function (c) { return c.bill_id; })); if (credPW.error) { return fail(credPW.error + ' Nothing was saved.', 503); } // v55.83-YD
       var byPW = {}; bPW.forEach(function (b) { byPW[b.id] = b; });
       // v55.83-XX — a Nextrade bill is paid only through NextTrade, never on a past wire straight to a vendor (fails closed)
       var nbPW = await nextradeBillIds(db, cleanPW.map(function (c) { return c.bill_id; }));
@@ -455,7 +459,8 @@ export async function POST(req) {
         var bb2 = byPW[cleanPW[pc].bill_id];
         if (!bb2 || bb2.record_status !== 'active') { return fail('A ticked bill was not found or is void / deleted.', 404); }
         var paid2 = 0; pPW.forEach(function (p) { if (p.bill_id === bb2.id && p.voided !== true) { paid2 += Number(p.amount) || 0; } });
-        if (cleanPW[pc].amount > r2((Number(bb2.total_amount) || 0) - paid2) + 0.005) { return fail(bb2.vendor_name + ' ' + (bb2.bill_number || '') + ' — only $' + r2((Number(bb2.total_amount) || 0) - paid2).toFixed(2) + ' is still open on it.', 409); }
+        var cred2 = credPW.byBill[bb2.id] || 0; // v55.83-YD
+        if (cleanPW[pc].amount > r2((Number(bb2.total_amount) || 0) - paid2 - cred2) + 0.005) { return fail(bb2.vendor_name + ' ' + (bb2.bill_number || '') + ' — only $' + r2((Number(bb2.total_amount) || 0) - paid2 - cred2).toFixed(2) + ' is still open on it' + (cred2 ? ' (vendor credits of $' + cred2.toFixed(2) + ' are applied)' : '') + '.', 409); }
         // v55.83-SB (bug review 4) — a bill paid through someone ELSE cannot go on this party's wire
         if (kindPW !== 'vendor' && bb2.paid_via && normRef(bb2.paid_via) !== normRef(payeePW)) { return fail(bb2.vendor_name + ' ' + (bb2.bill_number || '') + ' is paid through ' + bb2.paid_via + ', not ' + payeePW + ' — it cannot go on this wire.', 409); }
         if (kindPW !== 'vendor' && !bb2.paid_via) { markPW[bb2.id] = true; }
@@ -490,6 +495,7 @@ export async function POST(req) {
       var openIds = (bOpen.data || []).map(function (b) { return b.id; });
       var pz = openIds.length ? await inChunks(db, 'vendor_bill_payments', 'bill_id, amount, voided', 'bill_id', openIds) : [];
       var pd = {}; pz.forEach(function (x) { if (x.voided !== true) { pd[x.bill_id] = (pd[x.bill_id] || 0) + (Number(x.amount) || 0); } });
+      var credZ = await loadBillCredits(db, openIds); if (credZ.error) { outS.credits_error = credZ.error; } else { Object.keys(credZ.byBill).forEach(function (k) { pd[k] = (pd[k] || 0) + credZ.byBill[k]; }); } // v55.83-YD: a fully credited bill is not open
       (bOpen.data || []).forEach(function (b) {
         if ((Number(b.total_amount) || 0) - (pd[b.id] || 0) <= 0.005) { return; }
         outS.bills.total_open += 1;

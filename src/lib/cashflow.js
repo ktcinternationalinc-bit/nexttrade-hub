@@ -2,21 +2,23 @@
 // out for a period of time... compare what funds coming in to pay bills".
 // Pure functions so the launch test can exercise the real math.
 
-export function billOpenBalance(bill, payments) {
+// v55.83-YD — credited (optional): vendor credits applied to this bill (not a payment, no money moved) also lower what it still owes
+export function billOpenBalance(bill, payments, credited) {
   var paid = 0;
   for (var i = 0; i < (payments || []).length; i++) {
     var p = payments[i];
     if (p && p.bill_id === bill.id && p.voided !== true) { paid += Number(p.amount) || 0; }
   }
-  var open = (Number(bill.total_amount) || 0) - paid;
-  return { paid: Math.round(paid * 100) / 100, open: Math.round(open * 100) / 100 };
+  var cr = Number(credited) || 0;
+  var open = (Number(bill.total_amount) || 0) - paid - cr;
+  return { paid: Math.round(paid * 100) / 100, credited: Math.round(cr * 100) / 100, open: Math.round(open * 100) / 100 };
 }
 
-export function billStatus(bill, payments) {
+export function billStatus(bill, payments, credited) {
   if (bill.record_status === 'void') { return 'VOID'; }
-  var b = billOpenBalance(bill, payments);
+  var b = billOpenBalance(bill, payments, credited);
   if (b.open <= 0.005) { return 'PAID'; }
-  if (b.paid > 0.005) { return 'PARTIAL'; }
+  if (b.paid > 0.005 || b.credited > 0.005) { return 'PARTIAL'; }
   return 'OPEN';
 }
 

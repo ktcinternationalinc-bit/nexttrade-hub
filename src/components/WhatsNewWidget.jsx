@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YD',
+    date: '2026-11-23',
+    title: 'Vendor credit memos: record a credit from a vendor and apply it to their bills',
+    items: [
+      { text: '**Bills → 🧾 Vendor credits** (once the database step is installed). Record a credit memo from a vendor: vendor, number, date, amount, currency and what it is for. The same credit memo cannot be entered twice.' },
+      { text: '**Apply to bills:** pick that vendor’s open bills (any spelling of the vendor name, same currency); the oldest are filled in first and you can change any amount. A credit never goes beyond what is left on it, or beyond what a bill still owes after its payments, open wires and other credits.' },
+      { text: 'An applied credit lowers what the bill still owes everywhere: the bills list (Partial / Paid), what can go on a wire, and how much a payment can be. It is not a payment — no money moved.' },
+      { text: '**Refund received:** when the vendor pays the credit back as money, pick the money-in bank line it arrived on. That uses up the credit, so it cannot also be applied to a bill; the bank line can then not be used for anything else.' },
+      { text: 'Undo is always possible, with a reason: nothing is deleted; an undone credit stays listed, crossed out. A credit memo entered by mistake can be voided only while nothing of it is applied or refunded.' },
+      { text: 'Not yet: credits are not taken off the costs in Profitability, and do not go to the ClickBooks ledger or Wave. Profitability shows the credits applied in its dates as a pending adjustment, so those figures are not taken as final.' },
+      { superAdminOnly: true, text: 'Technical: NEEDS SQL sql/v55-83-YD-vendor-credits.sql (re-runnable, deletes nothing): vendor_credits + vendor_credit_applications (kind bill | refund) + request fingerprints; hub_vendor_credit_create / apply / unapply / void / refund (service_role only, locks hub-bill / hub-credit / hub-bank-line, closed-month check, audit); hub_wire_line_cap, hub_bill_payment_cap, hub_bill_payment_final, hub_guard_bill_payment, hub_bill_void_guard count applied credits; new hub_bill_total_floor; refund line exclusive vs invoice match / customer payment / transfer pair / RTM-NextTrade money back. Route /api/accounting/vendor-credits; loadBillCredits in bills loader + payment pre-checks, wire-packages (4 places), cashflow billOpenBalance(…, credited); profitability vendor_credits_pending. Tests: sql-v55-83-yd-vendor-credits.mjs (PGlite), test-v55-83-yd-vendor-credits-route.js.' },
+    ],
+  },
+  {
     version: 'v55.83-YL',
     date: '2026-11-24',
     title: 'Customers overview opens on This year; the reminders switch shows ON straight away',

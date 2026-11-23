@@ -13,6 +13,7 @@
 // Permissions: pnl.view to see it, pnl.edit_costs to change the set-up (super admin passes both).
 import { NextResponse } from 'next/server';
 import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server';
+import { creditsPendingInWindow } from '../../../../lib/vendor-credits-server'; // v55.83-YD
 import { projectForWindow } from '../../../../lib/profitability-window'; // v55.83-UD: no bill records older than the window // v55.83-UD: employees see only their history window
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
@@ -87,7 +88,9 @@ export async function POST(req) {
       var canEdit = await assertPermission(db, userId, 'pnl.edit_costs', req);
       // v55.83-TG (Max) — profit / margin only for people with 'P&L: See profit & margin' (super admin always)
       var seeM = await assertPermission(db, userId, MARGIN_PERMISSION, req); var marginOk = !!(seeM && seeM.ok === true);
-      return NextResponse.json(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), can_see_margin: marginOk, bills_note: billsNote, warehouse_note: whNote, window_floor: vwin.floor, api_build_marker: API_BUILD_MARKER }, marginOk ? out : stripProfit(out)));
+      // v55.83-YD (Codex 23 Nov) — vendor credits applied in these dates are NOT counted in these figures yet: said, as a pending adjustment
+      var vcPend = await creditsPendingInWindow(db, body.date_from || null, body.date_to || null);
+      return NextResponse.json(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), can_see_margin: marginOk, bills_note: billsNote, warehouse_note: whNote, window_floor: vwin.floor, vendor_credits_pending: vcPend, api_build_marker: API_BUILD_MARKER }, marginOk ? out : stripProfit(out)));
     }
 
     // v55.83-VR (Max, Nov 19: "keep track of the real inbound trucking bills") — READ ONLY. Kronos freight against the pounds
