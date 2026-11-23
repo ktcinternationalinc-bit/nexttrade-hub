@@ -1,5 +1,7 @@
 'use client';
 // v55.83-XG — ARRIVAL + FINAL-PAYMENT REMINDERS (Max, 22 Nov 2026), Phase 1: e-mail, sent by hand.
+// v55.83-XY (Max, 23 Nov 2026): Send-to and language come from the HUB customer; CC to the office; a PDF of the invoice attached;
+// sent from info@ktcus.com only; an automatic morning run behind a switch that is off until the super admin turns it on (AutoPanel).
 // The orders whose arrival is 21 days away or less (or already past), each with its invoice total / received / remaining
 // from the Hub's invoices. "Prepare reminder" shows the exact approved message in the chosen language; nothing leaves
 // until the person presses Send. All figures and all text come from the server (src/lib/arrival-reminders*.js).
@@ -25,7 +27,7 @@ export function ArrivalRemindersView(p) {
         var look = PHASE_LOOK[r.phase] || PHASE_LOOK.friendly; var last = r.reminders && r.reminders.last;
         return <tr key={r.order_id} style={{ borderTop: '1px solid ' + LINE, color: INK }}>
           <td className="px-2 py-1.5 font-extrabold">{r.release_number || '(none)'}</td>
-          <td className="px-2 py-1.5">{r.customer || '—'}{r.hub_customer && r.hub_customer !== r.customer && <div style={{ color: SUB, fontSize: 10 }}>{'Hub invoice: ' + r.hub_customer}</div>}</td>
+          <td className="px-2 py-1.5">{r.customer || '—'}{!r.limited && <div style={{ fontSize: 10, fontWeight: 800, color: r.language_chosen ? SUB : '#9a3412' }}>{(LANG_NAMES[r.language] || 'English') + (r.language_chosen ? '' : ' — language not chosen yet')}</div>}{!r.limited && !r.email && <div style={{ fontSize: 10, fontWeight: 800, color: '#991b1b' }}>no e-mail on the Hub customer</div>}{r.hub_customer && r.hub_customer !== r.customer && <div style={{ color: SUB, fontSize: 10 }}>{'Hub invoice: ' + r.hub_customer}</div>}</td>
           <td className="px-2 py-1.5">{(r.pol || '?') + ' → ' + (r.country || '?')}{r.pol_needs_confirm && <div style={{ color: '#9a3412', fontSize: 10, fontWeight: 800 }}>{'Port of loading to confirm (release ' + (r.release_prefix || 'has no prefix') + ')'}</div>}<div style={{ color: SUB, fontSize: 10 }}>{'Container ' + (r.container || '—')}</div></td>
           <td className="px-2 py-1.5">{r.arrival_date}</td>
           <td className="px-2 py-1.5 font-extrabold" style={{ color: look[1], background: look[2] }}>{counterWords(r.days)}</td>
@@ -34,12 +36,14 @@ export function ArrivalRemindersView(p) {
           <td className="px-2 py-1.5 text-right tabular-nums">{r.limited ? 'not shown' : (r.balance ? fmt(r.balance.received) : '—')}</td>
           <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.balance && r.balance.remaining > 0 ? '#991b1b' : '#065f46' }}>{r.limited ? 'not shown' : (r.balance ? fmt(r.balance.remaining) : '—')}</td>
           <td className="px-2 py-1.5">{last ? <span>{when(last.at)}<div style={{ color: SUB, fontSize: 10 }}>{(PHASE_LOOK[last.phase] ? PHASE_LOOK[last.phase][0] : last.phase) + ' · ' + last.channel + ' · ' + (LANG_NAMES[last.language] || last.language) + ' · ' + r.reminders.sent + ' sent'}</div></span> : <span style={{ color: SUB }}>none yet</span>}
+            {last && last.attachment_note && <div className="mt-1 px-1.5 py-0.5 rounded font-extrabold" title={last.attachment_note} style={{ color: '#7c2d12', background: '#fed7aa', border: '1px solid #ea580c', fontSize: 10 }}>{last.attachment_note}</div>}
             {r.reminders && r.reminders.unconfirmed && <div className="mt-1 px-1.5 py-0.5 rounded font-extrabold" style={{ color: '#7c2d12', background: '#fed7aa', border: '1px solid #ea580c', fontSize: 10 }}>{'Delivery unconfirmed — ' + when(r.reminders.unconfirmed.at) + (r.reminders.unconfirmed.sent_to ? ' to ' + r.reminders.unconfirmed.sent_to : '') + '. It may have reached the customer.'}</div>}
             {r.reminders && (r.reminders.sent > 0 || r.reminders.unconfirmed) && p.onHistory && <button onClick={function () { p.onHistory(r); }} className="mt-1 underline font-bold" style={{ color: '#1d4ed8', fontSize: 11 }}>History</button>}</td>
           <td className="px-2 py-1.5 text-right">
             {r.blocks.length > 0
               ? <span title={r.blocks.join(' ')} style={{ color: '#991b1b', fontWeight: 800, fontSize: 11 }}>{'Cannot send: ' + r.blocks[0]}</span>
               : <button onClick={function () { p.onPrepare(r); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Prepare reminder</button>}
+            {r.auto && !r.slot_sent && <div title={r.auto.reasons.join(' ')} style={{ fontSize: 10, marginTop: 2, fontWeight: 800, color: r.auto.eligible ? '#065f46' : '#9a3412' }}>{r.auto.eligible ? (p.autoOn ? 'Automatic: goes out at the next morning run' : 'Automatic: would go out by itself (switch is OFF)') : 'Automatic: needs a person — ' + r.auto.reasons[0]}</div>}
           </td>
         </tr>; })}
       {rows.length === 0 && <tr><td colSpan={11} className="px-2 py-3" style={{ color: SUB }}>No shipped, open order has an arrival date 21 days away or less.</td></tr>}
@@ -88,7 +92,7 @@ export function createReminderActions(io) {
         if (j.changed) { return prepare(o.row, o.lang, o.pol, o.to); }
         return;
       }
-      io.toast(j.test ? 'Test sent to ' + j.to + ' (your own address).' : 'Reminder sent to ' + j.to + '.', 'success');
+      io.toast((j.test ? 'Test sent to ' + j.to + ' (your own address).' : 'Reminder sent to ' + j.to + '.') + (j.attachment_note ? ' ' + j.attachment_note : ''), j.attachment_note ? 'warning' : 'success');
       if (j.test) { patch({ sending: false, note: 'Test sent to ' + j.to + ' — the customer received nothing.' }); }
       else { io.setOpen(null); io.load(); }
     }, function () {
@@ -99,6 +103,41 @@ export function createReminderActions(io) {
     });
   }
   return { prepare: prepare, send: send };
+}
+
+// v55.83-XY — the automatic schedule: its switch, what it would do, and what the last morning run did. No state of its own.
+export function AutoPanel(p) {
+  var a = p.auto || {}; var run = a.last_run; var on = a.on === true;
+  function n(x) { return (x && x.length) || 0; }
+  return <div className="mt-2 px-3 py-2 rounded text-[12px]" style={{ background: on ? '#dcfce7' : '#f1f5f9', color: INK, border: '2px solid ' + (on ? '#15803d' : '#94a3b8') }}>
+    <div className="flex items-center gap-2 flex-wrap">
+      <b>Automatic sending:</b>
+      <span className="px-2 py-0.5 rounded font-extrabold" style={on ? { background: '#15803d', color: '#ffffff' } : { background: '#475569', color: '#ffffff' }}>{on ? 'ON' : 'OFF'}</span>
+      {a.unreadable && <span style={{ color: '#991b1b', fontWeight: 800 }}>The switch could not be read — it counts as OFF.</span>}
+      {a.at && <span style={{ color: SUB }}>{'switched ' + (on ? 'on' : 'off') + ' by ' + (a.by_name || 'someone') + ', ' + when(a.at)}</span>}
+      {a.can_switch && <button onClick={function () { p.onSet(!on); }} disabled={p.busy} className="px-3 py-1 rounded-lg font-extrabold" style={on ? { background: '#ffffff', color: '#991b1b', border: '2px solid #dc2626' } : { background: '#15803d', color: '#ffffff' }}>{on ? 'Switch OFF' : 'Switch ON'}</button>}
+      {!a.can_switch && <span style={{ color: SUB }}>Only the super admin can switch it.</span>}
+    </div>
+    <div className="mt-1" style={{ color: SUB }}>{(a.schedule || '') + ' It sends only when nothing needs a person: an invoice with a balance, no warning, a known port of loading and an e-mail on the Hub customer. It writes in the language chosen on the Hub customer (English when none is chosen). Each stage goes out once; past the arrival date it is once a day for at most ' + (a.max_overdue_days || 30) + ' days.'}</div>
+    <div className="mt-1"><b>{(a.would_send || 0) + ' reminder(s)'}</b>{on ? ' will go out at the next run.' : ' would go out if it were ON.'}{!a.live_feed && <span style={{ color: '#991b1b', fontWeight: 800 }}>{' The Hub is reading a TEST copy of the warehouse — the automatic run sends nothing from it.'}</span>}</div>
+    {run && <div className="mt-1"><b>Last run</b>{' ' + when(run.at) + ': ' + n(run.sent) + ' sent, ' + n(run.failed) + ' not sent, ' + n(run.unconfirmed) + ' delivery unconfirmed, ' + (run.needs_person || 0) + ' waiting for a person' + (n(run.skipped) ? ', ' + n(run.skipped) + ' left for the next pass' : '') + '.'}{run.note && <span style={{ color: '#991b1b', fontWeight: 800 }}>{' ' + run.note}</span>}
+      {(run.failed || []).concat(run.unconfirmed || []).slice(0, 8).map(function (x, i) { return <div key={i} style={{ color: '#7c2d12' }}>{'• ' + (x.release || x.order_id) + ' to ' + x.to + ': ' + x.why}</div>; })}</div>}
+  </div>;
+}
+
+// v55.83-XY (Max: "cced to Jasmine@ktcus.com hsaad@ktcus.com") — who is copied on every customer reminder. The super admin can change it.
+export function CcLine(p) {
+  var _e = useState(null); var draft = _e[0]; var setDraft = _e[1];
+  var cc = p.cc || [];
+  return <div className="mt-2 px-3 py-2 rounded text-[12px] flex items-center gap-2 flex-wrap" style={{ background: '#f1f5f9', color: INK, border: '1px solid ' + LINE }}>
+    <b>Copied (CC) on every reminder to a customer:</b>
+    {draft === null ? <span>{cc.length ? cc.join(', ') : 'nobody'}</span>
+      : <input value={draft} onChange={function (e) { setDraft(e.target.value); }} placeholder="addresses, separated by commas" className="px-2 py-1.5 rounded nt-light" style={{ border: '1px solid #64748b', color: INK, background: '#ffffff', minWidth: 340 }} />}
+    {p.canEdit && draft === null && <button onClick={function () { setDraft(cc.join(', ')); }} className="underline font-bold" style={{ color: '#1d4ed8' }}>Change</button>}
+    {p.canEdit && draft !== null && <button onClick={function () { var v = draft; setDraft(null); p.onSave(v); }} className="px-3 py-1 rounded-lg font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Save</button>}
+    {p.canEdit && draft !== null && <button onClick={function () { setDraft(null); }} className="underline font-bold" style={{ color: SUB }}>Cancel</button>}
+    <span style={{ color: SUB }}>A test you send to yourself is not copied to anyone.</span>
+  </div>;
 }
 
 var OUTCOME = { sent: ['Sent', '#065f46', '#d1fae5'], failed: ['Not sent', '#334155', '#e2e8f0'], unknown: ['Delivery unconfirmed', '#7c2d12', '#fed7aa'], sending: ['Delivery unconfirmed (never finished)', '#7c2d12', '#fed7aa'] };
@@ -115,6 +154,7 @@ export function ReminderHistoryView(p) {
         <b>{when(x.sent_at || x.created_at)}</b><span>{'to ' + x.sent_to}</span><span style={{ color: SUB }}>{(PHASE_LOOK[x.phase] ? PHASE_LOOK[x.phase][0] : x.phase) + ' · ' + (LANG_NAMES[x.language] || x.language) + (x.sent_by_name ? ' · by ' + x.sent_by_name : '')}</span>
       </div>
       {x.error && <div className="text-[11px] mt-1" style={{ color: '#7c2d12' }}>{x.error}</div>}
+      {(x.cc || x.invoices_attached !== undefined) && <div className="text-[11px] mt-1" style={{ color: SUB }}>{(x.cc ? 'CC: ' + x.cc + ' · ' : '') + (x.invoices_attached ? x.invoices_attached + ' invoice PDF(s) attached' : 'no invoice attached')}{x.attachment_note && <b style={{ color: '#7c2d12' }}>{' · ' + x.attachment_note}</b>}</div>}
       {x.withheld ? <div className="text-[11px] mt-1" style={{ color: SUB }}>The text and the amounts of this entry are outside the history you may see.</div>
         : <div><div className="text-[11px] mt-1 font-bold">{x.subject}</div><div dir={x.language === 'ar' ? 'rtl' : 'ltr'} className="text-[11px] mt-1 px-2 py-1 rounded" style={{ background: '#f8fafc', whiteSpace: 'pre-wrap', textAlign: x.language === 'ar' ? 'right' : 'left' }}>{x.body}</div></div>}
     </div>; })}</div>;
@@ -134,6 +174,16 @@ export default function ArrivalRemindersTab(props) {
     call({ action: 'list' }).then(function (j) { setBusy(false); if (!j.ok) { setErr(j.error || 'Could not load.'); return; } setData(j); }, function () { setBusy(false); setErr('Could not reach the Hub.'); });
   }
   useEffect(function () { load(); }, []);
+  // v55.83-XY — the automatic schedule's switch (the server lets only the super admin change it)
+  function setCc(text) {
+    setBusy(true);
+    call({ action: 'cc_set', cc: text }).then(function (j) { setBusy(false); if (!j.ok) { setErr(j.error || 'The copy list was not changed.'); return; } toast('Copied on every reminder: ' + (j.cc.length ? j.cc.join(', ') : 'nobody') + '.', 'success'); load(); }, function () { setBusy(false); setErr('Could not reach the Hub — press Refresh to see whether the copy list changed.'); });
+  }
+  function setAuto(on) {
+    if (on && !window.confirm('Switch AUTOMATIC reminders ON?\n\nEvery morning the Hub will e-mail customers by itself — only the orders where nothing needs a person. You can switch it off here at any time.')) { return; }
+    setBusy(true);
+    call({ action: 'auto_set', enabled: !!on, confirm: !!on }).then(function (j) { setBusy(false); if (!j.ok) { setErr(j.error || 'The switch was not changed.'); return; } toast('Automatic reminders are now ' + (on ? 'ON' : 'OFF') + '.', 'success'); load(); }, function () { setBusy(false); setErr('Could not reach the Hub — press Refresh to see whether the switch changed.'); });
+  }
   // the dialog's state is also kept in a ref, so an answer that arrives later always works on the CURRENT dialog (Codex 22 Nov 14:19)
   function setOpenNow(v) { var nv = typeof v === 'function' ? v(openRef.current) : v; openRef.current = nv; setOpen(nv); }
   var act = createReminderActions({ call: call, getOpen: function () { return openRef.current; }, setOpen: setOpenNow, load: load, toast: toast, confirm: function (m) { return window.confirm(m); } });
@@ -153,10 +203,14 @@ export default function ArrivalRemindersTab(props) {
       </div>
       <div className="text-[12px] mt-1" style={{ color: SUB }}>Shipped, open orders arriving in 21 days or less. Each reminder tells the customer the expected arrival and asks for the final payment, with the invoice total, what was received and what is still owed. <b>Nothing is sent automatically</b> — you see the message and press Send.</div>
       {data && !data.log_ready && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #d97706' }}>{data.sql_hint}</div>}
-      {data && data.mailbox && !data.mailbox.configured && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #dc2626' }}>The info@ktcus.com mailbox is not connected on the server — reminders can be read here but not sent.</div>}
+      {data && data.mailbox && data.mailbox.wrong_from && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #dc2626' }}>{'The mailbox connected on the server is ' + data.mailbox.from + ', not info@ktcus.com. Reminders are only sent from info@ktcus.com — nothing can be sent until that setting is corrected in Vercel.'}</div>}
+      {data && data.mailbox && !data.mailbox.configured && !data.mailbox.wrong_from && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #dc2626' }}>The info@ktcus.com mailbox is not connected on the server — reminders can be read here but not sent.</div>}
+      {data && data.language_ready === false && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #d97706' }}>The customer language is not installed yet (sql/v55-83-XY-reminder-language-cc-attachments.sql) — every reminder is written in English until it is.</div>}
+      {data && data.cc && <CcLine cc={data.cc} canEdit={!!(data.auto && data.auto.can_switch)} onSave={setCc} />}
+      {data && data.auto && <AutoPanel auto={data.auto} busy={busy} onSet={setAuto} />}
       {err && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #dc2626' }}>{err}</div>}
     </div>
-    {data && <ArrivalRemindersView rows={data.rows} onPrepare={function (r) { prepare(r); }} onHistory={history} />}
+    {data && <ArrivalRemindersView rows={data.rows} autoOn={!!(data.auto && data.auto.on)} onPrepare={function (r) { prepare(r); }} onHistory={history} />}
     {hist && <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 70, overflowY: 'auto' }}>
       <div className="rounded-xl p-4" style={{ background: '#ffffff', color: INK, maxWidth: 820, margin: '40px auto', border: '2px solid #1d4ed8' }}>
         <div className="flex items-center gap-2"><div className="text-[15px] font-extrabold">{'Reminder history — release ' + (hist.row.release_number || '')}</div>
@@ -175,7 +229,7 @@ export default function ArrivalRemindersTab(props) {
         <div className="mt-3 flex items-center gap-2 flex-wrap text-[12px]">
           <b>Language:</b>
           {['en', 'es', 'fr', 'ar'].map(function (l) { return <button key={l} onClick={function () { prepare(open.row, l, open.pol, open.to); }} className="px-3 py-1 rounded-lg font-extrabold" style={open.lang === l ? { background: '#1d4ed8', color: '#ffffff' } : { background: '#ffffff', color: INK, border: '1px solid ' + LINE }}>{LANG_NAMES[l]}</button>; })}
-          {!open.row.language_from_warehouse && <span style={{ color: SUB }}>(no language on the customer yet — English unless you pick another)</span>}
+          {!open.row.language_chosen && <span style={{ color: '#9a3412', fontWeight: 800 }}>(no language chosen on the customer yet — English unless you pick another; choose it in Accounting → Customers)</span>}
         </div>
         {open.row.pol_needs_confirm && <div className="mt-3 px-3 py-2 rounded text-[12px]" style={{ background: '#ffedd5', color: '#7c2d12', border: '2px solid #ea580c' }}>
           <b>{'Confirm the port of loading. '}</b>{'Release ' + (open.row.release_number || '') + ' does not start with 1002 (Houston) or 1001 (Canada), so the Hub does not guess it.'}{open.row.pol_suggestion ? ' The warehouse on the order is "' + open.row.pol_suggestion + '".' : ''}
@@ -212,12 +266,15 @@ export default function ArrivalRemindersTab(props) {
           <div className="mt-3 flex items-center gap-2 flex-wrap text-[12px]">
             <b>Send to:</b>
             <input value={open.to} onChange={function (e) { var v = e.target.value; setOpenNow(function (o) { return Object.assign({}, o, { to: v }); }); }} placeholder="customer e-mail address" className="px-2 py-1.5 rounded nt-light" style={{ border: '1px solid #64748b', color: INK, background: '#ffffff', minWidth: 280 }} />
-            <span style={{ color: SUB }}>{open.row.email ? ('on file in the ' + (open.row.email_from === 'hub' ? 'Hub customer' : 'warehouse customer')) : 'no address on file — type one'}</span>
+            <span style={{ color: SUB }}>{open.row.email ? 'on file in the Hub customer (Accounting → Customers)' : 'no e-mail on the Hub customer — add it in Accounting → Customers, or type one'}</span>
+            {d.cc && d.cc.length > 0 && <div className="w-full" style={{ color: INK }}><b>CC:</b>{' ' + d.cc.join(', ')}<span style={{ color: SUB }}>{' — copied on every reminder to a customer (not on a test)'}</span></div>}
+            {open.row.recipients_bad && open.row.recipients_bad.length > 0 && <span style={{ color: '#991b1b', fontWeight: 800 }}>{'Not an address on the Hub customer: ' + open.row.recipients_bad.join(', ')}</span>}
+            <div className="w-full" style={{ color: INK }}><b>Attached:</b>{' ' + (d.attachments && d.attachments.length ? d.attachments.join(', ') : 'nothing')}{d.attachment_note && <span style={{ color: '#9a3412', fontWeight: 800 }}>{' — ' + d.attachment_note.replace(/^Sent WITHOUT/, 'It will go WITHOUT')}</span>}</div>
           </div>
           <div className="mt-3 flex items-center gap-2 flex-wrap">
             <button onClick={function () { send(false); }} disabled={!canSend} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: canSend ? '#15803d' : '#94a3b8', color: '#ffffff' }}>{open.sending ? 'Sending…' : 'Send to the customer'}</button>
             <button onClick={function () { send(true); }} disabled={!d.can_send || open.sending || (warns.length > 0 && !open.ack)} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#ffffff', color: INK, border: '2px solid #1d4ed8' }}>Send a test to myself</button>
-            <span className="text-[11px]" style={{ color: SUB }}>{'From ' + ((d.mailbox && d.mailbox.from) || 'info@ktcus.com') + ' · replies go to that mailbox · every send is logged'}</span>
+            <span className="text-[11px]" style={{ color: SUB }}>{'From ' + ((d.mailbox && d.mailbox.from) || 'info@ktcus.com') + ' · replies go to that mailbox · every send is logged'}{d.mailbox && d.mailbox.wrong_from && <b style={{ color: '#991b1b' }}>{' · NOT info@ktcus.com — sending is refused'}</b>}</span>
           </div>
         </div>}
       </div>

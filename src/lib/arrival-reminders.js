@@ -27,6 +27,45 @@ export function polOfRelease(release) {
   return { pol: null, certain: false, prefix: prefix };
 }
 
+// v55.83-XY (Max, 23 Nov 2026: "change that .. take from hub customer") — the Send-to is the e-mail on the HUB invoice customer
+// (Accounting → Customers), as before. The field is free text, so it may hold several (comma, semicolon, space or line separated): every valid one is
+// used, each once, at most 5. Anything that is not a plain address is reported, never guessed at.
+export function recipientsOf(text) {
+  var good = []; var bad = []; var seen = {};
+  String(text === null || text === undefined ? '' : text).split(/[\s,;]+/).forEach(function (t) {
+    var a = t.replace(/^[<(\[]+|[>)\].]+$/g, '').trim(); if (!a) { return; }
+    if (!/^[^@\s<>"',;:()]+@[^@\s<>"',;:()]+\.[A-Za-z]{2,}$/.test(a)) { bad.push(a.substring(0, 80)); return; }
+    var k = a.toLowerCase(); if (!seen[k]) { seen[k] = true; good.push(a); }
+  });
+  return { list: good.slice(0, 5), extra: good.length > 5 ? good.length - 5 : 0, bad: bad };
+}
+
+// v55.83-XY (Max, 23 Nov 2026: "this needs to be automated at beginning of the day of the time email is needed") — THE AUTOMATIC
+// SCHEDULE. Off until the super admin switches it on. One run each morning; a reminder goes out by itself only when NOTHING about
+// it needs a person. Everything else stays on the screen for a person, with the reason.
+export var AUTO_MAX_OVERDUE_DAYS = 30;   // "past the date = one every day" stops by itself after this many days; a person takes over
+export var AUTO_MAX_FAILED_PER_SLOT = 2; // a definite refusal by the mail server is tried again the next morning, at most this many times
+export var AUTO_MAX_PER_RUN = 25;
+// Max, 23 Nov 2026: "cced to Jasmine@ktcus.com hsaad@ktcus.com" · "SHOULS BE SENT FROM info@ktcus.com"
+export var DEFAULT_CC = ['Jasmine@ktcus.com', 'hsaad@ktcus.com'];
+export var REQUIRED_FROM = 'info@ktcus.com';
+export var MAX_INVOICE_PDFS = 6;
+// row = one row of buildReminderRows (read with no history window: the schedule is the system, not a person)
+export function autoCheck(row) {
+  var why = [];
+  if (!row) { return { eligible: false, reasons: ['no order'] }; }
+  if (row.blocks && row.blocks.length) { why.push(row.blocks[0]); }
+  if (row.warnings && row.warnings.length) { why.push('A person must check first: ' + row.warnings[0]); }
+  if (row.pol_needs_confirm) { why.push('The port of loading must be confirmed by a person (release ' + (row.release_prefix || 'without a prefix') + ').'); }
+  if (!row.recipients || !row.recipients.length) { why.push('Cannot send — no e-mail on the Hub customer.'); }
+  if (row.recipients_bad && row.recipients_bad.length) { why.push('The Hub customer\u2019s e-mail field has something that is not an address: ' + row.recipients_bad.join(', ') + '.'); }
+  if (row.slot_sent) { why.push('Already sent for this stage.'); }
+  if (row.slot_unconfirmed) { why.push('An earlier send for this stage is unconfirmed — a person must check.'); }
+  if ((row.slot_failed_auto || 0) >= AUTO_MAX_FAILED_PER_SLOT) { why.push('The mail server refused this reminder ' + row.slot_failed_auto + ' times — a person must look.'); }
+  if (row.phase === 'overdue' && Math.abs(Number(row.days) || 0) > AUTO_MAX_OVERDUE_DAYS) { why.push('More than ' + AUTO_MAX_OVERDUE_DAYS + ' days past the arrival date — the daily reminder has stopped; a person takes over.'); }
+  return { eligible: why.length === 0, reasons: why };
+}
+
 export function langOf(s) { var t = String(s || '').trim().toLowerCase().substring(0, 2); return LANGS.indexOf(t) >= 0 ? t : 'en'; }
 
 // whole days from "today" to the arrival date, both plain YYYY-MM-DD dates (no clock, no time zone arithmetic)
@@ -292,6 +331,6 @@ export function statusOf(logRows) {
   var un = unsure.length ? { count: unsure.length, at: unsure[0].created_at || null, sent_to: unsure[0].sent_to || null, slot: unsure[0].slot || null } : null;
   if (!real.length) { return { sent: 0, last: null, unconfirmed: un }; }
   var l = real[0];
-  return { sent: real.length, unconfirmed: un, last: { at: l.sent_at || l.created_at, phase: l.phase, slot: l.slot, channel: l.channel, language: l.language, mode: l.mode, sent_to: l.sent_to,
+  return { sent: real.length, unconfirmed: un, last: { invoices_attached: l.invoices_attached === undefined ? null : l.invoices_attached, attachment_note: l.attachment_note || null, cc: l.cc || null, at: l.sent_at || l.created_at, phase: l.phase, slot: l.slot, channel: l.channel, language: l.language, mode: l.mode, sent_to: l.sent_to,
     total: l.total === null || l.total === undefined ? null : Number(l.total), received: l.received === null || l.received === undefined ? null : Number(l.received), remaining: l.remaining === null || l.remaining === undefined ? null : Number(l.remaining) } };
 }

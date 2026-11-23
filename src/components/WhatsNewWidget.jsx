@@ -33,6 +33,22 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XY',
+    date: '2026-11-23',
+    title: 'Reminders: copy to the office, invoice attached, customer language, and automatic sending (off until switched on)',
+    items: [
+      { text: '**Language per customer.** Accounting → Customers: each customer now has four radio buttons — EN, ES, FR, AR — for the language the Hub writes to them in. Nothing chosen = English (shown as "not chosen yet"). The reminder box opens in that language; you can still pick another for one send.' },
+      { text: '**Copied to the office.** Every reminder to a customer is CC’d to Jasmine@ktcus.com and hsaad@ktcus.com. The list is shown at the top of the reminders screen and in the send box; the super admin can change it. A test you send to yourself is not copied to anyone.' },
+      { text: '**The invoice is attached.** A PDF copy of the customer invoice (each invoice on the release) goes with the reminder: company, invoice number and dates, bill-to, the lines, total, amount paid, balance due, notes and terms. Nothing internal is in it. First version: no logo, and an invoice with Arabic or other non-Western letters cannot be made into a PDF.' },
+      { text: '**If the invoice cannot be attached, the reminder is still sent** — the send box says so beforehand, and afterwards the reminders list shows "Sent WITHOUT the invoice attached" with the reason, so the invoice can be sent separately.' },
+      { text: '**Sent from info@ktcus.com only.** If the mailbox connected on the server is any other address, nothing is sent and a red bar names the address.' },
+      { text: '**Send-to** stays the e-mail on the Hub customer (several addresses in that field = one e-mail to all of them). No e-mail on the Hub customer = add it in Accounting → Customers, or type one.' },
+      { text: '**Automatic sending — OFF until the super admin switches it on** (top of the reminders screen). When ON, every morning at 12:00 UTC (7:00 in New York in winter, 8:00 in summer) the Hub sends the reminder for each order whose stage is due: 15–21 days once, 8–14 days twice, 0–7 days four times, then once a day after the arrival date (at most 30 days). It sends only when nothing needs a person — an invoice with a balance, no warning to check, a known port of loading and an e-mail on the Hub customer; every other order stays on the screen with the reason.' },
+      { text: '**Never twice:** a stage that was sent, by the schedule or by a person, is not sent again. A refusal by the mail server is tried once more the next morning, then left for a person; no answer is marked Delivery unconfirmed and waits for a person. If the warehouse cannot be read that morning, nothing is sent and the screen says why.' },
+      { superAdminOnly: true, text: 'Technical: NEW sql/v55-83-XY-reminder-language-cc-attachments.sql (accounting_customers.correspondence_language with a four-value check; arrival_reminders cc / invoices_attached / attachment_note; DELETE / TRUNCATE revoked from service_role) — the build works before it is installed (English for everyone, the three facts not stored). NEW src/lib/invoice-pdf.js (own PDF writer, no package), /api/accounting/customer-language (accounting.customers.edit + hub_audit_log), GET /api/accounting/arrival-reminders = the morning run (CRON_SECRET; vercel.json 0 12 * * * and 0 13 * * *), settings in app_settings (arrival_reminders_auto, arrival_reminders_auto_last_run, arrival_reminders_cc), actions auto_set / cc_set = super admin only. No Nextrade change.' },
+    ]
+  },
+  {
     version: 'v55.83-YE',
     date: '2026-11-23',
     title: 'Shipping cost of a release: your order',

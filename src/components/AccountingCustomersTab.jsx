@@ -5,6 +5,20 @@ import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supa
 import { customerLifecycle, archivePatch, restorePatch } from '../lib/record-lifecycle';
 import { canViewAccountingCustomers, canEditAccountingCustomers } from '../lib/bank-permissions';
 import RestrictedNotice from './RestrictedNotice';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-XY — the language choice is saved by a server route (verified sign-in + audit)
+
+// v55.83-XY — the four languages the Hub writes to customers in. No state of its own, so it can be rendered and checked alone.
+export var LANGUAGE_WORDS = { en: 'English', es: 'Spanish', fr: 'French', ar: 'Arabic' };
+var LANGUAGE_SHORT = { en: 'EN', es: 'ES', fr: 'FR', ar: 'AR' };
+export function LanguageChoice(p) {
+  return <div className="flex items-center gap-1.5 flex-wrap">
+    {['en', 'es', 'fr', 'ar'].map(function (l) {
+      return <label key={l} title={LANGUAGE_WORDS[l]} className="flex items-center gap-0.5 text-[10px] font-bold text-slate-100 cursor-pointer">
+        <input type="radio" name={p.name} checked={p.value === l} disabled={!!p.disabled} onChange={function () { p.onPick(l); }} />{LANGUAGE_SHORT[l]}
+      </label>; })}
+    {!p.value && <span className="text-[9px] text-amber-300 font-bold" title="Nothing chosen yet — the Hub writes in English until you pick one.">not chosen yet · English</span>}
+  </div>;
+}
 import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
 
 var BLANK = {
@@ -37,6 +51,17 @@ export default function AccountingCustomersTab(props) {
   var waveBiz = getActiveWaveBusiness() || '';
   var [waveReg, setWaveReg] = useState([]);
   useEffect(function () { supabase.from('wave_business_registry').select('*').then(function (r) { setWaveReg((r && r.data) || []); }).catch(function () {}); }, []);
+
+  // v55.83-XY — the language to write to this customer in. Saved by the server route (never straight from the browser).
+  var _lb = useState(null); var langBusy = _lb[0]; var setLangBusy = _lb[1];
+  function setLanguage(r, lang) {
+    if (!mayEdit || langBusy) { return; }
+    setLangBusy(r.id);
+    hubFetch('/api/accounting/customer-language', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customer_id: r.id, language: lang }) })
+      .then(function (res) { return res.json(); })
+      .then(function (j) { setLangBusy(null); if (!j || !j.ok) { toast.error((j && j.error) || 'The language was not saved.'); return; } toast.success((r.company_name || 'Customer') + ': ' + (LANGUAGE_WORDS[lang] || lang) + '.'); load(); },
+        function () { setLangBusy(null); toast.error('The language was not saved — could not reach the Hub.'); });
+  }
 
   function load() {
     setLoading(true);
@@ -152,13 +177,13 @@ export default function AccountingCustomersTab(props) {
       <label className="text-xs text-slate-100 font-bold flex items-center gap-2 mb-3 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 w-max cursor-pointer hover:bg-slate-700"><input type="checkbox" checked={showArchived} onChange={function (e) { setShowArchived(e.target.checked); }} /> Show archived customers</label>
 
       <div className="border border-slate-700 rounded overflow-hidden mb-4">
-        <div className="bg-slate-800/70 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px 96px' }}>
-          <div className="px-2 py-1.5">Company</div><div className="px-2 py-1.5">Contact</div><div className="px-2 py-1.5">Email</div><div className="px-2 py-1.5">Status</div><div className="px-2 py-1.5">Wave</div><div className="px-2 py-1.5">Business</div>
+        <div className="bg-slate-800/70 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px 96px 178px' }}>
+          <div className="px-2 py-1.5">Company</div><div className="px-2 py-1.5">Contact</div><div className="px-2 py-1.5">Email</div><div className="px-2 py-1.5">Status</div><div className="px-2 py-1.5">Wave</div><div className="px-2 py-1.5">Business</div><div className="px-2 py-1.5" title="The language the Hub writes to this customer in (payment and arrival reminders). Nothing chosen = English.">Language</div>
         </div>
         {filtered.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No accounting customers yet.</div> :
           filtered.map(function (r) {
             return (
-              <div key={r.id} onClick={function () { startEdit(r); }} className="grid items-center border-t border-slate-800 cursor-pointer hover:bg-slate-800/50" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px 96px' }}>
+              <div key={r.id} onClick={function () { startEdit(r); }} className="grid items-center border-t border-slate-800 cursor-pointer hover:bg-slate-800/50" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px 96px 178px' }}>
                 <div className="px-2 py-1.5 text-xs text-slate-100 truncate font-semibold">{r.company_name}</div>
                 <div className="px-2 py-1.5 text-xs text-slate-300 truncate">{r.contact_name || '—'}</div>
                 <div className="px-2 py-1.5 text-[11px] text-slate-300 truncate">{r.email || '—'}</div>
@@ -177,6 +202,11 @@ export default function AccountingCustomersTab(props) {
                     className={'text-[10px] px-1.5 py-0.5 rounded font-extrabold ' + (r.business_tag === 'egypt' ? 'bg-amber-600 text-white' : 'bg-sky-700 text-white')}>
                     {r.business_tag === 'egypt' ? '🇪🇬 Egypt' : '🇺🇸 US'}
                   </button>
+                </div>
+                {/* v55.83-XY (Max, 23 Nov: "need in customer list in hub radio box to indicate the language to use with correspondce") —
+                    one click saves it through the server (permission + audit entry). Nothing chosen yet = English. */}
+                <div className="px-2 py-1.5" onClick={function (e) { e.stopPropagation(); }}>
+                  <LanguageChoice value={r.correspondence_language || ''} disabled={!mayEdit || langBusy === r.id} name={'lang-' + r.id} onPick={function (l) { setLanguage(r, l); }} />
                 </div>
               </div>
             );

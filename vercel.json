@@ -1,6 +1,14 @@
 {
   "crons": [
     {
+      "path": "/api/accounting/arrival-reminders",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/accounting/arrival-reminders?pass=2",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/categorize",
       "schedule": "0 3 * * *"
     },

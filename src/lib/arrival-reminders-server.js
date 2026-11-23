@@ -11,7 +11,8 @@ import { businessOfInvoice } from './business-of';
 import { relKey } from './profitability';
 import { releasesOf, sameCustomer } from './order-lifecycle';
 import { isEmail, uncertainFailure } from './commercial-mail';
-import { daysBetween, phaseOf, slotOf, balanceOf, langOf, missingFields, statusOf, polOfRelease, releaseList, SIGNATURE } from './arrival-reminders';
+import { daysBetween, phaseOf, slotOf, balanceOf, langOf, missingFields, statusOf, polOfRelease, releaseList, recipientsOf, autoCheck, SIGNATURE, DEFAULT_CC, REQUIRED_FROM, MAX_INVOICE_PDFS } from './arrival-reminders';
+import { buildInvoicePdf } from './invoice-pdf';
 
 // the same orders the warehouse lists under "Arrival Dates": shipped and not closed
 export var ARRIVAL_STATUSES = ['shipped', 'post_loading_documentation', 'end_stage'];
@@ -76,7 +77,7 @@ export function buildReminderRows(input) {
     var polR = polOfRelease(o.release_number); // XG (Max 22 Nov): 1002 = Houston, 1001 = Canada; any other prefix is confirmed by a person, never guessed
     // the salutation: the warehouse contact person only when the warehouse and the Hub invoice agree on who the customer is (Codex 22 Nov)
     var differs = !!(cust && !sameCustomer(o.customer_name, cust.company_name || cust.contact_name));
-    var fields = { name: String((differs ? '' : o.customer_contact_person) || (cust && (cust.contact_name || cust.company_name)) || o.customer_name || '').trim(),
+    var fields = { name: String((cust && (cust.contact_name || cust.company_name)) || o.customer_name || '').trim(),
       release: o.release_number, pol: polR.certain ? polR.pol : '', destination: o.country, container: o.container, arrival_date: arrival, days: days,
       total: bal.ok ? bal.total : null, received: bal.ok ? bal.received : null, remaining: bal.ok ? bal.remaining : null,
       // Max 22 Nov: an invoice covering several releases → the message lists them all (this order's release first) with the invoice totals
@@ -98,23 +99,26 @@ export function buildReminderRows(input) {
     if (invs.some(function (i) { return i.releases > 1; })) { warnings.push('An invoice here covers more than one release (' + fields.releases.join(', ') + '). The message lists all of them and states the totals of the WHOLE invoice, not only this release.'); }
     if (poOnly) { warnings.push('The invoice was found by its P.O./S.O. number (its Release Number field is empty).'); }
     if (truthy(o.payment_made) && bal.ok && !bal.paid_in_full) { warnings.push('The warehouse has "Payment Received" ticked for this order, but the Hub still shows ' + bal.remaining.toFixed(2) + ' owed.'); }
-    var hubEmail = cust && isEmail(cust.email) ? String(cust.email).trim() : null;
-    var whEmail = isEmail(o.customer_email) ? String(o.customer_email).trim() : null;
-    if (hubEmail && whEmail && hubEmail.toLowerCase() !== whEmail.toLowerCase()) { warnings.push('The warehouse has a different e-mail for this customer (' + whEmail + ') than the Hub (' + hubEmail + ').'); }
+    // v55.83-XY (Max 23 Nov: "change that .. take from hub customer") — Send-to = the e-mail(s) on the HUB invoice customer. Nothing is
+    // taken from the warehouse feed for the address or the language.
+    var hb = recipientsOf(cust ? cust.email : ''); var hubEmail = hb.list.join(', ') || null;
+    if (hb.extra) { warnings.push('The Hub customer has more than 5 e-mail addresses — only the first 5 are used.'); }
     var slot = slotOf(days, today); var mine = logBy[String(o.id)] || [];
     function inSlot(l) { return l.slot === slot && l.channel === 'email' && l.mode !== 'test'; }
     var slotSent = mine.some(function (l) { return inSlot(l) && l.status === 'sent'; });
     // delivery unconfirmed (Codex 22 Nov P2): the mail server did not answer, or the send never finished. It may have reached the customer.
     var slotUnconfirmed = mine.some(function (l) { return inSlot(l) && (l.status === 'unknown' || l.status === 'sending'); });
+    var slotFailedAuto = mine.filter(function (l) { return l.slot === slot && l.channel === 'email' && l.mode === 'auto' && l.status === 'failed'; }).length;
     var rem = statusOf(mine);
     if (limited) { blocks = [LIMITED_WORDS]; warnings = []; fields = Object.assign({}, fields, { total: null, received: null, remaining: null, releases: [] }); if (rem.last) { rem.last = Object.assign({}, rem.last, { total: null, received: null, remaining: null }); } }
     rows.push({ order_id: Number(o.id), release_number: o.release_number || null, release_key: rk, customer: o.customer_name || null, hub_customer: cust ? (cust.company_name || cust.contact_name || null) : null,
-      warehouse: o.warehouse_name || null, country: o.country || null, container: o.container || null, status: o.status, arrival_date: arrival, days: days, phase: phase, slot: slot, slot_sent: slotSent, slot_unconfirmed: slotUnconfirmed, limited: limited,
-      language: langOf(o.customer_language), language_from_warehouse: !!o.customer_language, email: hubEmail || whEmail || null, email_from: hubEmail ? 'hub' : (whEmail ? 'warehouse' : null), whatsapp: o.customer_whatsapp || null,
+      warehouse: o.warehouse_name || null, country: o.country || null, container: o.container || null, status: o.status, arrival_date: arrival, days: days, phase: phase, slot: slot, slot_sent: slotSent, slot_unconfirmed: slotUnconfirmed, slot_failed_auto: slotFailedAuto, limited: limited,
+      language: langOf(cust && cust.correspondence_language), language_chosen: !!(cust && cust.correspondence_language), email: hubEmail, email_from: hubEmail ? 'hub' : null, recipients: hb.list, recipients_bad: hb.bad, whatsapp: o.customer_whatsapp || null,
       invoices: limited ? [] : invs.map(function (i) { return { id: i.id, number: i.number, total: i.total, paid: i.paid }; }), invoice_count: invs.length, balance: bal.ok ? { total: bal.total, received: bal.received, remaining: bal.remaining, overpaid: bal.overpaid } : null,
       pol: polR.certain ? polR.pol : null, pol_needs_confirm: !polR.certain, pol_suggestion: polR.certain ? null : (o.warehouse_name || null), release_prefix: polR.prefix,
       fields: fields, blocks: blocks, warnings: warnings, reminders: rem });
   });
+  rows.forEach(function (r) { r.auto = r.limited ? null : autoCheck(r); }); // what the morning schedule would do with this order (not told to a person limited by the history window)
   rows.sort(function (a, b) { return (a.days - b.days) || String(a.release_number || '').localeCompare(String(b.release_number || '')); });
   var counts = { friendly: 0, firmer: 0, urgent: 0, overdue: 0, ready: 0, blocked: 0 };
   rows.forEach(function (r) { counts[r.phase]++; if (r.blocks.length) { counts.blocked++; } else { counts.ready++; } });
@@ -126,7 +130,9 @@ export function reminderMailConfig(env) {
   var e = env || process.env;
   var user = String(e.COMMERCIAL_MAIL_USER || '').trim().toLowerCase(); var pass = String(e.COMMERCIAL_MAIL_PASSWORD || '');
   return { user: user, pass: pass, configured: isEmail(user) && pass.length > 0, smtp_host: e.COMMERCIAL_SMTP_HOST || 'smtp.hostinger.com', smtp_port: Number(e.COMMERCIAL_SMTP_PORT || 465), imap_host: e.COMMERCIAL_IMAP_HOST || 'imap.hostinger.com',
-    from: '"' + SIGNATURE + '" <' + user + '>' };
+    from: '"' + SIGNATURE + '" <' + user + '>',
+    // v55.83-XY (Max 23 Nov: "SHOULS BE SENT FROM info@ktcus.com") — a mailbox set to any other address never sends a reminder
+    from_ok: user === REQUIRED_FROM, wrong_from: isEmail(user) && pass.length > 0 && user !== REQUIRED_FROM };
 }
 function makeTransport(cfg, o) {
   if (o && o.transport) { return o.transport; }
@@ -155,10 +161,14 @@ async function copyToSent(cfg, mail, o) {
 export async function sendReminderMail(m, opts) {
   var o = opts || {}; var cfg = o.config || reminderMailConfig();
   if (!cfg.configured) { return { ok: false, not_configured: true, error: 'The info@ktcus.com mailbox is not connected on the server (COMMERCIAL_MAIL_USER and COMMERCIAL_MAIL_PASSWORD in Vercel).' }; }
-  if (!isEmail(m.to)) { return { ok: false, error: 'The recipient address is not valid.' }; }
+  if (cfg.user !== REQUIRED_FROM) { return { ok: false, wrong_from: true, error: 'The mailbox connected on the server is ' + cfg.user + ', not ' + REQUIRED_FROM + ' — reminders are only sent from ' + REQUIRED_FROM + '.' }; }
+  var rcp = recipientsOf(m.to); if (!rcp.list.length || rcp.bad.length) { return { ok: false, error: 'The recipient address is not valid.' }; }
   var dom = cfg.user.substring(cfg.user.indexOf('@') + 1);
   var mid = '<arrival-' + String(m.id || Date.now().toString(36)).replace(/[^a-z0-9]/gi, '').toLowerCase().substring(0, 40) + '@' + dom + '>';
-  var mail = { from: cfg.from, to: String(m.to).trim(), subject: m.subject, text: m.text, html: m.html, messageId: mid, replyTo: cfg.user, headers: { 'X-KTC-Reference': 'arrival-reminder' } };
+  var mail = { from: cfg.from, to: rcp.list.join(', '), subject: m.subject, text: m.text, html: m.html, messageId: mid, replyTo: cfg.user, headers: { 'X-KTC-Reference': 'arrival-reminder' } };
+  var ccl = recipientsOf((m.cc || []).join(', ')).list.filter(function (x) { return rcp.list.map(function (y) { return y.toLowerCase(); }).indexOf(x.toLowerCase()) < 0; });
+  if (ccl.length) { mail.cc = ccl.join(', '); }
+  if (m.attachments && m.attachments.length) { mail.attachments = m.attachments.map(function (x) { return { filename: x.filename, content: x.content, contentType: 'application/pdf' }; }); }
   var info = null; var err = null;
   try { info = await makeTransport(cfg, o).sendMail(mail); } catch (e) { err = e; }
   if (err) {
@@ -168,6 +178,81 @@ export async function sendReminderMail(m, opts) {
   }
   var resp = String((info && info.response) || '').substring(0, 200);
   if (!info || !info.accepted || info.accepted.length === 0) { return { ok: false, error: 'The mail server did not accept the recipient: ' + (resp || 'no answer') }; }
+  var refused = (info.rejected || []).map(function (x) { return String(x); });
   var copied = await copyToSent(cfg, mail, o);
-  return { ok: true, message_id: mid, smtp_response: resp, copied_to_sent: copied, from: cfg.user };
+  return { ok: true, message_id: mid, smtp_response: resp, copied_to_sent: copied, from: cfg.user, accepted: (info.accepted || []).map(function (x) { return String(x); }), rejected: refused };
+}
+
+// ── v55.83-XY: the automatic schedule's switch and its last run, kept in app_settings (the same table as the history window) ──
+export var AUTO_SWITCH_KEY = 'arrival_reminders_auto'; export var AUTO_LAST_RUN_KEY = 'arrival_reminders_auto_last_run';
+// → { value } (null when never set) or { error }. An unreadable switch is NEVER taken as "on".
+export async function readSetting(db, key) {
+  var res = await db.from('app_settings').select('*').or('key.eq.' + key + ',setting_key.eq.' + key).limit(1);
+  if (res && res.error) { res = await db.from('app_settings').select('*').eq('key', key).limit(1); }
+  if (res && res.error) { return { error: res.error.message }; }
+  var row = (res && res.data && res.data.length) ? res.data[0] : null;
+  if (!row) { return { value: null }; }
+  if (row.value && typeof row.value === 'object') { return { value: row.value }; }
+  if (row.setting_value) { try { return { value: JSON.parse(row.setting_value) }; } catch (eP) { return { error: 'the setting is not readable' }; } }
+  return { value: null };
+}
+export async function writeSetting(db, key, value, by) {
+  var full = { key: key, value: value, setting_key: key, setting_value: JSON.stringify(value), updated_by: by || null, updated_at: new Date().toISOString() };
+  var up = await db.from('app_settings').upsert(full, { onConflict: 'key' }).select();
+  if (up && up.error && /setting_key|setting_value|column/.test(up.error.message || '')) { up = await db.from('app_settings').upsert({ key: key, value: value, updated_by: by || null, updated_at: new Date().toISOString() }, { onConflict: 'key' }).select(); }
+  return up && up.error ? { error: up.error.message } : { ok: true };
+}
+// the switch is ON only when the stored value says exactly enabled === true
+export function autoIsOn(setting) { return !!(setting && setting.value && setting.value.enabled === true); }
+
+// ── v55.83-XY: who is copied on every customer reminder (Max 23 Nov: "cced to Jasmine@ktcus.com hsaad@ktcus.com") ──
+// A setting (app_settings arrival_reminders_cc = { list: [...] }) whose starting value is those two. An unreadable or malformed
+// setting falls back to the starting value: the copy to the office is never silently lost.
+export var CC_KEY = 'arrival_reminders_cc';
+export async function ccFor(db) {
+  var st = null; try { st = await readSetting(db, CC_KEY); } catch (e) { st = null; }
+  if (st && !st.error && st.value && Array.isArray(st.value.list)) { var r = recipientsOf(st.value.list.join(', ')); if (!r.bad.length) { return r.list; } }
+  return DEFAULT_CC.slice();
+}
+
+// ── v55.83-XY: a copy of the customer invoice(s) as PDF (Max 23 Nov: "please attach a copy of the invoice") ──
+// Only the customer invoice: its own row, its lines, its customer and the company profile. Never the customs invoice, never a cost.
+// It NEVER throws and never stops a reminder (Max: "SEND IT ANYWAY"): what could not be attached is returned as a note, which goes
+// on the log row and on the list so someone can send the invoice afterwards.
+export async function buildInvoiceAttachments(db, invoiceIds) {
+  var ids = (invoiceIds || []).filter(Boolean); var out = { attachments: [], names: [], note: null }; var notes = [];
+  if (!ids.length) { out.note = 'No invoice to attach.'; return out; }
+  try {
+    var use = ids.slice(0, MAX_INVOICE_PDFS); if (ids.length > use.length) { notes.push((ids.length - use.length) + ' more invoice(s) were not attached (at most ' + MAX_INVOICE_PDFS + ' per reminder)'); }
+    var iv = await db.from('accounting_invoices').select('*').in('id', use); if (iv.error) { throw new Error(iv.error.message); }
+    var it = await db.from('accounting_invoice_items').select('*').in('invoice_id', use); if (it.error) { throw new Error(it.error.message); }
+    var py = await db.from('accounting_invoice_payments').select('id, accounting_invoice_id, amount, voided, sync_status').in('accounting_invoice_id', use); if (py.error) { throw new Error(py.error.message); }
+    var cp = await db.from('company_profile').select('*').limit(1); var company = (cp && !cp.error && cp.data && cp.data[0]) || {};
+    var cids = {}; (iv.data || []).forEach(function (x) { if (x.accounting_customer_id) { cids[x.accounting_customer_id] = true; } });
+    var cu = Object.keys(cids).length ? await db.from('accounting_customers').select('id, company_name, contact_name, billing_address, email, phone').in('id', Object.keys(cids)) : { data: [] };
+    var custBy = {}; ((cu && cu.data) || []).forEach(function (c) { custBy[c.id] = c; });
+    var total = 0;
+    use.forEach(function (id) {
+      var inv = (iv.data || []).filter(function (x) { return String(x.id) === String(id); })[0];
+      if (!inv) { notes.push('an invoice could not be read'); return; }
+      if (!isArEligible(inv)) { notes.push((inv.invoice_number || 'an invoice') + ': not attached (void or draft)'); return; }
+      var paid = (Number(inv.wave_imported_paid) || 0) + (py.data || []).filter(function (p) { return String(p.accounting_invoice_id) === String(id) && !isPaymentVoid(p); }).reduce(function (a, p) { return a + (Number(p.amount) || 0); }, 0);
+      var r = null; try { r = buildInvoicePdf({ invoice: inv, items: (it.data || []).filter(function (x) { return String(x.invoice_id) === String(id); }), customer: custBy[inv.accounting_customer_id] || {}, company: company, paid: paid }); } catch (eB) { r = { ok: false, reason: 'the PDF could not be written (' + String((eB && eB.message) || eB).substring(0, 80) + ')' }; }
+      if (!r.ok) { notes.push((inv.invoice_number || 'an invoice') + ': ' + r.reason); return; }
+      if (total + r.bytes.length > 8000000) { notes.push((inv.invoice_number || 'an invoice') + ': too large to attach'); return; }
+      total += r.bytes.length; out.attachments.push({ filename: r.filename, content: r.bytes }); out.names.push(r.filename);
+    });
+  } catch (e) { out.attachments = []; out.names = []; notes = ['the invoice could not be read (' + String((e && e.message) || e).substring(0, 120) + ')']; }
+  out.note = notes.length ? 'Sent WITHOUT ' + (out.attachments.length ? 'every invoice' : 'the invoice') + ' attached — ' + notes.join('; ') + '.' : null;
+  return out;
+}
+
+// ── v55.83-XY: the log row. The three new columns (cc, invoices_attached, attachment_note) come with sql/v55-83-XY; until that is
+// installed the row is written without them rather than refusing the send (the reminder log itself must already be there). ──
+export async function insertLog(db, extra, base) {
+  var ins = await db.from('arrival_reminders').insert(Object.assign({}, base, extra || {})).select('id').maybeSingle();
+  if (ins && ins.error && /cc|invoices_attached|attachment_note/.test(String(ins.error.message || '')) && /column|schema cache/i.test(String(ins.error.message || ''))) {
+    ins = await db.from('arrival_reminders').insert(Object.assign({}, base)).select('id').maybeSingle(); if (ins && !ins.error) { ins.without_new_columns = true; }
+  }
+  return ins;
 }
