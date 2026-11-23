@@ -5,11 +5,13 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import InvoicePeek from './InvoicePeek';
-import { presetRange, owesOrUnknown } from '../lib/customers-overview';
+import { presetRange, owesOrUnknown, invoiceTone, customerTone } from '../lib/customers-overview';
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#cbd5e1';
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-var PRESETS = [['month', 'Last 30 days'], ['quarter', 'Last 3 months'], ['year', 'This year'], ['all', 'All'], ['custom', 'Custom dates']];
+var PRESETS = [['month', 'Last 30 days'], ['quarter', 'Last 3 months'], ['year', 'This year'], ['june', 'Since 1 June 2026'], ['all', 'All'], ['custom', 'Custom dates']];
+// v55.83-XM — strong row colours (Max keeps status colours bold): green = arrived and fully paid, yellow = partially paid
+var TONE = { green: { background: '#86efac', boxShadow: 'inset 5px 0 0 #15803d' }, yellow: { background: '#fde047', boxShadow: 'inset 5px 0 0 #a16207' } };
 var STATUS = { paid: ['Paid', '#065f46', '#d1fae5'], partial: ['Partially paid', '#92400e', '#fef3c7'], unpaid: ['Unpaid', '#991b1b', '#fee2e2'], limited: ['Payments before your history — not shown', '#334155', '#e2e8f0'] };
 
 // the table and the opened customer — no state of its own, so it can be rendered and checked on its own
@@ -25,7 +27,7 @@ export function CustomersOverviewView(p) {
       <thead><tr style={{ background: '#f1f5f9', color: '#334155' }}>{['Invoice', 'Date', 'Release', 'Status', 'Total', 'Paid', 'Left to pay', 'Due', 'Arrival (warehouse)'].map(function (h, i) { return <th key={h} className={'px-2 py-1 font-bold ' + (i >= 4 && i <= 6 ? 'text-right' : 'text-left')}>{h}</th>; })}</tr></thead>
       <tbody>{r.invoices.map(function (v) {
         var s = STATUS[v.status] || STATUS.unpaid;
-        return <tr key={v.id} onClick={function () { p.onOpenInvoice(v.id); }} title="Open this invoice" style={{ borderTop: '1px solid ' + LINE, color: INK, cursor: 'pointer' }}>
+        return <tr key={v.id} onClick={function () { p.onOpenInvoice(v.id); }} title="Open this invoice" style={Object.assign({ borderTop: '1px solid ' + LINE, color: INK, cursor: 'pointer' }, TONE[invoiceTone(v)] || {})}>
           <td className="px-2 py-1 font-bold" style={{ color: '#1d4ed8', textDecoration: 'underline' }}>{v.number || '(no number)'}</td>
           <td className="px-2 py-1">{v.invoice_date}</td>
           <td className="px-2 py-1">{v.release || '—'}</td>
@@ -45,7 +47,7 @@ export function CustomersOverviewView(p) {
         <thead><tr style={{ background: '#0f172a', color: '#ffffff', position: 'sticky', top: 0 }}>{head.map(function (h) { return <th key={h[0]} className={'px-2 py-2 font-bold text-' + h[1]}>{h[0]}</th>; })}</tr></thead>
         <tbody>{rows.map(function (r, i) {
           var key = r.customer_id || r.name; var isOpen = p.open === key;
-          var out = [<tr key={key} onClick={function () { p.onOpen(isOpen ? null : key); }} title={isOpen ? 'Close' : 'Show the invoices of ' + r.name} style={{ background: isOpen ? '#e0f2fe' : (i % 2 ? '#f8fafc' : '#ffffff'), color: INK, borderTop: '1px solid ' + LINE, cursor: 'pointer' }}>
+          var out = [<tr key={key} onClick={function () { p.onOpen(isOpen ? null : key); }} title={isOpen ? 'Close' : 'Show the invoices of ' + r.name} style={Object.assign({ background: isOpen ? '#e0f2fe' : (i % 2 ? '#f8fafc' : '#ffffff'), color: INK, borderTop: '1px solid ' + LINE, cursor: 'pointer' }, TONE[customerTone(r)] || {})}>
             <td className="px-2 py-1.5 font-bold">{(isOpen ? '▾ ' : '▸ ') + r.name}{r.arrived_unpaid > 0 && <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={{ color: '#ffffff', background: '#dc2626' }}>{r.arrived_unpaid + ' arrived, not paid'}</span>}</td>
             <td className="px-2 py-1.5 text-right tabular-nums">{r.invoice_count}{r.open_count > 0 && <span style={{ color: SUB }}>{' · ' + r.open_count + ' open'}</span>}{r.limited_count > 0 && <div style={{ color: '#92400e', fontSize: 9, fontWeight: 700 }}>{r.limited_count + ' not in paid / owed (payments before your history)'}</div>}</td>
             <td className="px-2 py-1.5 text-right tabular-nums">{sym + fmt(r.invoiced)}</td>
@@ -129,6 +131,12 @@ export default function CustomersOverviewTab(props) {
       <label className="flex items-center gap-1 font-bold"><input type="checkbox" checked={onlyOwing} onChange={function () { setOnlyOwing(!onlyOwing); }} /> Only customers who still owe (or whose balance is not shown)</label>
       {busy && <span style={{ color: SUB }}>Loading…</span>}
       {report && <span style={{ color: SUB }}>{(report.from || 'the start') + ' → ' + (report.to || 'today')}{report.window_floor ? ' · you can see from ' + report.window_floor + ' onward' : ''}</span>}
+    </div>
+    <div className="flex items-center gap-2 flex-wrap text-[11px] mb-2" style={{ color: INK }}>
+      <span className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#86efac', color: '#052e16', border: '1px solid #15803d' }}>Green = arrived and fully paid</span>
+      <span className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#fde047', color: '#422006', border: '1px solid #a16207' }}>Yellow = partially paid</span>
+      <span className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#dc2626', color: '#ffffff' }}>Red date = arrived, not paid</span>
+      <span style={{ color: SUB }}>A customer row is green only when every invoice in the period arrived and is fully paid.</span>
     </div>
     {err && <div className="text-[12px] font-bold rounded-lg p-2 mb-2" style={{ color: '#991b1b', background: '#fee2e2', border: '1px solid #fca5a5' }}>{err}</div>}
     {report && report.warehouse_is_staging && <div className="text-[11px] font-bold rounded-lg p-2 mb-2" style={{ color: '#92400e', background: '#fef3c7', border: '1px solid #fcd34d' }}>Arrival dates come from the STAGING copy of the Nextrade warehouse, not the live one yet. Treat them as a guide until the live feed is switched on.</div>}

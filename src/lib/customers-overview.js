@@ -157,6 +157,28 @@ export function maskOverviewTotals(report, canSeeTotals) {
 // balance is not a settled one.
 export function owesOrUnknown(row) { return !!row && ((Number(row.owed) || 0) > 0 || (row.limited_count || 0) > 0); }
 
+// v55.83-XM (Max, Nov 23: "need the ones that arrived and paid fully in green. Partially paid in yellow.")
+// ONE rule for the colour of a row, used for an invoice and for a customer:
+//   invoice   green  = the goods ARRIVED (every release has a warehouse date, none after today) AND the invoice is fully paid
+//             yellow = partially paid (arrived or not)
+//   customer  yellow = at least one of its invoices in the period is partially paid
+//             green  = it has invoices in the period, EVERY one of them arrived and is fully paid, and no balance is withheld
+// Anything else keeps its normal colour. A withheld amount ('limited') is never called paid.
+export var SINCE_JUNE = '2026-06-01';
+export function invoiceTone(v) {
+  if (!v) { return ''; }
+  if (v.status === 'partial') { return 'yellow'; }
+  if (v.status === 'paid' && v.arrived === true) { return 'green'; }
+  return '';
+}
+export function customerTone(r) {
+  var inv = (r && r.invoices) || []; if (!inv.length) { return ''; }
+  if (inv.some(function (v) { return v.status === 'partial'; })) { return 'yellow'; }
+  if (r.balance_incomplete || r.limited_count > 0) { return ''; }
+  if (inv.every(function (v) { return v.status === 'paid' && v.arrived === true; })) { return 'green'; }
+  return '';
+}
+
 // the dates of a preset, from today (yyyy-mm-dd). 'all' = no dates.
 export function presetRange(preset, today) {
   var t = day(today); if (!t) { return { from: '', to: '' }; }
@@ -164,6 +186,7 @@ export function presetRange(preset, today) {
   if (preset === 'month') { return { from: back(30), to: t }; }
   if (preset === 'quarter') { return { from: back(90), to: t }; }
   if (preset === 'year') { return { from: t.substring(0, 4) + '-01-01', to: t }; }
+  if (preset === 'june') { return { from: SINCE_JUNE, to: t }; } // v55.83-XM (Max, Nov 23: "need filter from June 1st as well")
   if (preset === 'all') { return { from: '', to: '' }; }
   return null; // custom: the dates typed by the person
 }

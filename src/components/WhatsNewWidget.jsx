@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XM',
+    date: '2026-11-23',
+    title: 'Customers overview: since 1 June, and colours for paid and partially paid',
+    items: [
+      { text: '**New date button: “Since 1 June 2026”.** One click shows every customer from 1 June 2026 to today.' },
+      { text: '**Green** = the goods arrived and the invoice is fully paid. **Yellow** = partially paid. The red arrival date (arrived, not paid) is unchanged. The colours are on each invoice when you open a customer.' },
+      { text: 'A customer line turns yellow when one of its invoices in the period is partially paid, and green only when every invoice in the period arrived and is fully paid.' },
+      { superAdminOnly: true, text: 'Technical: no SQL, no server change. customers-overview.js presetRange(\'june\') = 2026-06-01 → today; invoiceTone / customerTone (pure, tested) decide the colour; a withheld balance is never shown green.' },
+    ]
+  },
+  {
     version: 'v55.83-XL',
     date: '2026-11-23',
     title: 'Waiting for me: open the exact bill, then go straight back to the list',
