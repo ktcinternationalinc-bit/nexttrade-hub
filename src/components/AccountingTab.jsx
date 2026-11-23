@@ -79,6 +79,20 @@ export default function AccountingTab(props) {
   // v55.83-XL — "Open this bill" from Waiting for me: Bills opens on that exact bill; the Back button (SO) returns to the list
   var [billTarget, setBillTarget] = useState(null); // { id, bill_number, title, section, n } | null
   function openBillFrom(t) { if (!t || !t.id) { return; } setBillTarget(Object.assign({}, t, { n: Date.now() })); goFrom('bills'); }
+  // v55.83-XX (Max, 23 Nov: Nextrade bills "will be available for only Nextrade payments wires") — 🟦 Nextrade bills → Pay ▸ → "From a KTC
+  // transfer to NextTrade" asks (window event hub-open-nextrade-wire) for Wires → ＋ New wire to NextTrade with that bill ticked. goFrom keeps
+  // the SO Back button. Nothing is written by opening it; the transfer is picked by the person.
+  var [wirePreset, setWirePreset] = useState(null); // { payee, bill_id, bill_number, n } | null
+  useEffect(function () {
+    function onOpenWire(e) {
+      var d = (e && e.detail) || {}; if (!d.bill_id) { return; }
+      setWirePreset({ payee: d.payee || 'NextTrade Industries', bill_id: d.bill_id, bill_number: d.bill_number || '', n: Date.now() });
+      goFrom('wires');
+    }
+    try { window.addEventListener('hub-open-nextrade-wire', onOpenWire); } catch (e0) { return undefined; }
+    return function () { try { window.removeEventListener('hub-open-nextrade-wire', onOpenWire); } catch (e1) {} };
+  }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(function () { if (sub !== 'wires' && wirePreset) { setWirePreset(null); } }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps -- leaving Wires forgets the preset (a later visit opens nothing by itself)
   function alive(k) { return sub === k || (back && back.sub === k); }
   function shown(k) { return { display: sub === k ? 'block' : 'none' }; }
   var [waveKey, setWaveKey] = useState('');
@@ -219,7 +233,7 @@ export default function AccountingTab(props) {
       {sub === 'nextrade' && <div className="p-3"><CompanyBooksTab key="nextrade" company="nextrade" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.nextrade.manage'] === true} /></div>}
       {sub === 'rtm' && <div className="p-3"><CompanyBooksTab key="rtm" company="rtm" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.rtm.manage'] === true} /></div>}
       {sub === 'bills' && <div className="p-3"><BillsTab {...props} openBillTarget={back && back.sub === 'waiting' ? billTarget : null} onBackFromBill={back && back.sub === 'waiting' ? goBack : null} /></div>}
-      {sub === 'wires' && <div className="p-3"><WiresTab {...props} /></div>}
+      {sub === 'wires' && <div className="p-3"><WiresTab {...props} wirePreset={wirePreset} /></div>}
       {alive('forecast') && <div className="p-3" style={shown('forecast')}><CashForecastTab {...props} onGo={goFrom} /></div>}
       {alive('period_stats') && <div className="p-3" style={shown('period_stats')}><PeriodStatsTab {...props} onGo={goFrom} /></div>}
       {sub === 'categories' && <div className="p-3"><ExpenseRulesTab {...props} /></div>}

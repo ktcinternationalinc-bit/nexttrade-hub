@@ -21,7 +21,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { audit } from '../../../../lib/audit-server';
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server';
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
-import { auditPackage, packageFingerprint, packageStatus, packageTotals, packageLabel, normRef, samePayee, applyOverrides, checkKey, OVERRIDABLE, NOT_OVERRIDABLE_WHY, WIRE_FINGERPRINT_BILL_FIELDS } from '../../../../lib/wire-audit';
+import { auditPackage, packageFingerprint, packageStatus, packageTotals, packageLabel, normRef, samePayee, applyOverrides, checkKey, OVERRIDABLE, NOT_OVERRIDABLE_WHY, WIRE_FINGERPRINT_BILL_FIELDS, wireReady } from '../../../../lib/wire-audit';
 import { packageContext, inChunks, loadPayParties, aiReviewPackage } from '../../../../lib/wire-package-server';
 import { attachWire, autoMatchSentWires, wireCandidates, AUTO_FEE_MAX, fileAsProfessionalFees } from '../../../../lib/wire-auto-match'; // v55.83-RZ
 import { fundingLines, currencyMismatch } from '../../../../lib/wire-funding-server'; // v55.83-SP — requests drawn from a transfer
@@ -30,6 +30,7 @@ import { isRealDate, compareWireConfirmation } from '../../../../lib/wire-confir
 import { readWireConfirmation } from '../../../../lib/wire-confirmation-server';
 import { todayET } from '../../../../lib/et-time';
 import { handleInbox, inboxPathLinkedTo, linkedConfirmation } from '../../../../lib/wire-inbox-server'; // v55.83-XC — the bank-confirmation inbox
+import { nextradeBillIds, markNextradeBills } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills: no validation step on a NextTrade wire
 var SP_HINT = ' — run sql/v55-83-SP-funded-requests.sql in Supabase first.';
 function spMissing(m) { return /funding_txn_id|planned_send_date|wire_request_|wire_funding_|schema cache/i.test(String(m || '')); }
 
@@ -95,7 +96,11 @@ async function loadPackage(db, id) {
   if (lr.error) { return { error: lr.error }; }
   var ctx = await packageContext(db, id, lr.data || []);
   var pkg = pr.data;
-  var input = { pkg: pkg, lines: ctx.lines, sameRelease: ctx.sameRelease, sameNumber: ctx.sameNumber, sameIdentity: ctx.sameIdentity, sameOther: ctx.sameOther, knownReleases: ctx.knownReleases, otherOpen: ctx.otherOpen };
+  // v55.83-XX — which bills are Nextrade bills (looked up here, never from the screen). On a wire to NextTrade such a bill needs no
+  // validation step; on any other wire it blocks (NEXTRADE_BILL_ONLY). A failed lookup marks nothing: on a NextTrade wire the bill stays
+  // NOT exempt; on another wire the check blocks until the lookup works (NEXTRADE_CHECK_FAILED).
+  var nbP = await markNextradeBills(db, ctx.billBy || {});
+  var input = { pkg: pkg, lines: ctx.lines, sameRelease: ctx.sameRelease, sameNumber: ctx.sameNumber, sameIdentity: ctx.sameIdentity, sameOther: ctx.sameOther, knownReleases: ctx.knownReleases, otherOpen: ctx.otherOpen, nextradeCheckFailed: !nbP.ok };
   var hash = packageFingerprint(pkg, ctx.lines);
   // v55.83-RL — approved overrides (who + why) for THIS exact wire turn their ⛔ into ↷; the rest still block
   var ovr = [];
@@ -108,7 +113,7 @@ async function loadPackage(db, id) {
   // v55.83-WZ (Codex 10:22) — a wire approved BEFORE a new block existed (e.g. a duplicate or a disputed bill that could then be
   // overridden) is re-checked live: while today's checks find a block, it is flagged, not ready to send
   var stP = packageStatus(pkg, hash, rtmPending); if (stP === 'ready_to_send' && live && live.pass !== true) { stP = 'flagged'; }
-  return { pkg: pkg, rawLines: lr.data || [], ctx: ctx, input: input, live: live, hash: hash, overrides: ovr, status: stP, rtmPending: rtmPending, paidThrough: paidThrough };
+  return { pkg: pkg, rawLines: lr.data || [], ctx: ctx, input: input, live: live, hash: hash, overrides: ovr, status: stP, rtmPending: rtmPending, paidThrough: paidThrough, nextradeCheckError: nbP.ok ? null : (nbP.error || 'read failed') };
 }
 
 // v55.83-US — a wire line refused by the database (hub_wire_line_cap: more than is left on the bill), or the old one-wire rule
@@ -173,22 +178,27 @@ export async function POST(req) {
       openLines.forEach(function (l) { if (l.is_open && l.package_id !== body.package_id) { (onPkg[l.bill_id] = onPkg[l.bill_id] || []).push({ pkg: l.package_id, amount: r2(l.amount) }); resv[l.bill_id] = r2((resv[l.bill_id] || 0) + (Number(l.amount) || 0)); if (pkIds.indexOf(l.package_id) < 0) { pkIds.push(l.package_id); } } });
       var pks = pkIds.length ? await inChunks(db, 'wire_packages', 'id, seq, status', 'id', pkIds) : [];
       var pkLab = {}; pks.forEach(function (p) { pkLab[p.id] = packageLabel(p); });
+      // v55.83-XX (Max, 23 Nov: "no need to validate these bills / will be available for only Nextrade payments wires") — on a wire to
+      // NextTrade a Nextrade bill is offered without validation. Looked up here; a failed lookup = NOT exempt (fail closed, said below).
+      // On a wire to RTM or a vendor, Nextrade bills are not offered at all (saving one is refused anyway).
+      var nbO = await nextradeBillIds(db, ids);
       var rowsO = mine.map(function (b) {
         var open = r2((Number(b.total_amount) || 0) - (paidBy[b.id] || 0) - (resv[b.id] || 0));
         return { id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, release_number: b.release_number || null, bill_date: b.bill_date, due_date: b.due_date,
           category: b.category, total_amount: r2(b.total_amount), paid: paidBy[b.id] || 0, open: open, disputed: b.disputed === true,
           validation_status: b.validation_status || null, on_package: onPkg[b.id] ? onPkg[b.id].map(function (x) { return '$' + x.amount.toFixed(2) + ' on ' + (pkLab[x.pkg] || 'another wire'); }).join(', ') : null, reserved_elsewhere: resv[b.id] || 0,
           paid_via: b.paid_via || null, needs_mark: kindO !== 'vendor' && !b.paid_via, release_optional: kindO === 'affiliate',
-          other_reference: b.other_reference || null, shipment_direction: b.shipment_direction || null, bill_type: b.bill_type || null };
-      }).filter(function (b) { return b.open > 0.005; }).sort(function (a, b) { return (a.needs_mark - b.needs_mark) || String(a.due_date || a.bill_date || '').localeCompare(String(b.due_date || b.bill_date || '')); });
+          other_reference: b.other_reference || null, shipment_direction: b.shipment_direction || null, bill_type: b.bill_type || null,
+          nextrade_bill: kindO === 'affiliate' && nbO.ok && nbO.ids[String(b.id)] === true ? true : undefined };
+      }).filter(function (b) { return b.open > 0.005 && !(kindO !== 'affiliate' && nbO.ok && nbO.ids[String(b.id)] === true); }).sort(function (a, b) { return (a.needs_mark - b.needs_mark) || String(a.due_date || a.bill_date || '').localeCompare(String(b.due_date || b.bill_date || '')); });
       // v55.83-RO (Max 20:54) — only VALIDATED bills are offered for a wire (plus any already on the wire being changed);
       // the open bills still waiting for validation are counted apart so nobody wonders where they went
       // v55.83-RZ — recording a PAST wire: those bills were paid before validation existed — every open bill is offered
       if (body.past === true && g1 && g1.ctx && g1.ctx.isSuperAdmin) { return NextResponse.json({ ok: true, bills: rowsO, not_validated: [] }); }
       var keepO = {}; openLines.forEach(function (l) { if (l.is_open && body.package_id && l.package_id === body.package_id) { keepO[l.bill_id] = true; } });
-      var okO = rowsO.filter(function (b) { return b.validation_status === 'validated' || keepO[b.id]; });
-      var waitO = rowsO.filter(function (b) { return b.validation_status !== 'validated' && !keepO[b.id] && !b.on_package; });
-      return NextResponse.json({ ok: true, bills: okO, not_validated: waitO });
+      var okO = rowsO.filter(function (b) { return wireReady(b) || keepO[b.id]; });
+      var waitO = rowsO.filter(function (b) { return !wireReady(b) && !keepO[b.id] && !b.on_package; });
+      return NextResponse.json({ ok: true, bills: okO, not_validated: waitO, nextrade_check_error: nbO.ok ? undefined : 'Could not check which bills are Nextrade bills (' + (nbO.error || 'read failed') + ') — ' + (kindO === 'affiliate' ? 'they are treated as ordinary bills (validate first) until the check works again.' : 'saving this wire is refused until the check works again.') });
     }
 
     // ── list every package
@@ -205,6 +215,10 @@ export async function POST(req) {
       // NOT-VALIDATED here, the list's fingerprint never matched the signed one, and a fully signed wire showed 'PRE-WIRE · Check it'.
       var bl = bIds.length ? await inChunks(db, 'vendor_bills', WIRE_FINGERPRINT_BILL_FIELDS, 'id', bIds) : [];
       var bBy = {}; bl.forEach(function (b) { bBy[b.id] = b; });
+      // v55.83-XX — the same Nextrade-bill mark the opened wire uses, so a signed NextTrade wire's fingerprint matches here too
+      var ntPk = {}; pkgs.forEach(function (p) { if (p.payee_kind === 'affiliate') { ntPk[p.id] = true; } });
+      var ntBills = []; allL.forEach(function (l) { if (ntPk[l.package_id] && bBy[l.bill_id] && ntBills.indexOf(bBy[l.bill_id]) < 0) { ntBills.push(bBy[l.bill_id]); } });
+      if (ntBills.length) { await markNextradeBills(db, ntBills); }
       var nm = await userNames(db, [].concat(pkgs.map(function (p) { return p.created_by; }), pkgs.map(function (p) { return p.signoff1_by; }), pkgs.map(function (p) { return p.signoff2_by; }), pkgs.map(function (p) { return p.sent_by; })));
       var out = pkgs.map(function (p) {
         var ls = allL.filter(function (l) { return l.package_id === p.id; }).map(function (l) { return { line_id: l.id, bill_id: l.bill_id, amount: r2(l.amount), payment_id: l.payment_id, bill: bBy[l.bill_id] || {}, rtm: { confirmed_at: l.rtm_confirmed_at } }; });
@@ -276,12 +290,21 @@ export async function POST(req) {
       // v55.83-RJ (review gap 8) — a bill without a "paid through" that is ticked for an RTM / NextTrade wire is only
       // MARKED when the wire is SENT; until then it stays in what-we-owe like any unpaid bill
       var willMark = {};
+      // v55.83-XX — on a wire to NextTrade a Nextrade bill needs no validation step. Server lookup only; a failed lookup = NOT exempt.
+      // On any other wire a Nextrade bill is refused (paid only through NextTrade); there a failed lookup refuses the save (fails closed).
+      var nbS = await nextradeBillIds(db, clean.map(function (c) { return c.bill_id; }));
+      if (kindS !== 'affiliate') {
+        if (!nbS.ok) { return fail('Could not check whether these bills are Nextrade bills (' + (nbS.error || 'read failed') + ') — nothing was saved. Try again in a moment.', 503); }
+        var ntS = clean.filter(function (c) { return nbS.ids[String(c.bill_id)] === true; }).map(function (c) { var bx = bSBy[c.bill_id] || {}; return (bx.vendor_name || 'A bill') + ' ' + (bx.bill_number || ''); });
+        if (ntS.length) { return fail(ntS.join(', ') + (ntS.length === 1 ? ' is a Nextrade bill' : ' are Nextrade bills') + ' — paid only through NextTrade (a wire to NextTrade Industries, or the NextTrade starting balance). Untick ' + (ntS.length === 1 ? 'it' : 'them') + '.', 409); }
+      }
       for (var ci = 0; ci < clean.length; ci++) {
         var bb = bSBy[clean[ci].bill_id];
         if (!bb) { return fail('A bill on this wire was not found.', 404); }
         var whoB = (bb.vendor_name || 'A bill') + ' ' + (bb.bill_number || '');
         if (bb.record_status !== 'active') { return fail(whoB + ' is void — untick it.', 409); }
-        if (bb.validation_status !== 'validated' && !alreadyOn[bb.id]) { return fail(whoB + ' is not validated yet — only validated bills can go on a wire. Validate it first (type of bill, inbound / outbound, 3 checks, how you verified it).', 409); }
+        var exemptB = nbS.ok && nbS.ids[String(bb.id)] === true;
+        if (bb.validation_status !== 'validated' && !alreadyOn[bb.id] && !exemptB) { return fail(whoB + ' is not validated yet — only validated bills can go on a wire. Validate it first (type of bill, inbound / outbound, 3 checks, how you verified it).' + (nbS.ok ? '' : ' (Could not check whether it is a Nextrade bill: ' + (nbS.error || 'read failed') + '.)'), 409); }
         if (kindS !== 'vendor') {
           if (!bb.paid_via) { willMark[bb.id] = true; }
           else if (!samePayee(bb.paid_via, payeeS)) { return fail(whoB + ' is paid through ' + bb.paid_via + ' — it goes on THAT company\'s wire. Untick it.', 409); }
@@ -419,6 +442,11 @@ export async function POST(req) {
       var bPW = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, total_amount, record_status, paid_via', 'id', cleanPW.map(function (c) { return c.bill_id; }));
       var pPW = await inChunks(db, 'vendor_bill_payments', 'bill_id, amount, voided', 'bill_id', cleanPW.map(function (c) { return c.bill_id; }));
       var byPW = {}; bPW.forEach(function (b) { byPW[b.id] = b; });
+      // v55.83-XX — a Nextrade bill is paid only through NextTrade, never on a past wire straight to a vendor (fails closed)
+      var nbPW = await nextradeBillIds(db, cleanPW.map(function (c) { return c.bill_id; }));
+      if (!nbPW.ok) { return fail('Could not check whether these bills are Nextrade bills (' + (nbPW.error || 'read failed') + ') — nothing was saved.', 503); }
+      var ntPW = bPW.filter(function (b) { return nbPW.ids[String(b.id)] === true; });
+      if (ntPW.length) { return fail(ntPW.map(function (b) { return (b.vendor_name || 'A bill') + ' ' + (b.bill_number || ''); }).join(', ') + ' — a Nextrade bill is paid only through NextTrade, not on a wire straight to the vendor. Untick it.', 409); }
       var payeePW = String(body.payee_name || '').trim();
       if (kindPW === 'vendor') { var vsPW = {}; bPW.forEach(function (b) { vsPW[normRef(b.vendor_name)] = b.vendor_name; }); if (Object.keys(vsPW).length !== 1) { return fail('A wire straight to a vendor pays ONE vendor — these bills belong to several.'); } payeePW = vsPW[Object.keys(vsPW)[0]]; }
       if (!payeePW) { return fail('Pick who the wire went to.'); }
@@ -602,7 +630,8 @@ export async function POST(req) {
         cancelled: pkg.cancelled_by ? { by: nmG[pkg.cancelled_by] || 'user', at: pkg.cancelled_at, note: pkg.cancel_note } : null,
         reversed: pkg.reversed_by ? { by: nmG[pkg.reversed_by] || 'user', at: pkg.reversed_at, note: pkg.reverse_note } : null,
         rtm_pending: P.rtmPending, paid_through: P.paidThrough,
-        funding_txn_id: pkg.funding_txn_id || null, planned_send_date: pkg.planned_send_date || null, funding: fundG, by_vendor: byVendorG },
+        funding_txn_id: pkg.funding_txn_id || null, planned_send_date: pkg.planned_send_date || null, funding: fundG, by_vendor: byVendorG,
+        nextrade_check_error: P.nextradeCheckError || null /* v55.83-XX */ },
         lines: P.ctx.lines.map(function (l) { return Object.assign({}, l, { rtm: Object.assign({}, l.rtm, { confirmed_by: l.rtm.confirmed_by ? (nmG[l.rtm.confirmed_by] || 'user') : null }) }); }),
         // after it is sent the checks shown are the ones the two people signed (frozen) — live re-checks would call its own payments "paid before"
         checks: (function (res) {

@@ -17,6 +17,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { audit } from '../../../../lib/audit-server';
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
+import { nextradeBillIds } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills are paid only through NextTrade
 // v55.83-TX — balances / privacy come from the database over the complete ledger (hub_party_pool_status)
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server';
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-UD: a payment fully accounted for is finished // v55.83-TP private bank accounts
@@ -186,6 +187,12 @@ export async function POST(req) {
         return NextResponse.json({ ok: true, result: canTot ? ro.data : noTotals(ro.data), repeat: !!(ro.data && ro.data.repeat) });
       }
       var billsA = (Array.isArray(body.bills) ? body.bills : []).slice(0, 200).map(function (b) { return { bill_id: String((b && b.bill_id) || ''), amount: r2(b && b.amount) }; }).filter(function (b) { return b.bill_id && b.amount > 0; });
+      // v55.83-XX — a company that is not NextTrade never pays a Nextrade bill (fails closed on a lookup error)
+      if (party.kind !== 'affiliate' && billsA.length) {
+        var nbA = await nextradeBillIds(db, billsA.map(function (b) { return b.bill_id; }));
+        if (!nbA.ok) { return fail('Could not check whether these are Nextrade bills (' + (nbA.error || 'read failed') + ') — nothing was recorded.', 503); }
+        if (billsA.some(function (b) { return nbA.ids[String(b.bill_id)] === true; })) { return fail('A Nextrade bill is paid only through NextTrade, never through ' + party.name + '. Untick it. Nothing was recorded.', 409); }
+      }
       var ra = await rpcOnceMore(db, 'hub_party_allocate', { p: { party: party.name, ktc_business: US_WAVE_BUSINESS_ID, bank_transaction_id: body.bank_transaction_id || null, bills: billsA, fee: r2(body.fee), advance: r2(body.advance),
         reason: String(body.reason || '').trim().substring(0, 500) || null, actor: userId, request_id: rid, hidden_accounts: hiddenArr, restricted: !scope.all } }); // the database re-reads privacy live
       if (ra.error) { return guardFail(ra); }

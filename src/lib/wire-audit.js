@@ -22,6 +22,15 @@ function day(d) { return d ? String(d).substring(0, 10) : 'no date'; }
 // true = same day, false = different days, null = a date is missing (cannot judge)
 function sameDay(a, b) { if (!a || !b) { return null; } return String(a).substring(0, 10) === String(b).substring(0, 10); }
 
+// v55.83-XX (Max, 23 Nov 2026: "Nextrade bills ... no need to validate these bills / will be available for only Nextrade payments wires")
+// A Nextrade bill (an ACTIVE company_bill_links row for NextTrade, looked up on the SERVER only by src/lib/nextrade-bill-links-server.js,
+// which sets bill.nextrade_bill = true) needs no validation step on a wire to NextTrade Industries (payee kind 'affiliate'). Everywhere
+// else, and for every other bill, validation is unchanged. A failed lookup marks nothing, so the bill is NOT exempt (fail closed).
+export var NEXTRADE_BILL_NOTE = 'Nextrade bill - no validation needed';
+export function validationExempt(b) { return !!b && b.nextrade_bill === true; }
+// may this bill go on a wire now? validated, or a Nextrade bill (the server marks it only on a wire to NextTrade)
+export function wireReady(b) { return !!b && (b.validation_status === 'validated' || validationExempt(b)); }
+
 // One fingerprint of exactly what was checked and signed: every payment, its
 // bill, amount, release and reference. Any change → a different fingerprint →
 // earlier checks and sign-offs no longer count.
@@ -34,7 +43,7 @@ export function wireFingerprint(wire, lines, opts) {
   (lines || []).slice().sort(function (a, b) { return sk(a).localeCompare(sk(b)); }).forEach(function (l) {
     var b = l.bill || {};
     parts.push([l.payment_id, l.bill_id, r2(l.amount).toFixed(2), normRef(b.release_number), normRef(b.bill_number), normRef(b.vendor_name), r2(b.total_amount).toFixed(2), b.record_status || ''].join('|') + (b.other_reference ? '|' + normRef(b.other_reference) : '') + (b.shipment_direction ? '|' + String(b.shipment_direction) : '')
-      + ((opts && opts.validation && b.validation_status !== 'validated') ? '|NOT-VALIDATED' : '')); // RL; RO: a validation reopened after signing voids the signatures (prepared wires only): + other reference (only when set — older fingerprints unchanged)
+      + ((opts && opts.validation && b.validation_status !== 'validated') ? (opts.companyBills === true && validationExempt(b) ? '|COMPANY-BILL' : '|NOT-VALIDATED') : '')); // XX: a Nextrade bill on a NextTrade wire signs as |COMPANY-BILL, so losing its link changes the fingerprint; RL; RO: a validation reopened after signing voids the signatures (prepared wires only): + other reference (only when set — older fingerprints unchanged)
   });
   var s = parts.join('#'); var h = 5381;
   for (var i = 0; i < s.length; i++) { h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; }
@@ -97,7 +106,9 @@ export function auditWire(input) {
     if (b.disputed === true) { add('block', 'BILL_DISPUTED', who + ' is DISPUTED — resolve the dispute before paying it.'); }
     // v55.83-RO (Max, Nov 9 20:49: "validation needs to take place first before wiring ... you cannot pay a wire unless it has
     // been validated") — on a prepared wire an unvalidated bill BLOCKS and cannot be overridden; the after-the-fact bank view warns
-    if (b.validation_status !== 'validated' && (b.validation_status || (input && input.directionRules === true))) {
+    if (input && input.directionRules === true && input.companyBills === true && validationExempt(b) && b.validation_status !== 'validated') {
+      add('info', 'NEXTRADE_BILL', who + ': ' + NEXTRADE_BILL_NOTE + ' (a Nextrade bill, paid only through NextTrade).'); // v55.83-XX
+    } else if (b.validation_status !== 'validated' && (b.validation_status || (input && input.directionRules === true))) {
       if (input && input.directionRules === true) { add('block', 'BILL_NOT_VALIDATED', who + ' is NOT VALIDATED — validate it first (3 checks + how you verified it); a wire cannot pay an unvalidated bill.'); }
       else { add('warn', 'BILL_NOT_VALIDATED', who + ' has not been validated by a person yet (' + b.validation_status + ').'); }
     }
@@ -291,16 +302,16 @@ export function packageFingerprint(pkg, lines) {
   // An ordinary wire is unchanged: its fingerprint covers the whole total, fee included.
   var tot = packageTotals(p, lines);
   if (p.funding_txn_id) {
-    return wireFingerprint({ id: String(p.id || '') + '|' + (p.payee_kind || '') + '|' + normRef(p.payee_name) + '|from:' + String(p.funding_txn_id), amount: tot.bills }, lines, { validation: true });
+    return wireFingerprint({ id: String(p.id || '') + '|' + (p.payee_kind || '') + '|' + normRef(p.payee_name) + '|from:' + String(p.funding_txn_id), amount: tot.bills }, lines, { validation: true, companyBills: p.payee_kind === 'affiliate' });
   }
-  return wireFingerprint({ id: String(p.id || '') + '|' + (p.payee_kind || '') + '|' + normRef(p.payee_name), amount: tot.total }, lines, { validation: true });
+  return wireFingerprint({ id: String(p.id || '') + '|' + (p.payee_kind || '') + '|' + normRef(p.payee_name), amount: tot.total }, lines, { validation: true, companyBills: p.payee_kind === 'affiliate' });
 }
 // input = auditWire's input + { pkg: {id, seq, payee_kind, payee_name, fee_amount}, otherOpen: { bill_id: 'WP-0003' } }
 export function auditPackage(input) {
   var pkg = (input && input.pkg) || {};
   var lines = (input && input.lines) || [];
   var tot = packageTotals(pkg, lines);
-  var base = auditWire(Object.assign({}, input, { wire: { id: pkg.id, amount: tot.bills, direction: 'out' }, releaseOptional: pkg.payee_kind === 'affiliate', directionRules: true }));
+  var base = auditWire(Object.assign({}, input, { wire: { id: pkg.id, amount: tot.bills, direction: 'out' }, releaseOptional: pkg.payee_kind === 'affiliate', directionRules: true, companyBills: pkg.payee_kind === 'affiliate' })); // XX: Nextrade bills only on a NextTrade wire
   var checks = base.checks.filter(function (c) { return c.code !== 'ALL_CLEAR'; });
   var curBill = null;
   function add(level, code, text) { checks.push({ level: level, code: code, text: text, bill_id: curBill }); }
@@ -317,6 +328,8 @@ export function auditPackage(input) {
       // a bill ticked for this wire with no "paid through" yet is marked when the wire is SENT (review gap 8)
       if (!samePayee(b.paid_via, pkg.payee_name) && !(l.will_mark === true && !b.paid_via)) { add('block', 'PAYEE_MISMATCH', who + (b.paid_via ? ' is paid through ' + b.paid_via : ' is not marked "paid through ' + pkg.payee_name + '"') + ' — set that on the bill, or pay it on the right wire.'); }
     }
+    // v55.83-XX — a Nextrade bill is paid only through NextTrade: on any other wire it blocks (never overridable)
+    if (kind !== 'affiliate' && validationExempt(b)) { add('block', 'NEXTRADE_BILL_ONLY', who + ' is a Nextrade bill — it is paid only through NextTrade (a wire to NextTrade Industries, or the NextTrade starting balance). Remove it from this wire.'); }
     // v55.83-US — partial wires: the same bill on another open wire is fine while paid + every open wire ≤ the bill total
     var ob = other[l.bill_id];
     if (typeof ob === 'string') { add('block', 'IN_OTHER_PACKAGE', who + ' is already on wire ' + ob + ' — one bill, one wire.'); }
@@ -328,6 +341,9 @@ export function auditPackage(input) {
     }
   });
   curBill = null;
+  // v55.83-XX — the server could not read which bills are Nextrade bills: on a wire that is not to NextTrade nobody can tell that none is
+  // one, so it blocks until the check works (fails closed). On a NextTrade wire a failed read only means nothing is exempt.
+  if (input && input.nextradeCheckFailed === true && kind !== 'affiliate' && lines.length) { add('block', 'NEXTRADE_CHECK_FAILED', 'Could not check which bills are Nextrade bills (they are paid only through NextTrade) — run the check again in a moment.'); }
   if (tot.fee > 0.005) {
     if (kind === 'vendor') { add('block', 'FEE_NOT_ALLOWED', 'A wire straight to a vendor is bills only — remove the fee.'); } // v55.83-SC — RTM and NextTrade may both carry a service fee
     else { add('info', 'FEE', pkg.payee_name + ' fee ' + money(tot.fee) + ' on top of the bills (' + money(tot.bills) + ') — not backed by a bill.'); }
@@ -371,6 +387,7 @@ export var NOT_OVERRIDABLE_WHY = {
   IN_OTHER_PACKAGE: 'the bill is on another wire', PAYEE_MISMATCH: 'the bill belongs to another company / vendor', FEE_NOT_ALLOWED: 'only RTM wires carry a fee',
   BILL_DISPUTED: 'a disputed bill is resolved first, then paid', DUP_REF: 'another copy of this bill from the same vendor is in the Hub — void the extra copy first', DUP_REF_IN_WIRE: 'the same bill is on this wire twice', DUP_OTHER_REF: 'another bill from the same vendor has the same reference and date — void the extra copy first', DUP_OTHER_REF_IN_WIRE: 'the same bill is on this wire twice',
   NO_BILLS: 'a wire needs bills', NO_PAYEE: 'pick who the wire goes to', NOT_OUT: 'not money out',
+  NEXTRADE_BILL_ONLY: 'a Nextrade bill is paid only through NextTrade', NEXTRADE_CHECK_FAILED: 'the Nextrade-bill check has to work first', // v55.83-XX
 };
 export function checkKey(c) { return String(c.code) + '|' + String(c.bill_id || '') + '|' + String(c.text || ''); }
 // result = auditWire / auditPackage output; overrides = rows {check_key, fingerprint, reason, overridden_by, overridden_at}

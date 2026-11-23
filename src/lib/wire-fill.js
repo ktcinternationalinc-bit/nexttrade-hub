@@ -4,6 +4,7 @@
 // Pure. target = the WHOLE wire (bills + the party's service fee). Oldest due first (then oldest bill date); the last bill is
 // paid in part so the wire lands exactly on the amount. It only PROPOSES ticks — the person can change any of them, and the
 // wire still needs the check and both signatures.
+import { wireReady } from './wire-audit'; // v55.83-XX — a Nextrade bill the server offered on a NextTrade wire counts like a validated one
 function cents(x) { return Math.round((Number(String(x == null ? '' : x).replace(/,/g, '')) || 0) * 100); }
 
 // bills: [{ id, vendor_name, open, due_date, bill_date, validation_status, on_package, needs_mark }]
@@ -12,7 +13,7 @@ function cents(x) { return Math.round((Number(String(x == null ? '' : x).replace
 // marked "paid through" this party ARE chosen too — ticking one marks it, exactly as ticking by hand does. And: "we should
 // choose the vendor or vendors in which we need to send the wire to".
 export function fillVendors(bills) {
-  var by = {}; (bills || []).forEach(function (b) { if (b.validation_status === 'validated' && !b.on_package && cents(b.open) > 0) { by[b.vendor_name] = (by[b.vendor_name] || 0) + cents(b.open); } });
+  var by = {}; (bills || []).forEach(function (b) { if (wireReady(b) && !b.on_package && cents(b.open) > 0) { by[b.vendor_name] = (by[b.vendor_name] || 0) + cents(b.open); } });
   return Object.keys(by).sort().map(function (v) { return { vendor: v, open: by[v] / 100 }; });
 }
 export function fillToAmount(bills, target, opts) {
@@ -22,7 +23,7 @@ export function fillToAmount(bills, target, opts) {
   if (fee >= want) { return { ok: false, error: 'The service fee is as much as the whole wire — nothing is left for bills.' }; }
   var room = want - fee;
   var usable = (bills || []).filter(function (b) {
-    return b.validation_status === 'validated' && !b.on_package && cents(b.open) > 0 && (!o.vendor || b.vendor_name === o.vendor) && (!(o.vendors && o.vendors.length) || o.vendors.indexOf(b.vendor_name) >= 0);
+    return wireReady(b) && !b.on_package && cents(b.open) > 0 && (!o.vendor || b.vendor_name === o.vendor) && (!(o.vendors && o.vendors.length) || o.vendors.indexOf(b.vendor_name) >= 0);
   }).sort(function (a, b) {
     if (!!a.needs_mark !== !!b.needs_mark) { return a.needs_mark ? 1 : -1; } // bills already paid through this party first
     return String(a.due_date || a.bill_date || '9999').localeCompare(String(b.due_date || b.bill_date || '9999')) || String(a.bill_date || '').localeCompare(String(b.bill_date || '')) || String(a.id).localeCompare(String(b.id));

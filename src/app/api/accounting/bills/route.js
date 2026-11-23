@@ -32,6 +32,7 @@ import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { bankLineRemaining, checkBankPayment } from '../../../../lib/bill-bank-pay'; // v55.83-TH
 import { addAuditSubjects, billName, bankName } from '../../../../lib/audit-subjects-server'; // v55.83-TH
 import { billWireStates, wireStateWords } from '../../../../lib/bill-wire-state'; // v55.83-RZ
+import { nextradeBillIds, markNextradeBills, NEXTRADE_PAY_POINTER } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills are paid only through NextTrade
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts // v55.83-TO (Codex P1: verified identity for money actions)
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
@@ -381,6 +382,10 @@ export async function POST(req) {
           var wpR = await db.from('wire_packages').select('*').in('id', wpIds);
           var allWL = await db.from('wire_package_lines').select('*').in('package_id', wpIds);
           var billById = {}; rows.forEach(function (b) { billById[b.id] = b; });
+          // v55.83-XX — bills on a NextTrade wire carry the server's Nextrade-bill mark, so the wire's fingerprint (and READY) matches Wires
+          var ntPkB = {}; ((wpR && wpR.data) || []).forEach(function (p) { if (p.payee_kind === 'affiliate') { ntPkB[p.id] = true; } });
+          var ntBillsB = []; ((allWL && allWL.data) || []).forEach(function (l) { var bx = billById[l.bill_id]; if (ntPkB[l.package_id] && bx && ntBillsB.indexOf(bx) < 0) { ntBillsB.push(bx); } });
+          if (ntBillsB.length) { await markNextradeBills(db, ntBillsB); }
           var wsBy = billWireStates((wpR && wpR.data) || [], (allWL && allWL.data) || [], billById);
           rows.forEach(function (b) { var ws = wsBy[b.id]; if (ws) { b.wire_state = ws; b.wire_state_words = wireStateWords(ws, b.open); } });
         }
@@ -506,6 +511,18 @@ export async function POST(req) {
           if (Object.prototype.hasOwnProperty.call(fields, 'other_reference') && String(cur.data.other_reference || '').trim()) { vDiff('reference', cur.data.other_reference, fields.other_reference); }
           if (vChanged.length) { return NextResponse.json({ error: 'This bill is VALIDATED — its ' + vChanged.join(', ') + ' cannot change. Reopen the validation first (✓ VALIDATED → ↩ Reopen), then edit and validate it again.' }, { status: 409 }); }
           delete fields.direction_source; delete fields.bill_type_source;
+        }
+        // v55.83-XX (Max, 23 Nov: Nextrade bills "will be available for only Nextrade payments") — a Nextrade bill (an ACTIVE NextTrade
+        // company_bill_links row, looked up here) keeps "paid via NextTrade": it cannot be changed or cleared. A bill with no paid-via yet may
+        // only be set to NextTrade. A failed lookup refuses the change (fails closed); saving without touching paid-via is never blocked.
+        if (Object.prototype.hasOwnProperty.call(fields, 'paid_via') && partyKey(fields.paid_via) !== partyKey(cur.data.paid_via)) {
+          var nbSv = await nextradeBillIds(db, [bl.id]);
+          if (!nbSv.ok) { return NextResponse.json({ error: 'Could not check whether this is a Nextrade bill (' + (nbSv.error || 'read failed') + ') — “paid via” was not changed and nothing was saved. Try again in a moment.' }, { status: 503 }); }
+          if (nbSv.ids[String(bl.id)]) {
+            var ntParty = null; (await loadParties(db)).forEach(function (ps) { if (ps.kind === 'affiliate' && !ntParty) { ntParty = ps.name; } });
+            var toNt = !cur.data.paid_via && !!fields.paid_via && partyKey(fields.paid_via) === partyKey(ntParty || 'NextTrade Industries');
+            if (!toNt) { return NextResponse.json({ error: 'This is a Nextrade bill (made from a Nextrade expense line) — it is paid only through ' + (cur.data.paid_via || ntParty || 'NextTrade Industries') + ', so “paid via” cannot be ' + (fields.paid_via ? 'changed to ' + fields.paid_via : 'cleared') + '. ' + NEXTRADE_PAY_POINTER + ' Nothing was saved.', nextrade_bill: true }, { status: 409 }); }
+          }
         }
         var wOn = await openWireOf(db, bl.id);
         if (wOn && wOn.status === 'sent') { return NextResponse.json({ error: 'This bill is on wire ' + wOn.label + ', which was already SENT — it cannot change until that wire is attached to its bank line (🏦 Wires).' }, { status: 409 }); }
@@ -647,6 +664,11 @@ export async function POST(req) {
       if (bRow.error) { return readFail('the bill', bRow.error); }
       if (!bRow.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
       if (bRow.data.record_status !== 'active') { return NextResponse.json({ error: 'This bill is void.' }, { status: 409 }); }
+      // v55.83-XX (Max, 23 Nov: Nextrade bills "will be available for only Nextrade payments wires / ... use available balance for nextrade")
+      // — a Nextrade bill is never paid from a KTC bank line here. A failed lookup refuses (fails closed).
+      var nbR = await nextradeBillIds(db, [billId]);
+      if (!nbR.ok) { return readFail('whether this is a Nextrade bill', { message: nbR.error }); }
+      if (nbR.ids[String(billId)]) { return NextResponse.json({ error: 'This is a Nextrade bill — it is paid only through NextTrade, not recorded from a bank line here. ' + NEXTRADE_PAY_POINTER + ' Nothing was recorded.', nextrade_bill: true }, { status: 409 }); }
       // v55.83-RH (Max 16:04) — a bill on a prepared wire is paid BY THAT WIRE (when its bank line is attached), never twice by hand
       try {
         var onWire = await db.from('wire_package_lines').select('package_id').eq('bill_id', billId).eq('is_open', true).limit(1);
@@ -785,6 +807,11 @@ export async function POST(req) {
       var bRowsP = pIdsP.length ? await db.from('vendor_bills').select('id, vendor_name, bill_number, total_amount, record_status').in('id', pIdsP) : { data: [] };
       var bPaysP = pIdsP.length ? await db.from('vendor_bill_payments').select('id, bill_id, amount, voided').in('bill_id', pIdsP) : { data: [] };
       if (bRowsP.error) { return readFail('the bills', bRowsP.error); }
+      // v55.83-XX — Nextrade bills are paid only through NextTrade (a NextTrade wire or the NextTrade starting balance). Fails closed.
+      var nbP = await nextradeBillIds(db, pIdsP);
+      if (!nbP.ok) { return readFail('whether these are Nextrade bills', { message: nbP.error }); }
+      var ntHitP = ((bRowsP && bRowsP.data) || []).filter(function (b) { return nbP.ids[String(b.id)]; });
+      if (ntHitP.length) { return NextResponse.json({ error: ntHitP.map(function (b) { return billName(b); }).join(', ') + (ntHitP.length === 1 ? ' is a Nextrade bill' : ' are Nextrade bills') + ' — paid only through NextTrade, not from a KTC bank line. ' + NEXTRADE_PAY_POINTER + ' Untick ' + (ntHitP.length === 1 ? 'it' : 'them') + '. Nothing was recorded.', nextrade_bill: true }, { status: 409 }); }
       if (bPaysP.error) { return readFail('what is already paid on these bills', bPaysP.error); } // TO — fail closed (Codex P1)
       var onWireP = {};
       try { var wlP = pIdsP.length ? await db.from('wire_package_lines').select('bill_id, package_id').in('bill_id', pIdsP).eq('is_open', true) : { data: [] }; if (wlP.error && !missingRel(wlP.error)) { return readFail('the wires these bills are on', wlP.error); } var wpIds = ((wlP && wlP.data) || []).map(function (x) { return x.package_id; }); var wpR = wpIds.length ? await db.from('wire_packages').select('id, seq, status').in('id', wpIds) : { data: [] }; if (wpR.error && !missingRel(wpR.error)) { return readFail('the wires these bills are on', wpR.error); } var wpBy = {}; ((wpR && wpR.data) || []).forEach(function (w) { wpBy[w.id] = w; }); ((wlP && wlP.data) || []).forEach(function (x) { var w = wpBy[x.package_id]; if (w && w.status !== 'cancelled') { onWireP[x.bill_id] = 'WP-' + String(w.seq || 0).padStart(4, '0'); } }); } catch (eWP) { /* RH SQL not run */ }

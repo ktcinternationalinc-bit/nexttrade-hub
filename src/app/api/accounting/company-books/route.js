@@ -113,7 +113,9 @@ export async function POST(req) {
       });
       var gTotN = await assertPermission(db, userId, 'accounting.view_totals', req); // the 'still owed' sum is a sensitive total (Codex P1-1)
       // XE — the "still owed" sum would contain the hidden payroll bills (or reveal them by subtraction): withheld when any is hidden
-      return NextResponse.json({ ok: true, rows: rowsNb, can_totals: !!(gTotN && gTotN.ok === true) && restrictedNb === 0, payroll_restricted: restrictedNb > 0 ? PAYROLL_NOTE : undefined, api_build_marker: API_BUILD_MARKER });
+      // v55.83-XX — per-category "still owed" (the grouped list): the same totals permission, but a hidden payroll bill is simply left out of
+      // its group's sum (its amount is never in the answer), so the groups can show while the overall sum is withheld
+      return NextResponse.json({ ok: true, rows: rowsNb, can_totals: !!(gTotN && gTotN.ok === true) && restrictedNb === 0, can_group_totals: !!(gTotN && gTotN.ok === true), payroll_restricted: restrictedNb > 0 ? PAYROLL_NOTE : undefined, api_build_marker: API_BUILD_MARKER });
     }
 
     var comp = companyByKey(body.company);

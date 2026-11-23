@@ -20,6 +20,7 @@ import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { privateScope, isPrivateRow } from '../../../../lib/private-accounts-server';
 import { loadPartyFunds } from '../../../../lib/party-funds-server';
 import { feeExplanation, currentFundsWords, canSeeStartingBalance, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds';
+import { nextradeBillIds } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills are paid only through NextTrade
 
 // v55.83-XO (Max 21-22 Nov) — STARTING BALANCES: money a company already held for KTC before the Hub ("a previous balance to
 // nextrade that we will pay bills from"), and paying KTC bills from it ("b- NEW EXPENSE WHEN USED AFTER 6/1/2026").
@@ -47,6 +48,25 @@ function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, pro
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function fail(m, s) { return NextResponse.json({ ok: false, error: m }, { status: s || 400 }); }
 function readFail(what, e) { return NextResponse.json({ ok: false, error: 'Could not read ' + what + ' (' + ((e && e.message) || 'error') + ') — nothing was changed.' }, { status: 503 }); }
+// v55.83-XX (Max, 23 Nov: Nextrade bills "will be available for only Nextrade payments"; Codex 18:56: "NextTrade-only enforcement must also
+// cover the selected funding company/opening") — a company that is not NextTrade (the affiliate) never pays a Nextrade bill: not from its
+// starting balance, not as bills it already paid out of a transfer. Checked here, before the database step (whose own guards are unchanged).
+// A failed lookup refuses (fails closed). Returns a refusal or null.
+async function nextradeOnlyBlock(db, partyRow, billIds) {
+  if (partyRow && partyRow.kind === 'affiliate') { return null; }
+  var nb = await nextradeBillIds(db, billIds);
+  if (!nb.ok) { return fail('Could not check whether these are Nextrade bills (' + (nb.error || 'read failed') + ') — nothing was recorded.', 503); }
+  var hits = (billIds || []).filter(function (id) { return nb.ids[String(id)] === true; });
+  if (!hits.length) { return null; }
+  return fail((hits.length === 1 ? 'A bill you ticked is a Nextrade bill' : hits.length + ' bills you ticked are Nextrade bills') + ' — paid only through NextTrade (a wire to NextTrade Industries or the NextTrade starting balance), never through ' + ((partyRow && partyRow.name) || 'another company') + '. Untick ' + (hits.length === 1 ? 'it' : 'them') + '. Nothing was recorded.', 409);
+}
+// the same rule for the read-only pick lists: a company that is not NextTrade does not list Nextrade bills (lookup failed → listed; the write refuses)
+async function dropNextradeBills(db, partyRow, bills) {
+  if ((partyRow && partyRow.kind === 'affiliate') || !(bills || []).length) { return bills; }
+  var nb = await nextradeBillIds(db, bills.map(function (b) { return b.id; }));
+  if (!nb.ok) { return bills; }
+  return bills.filter(function (b) { return nb.ids[String(b.id)] !== true; });
+}
 function isDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
 // (Codex 17:51 P1) a person who may act but may NOT see balances ("Bank & Financial Summary") never gets a figure back from a
 // write: not in the answer (it is a bare acknowledgment — the screen reloads the permission-filtered list) and not inside a
@@ -125,6 +145,7 @@ export async function POST(req) {
         }
         var ocOut = ocb.map(function (b) { return { id: b.id, vendor: b.vendor_name || '', bill_number: b.bill_number || '', bill_date: b.bill_date || null, total: r2(b.total_amount), open: r2((Number(b.total_amount) || 0) - (ocPaid[b.id] || 0) - (ocWire[b.id] || 0)), via: b.paid_via || null }; })
           .filter(function (b) { return b.open > 0.005; }).sort(function (a, b) { return String(a.bill_date || '') < String(b.bill_date || '') ? -1 : 1; });
+        ocOut = await dropNextradeBills(db, obParty, ocOut); // v55.83-XX
         return NextResponse.json({ ok: true, bills: ocOut.slice(0, 500) });
       }
       var obRid = typeof body.request_id === 'string' && body.request_id.trim().length >= 8 ? body.request_id.trim().substring(0, 80) : null;
@@ -156,6 +177,7 @@ export async function POST(req) {
       if (body.paid_date < OPENING_PAY_FROM) { return fail('Bills are paid from a starting balance on 1 June 2026 or later (using it is a new expense from that date). Nothing was recorded.', 409); }
       var opRef = String(body.reference || '').trim().substring(0, 200); if (opRef.length < 3) { return fail('Type the payment reference or where the proof is.'); }
       var opWhy = String(body.reason || '').trim().substring(0, 300); if (opWhy.length < 3) { return fail('Say why, in a few words.'); }
+      var ntOp = await nextradeOnlyBlock(db, obParty, opClean.map(function (x) { return x.bill_id; })); if (ntOp) { return ntOp; } // v55.83-XX
       var opR = await db.rpc('hub_party_opening_pay', { p: { party: obParty.name, opening_id: String(body.opening_id), bills: opClean, paid_date: body.paid_date, reference: opRef, reason: opWhy, actor: userId, request_id: obRid, allow_closed: isSuper && body.allow_closed === true } });
       if (opR.error) { return guardFail(opR, true); }
       var opAck = { ok: true, action: action, bills: opClean.length }; if (opR.data && opR.data.repeat === true) { opAck.repeat = true; }
@@ -179,6 +201,7 @@ export async function POST(req) {
       var pcCur = String(pcT.data.iso_currency || 'USD').toUpperCase();
       var vbq; try { vbq = await fetchAllRows(function () { return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, total_amount, paid_via, record_status, currency').eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('record_status', 'active').order('id', { ascending: true }); }); } catch (eVb) { return readFail('the bills', eVb); }
       var vbs = vbq.filter(function (b) { return !b.paid_via || String(b.paid_via).toLowerCase() === pcParty.name.toLowerCase(); });
+      vbs = await dropNextradeBills(db, pcParty, vbs); // v55.83-XX — a Nextrade bill is never listed for RTM
       var vIds = vbs.map(function (b) { return b.id; }); var paidB = {}; var onWire = {};
       for (var vi = 0; vi < vIds.length; vi += 200) {
         var ppq = await db.from('vendor_bill_payments').select('bill_id, amount, voided').in('bill_id', vIds.slice(vi, vi + 200));
@@ -326,6 +349,7 @@ export async function POST(req) {
       var rpB = await db.from('vendor_bills').select('id, vendor_name, bill_number, currency').in('id', rpClean.map(function (x) { return x.bill_id; })); if (rpB.error) { return readFail('the bills', rpB.error); }
       var rpOff = (rpB.data || []).filter(function (b) { return String(b.currency || 'USD').toUpperCase() !== rpCur; });
       if (rpOff.length) { return fail(rpOff.map(function (b) { return (b.vendor_name || 'A bill') + ' ' + (b.bill_number || '') + ' is in ' + String(b.currency).toUpperCase(); }).join('; ') + ' — the transfer is in ' + rpCur + '. A bill in another currency cannot be recorded against it (no conversion is made). Nothing was recorded.', 409); }
+      var ntRp = await nextradeOnlyBlock(db, party, rpClean.map(function (x) { return x.bill_id; })); if (ntRp) { return ntRp; } // v55.83-XX
       var rpR = await db.rpc('hub_party_record_paid', { p: { party: party.name, bank_transaction_id: line.id, bills: rpClean, paid_date: body.paid_date, reference: rpRef, already_paid: true, reason: rpWhy, actor: userId, request_id: rid, allow_closed: isSuper && body.allow_closed === true } });
       if (rpR.error) { return guardFail(rpR, canTotalsW); }
       var rpA = ack(action, rpR.data); rpA.bills = rpClean.length; return NextResponse.json(rpA);

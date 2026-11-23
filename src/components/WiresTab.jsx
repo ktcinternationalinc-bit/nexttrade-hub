@@ -249,6 +249,9 @@ export default function WiresTab(props) {
     bills: boss || mp['bills.manage'] === true, // v55.83-SA — owner / admin too ("always (admin)")
     superAdmin: isSuperAdmin }; // v55.83-RZ — after both signatures only the super admin deletes / cancels; recording a past wire // v55.83-RV (review #3) — validating a bill from the wire screen = Bills: Manage, like the server
   var m0 = useState('prepared'); var mode = m0[0]; var setMode = m0[1];
+  // v55.83-XX — 🟦 Nextrade bills → Pay ▸ → "From a KTC transfer to NextTrade": open the wire builder with NextTrade + that bill
+  var wirePreset = props.wirePreset || null;
+  useEffect(function () { if (wirePreset) { setMode('prepared'); } }, [wirePreset ? wirePreset.n : 0]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!(perms.view || perms.prepare || perms.signoff || perms.send)) {
     return <div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155' }}>
       The Wires portal needs <b>Wires: View</b> (or Prepare / Sign Off / Send), with ClickBooks access — ask an admin in Settings → 🏦 Banking & Accounting Access.</div>;
@@ -260,6 +263,6 @@ export default function WiresTab(props) {
           style={mode === m[0] ? { background: '#1e293b', color: '#ffffff' } : { background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>{m[1]}</button>;
       })}
     </div>
-    {mode === 'prepared' ? <WirePackagesPanel userProfile={userProfile} toast={toast} perms={perms} /> : <BankWiresView {...props} />}
+    {mode === 'prepared' ? <WirePackagesPanel userProfile={userProfile} toast={toast} perms={perms} preset={wirePreset} /> : <BankWiresView {...props} />}
   </div>;
 }

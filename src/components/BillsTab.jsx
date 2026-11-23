@@ -594,7 +594,7 @@ export default function BillsTab(props) {
     </div>
     {canView && <AdvancesPanel userProfile={userProfile} toast={toast} onChanged={load} />}{/* v55.83-TX — advance balances, always visible */}
     {canView && <FundsHeldPanel userProfile={userProfile} toast={toast} onChanged={load} />}{/* v55.83-WF — funds held, per transfer (closed until opened; reads only when opened) */}
-    {panel === 'nextrade' && <NextradeBillsPanel userProfile={userProfile} onClose={function () { setPanel(null); }} />}
+    {panel === 'nextrade' && <NextradeBillsPanel userProfile={userProfile} isSuperAdmin={isSuperAdmin} cats={cats} onClose={function () { setPanel(null); }} />}{/* v55.83-XX — grouped by the Bills categories; Pay ▸ chooser */}
     {panel === 'repeating' && <RepeatingBillsPanel userProfile={userProfile} canManage={canManage} cats={cats} toast={toast} onClose={function () { setPanel(null); }} onChanged={load} />}
     {panel === 'rules' && <PriceRulesPanel api={api} toast={toast} onClose={function () { setPanel(null); }} onChanged={load} />}
     {/* v55.83-SJ — what we owe by age + bills on the books before they are paid */}

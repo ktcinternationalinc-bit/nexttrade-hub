@@ -16,7 +16,8 @@ import { requestCopyModel, requestCopyHtml } from '../lib/wire-request-print'; /
 import { supabase } from '../lib/supabase';
 import { todayET, fmtET } from '../lib/et-time';
 import { applyConfirmationAnswer, startConfirmationFile, confirmationSendProblem } from '../lib/wire-confirmation';
-import { PKG_STATUS_LABEL } from '../lib/wire-audit';
+import { PKG_STATUS_LABEL, wireReady, validationExempt, NEXTRADE_BILL_NOTE } from '../lib/wire-audit';
+import { presetPick } from '../lib/wire-bill-tree'; // v55.83-XX — "Pay ▸ From a KTC transfer to NextTrade" ticks that one bill
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
@@ -398,7 +399,7 @@ export default function WirePackagesPanel(props) {
     });
   }
   function pickPayee(kind, name) {
-    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind !== 'vendor' ? ed.fee : '', fillMsg: null, fillVendors: [], fundId: null, fund: null, onlyTheirs: undefined, shut: {} }));
+    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind !== 'vendor' ? ed.fee : '', fillMsg: null, fillVendors: [], fundId: null, fund: null, onlyTheirs: undefined, shut: {}, presetBill: null, presetMsg: null }));
     loadBills(kind, name, ed.id);
     if (kind !== 'vendor') { loadFunding(kind, name); }
   }
@@ -427,11 +428,28 @@ export default function WirePackagesPanel(props) {
       var current = true;
       setEd(function (e) {
         if (!e || e.kind !== kind || String(e.payee || '') !== String(payee || '')) { current = false; return e; } // review gap 10
-        return Object.assign({}, e, { bills: (j && j.ok) ? j.bills : [], waiting: (j && j.ok) ? (j.not_validated || []) : [] });
+        var nx = Object.assign({}, e, { bills: (j && j.ok) ? j.bills : [], waiting: (j && j.ok) ? (j.not_validated || []) : [], nextradeErr: (j && j.ok && j.nextrade_check_error) || '' });
+        // v55.83-XX — opened from 🟦 Nextrade bills → Pay ▸: tick that one bill for what is still owed (never the transfer); else say why
+        if (e.presetBill && j && j.ok) { var pp = presetPick(nx.picks, nx.bills, e.presetBill); nx.picks = pp.picks; nx.presetBill = null; nx.presetMsg = pp.ticked ? { bad: false, text: (pp.bill.vendor_name || 'The bill') + ' ' + (pp.bill.bill_number || '') + ' is ticked for $' + fmt(pp.bill.open) + '. Pick the KTC transfer to NextTrade it is paid from (below), or leave it as an ordinary wire, then Save & check.' } : { bad: true, text: pp.why } }
+        return nx;
       });
       if (current && !(j && j.ok)) { toast.error((j && j.error) || 'Could not load the bills.'); }
     });
   }
+  // v55.83-XX (Max, 23 Nov: Nextrade bills "will be available for only Nextrade payments wires") — 🟦 Nextrade bills → Pay ▸ → "From a KTC
+  // transfer to NextTrade" lands here: a NEW wire to NextTrade Industries with that bill ticked. The transfer is NOT picked for the person.
+  var presetN = props.preset ? props.preset.n : 0;
+  useEffect(function () {
+    var pr = props.preset; if (!pr || !pr.bill_id) { return; }
+    withPayees(function (pj) {
+      var hit = null; ((pj && pj.parties) || []).forEach(function (p) { if (!hit && p.kind === 'affiliate' && (!pr.payee || String(p.name).toLowerCase() === String(pr.payee).toLowerCase())) { hit = p; } });
+      if (!hit) { ((pj && pj.parties) || []).forEach(function (p) { if (!hit && p.kind === 'affiliate') { hit = p; } }); }
+      if (!hit) { toast.error('NextTrade Industries is not set up as a paid-through company — open ＋ New wire by hand.'); return; }
+      setDet(null); setQ('');
+      setEd({ id: null, kind: 'affiliate', payee: hit.name, fee: '', fee_note: '', memo: '', picks: {}, bills: null, fundId: null, fund: null, planned: '', presetBill: pr.bill_id, presetMsg: null, onlyTheirs: undefined, shut: {} });
+      loadBills('affiliate', hit.name, null); loadFunding('affiliate', hit.name);
+    });
+  }, [presetN]); // eslint-disable-line react-hooks/exhaustive-deps
   // v55.83-SC — "build a wire for a certain amount": the Hub ticks validated bills (oldest due first) and pays the last one in part
   function fillWire() {
     var fv = ed.fillVendors || [];
@@ -653,7 +671,7 @@ export default function WirePackagesPanel(props) {
     var mineT = groupTotals(mineB, ed.picks); var mineGroups = groupByVendor(mineB, ed.picks);
     var renderRow = function (b) {
       var on = ed.picks[b.id] != null;
-      var notValid = b.validation_status !== 'validated'; // v55.83-RO — validate first, then wire
+      var notValid = !wireReady(b); // v55.83-RO — validate first, then wire; v55.83-XX — a Nextrade bill on a NextTrade wire needs no validation
       var off = (ed.kind === 'vendor' && pickedVendor && b.vendor_name !== pickedVendor && !on) || (notValid && !on);
       return <tr key={b.id} onClick={function () { if (!off) { togglePick(b); } }} style={{ borderTop: '1px solid #e2e8f0', background: on ? '#ecfdf5' : '#ffffff', cursor: off ? 'not-allowed' : 'pointer', opacity: off ? 0.45 : 1 }}>
         <td className="px-2 py-2" style={{ width: 28 }}><input type="checkbox" readOnly checked={on} disabled={off} style={{ width: 18, height: 18 }} /></td>
@@ -661,7 +679,7 @@ export default function WirePackagesPanel(props) {
           {notValid ? <ValidateInline billId={b.id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.bills} onDone={function (d, t) {
             toast.success('✓ ' + b.vendor_name + ' ' + (b.bill_number || '') + ' validated — you can tick it now.');
             setEd(function (e) { return (e && e.bills) ? Object.assign({}, e, { bills: e.bills.map(function (x) { return x.id === b.id ? Object.assign({}, x, { validation_status: 'validated', shipment_direction: d || x.shipment_direction, bill_type: t || x.bill_type }) : x; }) }) : e; });
-          }} /> : <div className="text-[10px] font-extrabold" style={{ color: '#065f46' }}>✓ validated</div>}
+          }} /> : (b.validation_status !== 'validated' && validationExempt(b)) ? <div className="text-[10px] font-extrabold" style={{ color: '#1e40af' }}>{'🟦 ' + NEXTRADE_BILL_NOTE}</div> : <div className="text-[10px] font-extrabold" style={{ color: '#065f46' }}>✓ validated</div>}
           <div className="text-[11px]" style={{ color: MUTED }}>{'Bill ' + (b.bill_number || '—') + (b.due_date ? ' · due ' + b.due_date : b.bill_date ? ' · ' + b.bill_date : '')}{b.on_package ? ' · ' + b.on_package + ' already — left for this wire: $' + fmt(b.open) : ''}{b.disputed ? ' · DISPUTED' : ''}</div></td>
         <td className="px-2 py-2"><BillFields bill={b} editable={!!perms.prepare} busy={busy} releaseOptional={b.release_optional} onSave={function (field, value, done) { saveField(b.id, field, value, done); }} /></td>
         <td className="px-2 py-2 text-right text-[12px] tabular-nums" style={{ color: SUB }}>${fmt(b.open)}</td>
@@ -676,6 +694,8 @@ export default function WirePackagesPanel(props) {
         <div className="flex-1" />
         <Btn light onClick={function () { setEd(null); }}>✕ Close</Btn>
       </div>
+      {ed.presetBill && <div className="rounded-lg px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#eff6ff', color: '#1e3a8a', border: '1px solid #93c5fd' }}>{'🟦 Opened from Nextrade bills — loading the bill…'}</div>}
+      {ed.presetMsg && <div className="rounded-lg px-3 py-2 mb-2 text-[12px] font-bold" style={ed.presetMsg.bad ? { background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5' } : { background: '#eff6ff', color: '#1e3a8a', border: '1px solid #93c5fd' }}>{(ed.presetMsg.bad ? '⚠ ' : '🟦 ') + ed.presetMsg.text}</div>}
       {ed.paidFor && <div className="rounded-xl p-3 mb-3 text-[12px]" style={{ background: '#eff6ff', color: '#1e3a8a', border: '1px solid #93c5fd' }}>
         <div className="font-extrabold mb-1">{'How this works — nothing is sent to the bank from here'}</div>
         <div>{'1. We sent ' + ed.payee + ' a lump of money. That is the only line our bank shows.'}</div>
@@ -756,7 +776,8 @@ export default function WirePackagesPanel(props) {
         {ed.fillMsg && <div className="mt-2 rounded-lg px-3 py-2 text-[12px] font-bold" style={ed.fillMsg.bad ? { background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5' } : { background: '#ecfdf5', color: '#065f46', border: '1px solid #6ee7b7' }}>{(ed.fillMsg.bad ? '⚠ ' : '✓ ') + ed.fillMsg.text}</div>}
       </div>}
       {ed.kind && <div className="rounded-lg px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fcd34d', color: '#78350f' }}>
-        Only VALIDATED bills are listed here — a bill has to be validated (Inbound / Outbound, 3 checks, how you verified it) before it can be wired.
+        {'Only VALIDATED bills are listed here — a bill has to be validated (Inbound / Outbound, 3 checks, how you verified it) before it can be wired.' + (ed.kind === 'affiliate' ? ' Nextrade bills (made from Nextrade expense lines) are the exception on a wire to NextTrade: no validation needed.' : '')}
+        {ed.nextradeErr ? <div className="mt-1" style={{ color: '#991b1b' }}>{'⚠ ' + ed.nextradeErr}</div> : null}
         {(ed.waiting || []).length > 0 && <span>{' '}<button onClick={function () { setEd(Object.assign({}, ed, { showWaiting: !ed.showWaiting })); }} className="underline font-extrabold" style={{ color: '#1d4ed8' }}>
           {(ed.showWaiting ? '▾ hide ' : '▸ ') + ed.waiting.length + ' open bill(s) waiting for validation'}</button></span>}
         {ed.showWaiting && (ed.waiting || []).length > 0 && <div className="mt-2 grid gap-1">
@@ -836,7 +857,7 @@ export default function WirePackagesPanel(props) {
     var P = det.package; var st = P.status; var A = det.audit;
     var blocks = (det.checks.checks || []).filter(function (c) { return c.level === 'block'; });
     var warnsL = (det.checks.checks || []).filter(function (c) { return c.level === 'warn' || c.level === 'info'; });
-    var allValid = det.lines.every(function (l) { return (l.bill || {}).validation_status === 'validated'; });
+    var allValid = det.lines.every(function (l) { return (l.bill || {}).validation_status === 'validated' || (P.payee_kind === 'affiliate' && validationExempt(l.bill)); }); // XX: Nextrade bills on a NextTrade wire
     var steps = [['Bills validated', allValid], ['Prepared', true], ['Checked', st !== 'needs_check' && st !== 'flagged'], ['1st signature', !!(A.signoff1 && A.signoff1.valid)], ['2nd signature', !!(A.signoff2 && A.signoff2.valid)], [sentWords(P), !!P.sent], ['Bank line attached', !!P.attached]];
     if (P.paid_through) { steps.push([P.payee_name + ' proof', st === 'complete']); }
     var amountNow = P.approved_total != null ? P.approved_total : P.total;
@@ -1073,7 +1094,7 @@ export default function WirePackagesPanel(props) {
               {canTick ? <td className="px-2 py-1.5">{!l.rtm.confirmed_at ? <input type="checkbox" style={{ width: 16, height: 16 }} checked={!!proofF.ticks[l.line_id]} onChange={function (e) { var t2 = Object.assign({}, proofF.ticks); t2[l.line_id] = e.target.checked; setProofF(Object.assign({}, proofF, { ticks: t2 })); }} /> : '✓'}</td> : null}
               <td className="px-2 py-1.5 whitespace-nowrap"><button onClick={function () { setViewLine(l); }} className="px-2 py-1 rounded-lg text-[11px] font-extrabold" style={mineRv ? { background: '#dcfce7', color: '#14532d', border: '1px solid #86efac' } : { background: '#4f46e5', color: '#ffffff' }}>{mineRv ? '✓ Checked · view' : '👁 Open & check'}</button>
                 {revs.length > 0 && <div className="text-[10px] mt-0.5" style={{ color: MUTED }}>{'checked by ' + revs.map(function (r) { return r.by; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(', ')}</div>}</td>
-              <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}{b.validation_status !== 'validated' && P.raw_status === 'draft' ? <ValidateInline billId={l.bill_id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.bills} onDone={function () { toast.success('✓ Validated.'); recheck(); }} /> : null}{l.will_mark && P.raw_status === 'draft' ? <div className="text-[10px] font-bold" style={{ color: '#0e7490' }}>{'becomes “paid through ' + P.payee_name + '” when sent'}</div> : null}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
+              <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}{b.validation_status !== 'validated' && P.payee_kind === 'affiliate' && validationExempt(b) ? <div className="text-[10px] font-extrabold" style={{ color: '#1e40af' }}>{'🟦 ' + NEXTRADE_BILL_NOTE}</div> : b.validation_status !== 'validated' && P.raw_status === 'draft' ? <ValidateInline billId={l.bill_id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.bills} onDone={function () { toast.success('✓ Validated.'); recheck(); }} /> : null}{l.will_mark && P.raw_status === 'draft' ? <div className="text-[10px] font-bold" style={{ color: '#0e7490' }}>{'becomes “paid through ' + P.payee_name + '” when sent'}</div> : null}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
               <td className="px-2 py-1.5"><BillFields bill={b} editable={P.raw_status === 'draft' && !!perms.prepare} busy={busy} releaseOptional={P.payee_kind === 'affiliate'} onSave={function (field, value, done) { saveField(l.bill_id, field, value, done); }} /></td>
               <td className="px-2 py-1.5 whitespace-nowrap">{b.bill_date || <span style={{ color: '#b91c1c', fontWeight: 800 }}>missing</span>}</td><td className="px-2 py-1.5 whitespace-nowrap">{b.due_date || '—'}</td>
               <td className="px-2 py-1.5">{b.category ? String(b.category).replace(/_/g, ' ') : '—'}</td>

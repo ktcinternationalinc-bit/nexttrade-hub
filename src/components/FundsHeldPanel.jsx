@@ -7,6 +7,7 @@
 // Inline colours on white panels (the dark theme repaints bg-white).
 import React, { useState, useEffect } from 'react';
 import { hubFetch } from '../lib/hub-fetch';
+import { startingBalanceToPay, openingPickAmount, NEXTRADE_OPEN_WIRE_EVENT, NEXTRADE_PAY_OPENING_EVENT } from '../lib/nextrade-bill-groups'; // v55.83-XX
 
 function fmt(n) { return n == null ? '—' : '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function today() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
@@ -52,6 +53,7 @@ export default function FundsHeldPanel(props) {
   var s4 = useState({}); var open = s4[0]; var setOpen = s4[1];
   var s5 = useState(null); var form = s5[0]; var setForm = s5[1]; // { kind: 'mark' | 'reverse', party, id, fee, amount, date, reason }
   var s6 = useState(false); var shown = s6[0]; var setShown = s6[1];
+  var s7 = useState(null); var payAsk = s7[0]; var setPayAsk = s7[1]; // v55.83-XX — { bill_id, bill_number, party, text, bad, offerWire } from 🟦 Nextrade bills → Pay ▸
 
   function api(payload) {
     return hubFetch('/api/accounting/party-funds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
@@ -105,9 +107,45 @@ export default function FundsHeldPanel(props) {
   // v55.83-XO — STARTING BALANCE (super admin): add one, correct one, pay bills from one
   function openOpeningAdd(p) { setForm({ kind: 'opening_add', party: p.party, id: 'sb-add:' + p.party, amount: '', date: '', reason: '', visible: null, click: clickId() }); }
   function openOpeningCorrect(p, sb) { setForm({ kind: 'opening_correct', party: p.party, id: 'sb:' + sb.id, sb: sb.id, amount: '', reason: '', max: Number(sb.left), click: clickId() }); }
-  function openOpeningPay(p, sb) {
+  // presetBill (v55.83-XX) = the bill chosen in 🟦 Nextrade bills → Pay ▸: ticked for what is still owed, never more than is left on the balance
+  function openOpeningPay(p, sb, presetBill) {
     setForm({ kind: 'opening_pay', party: p.party, id: 'sb:' + sb.id, sb: sb.id, asOf: sb.as_of, max: Number(sb.left), date: '', reference: '', reason: '', picks: {}, bills: null, click: clickId() });
-    api({ action: 'opening_pay_candidates', party: p.party }).then(function (j) { setForm(function (f) { return f && f.kind === 'opening_pay' && f.sb === sb.id ? Object.assign({}, f, { bills: (j && j.ok) ? (j.bills || []) : [], billsErr: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the bills.') }) : f; }); });
+    api({ action: 'opening_pay_candidates', party: p.party }).then(function (j) { setForm(function (f) {
+      if (!(f && f.kind === 'opening_pay' && f.sb === sb.id)) { return f; }
+      var nf = Object.assign({}, f, { bills: (j && j.ok) ? (j.bills || []) : [], billsErr: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the bills.') });
+      if (presetBill && j && j.ok) {
+        var hitB = nf.bills.filter(function (x) { return String(x.id) === String(presetBill); })[0]; var amt = hitB ? openingPickAmount(hitB, sb.left) : null;
+        if (amt) { var pk = Object.assign({}, nf.picks); pk[hitB.id] = amt; nf.picks = pk; nf.presetNote = (hitB.vendor || 'The bill') + ' ' + (hitB.bill_number || '') + ' is ticked for $' + amt + '. Fill the paid date, the reference and why, then Pay.'; }
+        else { nf.presetNote = 'That bill is not among the bills this balance can pay (it may be on an open wire, already paid, or not in US dollars).'; nf.presetBad = true; }
+      }
+      return nf;
+    }); });
+  }
+  // v55.83-XX (Max, 23 Nov: "use available balance for nextrade that we enter in the beginning ... until all done") — 🟦 Nextrade bills →
+  // Pay ▸ → "From the NextTrade starting balance": open this panel, pick the OLDEST NextTrade starting balance with money left, tick the bill.
+  // No balance with money left → said plainly, with the other way (a KTC transfer to NextTrade) one click away. Nothing is paid by opening it.
+  useEffect(function () {
+    function onPayOpening(e) {
+      var d = (e && e.detail) || {}; if (!d.bill_id) { return; }
+      var base = { bill_id: d.bill_id, bill_number: d.bill_number || '', party: d.party || 'NextTrade Industries' };
+      setShown(true); setForm(null); setPayAsk(Object.assign({}, base, { text: 'Looking for the NextTrade starting balance…' }));
+      try { var el = document.getElementById('nt-funds-held'); if (el && el.scrollIntoView) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } catch (eS) { /* old browser */ }
+      setBusy(true);
+      api({ action: 'funds' }).then(function (j) {
+        if (!(j && j.ok)) { setErr((j && j.error) || 'Could not load the funds.'); setPayAsk(Object.assign({}, base, { bad: true, offerWire: true, text: 'The funds did not load (' + ((j && j.error) || 'error') + '), so the starting balance cannot be used right now.' })); return; }
+        setData(j); setErr('');
+        var pick = startingBalanceToPay(j, base.party);
+        if (!pick.ok) { setPayAsk(Object.assign({}, base, { bad: true, offerWire: true, text: pick.why })); return; }
+        setPayAsk(Object.assign({}, base, { text: 'Paying bill ' + (base.bill_number || '') + ' from the NextTrade starting balance as of ' + pick.sb.as_of + ' (the oldest one with money left: ' + fmt(pick.sb.left) + ').' }));
+        openOpeningPay(pick.party, pick.sb, base.bill_id);
+      }).finally(function () { setBusy(false); });
+    }
+    try { window.addEventListener(NEXTRADE_PAY_OPENING_EVENT, onPayOpening); } catch (e0) { return undefined; }
+    return function () { try { window.removeEventListener(NEXTRADE_PAY_OPENING_EVENT, onPayOpening); } catch (e1) {} };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  function payFromTransferInstead(a) {
+    setPayAsk(null);
+    try { window.dispatchEvent(new CustomEvent(NEXTRADE_OPEN_WIRE_EVENT, { detail: { payee: a.party, bill_id: a.bill_id, bill_number: a.bill_number } })); } catch (e) { /* old browser */ }
   }
   function saveOpening() {
     if (form.kind === 'opening_pay') {
@@ -132,13 +170,17 @@ export default function FundsHeldPanel(props) {
   }
   var chip = function (st) { var w = STATUS_WORDS[st] || STATUS_WORDS.needs_reconciliation; return <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded" style={{ background: w.bg, color: w.fg }}>{w.text}</span>; };
 
-  return <div className="rounded-xl p-3 mt-3" style={{ background: '#ffffff', color: INK, border: '1px solid #e2e8f0' }}>
+  return <div id="nt-funds-held" className="rounded-xl p-3 mt-3" style={{ background: '#ffffff', color: INK, border: '1px solid #e2e8f0' }}>
     <div className="flex items-center gap-2 flex-wrap">
       <button type="button" onClick={function () { setShown(!shown); }} className="text-[14px] font-extrabold" style={{ color: INK }}>{(shown ? '▾ ' : '▸ ') + '🏦 Funds with RTM / NextTrade'}</button>
       <span className="text-[11px]" style={{ color: MUTED }}>Money already sent to each company: what it paid, services rendered, reserved, and what is still available. Unused money is never an expense.</span>
       {shown && <button type="button" onClick={load} disabled={busy} className="px-2 py-1 rounded text-[10px] font-bold" style={{ background: '#e0f2fe', color: '#075985' }}>{busy ? 'Loading…' : '↻ Refresh'}</button>}
     </div>
     {shown && err && <div className="text-[12px] p-2 rounded mt-2" style={{ background: '#fef2f2', color: '#991b1b' }}>{err}</div>}
+    {shown && payAsk && <div className="text-[12px] p-2 rounded mt-2 flex gap-2 items-center flex-wrap font-bold" style={payAsk.bad ? { background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5' } : { background: '#eff6ff', color: '#1e3a8a', border: '1px solid #93c5fd' }}>
+      <span>{'🟦 ' + payAsk.text}</span>
+      {payAsk.offerWire && <button type="button" onClick={function () { payFromTransferInstead(payAsk); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>From a KTC transfer to NextTrade →</button>}
+      <button type="button" onClick={function () { setPayAsk(null); }} className="px-2 py-1 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>✕</button></div>}
     {shown && data && data.sql_missing && <div className="text-[12px] p-2 rounded mt-2" style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d' }}>{'Showing what is recorded. Confirming a transfer and marking services rendered are not switched on yet — they arrive with a later update. Until then every transfer shows as “needs reconciliation” and nothing is spendable.'}</div>}
     {shown && data && (data.parties || []).map(function (p) {
       var T = p.totals;
@@ -180,6 +222,7 @@ export default function FundsHeldPanel(props) {
                 </div>}
                 {form && form.id === 'sb:' + sb.id && form.kind === 'opening_pay' && <div className="mt-2 p-2 rounded" style={{ background: '#ffffff', border: '1px solid #bae6fd' }}>
                   <div className="text-[12px] font-extrabold">{'Pay KTC bills from the starting balance with ' + p.party + ' (no bank money moves; ' + fmt(form.max) + ' left):'}</div>
+                  {form.presetNote && <div className="text-[11px] font-bold mb-1" style={{ color: form.presetBad ? '#991b1b' : '#1e3a8a' }}>{'🟦 ' + form.presetNote}</div>}
                   <div className="text-[11px] mb-1" style={{ color: SUB }}>{'Tick the bills ' + p.party + ' paid (or will pay) out of this balance and the amount of each. The paid date must be 1 June 2026 or later' + (form.asOf > STARTING_BALANCE_PAY_FROM ? ' and not before ' + form.asOf : '') + '.'}</div>
                   {form.bills === null ? <div className="text-[11px]" style={{ color: MUTED }}>Looking for open bills…</div> : form.billsErr ? <div className="text-[11px]" style={{ color: '#991b1b' }}>{form.billsErr}</div> : form.bills.length === 0 ? <div className="text-[11px]" style={{ color: MUTED }}>No open bill can be paid from it.</div> :
                     <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #e0f2fe', borderRadius: 6 }}>{form.bills.map(function (b) { var on = Object.prototype.hasOwnProperty.call(form.picks || {}, b.id);
