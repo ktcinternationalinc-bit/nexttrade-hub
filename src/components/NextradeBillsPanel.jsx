@@ -13,10 +13,11 @@ export default function NextradeBillsPanel(props) {
   var s2 = useState(''); var err = s2[0]; var setErr = s2[1];
   var s3 = useState(false); var showVoid = s3[0]; var setShowVoid = s3[1];
   var s4 = useState(false); var canTotals = s4[0]; var setCanTotals = s4[1];
+  var s5 = useState(''); var payNote = s5[0]; var setPayNote = s5[1]; // v55.83-XE
   function load() {
     hubFetch('/api/accounting/company-books', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'nextrade_bills', user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
-      .then(function (j) { if (j && j.ok) { setRows(j.rows || []); setCanTotals(j.can_totals === true); setErr(j.sql_missing || ''); } else { setErr((j && j.error) || 'Could not load.'); } })
+      .then(function (j) { if (j && j.ok) { setRows(j.rows || []); setCanTotals(j.can_totals === true); setPayNote(j.payroll_restricted || ''); setErr(j.sql_missing || ''); } else { setErr((j && j.error) || 'Could not load.'); } })
       .catch(function (e) { setErr('Could not reach the server (' + ((e && e.message) || 'network') + ').'); });
   }
   useEffect(function () { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -41,12 +42,14 @@ export default function NextradeBillsPanel(props) {
       <th className="p-1 text-left">Bill #</th><th className="p-1 text-left">Vendor</th><th className="p-1 text-left">Due</th><th className="p-1 text-right">Amount</th><th className="p-1 text-left">KTC category</th><th className="p-1 text-left">From the Nextrade line</th><th className="p-1 text-left">Status</th></tr></thead>
       <tbody>{list.map(function (r) {
         var b = r.bill || {}; var l = r.line || {};
-        var st = r.link.status !== 'active' ? 'voided (category changed)' : b.record_status !== 'active' ? b.record_status : r.paid >= (Number(b.total_amount) || 0) - 0.005 ? 'paid' : 'owed to Nextrade';
+        // v55.83-XE — a payroll bill without 'payroll.view': no amount (null is not zero); its paid / owed state comes from the server
+        var st = r.link.status !== 'active' ? 'voided (category changed)' : b.record_status !== 'active' ? b.record_status : r.payroll_restricted ? (r.state === 'paid' ? 'paid' : 'owed to Nextrade') : r.paid >= (Number(b.total_amount) || 0) - 0.005 ? 'paid' : 'owed to Nextrade';
         return <tr key={r.link.id} style={{ borderTop: '1px solid #e2e8f0', opacity: r.link.status === 'active' ? 1 : 0.5 }}>
           <td className="p-1 whitespace-nowrap">{b.bill_number}{r.link.mode === 'attached' ? ' 🔗' : ''}</td><td className="p-1">{b.vendor_name}</td><td className="p-1 whitespace-nowrap">{b.due_date}</td>
-          <td className="p-1 text-right font-bold">{fmt(b.total_amount)}</td><td className="p-1">{b.category || <span style={{ color: '#b45309' }}>not set — Nextrade → Category mapping</span>}</td>
-          <td className="p-1">{l.date} · {l.name}</td><td className="p-1">{st}{st === 'owed to Nextrade' && <button onClick={function () { payBill(b); }} title="Pick the payment sent to NextTrade (or their advance) that pays this bill" className="ml-2 px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Pay ▸</button>}</td></tr>;
+          <td className="p-1 text-right font-bold">{r.payroll_restricted ? <span title="Payroll amount restricted — needs the Payroll / salaries: view switch" style={{ color: '#64748b' }}>🔒</span> : fmt(b.total_amount)}</td><td className="p-1">{b.category || <span style={{ color: '#b45309' }}>not set — Nextrade → Category mapping</span>}</td>
+          <td className="p-1">{l.date} · {l.name}</td><td className="p-1">{st}{st === 'owed to Nextrade' && !r.payroll_restricted && <button onClick={function () { payBill(b); }} title="Pick the payment sent to NextTrade (or their advance) that pays this bill" className="ml-2 px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Pay ▸</button>}</td></tr>;
       })}</tbody></table></div>
+    {payNote && <div className="text-[10px] mt-2 font-bold" style={{ color: '#92400e' }}>🔒 {payNote} The “Still owed” sum is not shown while payroll is hidden.</div>}
     {rows && !list.length && <div className="text-[11px] mt-2" style={{ color: '#64748b' }}>No Nextrade bills yet.</div>}
     <div className="text-[10px] mt-2" style={{ color: '#64748b' }}>🔗 = an existing KTC bill (for example a repeating rent bill) the Nextrade line was attached to, instead of making a second bill.</div>
   </div>;

@@ -41,7 +41,8 @@ ok(/STAGING · TEST/.test(block('ntwarehouse-staging')), 'staging panel keeps th
 ok(!/opens the staging\s*\n?\s*copy in a NEW TAB/.test(page) && page.indexOf('NEW TAB') < 0, 'the stale "NEW TAB" sidebar comment is fixed');
 
 // Badge + What's New.
-ok(page.includes('>v55.83-XJ</span>'), 'badge bumped to v55.83-XJ');
+// v55.83-XE: a later build moves the badge on; the badge always names the newest What's New entry (XJ or later).
+ok((function () { var top = /BUILD_HISTORY = [s*{s*version: '(v55.83-[A-Z]+)'/.exec(whatsnew); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })(), 'badge names the newest What's New entry (v55.83-XJ or later)');
 ok(/version: 'v55\.83-XJ'/.test(whatsnew), "What's New has a v55.83-XJ entry");
 
 console.log('\nXJ warehouse-iframe-scroll: ' + pass + '/' + pass + ' checks passed');

@@ -25,6 +25,7 @@ export var BANKING_GROUPS = [
     { key: 'accounting.view_totals', label: 'Money totals', desc: 'Came In, Went Out, Sales, Net Moved, Projected Net. Without it these show “Restricted”.', needsBooks: true },
     { key: 'pnl.view', label: 'P&L and Profitability', desc: 'Profitability, Sales P&L and Inventory P&L screens: revenue and cost of goods per product, customer and invoice.', needsBooks: true },
     { key: 'pnl.view_margin', label: 'Profit & margin 🔒', desc: 'The PROFIT and MARGIN numbers on those screens. Without it they show 🔒. Only the super admin can switch this on.', needsBooks: true, sensitive: true },
+    { key: 'payroll.view', label: 'Payroll / salaries: view 🔒', desc: 'Warehouse salary (payroll) amounts. Without it payroll shows as "Warehouse staff" with 🔒. Today: Nextrade books and Nextrade bills; Bills, wires and P&L follow. Only the super admin can switch this on.', sensitive: true }, // v55.83-XE
     { key: 'pnl.edit_costs', label: 'Edit product costs', desc: 'Type or change product costs (with the date they start). The most sensitive accounting change.', needsBooks: true },
     { key: 'accounting.view_invoicing', label: 'Invoices & collections', desc: 'Invoiced, Paid, Still Open, Collected — and the invoices behind them.', needsBooks: true },
     { special: 'canViewBankBalances', label: 'Bank balances', desc: 'Account balances, trial balance, general ledger, cash flow, bank reconciliation. Super admin grants only.' },

@@ -18,6 +18,7 @@ import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private
 import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
 import { PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
+import { payrollScope, payrollKeys, maskPayrollLine, maskPayrollBill, isPayrollVendorName, PAYROLL_NOTE } from '../../../../lib/payroll-visibility'; // v55.83-XE — warehouse salaries only for 'payroll.view'
 import { learnPlan, linesForRule } from '../../../../lib/company-rule-learn'; // v55.83-VK — the books learn a rule from what a person categorizes
 var SQL_MISSING_UD = '"KTC pays this" on a category needs one database update first: run sql/v55-83-UD-pay-nextrade.sql in Supabase (SQL Editor).';
 var SQL_MISSING_VK = 'Rules need one small database update before they can categorize lines: run sql/v55-83-VK-rule-apply-guard.sql in Supabase (SQL Editor). Nothing was changed. You can still categorize lines by hand.';
@@ -68,6 +69,8 @@ export async function POST(req) {
     // v55.83-TP (live) — private bank accounts: hidden unless super admin or 'bank.view_private'; fails closed
     var scope = await privateScope(db, userId);
     if (scope.error) { return fail(scope.error + ' — nothing shown.', 503); }
+    // v55.83-XE — payroll amounts (warehouse salaries) only for the super admin or 'payroll.view'; fails closed
+    var pay = await payrollScope(db, userId, req);
 
     // KTC Bills → 🟦 Nextrade bills: a KTC screen, so it needs Bills: View / Manage (not the Nextrade permission)
     if (action === 'nextrade_bills') {
@@ -89,10 +92,28 @@ export async function POST(req) {
         (lq.data || []).forEach(function (l) { lines[l.id] = l; });
         (pq.data || []).forEach(function (p) { if (p.voided !== true) { paid[p.bill_id] = (paid[p.bill_id] || 0) + (Number(p.amount) || 0); } });
       }
-      var catsNb = await loadCats(db, NEXTRADE_COMPANY_ID); var payKeys = {}; ((catsNb && catsNb.data) || []).forEach(function (c) { if (c.is_payroll) { payKeys[c.key] = true; } }); // UD: payroll shows as Warehouse staff — no names
-      var rowsNb = links.map(function (l) { var ln0 = lines[l.source_bank_transaction_id] || null; if (ln0 && isPrivateRow(ln0, scope)) { ln0 = { date: ln0.date, name: '(private account)' }; } else if (ln0 && payKeys[l.category_key]) { ln0 = { date: ln0.date, name: 'Warehouse staff', amount_abs: ln0.amount_abs, account_id: ln0.account_id }; } return { link: l, bill: bills[l.bill_id] || null, line: ln0, paid: Math.round((paid[l.bill_id] || 0) * 100) / 100 }; });
+      var catsNb = await loadCats(db, NEXTRADE_COMPANY_ID);
+      // v55.83-XE (Codex 22 Nov 08:43 P2) — without the categories nobody can tell which bills are payroll (an ATTACHED bill keeps
+      // its own vendor name), so the whole answer is refused: no rows, no totals. Fails closed for everyone, holders included.
+      if (!catsNb || catsNb.error) { return readFail('the Nextrade categories (needed to keep payroll hidden)', catsNb ? catsNb.error : null); }
+      var payKeys = {}; ((catsNb && catsNb.data) || []).forEach(function (c) { if (c.is_payroll) { payKeys[c.key] = true; } }); // UD: payroll shows as Warehouse staff — no names
+      var restrictedNb = 0;
+      var rowsNb = links.map(function (l) {
+        var ln0 = lines[l.source_bank_transaction_id] || null; var b0 = bills[l.bill_id] || null; var paid0 = Math.round((paid[l.bill_id] || 0) * 100) / 100;
+        var isPay = !!payKeys[l.category_key] || !!(b0 && isPayrollVendorName(b0.vendor_name));
+        if (ln0 && isPrivateRow(ln0, scope)) { ln0 = { date: ln0.date, name: '(private account)' }; } else if (ln0 && isPay) { ln0 = { date: ln0.date, name: 'Warehouse staff', amount_abs: ln0.amount_abs, account_id: ln0.account_id }; }
+        // v55.83-XE — without 'payroll.view' a payroll bill shows as "Warehouse staff" with its date and state only: no amount,
+        // no paid amount, no description. The paid / owed state is worked out here, from the real numbers, before they are removed.
+        if (isPay && !pay.canSee) {
+          if (l.status === 'active') { restrictedNb++; }
+          var stateNb = b0 && paid0 >= (Number(b0.total_amount) || 0) - 0.005 ? 'paid' : 'owed';
+          return { link: l, bill: maskPayrollBill(b0), line: ln0 ? { date: ln0.date, name: 'Warehouse staff', payroll_restricted: true } : null, paid: null, state: stateNb, payroll_restricted: true };
+        }
+        return { link: l, bill: b0, line: ln0, paid: paid0 };
+      });
       var gTotN = await assertPermission(db, userId, 'accounting.view_totals', req); // the 'still owed' sum is a sensitive total (Codex P1-1)
-      return NextResponse.json({ ok: true, rows: rowsNb, can_totals: !!(gTotN && gTotN.ok === true), api_build_marker: API_BUILD_MARKER });
+      // XE — the "still owed" sum would contain the hidden payroll bills (or reveal them by subtraction): withheld when any is hidden
+      return NextResponse.json({ ok: true, rows: rowsNb, can_totals: !!(gTotN && gTotN.ok === true) && restrictedNb === 0, payroll_restricted: restrictedNb > 0 ? PAYROLL_NOTE : undefined, api_build_marker: API_BUILD_MARKER });
     }
 
     var comp = companyByKey(body.company);
@@ -178,6 +199,9 @@ export async function POST(req) {
         var cu = await db.from('company_categories').select('id, key, kind, is_payroll, label').eq('id', p.id).eq('company_id', cid).maybeSingle();
         if (cu.error) { return readFail('the category', cu.error); }
         if (!cu.data) { return fail('Category not found in ' + comp.label + '.', 404); }
+        // v55.83-XE (Codex 11:24) — taking the payroll mark off a category would make every salary line in it visible: the super
+        // admin's own action only (audited below with from / to), never a side effect of renaming or changing the kind
+        if (cu.data.is_payroll === true && row.is_payroll !== true && !pay.isSuperAdmin) { return fail('Only the super admin can take the payroll mark off a category (it would show the salaries in it). Nothing was changed.', 403); }
         var u = await db.from('company_categories').update(row).eq('id', p.id).eq('company_id', cid).select('id');
         if (u.error && /makes_ktc_bill/.test(String(u.error.message || ''))) { return fail(SQL_MISSING_UD, 409); }
         if (u.error && /direction/.test(String(u.error.message || ''))) { return fail(SQL_MISSING_UB, 409); }
@@ -258,7 +282,18 @@ export async function POST(req) {
       var byKey = {}; (catsL.data || []).forEach(function (c) { byKey[c.key] = c; });
       // payroll shows as "Warehouse staff" — no names (Max)
       var linesOut = (pl.data || []).map(function (l) { var c = byKey[l.company_category]; return (c && c.is_payroll) ? Object.assign({}, l, { name: 'Warehouse staff', merchant_name: null }) : l; });
-      if (action === 'totals') { return NextResponse.json({ ok: true, totals: companyTotals(linesOut, catsL.data || []), from: from, to: to, capped: !!pl.capped }); }
+      // v55.83-XE — without 'payroll.view' a payroll line keeps its date, account and category, but not its amount
+      var payK = payrollKeys(catsL.data || []); var hiddenPay = 0;
+      if (!pay.canSee) { linesOut = linesOut.map(function (l) { if (payK[l.company_category]) { hiddenPay++; return maskPayrollLine(l); } return l; }); }
+      if (action === 'totals') {
+        if (pay.canSee || !hiddenPay) { return NextResponse.json({ ok: true, totals: companyTotals(linesOut, catsL.data || []), from: from, to: to, capped: !!pl.capped }); }
+        // XE (Codex 11:24: an exact total a payroll amount can be subtracted out of is not shown) — totals WITHOUT payroll, labelled
+        // as such; the payroll row itself is listed with no amounts. Never presented as the company's full money out.
+        var totNp = companyTotals(linesOut.filter(function (l) { return !l.payroll_restricted; }), catsL.data || []);
+        (catsL.data || []).forEach(function (c) { if (payK[c.key] && linesOut.some(function (l) { return l.company_category === c.key; })) { totNp.rows.push({ key: c.key, label: c.label, kind: c.kind, byMonth: {}, total: null, payroll_restricted: true }); } });
+        totNp.excludes_payroll = true;
+        return NextResponse.json({ ok: true, totals: totNp, from: from, to: to, capped: !!pl.capped, payroll_restricted: PAYROLL_NOTE });
+      }
       var links = {}; var ktcMapL = null; var ktcCatsL = null;
       if (comp.key === 'nextrade' && linesOut.length) {
         var lnk = await db.from('company_bill_links').select('source_bank_transaction_id, bill_id, mode, status').eq('company_id', cid).eq('status', 'active').limit(20000);
@@ -280,7 +315,7 @@ export async function POST(req) {
         (lq.data || []).forEach(function (x) { (legs[x.transfer_group_id] = legs[x.transfer_group_id] || []).push(x); });
       }
       function otherLeg(l) { if (!l.transfer_group_id) { return null; } var o = (legs[l.transfer_group_id] || []).filter(function (x) { return x.id !== l.id; })[0]; if (!o) { return null; } if (isPrivateRow(o, scope)) { return { private: true }; } var oa = accts[o.account_id] || {}; return { id: o.id, date: o.date, account_label: (oa.name || 'account') + (oa.mask ? ' ••' + oa.mask : '') }; } // (Codex 22:50) a private partner leg: nothing about it is returned
-      return NextResponse.json({ ok: true, lines: linesOut.map(function (l) { var a = accts[l.account_id] || {}; return Object.assign({}, l, { account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', ktc_bill: links[l.id] || null, transfer_with: otherLeg(l) }); }), categories: catsL.data || [], capped: !!pl.capped, ktc_map: ktcMapL || undefined, ktc_categories: ktcCatsL || undefined });
+      return NextResponse.json({ ok: true, lines: linesOut.map(function (l) { var a = accts[l.account_id] || {}; return Object.assign({}, l, { account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', ktc_bill: links[l.id] || null, transfer_with: otherLeg(l) }); }), categories: catsL.data || [], capped: !!pl.capped, ktc_map: ktcMapL || undefined, ktc_categories: ktcCatsL || undefined, payroll_restricted: hiddenPay ? PAYROLL_NOTE : undefined });
     }
 
     // the KTC side needs: the party name and the Nextrade → KTC category mapping
@@ -329,14 +364,18 @@ export async function POST(req) {
     if (action === 'missing_bills' || action === 'make_missing_bills') {
       if (comp.key !== 'nextrade') { return fail('Only Nextrade lines make KTC bills.'); }
       var mb = await missingBillLines(); if (mb.error) { return readFail('the lines without a KTC bill', mb.error); }
-      if (action === 'missing_bills') { return NextResponse.json({ ok: true, count: mb.lines.length, lines: mb.lines.slice(0, 50).map(function (l) { return { id: l.id, date: l.date, amount: l.amount_abs, category: l.company_category, name: mb.cats[l.company_category] && mb.cats[l.company_category].is_payroll ? 'Warehouse staff' : (l.merchant_name || l.name) }; }) }); }
+      // v55.83-XE — without 'payroll.view': payroll lines are listed (date, "Warehouse staff") with no amount, and are not billed by
+      // this person (the bill and its messages carry the amount) — someone with the switch makes those
+      function payLine(l) { return !!(mb.cats[l.company_category] && mb.cats[l.company_category].is_payroll); }
+      if (action === 'missing_bills') { return NextResponse.json({ ok: true, count: mb.lines.length, payroll_restricted: !pay.canSee && mb.lines.some(payLine) ? PAYROLL_NOTE : undefined, lines: mb.lines.slice(0, 50).map(function (l) { var hid = !pay.canSee && payLine(l); return { id: l.id, date: l.date, amount: hid ? null : l.amount_abs, payroll_restricted: hid || undefined, category: l.company_category, name: payLine(l) ? 'Warehouse staff' : (l.merchant_name || l.name) }; }) }); }
+      var heldPay = 0; if (!pay.canSee) { mb.lines = mb.lines.filter(function (l) { if (payLine(l)) { heldPay++; return false; } return true; }); }
       var instM = await db.rpc('hub_company_books_installed'); if (instM.error || instM.data !== true) { return fail(SQL_MISSING, 409); }
       var nctxM = await nextradeCtx(); if (nctxM.error) { return readFail('the category mapping', nctxM.error); }
       var doM = mb.lines.slice(0, 100); var resM = [];
       for (var mj = 0; mj < doM.length; mj++) { resM.push(await categorize(doM[mj], mb.cats[doM[mj].company_category], 'manual', nctxM)); }
       var badM = resM.filter(function (r) { return !r.ok; });
       await audit(db, userId, 'nextrade_missing_bills_made', 'company', cid, { tried: doM.length, made: doM.length - badM.length, failed: badM.length });
-      return NextResponse.json({ ok: badM.length === 0, made: doM.length - badM.length, left: mb.lines.length - doM.length + badM.length, error: badM.length ? badM.length + ' line(s) not billed: ' + badM.slice(0, 5).map(function (b) { return b.error; }).join(' · ') : undefined });
+      return NextResponse.json({ ok: badM.length === 0, made: doM.length - badM.length, left: mb.lines.length - doM.length + badM.length + heldPay, payroll_left: heldPay || undefined, note: heldPay ? heldPay + ' payroll line(s) left for someone with "Payroll / salaries: view".' : undefined, error: badM.length ? badM.length + ' line(s) not billed: ' + badM.slice(0, 5).map(function (b) { return b.error; }).join(' · ') : undefined });
     }
 
     // v55.83-VK — learn a rule from each line a person categorized by hand. Best effort: the category is already saved, so a
@@ -412,10 +451,16 @@ export async function POST(req) {
       var wrong = (lr.data || []).filter(function (l) { return l.wave_business_id !== cid || isPrivateRow(l, scope); });
       if (wrong.length || (lr.data || []).length !== ids.length) { return fail('Some of those lines are not ' + comp.label + ' lines — nothing was changed.', 409); }
       if ((lr.data || []).some(function (l) { return l.pending === true; })) { return fail(PENDING_REFUSAL, 409); } // v55.83-XT
+      // v55.83-XE (Codex 11:24) — moving a line OUT of payroll (another category, or back to none) would show its salary to everyone
+      // who can open the books: the super admin's own action only. Moving a line INTO payroll (hiding it) is open to everyone.
+      var payS = payrollKeys(catsS.data || []);
+      if (!pay.isSuperAdmin && (lr.data || []).some(function (l) { return payS[l.company_category] && !(catS && payS[catS.key]); })) { return fail('Only the super admin can move a payroll line out of payroll (it would show the salary). Nothing was changed.', 403); }
       var nctx = null;
       if (comp.key === 'nextrade') { nctx = await nextradeCtx(); if (nctx.error) { return readFail('the category mapping', nctx.error); } }
       var results = [];
       for (var i = 0; i < lr.data.length; i++) { results.push(await categorize(lr.data[i], catS, 'manual', nctx)); }
+      // XE — a person without the switch never gets a payroll line's KTC-side messages (a duplicate warning names the amount)
+      if (!pay.canSee) { results = results.map(function (r) { var ln1 = lr.data.filter(function (x) { return x.id === r.id; })[0]; if (ln1 && (payS[ln1.company_category] || (catS && payS[catS.key]))) { return r.ok ? { id: r.id, ok: true, skipped: r.skipped, payroll_restricted: true } : { id: r.id, ok: false, error: 'A payroll line could not be saved — ask someone with "Payroll / salaries: view" to look at it.' }; } return r; }); }
       var bad = results.filter(function (r) { return !r.ok; });
       // v55.83-VK (Max 19 Nov: "any categories i enter should be learned … a rule should be created and used and automatically
       // updated") — what the person just did becomes this company's rule. Never from payroll lines (names) or private accounts.
@@ -510,6 +555,11 @@ export async function POST(req) {
       if (!t0 || t0.wave_business_id !== cid || isPrivateRow(t0, scope)) { return fail('That line is not one of ' + comp.label + '\u2019s lines.', 404); }
       if (t0.transfer_group_id) { return fail('This line is already paired — unpair it first.', 409); }
       if (t0.pending === true) { return fail(PENDING_REFUSAL, 409); } // v55.83-XT
+      // v55.83-XE — a payroll line is never offered for pairing (pairing takes it out of payroll), and a person without the switch
+      // never sees a payroll line among the candidates (the search runs on amounts)
+      var catsTc = await loadCats(db, cid); if (catsTc.error) { return readFail('the categories', catsTc.error); }
+      var payTc = payrollKeys(catsTc.data || []);
+      if (payTc[t0.company_category]) { return fail('A payroll line cannot be paired as a transfer.', 409); }
       var manualT = body.manual === true; var spanT = manualT ? 90 : 10;
       var dT = t0.posted_date || t0.date;
       var loT = new Date(Date.parse(dT) - spanT * 86400000).toISOString().substring(0, 10); var hiT = new Date(Date.parse(dT) + spanT * 86400000).toISOString().substring(0, 10);
@@ -519,7 +569,7 @@ export async function POST(req) {
       var cr = await cq.order('date', { ascending: false }).limit(manualT ? 400 : 20);
       if (cr.error) { return readFail('the other accounts\u2019 lines', cr.error); }
       var realT = realAccounts(await loadBankAccounts(db));
-      var candT = dropPrivate(cr.data || [], scope).filter(function (c0) { return realKeyOf(c0.account_id, realT) !== realKeyOf(t0.account_id, realT); });
+      var candT = dropPrivate(cr.data || [], scope).filter(function (c0) { return realKeyOf(c0.account_id, realT) !== realKeyOf(t0.account_id, realT) && !payTc[c0.company_category]; });
       if (manualT) {
         var qT = String(body.q || '').trim().toLowerCase();
         if (qT) { candT = candT.filter(function (c) { return (String(c.merchant_name || '') + ' ' + String(c.name || '') + ' ' + Number(c.amount_abs).toFixed(2) + ' ' + String(c.date)).toLowerCase().indexOf(qT) >= 0; }); }
@@ -534,8 +584,11 @@ export async function POST(req) {
       if (instT.error || instT.data !== true) { return fail(SQL_MISSING_UB, 409); }
       var rpcT;
       if (action === 'pair_transfer') {
-        var ab = await db.from('bank_transactions').select('id, account_id, wave_business_id').in('id', [body.a || '', body.b || '']);
+        var ab = await db.from('bank_transactions').select('id, account_id, wave_business_id, company_category').in('id', [body.a || '', body.b || '']);
         if (ab.error) { return readFail('the two lines', ab.error); }
+        var catsPt = await loadCats(db, cid); if (catsPt.error) { return readFail('the categories', catsPt.error); }
+        var payPt = payrollKeys(catsPt.data || []); // v55.83-XE — pairing takes a line out of payroll: never
+        if ((ab.data || []).some(function (x) { return payPt[x.company_category]; })) { return fail('A payroll line cannot be paired as a transfer. Nothing was changed.', 409); }
         if ((ab.data || []).length !== 2 || (ab.data || []).some(function (x) { return x.wave_business_id !== cid || isPrivateRow(x, scope); })) { return fail('Both lines must be ' + comp.label + '\u2019s lines that you can see.', 409); }
         var realP = realAccounts(await loadBankAccounts(db));
         if (realKeyOf(ab.data[0].account_id, realP) === realKeyOf(ab.data[1].account_id, realP)) { return fail('Both lines are in the same bank account (two connections of one account) — that is not a transfer.', 409); }

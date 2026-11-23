@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XE',
+    date: '2026-11-22',
+    title: 'Warehouse salaries: only for people Max allows (step 1: Nextrade books)',
+    items: [
+      { text: '**New switch: Payroll / salaries: view 🔒.** Only the super admin can switch it on: Settings → 🏦 Banking & Accounting Access → the person → group 2 · Money.' },
+      { text: 'Without it, in the Nextrade books and in KTC Bills → 🟦 Nextrade bills, a salary line still shows its date as "Warehouse staff", but the amount shows 🔒 instead of a number. Other lines are unchanged.' },
+      { text: 'The Nextrade month totals then say **WITHOUT payroll**, because they are not the full totals. In Nextrade bills, the "Still owed" sum is not shown while salaries are hidden, and a hidden salary bill has no Pay button.' },
+      { text: 'Only the super admin can move a salary line out of payroll or take the payroll mark off a category, because that would show the salary. Anyone may put a line into payroll. A salary line can never be paired as a transfer.' },
+      { text: '**Not covered yet:** Bills, wires, P&L by period (column D · Payroll), downloads and the bank screens still show salary amounts. They follow in the next steps, with a database step for Max.' },
+      { superAdminOnly: true, text: 'Technical: lib/payroll-visibility.js (payrollScope fails closed; super admin always passes); company-books lines / totals / nextrade_bills / missing_bills / make_missing_bills / set_category / save_category / transfer_candidates / pair_transfer. payroll.view added to SENSITIVE_PERMS (server) and Settings. The DB sensitive-grant guard and row-level rules are NOT changed yet. Codex 22 Nov 08:43 P2 fixed: nextrade_bills refuses (no rows, no totals) when the Nextrade categories cannot be read, because an attached payroll bill keeps its own vendor name. Test __tests__/test-v55-83-xe-payroll-view.js 47/47 (incl. that failure for staff, admin without the switch, holder).' }
+    ]
+  },
+  {
     version: 'v55.83-XJ',
     date: '2026-11-22',
     title: 'Warehouse panels now scroll sideways (no more cut-off edges)',
