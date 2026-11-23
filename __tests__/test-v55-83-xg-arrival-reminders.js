@@ -430,7 +430,7 @@ function logRows() { return db.t.arrival_reminders; }
   var sql = fs.readFileSync(path.join(root, 'sql/v55-83-XG-arrival-reminders.sql'), 'utf8');
   check('SQL: one new table only, re-runnable, no delete right, nothing dropped or altered elsewhere', /CREATE TABLE IF NOT EXISTS public\.arrival_reminders/.test(sql) && /status IN \('sending','sent','failed','unknown'\)/.test(sql) && /WHERE mode = 'auto' AND status IN \('sending','sent','unknown'\)/.test(sql) && !/DROP |DELETE|TRUNCATE|ALTER TABLE public\.(?!arrival_reminders)/i.test(sql.replace(/--.*$/gm, '')) && /GRANT SELECT, INSERT, UPDATE ON public\.arrival_reminders TO service_role/.test(sql) && /REVOKE ALL ON public\.arrival_reminders FROM PUBLIC, anon, authenticated/.test(sql));
   var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
-  check('badge and What’s New say XG', page.indexOf('>v55.83-XG</span>') > 0 && wn.indexOf("version: 'v55.83-XG'") > 0);
+  check('badge and What’s New say XG', (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })() /* a later build moves the badge on; it always names the newest What's New entry (XG or later) */ && wn.indexOf("version: 'v55.83-XG'") > 0);
 
   Module._load = origLoad; Module._resolveFilename = orig;
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
