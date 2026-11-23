@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XZ',
+    date: '2026-11-23',
+    title: 'Reminder box: the Send-to address is readable',
+    items: [
+      { text: '**Arrival & final-payment reminders:** the address in the **Send to** box (and the port-of-loading box) was shown in a near-white colour on the white box. Both now show dark text on white with a visible border, in both skins.' },
+      { superAdminOnly: true, text: 'Technical (no SQL): the two text inputs in ArrivalRemindersTab carry the nt-light class (globals.css) and a #64748b border. Nothing else changed.' },
+    ]
+  },
+  {
     version: 'v55.83-XQ',
     date: '2026-11-23',
     title: 'See what RTM / NextTrade handled for you each month',

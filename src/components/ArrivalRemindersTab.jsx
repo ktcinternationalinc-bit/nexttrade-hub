@@ -180,7 +180,7 @@ export default function ArrivalRemindersTab(props) {
         {open.row.pol_needs_confirm && <div className="mt-3 px-3 py-2 rounded text-[12px]" style={{ background: '#ffedd5', color: '#7c2d12', border: '2px solid #ea580c' }}>
           <b>{'Confirm the port of loading. '}</b>{'Release ' + (open.row.release_number || '') + ' does not start with 1002 (Houston) or 1001 (Canada), so the Hub does not guess it.'}{open.row.pol_suggestion ? ' The warehouse on the order is "' + open.row.pol_suggestion + '".' : ''}
           <div className="flex items-center gap-2 flex-wrap mt-1">
-            <input value={open.polDraft || ''} onChange={function (e) { var v = e.target.value; setOpenNow(function (o) { return Object.assign({}, o, { polDraft: v }); }); }} placeholder="port of loading, as the customer should read it" maxLength={60} className="px-2 py-1.5 rounded" style={{ border: '1px solid ' + LINE, color: INK, background: '#ffffff', minWidth: 280 }} />
+            <input value={open.polDraft || ''} onChange={function (e) { var v = e.target.value; setOpenNow(function (o) { return Object.assign({}, o, { polDraft: v }); }); }} placeholder="port of loading, as the customer should read it" maxLength={60} className="px-2 py-1.5 rounded nt-light" style={{ border: '1px solid #64748b', color: INK, background: '#ffffff', minWidth: 280 }} />
             <button onClick={function () { if (String(open.polDraft || '').trim()) { prepare(open.row, open.lang, open.polDraft, open.to); } }} disabled={!String(open.polDraft || '').trim()} className="px-3 py-1.5 rounded-lg font-extrabold" style={{ background: String(open.polDraft || '').trim() ? '#1d4ed8' : '#94a3b8', color: '#ffffff' }}>{open.pol ? 'Change and write again' : 'Confirm and write the reminder'}</button>
             {open.pol && <span style={{ fontWeight: 800 }}>{'Confirmed: ' + open.pol}</span>}
           </div>
@@ -211,7 +211,7 @@ export default function ArrivalRemindersTab(props) {
           </div>}
           <div className="mt-3 flex items-center gap-2 flex-wrap text-[12px]">
             <b>Send to:</b>
-            <input value={open.to} onChange={function (e) { var v = e.target.value; setOpenNow(function (o) { return Object.assign({}, o, { to: v }); }); }} placeholder="customer e-mail address" className="px-2 py-1.5 rounded" style={{ border: '1px solid ' + LINE, color: INK, background: '#ffffff', minWidth: 280 }} />
+            <input value={open.to} onChange={function (e) { var v = e.target.value; setOpenNow(function (o) { return Object.assign({}, o, { to: v }); }); }} placeholder="customer e-mail address" className="px-2 py-1.5 rounded nt-light" style={{ border: '1px solid #64748b', color: INK, background: '#ffffff', minWidth: 280 }} />
             <span style={{ color: SUB }}>{open.row.email ? ('on file in the ' + (open.row.email_from === 'hub' ? 'Hub customer' : 'warehouse customer')) : 'no address on file — type one'}</span>
           </div>
           <div className="mt-3 flex items-center gap-2 flex-wrap">
