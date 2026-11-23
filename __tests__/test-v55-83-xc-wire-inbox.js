@@ -44,7 +44,14 @@ db.hooks = {
   },
   wire_discrepancy_notices: {
     insert: function (r) { if (db.t.wire_discrepancy_notices.some(function (x) { return x.dedupe_key === r.dedupe_key; })) { return 'duplicate key value violates unique constraint "uq_wdn_dedupe"'; } },
-    update: function (row, p) { if ((row.mail_status === 'sent' || row.mail_status === 'partly_sent') && p.mail_status !== undefined && p.mail_status !== row.mail_status) { return 'WIRE_NOTICE_LOCKED: this note was already e-mailed'; } },
+    update: function (row, p) {
+      if (global.__failResultSave && p.mail_status && p.mail_status !== 'sending') { global.__failResultSave = false; return 'connection reset while saving the e-mail result'; }
+      if ((row.mail_status === 'sent' || row.mail_status === 'partly_sent') && p.mail_status !== undefined && p.mail_status !== row.mail_status) { return 'WIRE_NOTICE_LOCKED: this note was already e-mailed'; }
+      // rev3, like the SQL guard: pending → sending → result, never back; a result only after a claim
+      if (p.mail_status === 'pending' && row.mail_status !== 'pending') { return 'WIRE_NOTICE_LOCKED: cannot be put back to pending'; }
+      if (p.mail_status === 'sending' && row.mail_status !== 'pending' && row.mail_status !== 'sending') { return 'WIRE_NOTICE_LOCKED: already has its result'; }
+      if (row.mail_status === 'pending' && p.mail_status !== undefined && p.mail_status !== 'pending' && p.mail_status !== 'sending') { return 'WIRE_NOTICE_LOCKED: claim the note before recording a result'; }
+    },
   },
 };
 var files = {};
@@ -229,6 +236,36 @@ console.log('XC — the bank-confirmation inbox');
   check('rev2: opening the inbox (Wires: Send) e-mails a note left pending 2+ minutes; a just-saved one is left to its own step; view-only sends nothing', viewOnlyNoMail && nE2.mail_status === 'sent' && nE3.mail_status === 'pending' && global.__mails.length === mailsL + 1, [viewOnlyNoMail, nE2.mail_status, nE3.mail_status]);
   nE3.mail_status = 'not_sent'; nE3.mail_error = 'test fixture'; // keep later counts simple
 
+  // ── rev3 (Codex 22 Nov 14:36 P2): two people open the inbox while one pending note's e-mail is still in flight → ONE e-mail
+  db.t.wire_discrepancy_notices.push({ id: 'n0000000-0000-0000-0000-0000000000f1', dedupe_key: 'link:race:amount', kind: 'amount', package_id: w2.id, inbox_id: ids['bolt-wire.png'], note: 'WP: race', created_at: oldIso, mail_status: 'pending' });
+  var mailsR = global.__mails.length; var audR = auditOf('wire_discrepancy_noted').length;
+  global.__mailDelayMs = 150;
+  var both = await Promise.all([call('u1', { action: 'inbox_list' }), call('u1', { action: 'inbox_list' })]);
+  global.__mailDelayMs = 0;
+  var nF1 = db.t.wire_discrepancy_notices.filter(function (x) { return x.id === 'n0000000-0000-0000-0000-0000000000f1'; })[0];
+  check('rev3: two inbox openings at the same moment, the e-mail still in flight → both answer 200, ONE e-mail batch, ONE audit row, the note "sent" with who claimed it', both[0].ok && both[1].ok && global.__mails.length === mailsR + 1 && auditOf('wire_discrepancy_noted').length === audR + 1 && nF1.mail_status === 'sent' && nF1.mail_sent === 3 && nF1.mail_claimed_by === 'u1' && !!nF1.mail_claimed_at, [global.__mails.length - mailsR, auditOf('wire_discrepancy_noted').length - audR, nF1]);
+  // the same race through the attach path: two repeats of the same attach at once, one pending note → one e-mail
+  db.t.wire_discrepancy_notices.push({ id: 'n0000000-0000-0000-0000-0000000000f2', dedupe_key: 'link:' + ids['bolt-wire.png'] + ':currency', kind: 'currency', package_id: w2.id, inbox_id: ids['bolt-wire.png'], note: 'WP: race 2', created_at: new Date().toISOString(), mail_status: 'pending' });
+  var mailsR2 = global.__mails.length; global.__mailDelayMs = 150;
+  var both2 = await Promise.all([call('u1', { action: 'inbox_link', inbox_id: ids['bolt-wire.png'], package_id: w2.id }), call('u1', { action: 'inbox_link', inbox_id: ids['bolt-wire.png'], package_id: w2.id })]);
+  global.__mailDelayMs = 0;
+  check('rev3: two repeats of the same attach at once → ONE e-mail; exactly one of the two answers says it sent it', both2[0].ok && both2[1].ok && global.__mails.length === mailsR2 + 1 && (both2[0].mails.length + both2[1].mails.length) === 1, [global.__mails.length - mailsR2, both2[0].mails, both2[1].mails]);
+
+  // ── rev3: the e-mail went out but saving its result failed → the note stays "sending" (outcome unknown), never sent again by itself
+  db.t.wire_discrepancy_notices.push({ id: 'n0000000-0000-0000-0000-0000000000f3', dedupe_key: 'link:lost:amount', kind: 'amount', package_id: w2.id, inbox_id: ids['bolt-wire.png'], note: 'WP: lost result', created_at: oldIso, mail_status: 'pending' });
+  var mailsL3 = global.__mails.length; global.__failResultSave = true;
+  await call('u1', { action: 'inbox_list' });
+  var nF3 = db.t.wire_discrepancy_notices.filter(function (x) { return x.id === 'n0000000-0000-0000-0000-0000000000f3'; })[0];
+  check('rev3: the e-mail is sent but its result cannot be saved → the note stays "sending" with who / when claimed (not "sent", not pending)', global.__mails.length === mailsL3 + 1 && nF3.mail_status === 'sending' && nF3.mail_claimed_by === 'u1' && !nF3.mail_at, nF3);
+  nF3.mail_claimed_at = oldIso; // as if that was 3 minutes ago
+  var l3 = await call('u1', { action: 'inbox_list' }); await call('u1', { action: 'inbox_link', inbox_id: ids['bolt-wire.png'], package_id: w2.id });
+  var shown = (l3.notices || []).filter(function (x) { return x.id === nF3.id; })[0];
+  check('… later openings and repeats do NOT send it again; the list shows it as "sending" for a person to check', global.__mails.length === mailsL3 + 1 && nF3.mail_status === 'sending' && shown && shown.mail_status === 'sending', [global.__mails.length - mailsL3, shown && shown.mail_status]);
+  var back = await db.from('wire_discrepancy_notices').update({ mail_status: 'pending' }).eq('id', nF3.id).select('id');
+  check('… and it cannot be put back to pending (it could then be sent twice)', !!back.error && /pending/.test(back.error.message) && nF3.mail_status === 'sending', back);
+  var u3list = await call('u3', { action: 'inbox_list' });
+  check('rev3: view-only opening stays read-only (no claim, no e-mail)', u3list.ok && global.__mails.length === mailsL3 + 1, null);
+
   // ── set aside: reason required, kept forever
   var dsBad = await call('u1', { action: 'inbox_dismiss', inbox_id: ids['mystery.png'], reason: 'no' });
   var ds = await call('u1', { action: 'inbox_dismiss', inbox_id: ids['mystery.png'], reason: 'not our wire - a customer sent it' });
@@ -237,7 +274,7 @@ console.log('XC — the bank-confirmation inbox');
   // ── the list shows it all
   var l1 = await call('u3', { action: 'inbox_list' });
   var rowL = (l1.rows || []).filter(function (r) { return r.id === ids['acme-wire.pdf']; })[0];
-  check('the inbox list: 4 files, names of who added / attached, the wire label, 5 notes (the Bolt file also got its own "no matching wire" note when it was read)', l1.ok && l1.rows.length === 4 && rowL.uploaded_by_name === 'Preparer' && rowL.linked_by_name === 'Preparer' && /^WP-/.test(rowL.linked_label) && l1.notices.length === 8, [l1.notices && l1.notices.length, rowL && rowL.uploaded_by_name, rowL && rowL.linked_by_name, rowL && rowL.linked_label]);
+  check('the inbox list: 4 files, names of who added / attached, the wire label, 11 notes (5 real: the Bolt file also got its own "no matching wire" note when read; + 3 rev2 and 3 rev3 fixture notes)', l1.ok && l1.rows.length === 4 && rowL.uploaded_by_name === 'Preparer' && rowL.linked_by_name === 'Preparer' && /^WP-/.test(rowL.linked_label) && l1.notices.length === 11, [l1.notices && l1.notices.length, rowL && rowL.uploaded_by_name, rowL && rowL.linked_by_name, rowL && rowL.linked_label]);
 
   // ── mail service off: the note says NOT e-mailed (never "sent")
   global.__mailMode = 'off';
@@ -281,6 +318,7 @@ console.log('XC — the bank-confirmation inbox');
   var wp = fs.readFileSync(path.join(root, 'src/components/WirePackagesPanel.jsx'), 'utf8');
   check('screen: 🏦 Wires has the 📥 Bank confirmations button and shows the inbox', /import WireInboxPanel from '.\/WireInboxPanel'/.test(wp) && /📥 Bank confirmations/.test(wp) && /<WireInboxPanel /.test(wp), null);
   check('screen: the inbox uploads to the PRIVATE bucket under pv/wire-inbox-, adds, reads, attaches, sets aside', /from\('bills-private'\)\.upload\(path/.test(panel) && /'pv\/wire-inbox-'/.test(panel) && ['inbox_add', 'inbox_read', 'inbox_link', 'inbox_dismiss', 'inbox_list'].every(function (a) { return panel.indexOf("'" + a + "'") >= 0; }), null);
+  check('rev3 screen: a note left "sending" 2+ minutes shows "e-mail outcome unknown" and says it is not sent again by itself', /e-mail outcome unknown/.test(panel) && /not sent again by itself/.test(panel) && /n\.mail_status === 'sending'/.test(panel), null);
   check('screen: "Mark as sent" offers the inbox file and sends its path without uploading again', /📥 Use the confirmation from the inbox/.test(wp) && /sendF\.file\.inbox === true/.test(wp), null);
 
   console.log('XC inbox: ' + pass + ' passed, ' + failN + ' failed');

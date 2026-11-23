@@ -68,7 +68,12 @@ CREATE TABLE IF NOT EXISTS public.wire_discrepancy_notices (
 ALTER TABLE public.wire_discrepancy_notices DROP CONSTRAINT IF EXISTS wdn_kind_ok;
 ALTER TABLE public.wire_discrepancy_notices ADD CONSTRAINT wdn_kind_ok CHECK (kind IN ('amount', 'date', 'recipient', 'status', 'currency', 'no_wire', 'missing_confirmation', 'not_readable'));
 ALTER TABLE public.wire_discrepancy_notices DROP CONSTRAINT IF EXISTS wdn_mail_status_ok;
-ALTER TABLE public.wire_discrepancy_notices ADD CONSTRAINT wdn_mail_status_ok CHECK (mail_status IN ('pending', 'sent', 'partly_sent', 'not_sent', 'no_recipients'));
+-- XC rev3 (Codex 22 Nov 14:36 P2): a note is CLAIMED (pending → sending) by the one caller that e-mails it; who / when is kept
+ALTER TABLE public.wire_discrepancy_notices ADD COLUMN IF NOT EXISTS mail_claimed_at timestamptz;
+ALTER TABLE public.wire_discrepancy_notices ADD COLUMN IF NOT EXISTS mail_claimed_by uuid;
+ALTER TABLE public.wire_discrepancy_notices ADD CONSTRAINT wdn_mail_status_ok CHECK (mail_status IN ('pending', 'sending', 'sent', 'partly_sent', 'not_sent', 'no_recipients'));
+ALTER TABLE public.wire_discrepancy_notices DROP CONSTRAINT IF EXISTS wdn_claim_complete;
+ALTER TABLE public.wire_discrepancy_notices ADD CONSTRAINT wdn_claim_complete CHECK (mail_status = 'pending' OR mail_claimed_at IS NOT NULL);
 ALTER TABLE public.wire_discrepancy_notices DROP CONSTRAINT IF EXISTS wdn_sent_counts;
 ALTER TABLE public.wire_discrepancy_notices ADD CONSTRAINT wdn_sent_counts CHECK (mail_status NOT IN ('sent', 'partly_sent') OR (mail_sent IS NOT NULL AND mail_sent > 0 AND mail_at IS NOT NULL));
 CREATE UNIQUE INDEX IF NOT EXISTS uq_wdn_dedupe ON public.wire_discrepancy_notices (dedupe_key);
@@ -103,6 +108,19 @@ BEGIN
   END IF;
   IF OLD.mail_status IN ('sent', 'partly_sent') AND NEW.mail_status IS DISTINCT FROM OLD.mail_status THEN
     RAISE EXCEPTION 'WIRE_NOTICE_LOCKED: this note was already e-mailed';
+  END IF;
+  -- rev3: e-mailing goes pending → sending → its result, never back. A claim (who / when) never changes once made.
+  IF NEW.mail_status = 'pending' AND OLD.mail_status <> 'pending' THEN
+    RAISE EXCEPTION 'WIRE_NOTICE_LOCKED: an e-mail already started for this note cannot be put back to pending (it could be sent twice)';
+  END IF;
+  IF NEW.mail_status = 'sending' AND OLD.mail_status NOT IN ('pending', 'sending') THEN
+    RAISE EXCEPTION 'WIRE_NOTICE_LOCKED: this note''s e-mail already has its result';
+  END IF;
+  IF OLD.mail_status = 'pending' AND NEW.mail_status NOT IN ('pending', 'sending') THEN
+    RAISE EXCEPTION 'WIRE_NOTICE_LOCKED: claim the note (sending) before recording an e-mail result';
+  END IF;
+  IF OLD.mail_claimed_at IS NOT NULL AND (NEW.mail_claimed_at IS DISTINCT FROM OLD.mail_claimed_at OR NEW.mail_claimed_by IS DISTINCT FROM OLD.mail_claimed_by) THEN
+    RAISE EXCEPTION 'WIRE_NOTICE_LOCKED: who claimed this e-mail cannot change';
   END IF;
   RETURN NEW;
 END $fn$;
@@ -170,4 +188,5 @@ UNION ALL SELECT 'no delete / locked decisions (inbox)', CASE WHEN EXISTS (SELEC
 UNION ALL SELECT 'no delete / locked notes', CASE WHEN EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_wdn_guard') THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'one note per discrepancy', CASE WHEN to_regclass('public.uq_wdn_dedupe') IS NOT NULL THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'attach = one step (file + notes + decision)', CASE WHEN to_regprocedure('public.hub_wire_inbox_link(uuid, uuid, uuid, text, jsonb)') IS NOT NULL AND NOT has_function_privilege('authenticated', 'public.hub_wire_inbox_link(uuid, uuid, uuid, text, jsonb)', 'EXECUTE') THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'each e-mail claimed once (pending → sending)', CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'wire_discrepancy_notices' AND column_name = 'mail_claimed_at') AND to_regclass('public.wire_discrepancy_notices') IS NOT NULL THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'browsers cannot read the inbox', CASE WHEN NOT has_table_privilege('authenticated', 'public.wire_confirmation_inbox', 'SELECT') AND NOT has_table_privilege('anon', 'public.wire_confirmation_inbox', 'SELECT') THEN 'OK' ELSE 'OPEN' END;

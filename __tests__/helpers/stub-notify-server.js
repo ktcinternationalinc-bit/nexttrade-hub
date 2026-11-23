@@ -3,6 +3,8 @@
 global.__mails = global.__mails || [];
 async function notifyServer(type, ids, subject, body, by) {
   global.__mails.push({ type: type, ids: ids.slice(), subject: subject, body: body, by: by });
+  // global.__mailDelayMs keeps this send "in flight" for a while, so a second caller can arrive meanwhile (XC rev3 race test)
+  if (global.__mailDelayMs) { await new Promise(function (r) { setTimeout(r, global.__mailDelayMs); }); }
   if (global.__mailMode === 'throw') { throw new Error('mail service down'); }
   if (global.__mailMode === 'off') { return { attempted: ids.length, sent: 0, skipped: ids.length }; }
   return { attempted: ids.length, sent: ids.length, skipped: 0 };

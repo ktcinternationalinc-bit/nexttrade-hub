@@ -14,7 +14,7 @@ var ST = {
   no_wire: ['No matching wire', '#fee2e2', '#991b1b'], linked: ['Attached to its wire', '#d1fae5', '#065f46'], dismissed: ['Set aside', '#e2e8f0', '#475569'],
 };
 var KIND = { amount: 'Different amount', date: 'Different date', recipient: 'Different recipient', status: 'Bank status not sent', currency: 'Other currency', no_wire: 'No matching wire', missing_confirmation: 'Sent wire with no confirmation', not_readable: 'Could not be read' };
-var MAIL = { pending: 'e-mail pending', sent: 'e-mailed', partly_sent: 'e-mailed to some', not_sent: 'NOT e-mailed', no_recipients: 'no one to e-mail' };
+var MAIL = { pending: 'e-mail pending', sending: 'e-mailing…', sent: 'e-mailed', partly_sent: 'e-mailed to some', not_sent: 'NOT e-mailed', no_recipients: 'no one to e-mail' };
 function money(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function Btn(p) { return <button onClick={p.onClick} disabled={p.disabled} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={p.light ? { background: '#f1f5f9', color: SUB, opacity: p.disabled ? 0.5 : 1 } : { background: p.color || '#1d4ed8', color: '#ffffff', opacity: p.disabled ? 0.5 : 1 }}>{p.children}</button>; }
 
@@ -127,7 +127,10 @@ export default function WireInboxPanel(p) {
       {notices.map(function (n) {
         return <div key={n.id} className="text-[12px] rounded-lg px-3 py-1.5 mb-1" style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: INK }}>
           <b>{KIND[n.kind] || n.kind}</b>{' · ' + n.note + ' · ' + fmtET(n.created_at, 'datetime') + ' · '}
-          <span style={{ color: n.mail_status === 'sent' ? '#065f46' : (n.mail_status === 'not_sent' ? '#b91c1c' : MUTED) }}>{(MAIL[n.mail_status] || n.mail_status) + (n.mail_status === 'not_sent' && n.mail_error ? ' (' + n.mail_error + ')' : '')}</span>
+          {/* XC rev3 — an e-mail that started but whose result was never saved is NOT retried by itself: a person checks it */}
+          {n.mail_status === 'sending' && Date.now() - Date.parse(n.mail_claimed_at || n.created_at || 0) >= 120000
+            ? <span className="font-extrabold" style={{ color: '#b45309' }}>{'⚠ e-mail outcome unknown (started ' + fmtET(n.mail_claimed_at || n.created_at, 'datetime') + ', no result saved) — check with the people who should have got it; it is not sent again by itself'}</span>
+            : <span style={{ color: n.mail_status === 'sent' ? '#065f46' : (n.mail_status === 'not_sent' ? '#b91c1c' : MUTED) }}>{(MAIL[n.mail_status] || n.mail_status) + (n.mail_status === 'not_sent' && n.mail_error ? ' (' + n.mail_error + ')' : '')}</span>}
         </div>;
       })}
     </div>}

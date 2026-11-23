@@ -45,9 +45,22 @@ export async function raiseNotice(db, n, actorId, opts) {
   return { created: true, notice: sentM.notice, mail: sentM.mail };
 }
 
-// a note just saved (mail_status 'pending'): audited, then e-mailed once; the result is recorded only while it is still pending
+// a note waiting for its e-mail (mail_status 'pending'). XC rev3 (Codex 22 Nov 14:36 P2): it is CLAIMED first, in one database
+// update (pending → sending, only while still pending). Only the caller whose claim succeeds audits and sends; everyone else
+// (a second person opening the inbox at the same moment, a repeated attach) gets the note as it stands and sends nothing.
+// The result is then recorded only while the note is still 'sending'. A send whose result could not be saved stays 'sending' for
+// good: the screen shows "e-mail outcome unknown" for a person to check. It is never put back to pending, so it is never sent twice.
 export async function mailNotice(db, notice, wireLabel, actorId, opts) {
   var o = opts || {};
+  if (!notice || !notice.id) { return { claimed: false, notice: notice, mail: { mail_status: (notice && notice.mail_status) || 'pending' } }; }
+  var cl = await db.from('wire_discrepancy_notices').update({ mail_status: 'sending', mail_claimed_at: new Date().toISOString(), mail_claimed_by: actorId || null })
+    .eq('id', notice.id).eq('mail_status', 'pending').select('*');
+  if (cl.error || !cl.data || !cl.data.length) {
+    var cur = await db.from('wire_discrepancy_notices').select('*').eq('id', notice.id).maybeSingle();
+    var now = (cur && cur.data) || notice;
+    return { claimed: false, notice: now, mail: { mail_status: now.mail_status, mail_sent: now.mail_sent, mail_at: now.mail_at || null, mail_error: cl.error ? String(cl.error.message || '').substring(0, 300) : (now.mail_error || null) } };
+  }
+  notice = cl.data[0];
   await audit(db, actorId, 'wire_discrepancy_noted', notice.package_id ? 'wire_package' : 'wire_inbox', notice.package_id || notice.inbox_id || null, { kind: notice.kind, note: notice.note, dedupe_key: notice.dedupe_key, inbox_id: notice.inbox_id || null });
   var ids = o.recipients || await noticeRecipients(db);
   var mailRes; var patch;
@@ -59,8 +72,13 @@ export async function mailNotice(db, notice, wireLabel, actorId, opts) {
     patch = { mail_recipients: ids.length, mail_sent: sent, mail_status: sent > 0 && sent >= tried ? 'sent' : (sent > 0 ? 'partly_sent' : 'not_sent'),
       mail_at: sent > 0 ? new Date().toISOString() : null, mail_error: sent > 0 ? null : String((mailRes && (mailRes.error || (mailRes.skipped ? 'the mail service did not send (not set up, or turned off for these people)' : ''))) || 'nothing was sent').substring(0, 300) };
   }
-  if (notice.id) { await db.from('wire_discrepancy_notices').update(patch).eq('id', notice.id).eq('mail_status', 'pending'); }
-  return { notice: Object.assign({}, notice, patch), mail: patch };
+  var sv = null;
+  try { sv = await db.from('wire_discrepancy_notices').update(patch).eq('id', notice.id).eq('mail_status', 'sending').select('id'); } catch (eS) { sv = { error: eS }; }
+  if (!sv || sv.error || !sv.data || !sv.data.length) {
+    // the mails may have gone out, but the result is not saved: the note stays 'sending' (outcome unknown), shown for a person to check
+    return { claimed: true, notice: Object.assign({}, notice, { mail_status: 'sending' }), mail: { mail_status: 'sending', result_not_saved: true, would_have_been: patch.mail_status } };
+  }
+  return { claimed: true, notice: Object.assign({}, notice, patch), mail: patch };
 }
 
 // sent wires (not requests) with no bank confirmation file, MISSING_PROOF_DAYS after their sent date → one note each, ever
@@ -139,7 +157,7 @@ async function loadRow(db, id, sameWire) {
   if (OPEN_STATUSES.indexOf(q.data.status) < 0) { return { res: no(q.data.status === 'linked' ? 'This confirmation is already attached to another wire.' : 'This confirmation was set aside.', 409) }; }
   return { row: q.data };
 }
-var RESUME_MAIL_AFTER_MS = 120000; // a note still "pending" this long after it was saved was left by an interrupted try: e-mail it now
+var RESUME_MAIL_AFTER_MS = 120000; // opening the inbox e-mails a note still "pending" this long after it was saved (an attach that stopped before its own e-mail step); the claim in mailNotice keeps this to one send even when two people open the inbox at once
 
 // an audit row of this wire for this inbox confirmation already there? (a repeated attach writes each audit once)
 async function hasAudit(db, action, pkgId, test) {
@@ -278,12 +296,12 @@ export async function handleInbox(db, userId, action, body, deps) {
     // e-mail the notes THIS step saved; on a repeat, also notes an interrupted earlier try saved but never e-mailed
     var newIds = (res.notice_ids || []).map(String); var mails = [];
     var nq = await db.from('wire_discrepancy_notices').select('*').eq('inbox_id', rowL.id).eq('package_id', pkg.id).eq('mail_status', 'pending');
-    var toMail = ((nq && nq.data) || []).filter(function (x) { return newIds.indexOf(String(x.id)) >= 0 || (res.resumed && Date.now() - Date.parse(x.created_at || 0) >= RESUME_MAIL_AFTER_MS); });
+    var toMail = ((nq && nq.data) || []).filter(function (x) { return newIds.indexOf(String(x.id)) >= 0 || res.resumed === true; }); // a repeat claims any note an earlier try left pending (one sender wins the claim)
     if (toMail.length) {
       var rcp = d.recipients || await noticeRecipients(db);
       for (var k = 0; k < toMail.length; k++) {
         var mR = await mailNotice(db, toMail[k], lab, userId, Object.assign({}, mailOpts, { recipients: rcp }));
-        mails.push({ kind: toMail[k].kind, mail: mR.mail.mail_status });
+        if (mR.claimed) { mails.push({ kind: toMail[k].kind, mail: mR.mail.mail_status }); } // only the e-mails THIS call sent
       }
     }
     var next = pkg.status === 'draft' ? 'To mark it sent, open ' + lab + ' and press “📥 Use the confirmation from the inbox”, then Mark as sent.' : (pkg.status === 'sent' ? lab + ' waits for its bank line.' : '');
