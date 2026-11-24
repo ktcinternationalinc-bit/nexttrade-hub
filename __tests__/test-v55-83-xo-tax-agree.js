@@ -23,6 +23,7 @@ stub('src/lib/server-permissions.js', {
   assertPermission: function (db, uid, perm) { return Promise.resolve(allowed(perm) ? { ok: true, ctx: { isSuperAdmin: state.super, mp: {}, deny: {} } } : { ok: false, status: 403, ctx: { isSuperAdmin: false, mp: {}, deny: {} } }); },
   loadUserPermissions: function () { return Promise.resolve({ isSuperAdmin: state.super, mp: {}, deny: {} }); },
   userHasPermission: function (ctx, perm) { return allowed(perm); }, SENSITIVE_PERMS: {},
+  revenueSwitchedOff: function () { return false; }, // v55.83-XK — the stand-in needs the new export (revenueScope calls it for anyone not super admin); nobody is a researcher here
 });
 var supa = require.resolve('@supabase/supabase-js', { paths: [root] });
 require.cache[supa] = { id: supa, filename: supa, loaded: true, exports: { createClient: function () { return state.db; } } };

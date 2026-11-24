@@ -162,7 +162,7 @@ function chain(table) { var q = {};
 stub(path.join(root, 'node_modules/next/server.js'), { NextResponse: { json: function (body, init) { return { status: (init && init.status) || 200, body: body }; } } });
 stub('@supabase/supabase-js', { createClient: function () { return { from: chain, rpc: function () { world.writes += 1; return Promise.resolve({}); } }; } });
 stub(path.join(root, 'src/lib/verified-caller.js'), { verifiedCaller: async function () { return world.who; } });
-stub(path.join(root, 'src/lib/server-permissions.js'), { assertPermission: async function (db, userId, key) { return world.perms[key] ? { ok: true, ctx: {} } : { ok: false }; } });
+stub(path.join(root, 'src/lib/server-permissions.js'), { loadUserPermissions: async function () { return {}; }, revenueSwitchedOff: function () { return false; } /* v55.83-XK stand-in: nobody is a researcher here */, assertPermission: async function (db, userId, key) { return world.perms[key] ? { ok: true, ctx: {} } : { ok: false }; } });
 stub(path.join(root, 'src/lib/visibility-window-server.js'), { windowFloorFor: async function () { return world.floorError ? { error: world.floorError } : { floor: world.floor }; }, clampFrom: function (d, f) { return !f ? d : (!d || d < f ? f : d); } });
 var ROUTE = require(path.join(root, 'src/app/api/accounting/profitability/route.js'));
 function post(body) { return ROUTE.POST({ json: async function () { return body; }, headers: { get: function () { return 'Bearer x'; } } }); }
