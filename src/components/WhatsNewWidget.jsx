@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YQ',
+    date: '2026-11-24',
+    title: 'Change Schedule: a STOP switch for warehouse releases',
+    items: [
+      { text: '**New at the top of Change Schedule: “Stop all warehouse releases”.** One click (with a short reason) and nothing new can be approved, and nothing already approved will start on the warehouse. Only the super admin can stop or restart; everyone else sees whether releases are stopped and why.' },
+      { text: 'It does not interrupt a move that is already running, and it does not undo anything already on the warehouse. Taking back a waiting request still works while stopped.' },
+      { text: 'Every stop and restart is on the audit trail with the name, the time and the reason.' },
+      { superAdminOnly: true, text: 'Technical: no SQL (app_settings key warehouse_release_pause). lib/release-pause.js; /api/releases/pause (GET any team member, POST super admin). Enforced in /api/releases/signoff (go / rollback refused, withdraw allowed) and in the worker channel claim step (answers “not yours”, so the pinned office worker needs no change). Unreadable setting = stopped. Pushed on Max’s order; Codex to review after the fact.' },
+    ]
+  },
+  {
     version: 'v55.83-YO',
     date: '2026-11-24',
     title: 'Canada History: joined to the NT Warehouse records after the old workbook ends',

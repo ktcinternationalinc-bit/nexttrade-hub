@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import workerRules from '../../../../../release-management/lib/worker-authorization';
 import selection from '../../../../../release-management/lib/selection';
+import { readReleasePause } from '../../../../lib/release-pause'; // v55.83-YQ — the stop switch
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 function response(data, status = 200) { return NextResponse.json(data, { status, headers: { 'Cache-Control': 'no-store' } }); }
@@ -33,6 +34,8 @@ export async function POST(request) {
         if (!/^[a-f0-9-]{36}$/i.test(body.userId || '')) return response({ error: { message: 'Invalid approver.' } }, 400);
         result = { data: await workerRules.authorized(db, body.userId, body.requireSuperAdmin === true) }; break;
       case 'claim':
+        // v55.83-YQ (Max, 24 Nov) — while warehouse releases are STOPPED (or the switch cannot be read) no request is handed out.
+        if ((await readReleasePause(db)).paused) return response({ data: false, paused: true });
         if (!Number.isSafeInteger(Number(body.request)) || Number(body.request) < 1) return response({ error: { message: 'Invalid request ID.' } }, 400);
         if (body.version !== selection.DATA_WORKER_VERSION) {
           const candidate = await db.from('release_signoffs').select('detail').eq('id', body.request).eq('scope', 'warehouse').maybeSingle();

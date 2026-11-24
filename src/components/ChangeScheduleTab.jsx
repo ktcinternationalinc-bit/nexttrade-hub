@@ -9,6 +9,7 @@
 // preview, using the Hub's JetBrains Mono for mono accents.
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import ReleasePauseBar from './ReleasePauseBar'; // v55.83-YQ — the stop switch for warehouse releases
 
 var C = {
   bg: '#0a0e1a', panel: '#111827', card: '#151c2e',
@@ -331,6 +332,7 @@ export default function ChangeScheduleTab() {
     <div className="warehouse-release-manager" style={{ background: C.bg, color: C.ink, border: '1px solid ' + C.line, padding: '24px 22px 30px', fontFamily: 'system-ui, sans-serif', lineHeight: 1.5, overflowWrap: 'anywhere' }}>
       <style>{'.warehouse-release-manager button:disabled{opacity:.45;cursor:not-allowed!important}.warehouse-change-row{grid-template-columns:minmax(0,1fr) auto}@media(max-width:600px){.warehouse-change-row{grid-template-columns:minmax(0,1fr)}}'}</style>
       <div style={{ maxWidth: 1080, margin: '0 auto', display: 'grid', gap: 22 }}>
+        <ReleasePauseBar onChange={function () { load(); }} />
         <header>
           <h1 style={{ fontSize: '1.5rem', margin: '0 0 4px', letterSpacing: 0 }}>Change Schedule</h1>
           <p style={{ margin: 0, color: C.muted, fontSize: '.92rem', maxWidth: '80ch' }}>

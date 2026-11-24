@@ -10,6 +10,7 @@ import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, requireReleaseManager, findItem, checkS
 import { matchesReview, reviewState } from '../../../../lib/release-review';
 import bundledRegister from '../../../../../release-management/release-register.json';
 import selection from '../../../../../release-management/lib/selection';
+import { readReleasePause, pauseSentence } from '../../../../lib/release-pause'; // v55.83-YQ — the stop switch
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,6 +35,8 @@ export async function POST(request) {
   if (!ids.length || ids.length > 20 || new Set(ids).size !== ids.length || ids.some(function (id) { return typeof id !== 'string' || !findItem(bundledRegister, id); })) { return deny('Select valid, different warehouse changes.', 400); }
   var action = String(body.action || '');
   if (action !== 'go' && action !== 'rollback' && action !== 'withdraw') { return deny('Unknown release action.', 400); }
+  // v55.83-YQ (Max, 24 Nov) — the stop switch: no new move or roll back is recorded while it is on. Taking a request back is still allowed.
+  if (action !== 'withdraw') { var pz = await readReleasePause(db); if (pz.paused) { return deny(pauseSentence(pz) + ' Nothing was recorded.', 409); } }
   if (Array.isArray(body.item_ids) && body.confirm !== (action === 'go' ? 'DEPLOY' : action === 'rollback' ? 'ROLLBACK' : 'WITHDRAW')) { return deny('Confirm the selected action first.', 400); }
   var sr = await db.from(SIGNOFF_TABLE).select(SIGNOFF_COLUMNS).eq('scope', 'warehouse').order('id', { ascending: true }).limit(5000);
   if (sr.error) {
