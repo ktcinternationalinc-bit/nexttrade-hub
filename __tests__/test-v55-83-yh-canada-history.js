@@ -215,10 +215,10 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
   check('the tab is in the menu', /\{ id: 'canadahistory', label: '[^']*', icon: '[^']*' \}/.test(page));
   check('the tab is drawn', /tab === 'canadahistory' && \(/.test(page) && /<CanadaHistoryTab /.test(page) && /import CanadaHistoryTab from '\.\.\/components\/CanadaHistoryTab'/.test(page));
   check('the tab opens only with the explicit switch', /if \(t\.id === 'canadahistory'\) \{ return modulePerms\['canada_history\.access'\] === true; \}/.test(page));
-  check('the tab sits under REPORTS and has a breadcrumb', /group: 'REPORTS', items: \['reports', 'canadahistory'\]/.test(page) && /canadahistory:'Reports'/.test(page));
+  check('the tab has its own ARCHIVE group right under REPORTS, and a breadcrumb', /\{ group: 'REPORTS', items: \['reports'\] \},\s*\{ group: 'ARCHIVE', items: \['canadahistory'\] \},/.test(page) && /canadahistory:'Archive'/.test(page));
   check('the History icon is imported and used', /CalendarClock, History\s/.test(page) && /canadahistory: History,/.test(page));
   check('the badge says YH', page.indexOf('>v55.83-YH</span>') >= 0);
-  check('the switch is in Settings', /\{ key: 'canada_history\.access', label: 'Reports: Canada History'/.test(settings));
+  check('the switch is in Settings', /\{ key: 'canada_history\.access', label: 'Archive: Canada History'/.test(settings));
   check("What's New has YH on top", /export const BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-YH',\s*date: '2026-11-24'/.test(wn));
   [['route', route], ['server lib', server], ['rules lib', lib]].forEach(function (x) {
     var code = x[1].replace(/\/\/[^\n]*/g, '');

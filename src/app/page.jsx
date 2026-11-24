@@ -2013,7 +2013,7 @@ function HubApp() {
   const toast = _toastRaw || HUB_TOAST_FALLBACK;
 
   // Breadcrumb — shows current location
-  const TAB_GROUPS = { dashboard:'Overview', sales:'Egypt Finance', treasury:'Egypt Finance', checks:'Egypt Finance', debts:'Egypt Finance', egyptbank:'Egypt Finance', bank:'USA Finance', accounting:'USA Finance', quotes:'Egypt Finance', openaccounts:'Open Accounts', reports:'Reports', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System', releases:'System', canadahistory:'Reports' };
+  const TAB_GROUPS = { dashboard:'Overview', sales:'Egypt Finance', treasury:'Egypt Finance', checks:'Egypt Finance', debts:'Egypt Finance', egyptbank:'Egypt Finance', bank:'USA Finance', accounting:'USA Finance', quotes:'Egypt Finance', openaccounts:'Open Accounts', reports:'Reports', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System', releases:'System', canadahistory:'Archive' };
   const currentTabLabel = TABS.find(t => t.id === tab)?.label?.split(' / ')[0] || tab;
   const currentGroup = TAB_GROUPS[tab] || '';
 
@@ -6000,7 +6000,8 @@ function HubApp() {
               { group: '🇺🇸 USA FINANCE', items: ['bank', 'accounting'] },
               { group: '🇪🇬 EGYPT FINANCE', items: ['sales', 'quotes', 'treasury', 'checks', 'debts', 'egyptbank'] },
               { group: 'OPEN ACCOUNTS', items: ['openaccounts'] },
-              { group: 'REPORTS', items: ['reports', 'canadahistory'] },
+              { group: 'REPORTS', items: ['reports'] },
+              { group: 'ARCHIVE', items: ['canadahistory'] },
               { group: 'OPERATIONS', items: ['warehouse', 'inventory', 'customs', 'shipping', 'sourcing'] },
               { group: 'PEOPLE', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
               { group: 'SYSTEM', items: ['admin', 'ai', 'settings', 'import', 'systemtickets', 'releases'] },
