@@ -24,7 +24,7 @@ function Tag(props) {
   var tint = { prod: 'rgba(52,211,153,.1)', stage: 'rgba(242,207,91,.1)', codex: 'rgba(56,189,248,.1)', max: 'rgba(248,163,59,.12)', data: 'rgba(196,181,253,.1)' }[color] || 'transparent';
   var text = C[color] || C.ink;
   return (
-    <span style={{ font: '700 10.5px system-ui, sans-serif', padding: '3px 9px', borderRadius: 999, whiteSpace: 'nowrap', border: '1px solid ' + border, color: text, background: tint }}>
+    <span style={{ font: '700 10.5px system-ui, sans-serif', padding: '3px 9px', borderRadius: 999, border: '1px solid ' + border, color: text, background: tint }}>
       {label}
     </span>
   );
@@ -57,7 +57,7 @@ function SignBox(props) {
 
   function send() {
     setBusy(true); setMsg(null);
-    callApi('/api/releases/signoff', 'POST', { item_id: it.id, action: open, confirm: typed })
+    callApi(open === 'check' ? '/api/releases/check' : '/api/releases/signoff', 'POST', open === 'check' ? { item_id: it.id, head: sg.head, note: typed } : { item_id: it.id, action: open, confirm: typed, heads: { [it.id]: sg.head }, builds: { [it.id]: it.manifest && it.manifest.sha } })
       .then(function (j) {
         if (j && j.ok) { setMsg({ ok: true, text: j.note || 'Recorded.' }); setOpen(''); setTyped(''); props.onDone(); }
         else { setMsg({ ok: false, text: (j && j.error) || 'It could not be recorded. Nothing was changed.' }); }
@@ -66,28 +66,29 @@ function SignBox(props) {
       .then(function () { setBusy(false); });
   }
 
-  var label = { go: 'Sign off: go to production', rollback: 'Ask to roll this back', withdraw: 'Take it back' };
+  var label = { go: 'Sign off: go to production', rollback: 'Ask to roll this back', withdraw: 'Take it back', check: 'Record production verification' };
   var ask = { go: 'This records your go for this exact build. To confirm, type the name of the change:', rollback: 'This records your request to put this change back to what it was before. To confirm, type the name of the change:', withdraw: 'This takes your go / roll-back request back. To confirm, type the name of the change:' };
   return (
     <div style={{ gridColumn: '1 / -1', borderTop: '1px dashed ' + C.line, paddingTop: 9, marginTop: 2, fontSize: '.82rem' }}>
-      {sg.kind === 'go' && <div style={{ color: C.prod }}><b>Signed off</b>{sg.by ? ' by ' + sg.by : ''}{sg.at ? ' · ' + fmtWhen(sg.at) : ''}{sg.sha ? ' · build ' + String(sg.sha).substring(0, 7) : ''}. The move itself is done from the KTC office PC, backups first.</div>}
+      {sg.kind === 'go' && <div style={{ color: C.prod }}><b>Queued for deployment</b>{sg.by ? ' by ' + sg.by : ''}{sg.at ? ' · ' + fmtWhen(sg.at) : ''}{sg.sha ? ' · build ' + String(sg.sha).substring(0, 7) : ''}.</div>}
       {sg.kind === 'rollback' && <div style={{ color: C.max }}><b>Roll back requested</b>{sg.by ? ' by ' + sg.by : ''}{sg.at ? ' · ' + fmtWhen(sg.at) : ''}{sg.sha ? ' · of build ' + String(sg.sha).substring(0, 7) : ''}. The restore itself is done from the KTC office PC.</div>}
       {sg.kind === 'unknown' && <div style={{ color: C.muted }}>Sign-off status is not available right now.</div>}
       {sg.problem && <div style={{ color: '#fca5a5' }}>{sg.problem}</div>}
       {sg.why && <div style={{ color: C.muted }}>{sg.why}</div>}
-      {!open && (sg.canGo || sg.canRollback || sg.canWithdraw) && (
+      {!open && (sg.canGo || sg.canRollback || sg.canWithdraw || sg.canCheck) && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-          {sg.canGo && <button style={btn(C.prod, true)} onClick={function () { setOpen('go'); setMsg(null); }}>{label.go}</button>}
-          {sg.canRollback && <button style={btn(C.max, false)} onClick={function () { setOpen('rollback'); setMsg(null); }}>{label.rollback}</button>}
+          {sg.canGo && <button style={btn(C.prod, true)} onClick={function () { props.onReview('go', it.id); }}>Review deployment</button>}
+          {sg.canRollback && <button style={btn(C.max, false)} onClick={function () { props.onReview('rollback', it.id); }}>Review code rollback</button>}
           {sg.canWithdraw && <button style={btn(C.muted, false)} onClick={function () { setOpen('withdraw'); setMsg(null); }}>{label.withdraw}</button>}
+          {sg.canCheck && <button style={btn(C.prod, false)} onClick={function () { setOpen('check'); setMsg(null); }}>Record production verification</button>}
         </div>
       )}
       {open && (
         <div style={{ marginTop: 6, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
-          <div style={{ color: C.ink }}>{ask[open]}</div>
+          <div style={{ color: C.ink }}>{open === 'check' ? 'What did you test on the live warehouse, and what was the result?' : ask[open]}</div>
           {open === 'rollback' && sg.liveBuild && <div style={{ color: C.muted, marginTop: 4 }}>What will be undone: build <b style={{ fontFamily: C.mono, color: C.ink }}>{String(sg.liveBuild).substring(0, 7)}</b>, restored from <span style={{ fontFamily: C.mono }}>{sg.liveBackup}</span>.</div>}
           <div style={{ font: '700 12px ' + C.mono, color: C.gold2, margin: '4px 0 6px' }}>{it.title}</div>
-          <input value={typed} onChange={function (e) { setTyped(e.target.value); }} placeholder="Type the name here" style={{ width: '100%', maxWidth: 520, padding: '7px 9px', borderRadius: 6, border: '1px solid ' + C.line, background: '#0a0e1a', color: C.ink, font: '500 13px system-ui, sans-serif' }} />
+          <input value={typed} onChange={function (e) { setTyped(e.target.value); }} placeholder={open === 'check' ? 'Production test notes' : 'Type the name here'} style={{ boxSizing: 'border-box', width: '100%', maxWidth: 520, padding: '7px 9px', borderRadius: 6, border: '1px solid ' + C.line, background: '#0a0e1a', color: C.ink, font: '500 13px system-ui, sans-serif' }} />
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <button disabled={busy} style={btn(open === 'go' ? C.prod : C.max, true)} onClick={send}>{busy ? 'Recording…' : label[open]}</button>
             <button disabled={busy} style={btn(C.muted, false)} onClick={function () { setOpen(''); setTyped(''); }}>Cancel</button>
@@ -157,8 +158,9 @@ function Row(props) {
   if (it.needsCodex) { tags.push({ color: 'codex', label: 'Codex reviewing' }); }
   if (it.needsMax) { tags.push({ color: 'max', label: "Needs your go" }); }
   return (
-    <div style={{ background: C.card, border: '1px solid ' + C.line, borderLeft: '3px solid ' + leftColor, borderRadius: 10, padding: '12px 14px', display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'start' }}>
+    <div className="warehouse-change-row" style={{ background: C.card, border: '1px solid ' + C.line, borderLeft: '3px solid ' + leftColor, borderRadius: 8, padding: '12px 14px', display: 'grid', gap: 10, alignItems: 'start' }}>
       <div style={{ minWidth: 0 }}>
+        {props.canSign && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}><input type="checkbox" aria-label={'Select ' + it.title} checked={!!props.selected} onChange={function () { props.onSelect(it.id); }} />Select change</label>}
         <h3 style={{ margin: '0 0 3px', fontSize: '.98rem', color: C.ink }}>{it.title}</h3>
         <div style={{ font: '600 11px ' + C.mono, color: C.muted }}>{it.meta || it.date || ''}</div>
         {it.desc && <div style={{ color: C.muted, fontSize: '.86rem', marginTop: 4, maxWidth: '70ch' }}>{it.desc}</div>}
@@ -172,7 +174,7 @@ function Row(props) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end', minWidth: 150 }}>
         {tags.map(function (t, i) { return <Tag key={i} color={t.color} label={t.label} />; })}
       </div>
-      {props.sign && (props.canSign || props.sign.kind === 'go' || props.sign.kind === 'rollback') && <SignBox item={it} sign={props.sign} onDone={props.onDone} />}
+      {props.sign && <SignBox item={it} sign={props.sign} onDone={props.onDone} onReview={props.onReview} />}
     </div>
   );
 }
@@ -181,10 +183,14 @@ export default function ChangeScheduleTab() {
   var st = useState(null); var data = st[0]; var setData = st[1];
   var es = useState(''); var err = es[0]; var setErr = es[1];
   var ls = useState(true); var loading = ls[0]; var setLoading = ls[1];
+  var ps = useState({}); var picked = ps[0]; var setPicked = ps[1];
+  var rs = useState(null); var review = rs[0]; var setReview = rs[1];
+  var bs = useState(false); var sending = bs[0]; var setSending = bs[1];
+  var ms = useState(''); var message = ms[0]; var setMessage = ms[1];
 
   function load() {
     setLoading(true); setErr('');
-    // The route is authenticated (super-admin OR releases.access), so send the sign-in bearer.
+    // The schedule is available to verified team members through the signed-in API.
     supabase.auth.getSession()
       .then(function (s) {
         var token = s && s.data && s.data.session ? s.data.session.access_token : '';
@@ -200,21 +206,38 @@ export default function ChangeScheduleTab() {
       .catch(function () { setErr('Could not reach the release register.'); setData(null); })
       .then(function () { setLoading(false); });
   }
-  useEffect(function () { load(); }, []);
+  useEffect(function () { load(); var timer = setInterval(load, 15000); return function () { clearInterval(timer); }; }, []);
 
   var items = (data && data.items) || [];
-  // v55.83-YJ — sign-off state comes from the server; buttons only for the super admin.
+  // Sign-off state and permission to take action come from the server.
   // Which list a change is in follows the recorded history (current), not only the register file.
   var signs = (data && data.signoffs) || {};
   var queued = items.filter(function (it) { return it && whereOf(it, signs[it.id]) === 'staging'; });
   var live = items.filter(function (it) { return it && whereOf(it, signs[it.id]) !== 'staging'; });
   var canSign = !!(data && data.canSign);
+  var selectedIds = Object.keys(picked).filter(function (id) { return picked[id]; });
+  function select(id) { setPicked(function (p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); }
+  function openReview(action, id) {
+    var ids = id ? [id] : selectedIds;
+    setReview({ action: action, items: ids.map(function (key) { return items.find(function (it) { return it.id === key; }); }).filter(Boolean), heads: Object.assign({}, signs) });
+    setMessage('');
+  }
+  function confirmReview() {
+    var heads = {}; var builds = {}; var digests = {};
+    review.items.forEach(function (it) { heads[it.id] = (review.heads[it.id] || {}).head; builds[it.id] = it.manifest && it.manifest.sha; digests[it.id] = (review.heads[it.id] || {}).manifestDigest; });
+    setSending(true);
+    callApi('/api/releases/signoff', 'POST', { item_ids: review.items.map(function (it) { return it.id; }), action: review.action, heads: heads, builds: builds, digests: digests, confirm: review.action === 'go' ? 'DEPLOY' : 'ROLLBACK' })
+      .then(function (j) { if (!j || !j.ok) throw new Error((j && j.error) || 'Could not queue the release.'); setMessage(j.note); setPicked({}); setReview(null); load(); })
+      .catch(function (e) { setMessage(e.message); }).finally(function () { setSending(false); });
+  }
+  var reviewBlocked = review && review.items.some(function (it) { var s = review.heads[it.id] || {}; return review.action === 'go' ? !s.canGo : !s.canRollback; });
 
   return (
-    <div style={{ background: C.bg, color: C.ink, borderRadius: 14, border: '1px solid ' + C.line, padding: '24px 22px 30px', fontFamily: 'system-ui, sans-serif', lineHeight: 1.5 }}>
+    <div className="warehouse-release-manager" style={{ background: C.bg, color: C.ink, border: '1px solid ' + C.line, padding: '24px 22px 30px', fontFamily: 'system-ui, sans-serif', lineHeight: 1.5, overflowWrap: 'anywhere' }}>
+      <style>{'.warehouse-release-manager button:disabled{opacity:.45;cursor:not-allowed!important}.warehouse-change-row{grid-template-columns:minmax(0,1fr) auto}@media(max-width:600px){.warehouse-change-row{grid-template-columns:minmax(0,1fr)}}'}</style>
       <div style={{ maxWidth: 1080, margin: '0 auto', display: 'grid', gap: 22 }}>
         <header>
-          <h1 style={{ fontSize: '1.5rem', margin: '0 0 4px', letterSpacing: '-.01em' }}>Change Schedule</h1>
+          <h1 style={{ fontSize: '1.5rem', margin: '0 0 4px', letterSpacing: 0 }}>Change Schedule</h1>
           <p style={{ margin: 0, color: C.muted, fontSize: '.92rem', maxWidth: '80ch' }}>
             {(data && data.intro) || "What's live on production, what's waiting on fix staging, and what each change still needs before it moves."}
           </p>
@@ -235,6 +258,33 @@ export default function ChangeScheduleTab() {
             })}
           </div>
         </header>
+        {data && <div role="status" style={{ color: data.workerOnline ? C.prod : C.max }}>
+          {data.workerOnline ? 'Warehouse deployment worker online' : 'Warehouse deployment worker offline: requests remain queued until it reconnects'}
+          {data.worker && data.worker.last_seen ? ' · Last contact ' + fmtWhen(data.worker.last_seen) : ''}
+          {!canSign && <div style={{ color: C.muted }}>View only. Managing releases requires the NT Warehouse release permission.</div>}
+          {!data.executionReady && <div>Execution database setup is not available. No release can be queued.</div>}
+        </div>}
+        {data && (data.executions || []).map(function (job) { return <div key={job.request_id} role="status" style={{ color: C.max }}>Request #{job.request_id}: {job.phase === 'running' ? 'Executing' : 'Recovery check required'} · Started {fmtWhen(job.started_at)}</div>; })}
+        {canSign && <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <b>{selectedIds.length} selected</b>
+          <button disabled={!selectedIds.length || sending} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Review selected deployments</button>
+          <button disabled={!selectedIds.length || sending} style={btn(C.max, false)} onClick={function () { openReview('rollback'); }}>Review selected code rollbacks</button>
+          <button disabled={!selectedIds.length} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
+        </div>}
+        {message && <div role="status" style={{ color: C.max }}>{message}</div>}
+        {review && <section role="dialog" aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
+          <h2>{review.action === 'go' ? 'Confirm selected deployments' : 'Confirm selected code rollbacks'}</h2>
+          <p>NT Warehouse production only. Database records, orders, scans, bills and uploads are not restored or changed by this operation.</p>
+          {review.items.map(function (it) { var s = review.heads[it.id] || {}; return <div key={it.id} style={{ padding: '10px 0', borderTop: '1px solid ' + C.line }}>
+            <b>{it.title}</b><div>Build: {review.action === 'go' ? (it.manifest && it.manifest.sha) || 'Not prepared' : s.liveBuild || 'No recorded target'}</div>
+            <div>{review.action === 'go' ? 'Files: ' + (((it.manifest || {}).files || []).map(function (f) { return f.path; }).join(', ') || 'No reviewed file list') : 'Backup: ' + (s.liveBackup || 'Not recorded')}</div>
+            {s.why && <div style={{ color: C.max }}>{s.why}</div>}
+          </div>; })}
+          <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+            <button disabled={sending || reviewBlocked || !review.items.length || !canSign} style={btn(C.prod, true)} onClick={confirmReview}>{sending ? 'Queuing...' : review.action === 'go' ? 'Confirm and queue deployment' : 'Confirm and queue code rollback'}</button>
+            <button disabled={sending} style={btn(C.muted, false)} onClick={function () { setReview(null); }}>Cancel</button>
+          </div>
+        </section>}
 
         {canSign && data && data.signoffsInstalled === false && (
           <div style={{ background: 'rgba(248,163,59,.1)', border: '1px solid #8a5a1a', borderRadius: 10, padding: '10px 14px', color: C.max, fontSize: '.86rem' }}>
@@ -258,7 +308,7 @@ export default function ChangeScheduleTab() {
           </h2>
           <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>All on fix staging. Each moves only after Codex passes it and you name it — then a backed-up, reversible deploy.</p>
           <div style={{ display: 'grid', gap: 10 }}>
-            {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} />; })
+            {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} selected={picked[it.id]} onSelect={select} onReview={openReview} />; })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'Nothing queued.'}</div>}
           </div>
         </section>
@@ -270,7 +320,7 @@ export default function ChangeScheduleTab() {
           </h2>
           <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>Warehouse changes moved to the live site.</p>
           <div style={{ display: 'grid', gap: 10 }}>
-            {live.length ? live.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} />; })
+            {live.length ? live.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} selected={picked[it.id]} onSelect={select} onReview={openReview} />; })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'Nothing on production yet.'}</div>}
           </div>
         </section>

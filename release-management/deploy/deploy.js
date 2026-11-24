@@ -206,6 +206,7 @@ function main() {
   var res = remote.deployLive({
     runner: runner, appRoot: CONFIG.live.appRoot, backupRoot: CONFIG.live.backupRoot, topic: topic, stamp: stamp, sha: sha,
     files: files, allow: item.deployFiles, localRoot: path.join(repoRootFor(item), (CONFIG.repo && CONFIG.repo.appSubdir) || ''),
+    manifest: item.manifest,
     cacheCmds: cacheCmds, siteUrl: CONFIG.live.checkUrl, tmpDir: tmpDir, log: say
   });
   if (!res.ok) {

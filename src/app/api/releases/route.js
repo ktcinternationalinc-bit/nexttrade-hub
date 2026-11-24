@@ -3,9 +3,8 @@
 // Schedule tab shows: what is live on production, what is queued on fix staging, and what each
 // change still needs (Codex pass / Max's go / data-change flag).
 //
-// Codex pre-build point 3: protect the API itself, not just the tab. This route verifies the
-// caller's sign-in (verifiedCaller) and requires super-admin OR the 'releases.access' switch
-// (assertPermission) — it FAILS CLOSED. It takes NO caller input (no path, no query), reads a
+// This route verifies the caller's team sign-in and reads the current execution state.
+// It takes no caller input, reads a
 // FIXED file path (no traversal), performs no writes, and returns only the schedule fields —
 // no credentials. The register is release-management/release-register.json (hand-editable, or
 // appended to by the deploy/rollback tooling). The static import guarantees the file ships with
@@ -16,8 +15,9 @@ import { createClient } from '@supabase/supabase-js';
 import fs from 'fs';
 import path from 'path';
 import { verifiedCaller } from '../../../lib/verified-caller';
-import { assertPermission } from '../../../lib/server-permissions';
+import { loadUserPermissions, userHasPermission } from '../../../lib/server-permissions';
 import bundledRegister from '../../../../release-management/release-register.json';
+import selection from '../../../../release-management/lib/selection';
 // v55.83-YJ — the latest sign-off / roll-back request per change (read only here; writes are /api/releases/signoff)
 import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, latestByItem, itemSignState, tableMissing, historyList } from '../../../lib/release-signoff';
 
@@ -34,9 +34,9 @@ export async function GET(request) {
   var db = admin();
   var who = await verifiedCaller(request, {}, admin);
   if (who.error) { return deny(who.error, who.status || 401); }
-  // 2) Require super-admin OR releases.access. Fails closed.
-  var perm = await assertPermission(db, who.userId, 'releases.access', request);
-  if (!perm.ok) { return deny(perm.error || 'You do not have access to the Change Schedule.', perm.status || 403); }
+  // 2) Verify the team profile and its permissions.
+  var ctx = await loadUserPermissions(db, who.userId);
+  if (!ctx || !ctx.role || ctx.readError) { return deny('Your team access could not be verified.', 403); }
 
   // 3) Read the fixed register path (no caller input).
   var register = bundledRegister;
@@ -57,13 +57,21 @@ export async function GET(request) {
   var queued = items.filter(function (it) { return it && it.status !== 'live'; });
   var live = items.filter(function (it) { return it && it.status === 'live'; });
 
-  // v55.83-YJ — sign-off state per item. Only the super admin gets buttons; a missing table = no buttons, said plainly.
-  var canSign = !!(perm.ctx && perm.ctx.isSuperAdmin === true);
+  // A missing execution table disables release actions until setup is complete.
+  var canSign = userHasPermission(ctx, 'releases.manage');
+  var worker = null; var executions = []; var executionReady = false;
+  try {
+    var wr = await db.from('release_worker_status').select('enabled, last_seen').eq('id', 1).maybeSingle();
+    var er = await db.from('release_execution').select('request_id, phase, started_at, finished_at').in('phase', ['running', 'attention']);
+    executionReady = !wr.error && !er.error;
+    worker = wr.data || null; executions = er.data || [];
+  } catch (eW) { executionReady = false; }
+  var workerOnline = !!(worker && worker.enabled && Date.now() - Date.parse(worker.last_seen) < 120000);
   var signoffsInstalled = true; var signoffsError = ''; var signRows = [];
   try {
     var sr = await db.from(SIGNOFF_TABLE).select(SIGNOFF_COLUMNS).eq('scope', 'warehouse').order('id', { ascending: true }).limit(5000);
     if (sr.error) { if (tableMissing(sr.error)) { signoffsInstalled = false; } else { signoffsError = 'The sign-offs could not be read right now.'; } }
-    else { signRows = sr.data || []; }
+    else { signRows = sr.data || []; if (signRows.length === 5000) { signoffsError = 'History limit reached; release actions are blocked until the full history is loaded.'; } }
   } catch (eS) { signoffsError = 'The sign-offs could not be read right now.'; }
   var latest = latestByItem(signRows);
   var signoffs = {};
@@ -71,6 +79,12 @@ export async function GET(request) {
   items.forEach(function (it) {
     if (!it || !it.id) { return; }
     var stt = itemSignState(it, latest[String(it.id)]);
+    stt.manifestDigest = it.manifest ? selection.digest(it.manifest) : '';
+    stt.head = signRows.filter(function (r) { return r.item_id === it.id; }).reduce(function (n, r) { return Math.max(n, Number(r.id)); }, 0);
+    stt.executing = executions.some(function (e) { return signRows.some(function (r) { return r.id === e.request_id && r.item_id === it.id; }); });
+    stt.canCheck = canSign && readable && executionReady && !stt.executing && stt.where === 'deployed' && stt.kind === 'none';
+    if (stt.executing) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; stt.why = 'Execution is running or needs recovery. No new request can replace it.'; }
+    if (!executionReady) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; }
     if (!canSign || !readable) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; }
     if (!readable) { stt.kind = 'unknown'; }
     signoffs[String(it.id)] = stt;
@@ -79,6 +93,10 @@ export async function GET(request) {
   return NextResponse.json({
     ok: true,
     canSign: canSign,
+    worker: worker,
+    workerOnline: workerOnline,
+    executionReady: executionReady,
+    executions: executions,
     signoffsInstalled: signoffsInstalled,
     signoffsError: signoffsError,
     signoffs: signoffs,
@@ -90,7 +108,7 @@ export async function GET(request) {
     source: source,
     snapshot: true,
     asOf: register.updated || '',
-    statusNote: 'This is the maintained release PLAN as of the date shown — not a live deployment feed. A change is only "on production" once it was deployed and verified by hand.',
+    statusNote: 'Candidate details are a reviewed release plan. Execution status and history are read from the live release queue. A queued request is not a completed deployment.',
     updated: register.updated || '',
     updatedBy: register.updatedBy || '',
     intro: register.intro || '',
@@ -100,6 +118,6 @@ export async function GET(request) {
     liveCount: live.length,
     protocol: register.protocol || [],
     protocolNote: register.protocolNote || '',
-    deployAutomation: register.deployAutomation || null
+    deployAutomation: { status: workerOnline ? 'online' : 'offline' }
   });
 }

@@ -55,6 +55,7 @@ function world() {
   };
   w.opts = function (stamp, files) {
     return { runner: w.runner, appRoot: '~/app', backupRoot: '~/code-backups', topic: 'wh-test', stamp: stamp, sha: 'abc1234', files: files || FILES, allow: FILES,
+      manifest: { sha: 'abc1234', files: (files || FILES).map(function (f) { return { path: f, before: fs.existsSync(home + '/app/' + f) ? sha(read(home + '/app/' + f)) : '', after: fs.existsSync(local + '/' + f) ? sha(read(local + '/' + f)) : '0'.repeat(64) }; }) },
       localRoot: w.local, cacheCmds: ['php artisan view:clear'], siteUrl: 'https://example.invalid/', tmpDir: w.base };
   };
   w.live = function (f) { return fs.existsSync(w.home + '/app/' + f) ? read(w.home + '/app/' + f).toString() : null; };
@@ -328,6 +329,18 @@ var sent = remoteSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 check('remote.js builds no rm / rmdir / DROP / mysql / migrate / chmod command', !/'\s*rm\s|"rm\s|rmdir|\bDROP\b|mysql|artisan migrate|chmod|chown/.test(sent));
 check('deploy.js and rollback.js make no connection before liveSwitch is on', depSrc.indexOf('remote.liveSwitch(CONFIG)') < depSrc.indexOf('remote.sshRunner(') && rbSrc.indexOf('remote.liveSwitch(CONFIG)') < rbSrc.indexOf('remote.sshRunner(') && !/execFileSync\('ssh'/.test(depSrc + rbSrc));
 check('rollback.js checks the roll-back gate before the switches', rbSrc.indexOf('rollbackProblems(item') < rbSrc.indexOf('remote.liveSwitch(CONFIG)') && rbSrc.indexOf('rollbackProblems(item') > 0);
+
+// A reviewed baseline is frozen BEFORE another developer changes production.
+w = world();
+var reviewed = w.opts('20261124181818');
+write(w.home + '/app/' + FILES[1], 'NEWER OTHER SESSION');
+r = remote.deployLive(reviewed);
+check('stale reviewed baseline stops BEFORE replacing even the first file', !r.ok && /Production changed since review/.test(r.problems.join(' ')) && r.replaced.length === 0 && w.live(FILES[0]) === '<?php // OLD A\n' && w.live(FILES[1]) === 'NEWER OTHER SESSION', r);
+w = world(); reviewed = w.opts('20261124181819');
+write(w.local + '/' + FILES[0], 'UNREVIEWED BYTES');
+r = remote.deployLive(reviewed);
+check('dirty candidate bytes cannot replace the reviewed artifact', !r.ok && /Candidate bytes changed/.test(r.problems.join(' ')) && w.cmds.length === 0, r);
+check('uploads and database files are refused even when allowlisted', ['public/uploads/a.jpg', 'database/migrations/a.php', 'storage/a.json'].every(function (p) { return !!remote.fileProblem(p); }));
 
 // the scratch folders (yj-remote-<pid>-<n>) are left in place; this test removes nothing
 console.log('\nYJ remote: ' + pass + ' passed, ' + failN + ' failed');

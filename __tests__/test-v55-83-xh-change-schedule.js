@@ -21,16 +21,15 @@ ok(/releases: CalendarClock/.test(page), "'releases' has a sidebar icon");
 ok(/tab === 'releases' && \(/.test(page), "content area renders a block for tab === 'releases'");
 ok(/<ChangeScheduleTab \/>/.test(page), 'the releases tab renders ChangeScheduleTab');
 
-// UI permission gate: super admin handled by `return TABS` earlier; others need the switch.
-ok(/if \(t\.id === 'releases'\) \{ return modulePerms\['releases\.access'\] === true; \}/.test(page), "releases tab gated on modulePerms['releases.access']");
-ok(/key: 'releases\.access'/.test(settings), "releases.access permission key exists in SettingsTab");
+ok(/if \(!userProfile\) return TABS\.filter/.test(page) && /if \(t\.id === 'releases'\) \{ return true; \}/.test(page), 'verified team members can see Change Schedule');
+ok(/key: 'releases\.manage'/.test(settings), 'release management permission is available in Settings');
 
 // API is AUTHENTICATED and read-only (Codex point 3: protect the API itself, fail closed).
 ok(/export async function GET\(/.test(route), '/api/releases exposes GET');
 ok(!/export async function (POST|PUT|DELETE|PATCH)/.test(route), '/api/releases has no POST/PUT/DELETE/PATCH (read-only)');
 ok(/verifiedCaller\(/.test(route), '/api/releases verifies the sign-in (verifiedCaller)');
-ok(/assertPermission\([^)]*'releases\.access'/.test(route), "/api/releases requires super-admin OR releases.access");
-ok(/if \(who\.error\)[^\n]*deny/.test(route) && /if \(!perm\.ok\)[^\n]*deny/.test(route), '/api/releases fails closed on unverified sign-in and on missing permission (unauthorized direct request is denied)');
+ok(/userHasPermission\(ctx, 'releases\.manage'\)/.test(route), '/api/releases verifies permission to manage releases');
+ok(/if \(who\.error\)[^\n]*deny/.test(route) && /!ctx\.role \|\| ctx\.readError/.test(route), '/api/releases fails closed on unverified sign-in or an unreadable team profile');
 ok(!/\.(insert|update|delete|upsert)\s*\(/.test(route), '/api/releases performs no DB writes');
 ok(!/request\.(nextUrl|url)|searchParams|params\.get/.test(route), '/api/releases takes no caller input / path (fixed register path, no traversal)');
 

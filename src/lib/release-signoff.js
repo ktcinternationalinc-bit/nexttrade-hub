@@ -4,7 +4,8 @@
 // A sign-off row is ONLY Max's go (gate input 3 of release-management/lib/gate.js). It never replaces
 // the recorded Codex pass or the executed QA result and it moves nothing by itself.
 // Hub releases are NOT handled here: they go out the way they always have (Max 24 Nov).
-import { loadUserPermissions } from './server-permissions';
+import { loadUserPermissions, userHasPermission } from './server-permissions';
+import selection from '../../release-management/lib/selection';
 
 export var SIGNOFF_TABLE = 'release_signoffs';
 // every column the rules need — one list, used by both routes, so the rules never run on half a row
@@ -13,11 +14,10 @@ export var SIGNOFF_COLUMNS = 'id, item_id, scope, action, sha, approval_text, de
 function str(v) { return v === null || v === undefined ? '' : String(v); }
 function norm(v) { return str(v).replace(/\s+/g, ' ').trim().toLowerCase(); }
 
-// ---------------- who may sign: the super admin only (releases.access can read, never write)
-export async function superAdminOnly(db, userId) {
-  if (!userId) { return { ok: false, status: 403, error: 'Only the super admin can sign off or roll back.' }; }
+export async function requireReleaseManager(db, userId) {
+  if (!userId) { return { ok: false, status: 403, error: 'Warehouse release management permission is required.' }; }
   var ctx = await loadUserPermissions(db, userId);
-  if (!ctx || ctx.isSuperAdmin !== true) { return { ok: false, status: 403, error: 'Only the super admin can sign off or roll back.' }; }
+  if (!ctx || !userHasPermission(ctx, 'releases.manage')) { return { ok: false, status: 403, error: 'Warehouse release management permission is required.' }; }
   var name = '';
   try {
     var r = await db.from('users').select('id, name').eq('id', userId).limit(1);
@@ -53,8 +53,8 @@ export function passedBuild(item) {
 // The sentence that is stored and later matched by the deploy / rollback gate. Made here, never typed in the
 // browser. Both name the exact build, so a go or a roll-back request for one build never fits another.
 export function approvalText(action, item, sha) {
-  if (action === 'go') { return 'Max: yes, put ' + str(item.id) + ' on production @ ' + str(sha); }
-  if (action === 'rollback') { return 'Max: roll ' + str(item.id) + ' back @ ' + str(sha); }
+  if (action === 'go') { return 'Approved: put ' + str(item.id) + ' on production @ ' + str(sha); }
+  if (action === 'rollback') { return 'Approved: roll ' + str(item.id) + ' back @ ' + str(sha); }
   return '';
 }
 
@@ -197,11 +197,15 @@ export function itemSignState(item, latest) {
   }
   if (out.kind === 'none') {
     if (live) {
-      if (target) { out.canRollback = true; }
-      else { out.why = out.why || 'This change was moved by hand, so no build and backup folder are recorded for it. It can only be put back by hand; a roll back cannot be requested here.'; }
+      if (target && target.row) { out.canRollback = true; }
+      else { out.why = out.why || 'The worker needs a recorded production move with its build and backup before it can roll this change back.'; }
     }
     else if (!build) { out.why = out.why || 'Waiting for Codex to pass this exact build for production. It cannot be signed off before that.'; }
-    else { out.canGo = true; }
+    else {
+      var problems = selection.candidateProblems(item);
+      if (problems.length) { out.why = problems.join(' '); }
+      else { out.canGo = true; }
+    }
   }
   return out;
 }
