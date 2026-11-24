@@ -197,7 +197,7 @@ export function itemSignState(item, latest) {
   }
   if (out.kind === 'none') {
     if (live) {
-      if (item && item.dataChange) { out.why = 'Restoring this database change requires a separately reviewed operation.'; }
+      if (item && item.dataChange && !selection.isOrderQueueRelease(item)) { out.why = 'Restoring this database change requires a separately reviewed operation.'; }
       else if (target && target.row) { out.canRollback = true; }
       else { out.why = out.why || 'The worker needs a recorded production move with its build and backup before it can roll this change back.'; }
     }

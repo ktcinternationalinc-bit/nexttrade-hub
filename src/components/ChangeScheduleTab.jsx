@@ -327,6 +327,7 @@ export default function ChangeScheduleTab() {
               return result && <div>
                 <div>Build: {result.sha || 'Not prepared'}</div>
                 {result.files.length > 0 && <div>Files: {result.files.join(', ')}</div>}
+                {result.migrations?.length > 0 && <div>Migrations: {result.migrations.join(', ')}</div>}
                 {result.note && <div style={{ color: C.max }}>{result.note}</div>}
                 {result.evidence && <div>{result.evidence}</div>}
                 {result.steps.length > 0 && <ul>{result.steps.map(function (step) { return <li key={step}>{step}</li>; })}</ul>}
@@ -335,7 +336,10 @@ export default function ChangeScheduleTab() {
           </div>; })}
           {review.result?.problems?.length > 0 && <ul style={{ color: C.max }}>{review.result.problems.map(function (problem) { return <li key={problem}>{problem}</li>; })}</ul>}
           {review.action === 'go' && review.result?.passed && review.result.results.some(function (r) { return r.dataChange; }) && <p style={{ color: C.data }}>
-            Approval includes the described production database correction. The worker checks that the records still match the approved snapshot.
+            Approval includes the listed production database work. The worker checks the prerequisites and backs up the affected data first.
+          </p>}
+          {review.result?.passed && review.result.waitsForWorker && <p style={{ color: C.max }}>
+            The worker that handles these database changes is offline. You can approve now, and the changes will wait in the queue.
           </p>}
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
             <button disabled={sending || reviewing || reviewBlocked || !review.items.length || !canSign} style={btn(C.prod, true)} onClick={confirmReview}>{sending ? 'Queuing...' : review.action === 'go' ? 'Approve and queue deployment' : 'Confirm and queue code rollback'}</button>

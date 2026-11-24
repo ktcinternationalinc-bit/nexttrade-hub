@@ -68,23 +68,85 @@
       "id": "wh-order-queue",
       "title": "Order Queue rebuild",
       "repo": "nextrade_WAREHOUSE",
-      "build": "",
+      "build": "ae404ef4f57b2bfe07a9f92fe142817f7917c85d",
       "date": "2026-11-15",
       "where": "staging",
       "status": "queued",
       "needsCodex": false,
-      "needsMax": false,
+      "needsMax": true,
       "dataChange": true,
       "meta": "15 Nov",
       "desc": "USA/Canada sections, kept reservations (no double-deduction), release-with-reason, save & create picking PDF.",
-      "proposedBuild": "c8e70efafe514337c54d54fbcdcf897366a3deee",
       "releaseSteps": [
-        "Production is missing released_at, release_reason and released_by. Fix staging has all three.",
-        "The proposed build includes two additive migrations before the Order Queue code. Review the migrations, reservation flow and code rollback as one release."
+        "Back up the production orders queue and the six listed code files.",
+        "Add the three reservation-history fields with the two tested migrations, then move the exact Order Queue code.",
+        "A code rollback keeps the new history columns and any reservations saved after deployment."
       ],
-      "files": "order queue views + controllers",
-      "backup": "staging backup bundle",
-      "rollback": "restore bundle + php artisan view:clear"
+      "routesChanged": true,
+      "manifest": {
+        "sha": "ae404ef4f57b2bfe07a9f92fe142817f7917c85d",
+        "target": "production",
+        "dataCompatible": true,
+        "files": [
+          {
+            "path": "app/Http/Controllers/Admin/OrderController.php",
+            "before": "ff4da0caf4907f76996a72603bd5b079142e97ad85e3263088a5138d7401cbbe",
+            "after": "748b26f79789e0a71f2f60ec3fcbed44020ac3b574bc336c48929f88a9c75802"
+          },
+          {
+            "path": "app/Models/OrderQueue.php",
+            "before": "8df4a70b7377ca3a2965b4a95668202bafeb46a20de572905acecab65a64d577",
+            "after": "2cdb6bc638172aa11150b19cdf801cb086f706c3026703641e9ac648f2c400a8"
+          },
+          {
+            "path": "app/Services/OrderQueueService.php",
+            "before": "",
+            "after": "7fba57306b21f16820d6a513fbef5c87e08924edf53b24ac394676ecfcc5cabb"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/pending_order/pending_order_queue.blade.php",
+            "before": "fa924949f8fed004c7d3919cff3c19e7c0bca34661af186fb8b9742f8bb14156",
+            "after": "695e628e75adb1563eb17099d5091538280bee482cffb75100b18242d52ee102"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/pending_order/pending_order_pdf.blade.php",
+            "before": "6dd751552cfc40647953fa5b7f8b9cb1802e69d043ff5b2fc0ed66b13a516dd9",
+            "after": "0563e70974f8298c93c336e45b47fb8fdc1d49cf26393dc5b1ddfd0b3e743cc2"
+          },
+          {
+            "path": "routes/web.php",
+            "before": "e8ea992fb043c276a862b4f3395ac9351babf0b380131bf6a4fab02b51d8d616",
+            "after": "f22e4846cf8bc7ed51c1b7fa00804e5a0546f0c169f4194ccfe03bb3ffeeab2f"
+          }
+        ],
+        "dataPlan": {
+          "kind": "order-queue-schema-v1",
+          "migrations": [
+            {
+              "name": "2026_11_15_000001_add_release_columns_to_order_queues.php",
+              "sha256": "4ad7e68e964189f6bbb39c2270d23eab98057508d85546268d4f8f2d88d901e3"
+            },
+            {
+              "name": "2026_11_15_000002_add_released_by_to_order_queues.php",
+              "sha256": "10d8fc7c3f06bddaf4f9e132704f0f6a4de4626c296466b4b7ae588cb0c14eba"
+            }
+          ]
+        }
+      },
+      "codexRef": {
+        "sha": "ae404ef4f57b2bfe07a9f92fe142817f7917c85d",
+        "target": "production",
+        "manifestDigest": "47e2b52908379fec498c8f1efb6d92f52b2a3ba921ea52fa837f77060ee0e682",
+        "feedbackRef": "docs/2026-11-24-warehouse-release-review.md#order-queue"
+      },
+      "behavioralQa": {
+        "sha": "ae404ef4f57b2bfe07a9f92fe142817f7917c85d",
+        "target": "production",
+        "manifestDigest": "47e2b52908379fec498c8f1efb6d92f52b2a3ba921ea52fa837f77060ee0e682",
+        "kind": "behavioral",
+        "result": "PASS",
+        "summary": "Staging MariaDB tests passed for the two migrations, USA/Canada availability, picked weight, saved PDF lines, and releasing one reservation or an explicitly selected whole order."
+      }
     },
     {
       "id": "wh-bug-001",

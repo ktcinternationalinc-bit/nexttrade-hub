@@ -303,6 +303,10 @@ function deployLive(o) {
     }
     s.putJson(manifest, backupDir + '/MANIFEST.json', o.tmpDir);
     s.readManifest(backupDir);                                   // the list must read back before anything is replaced
+    if (o.prepareDatabase) {
+      out.databaseStarted = true;
+      out.database = o.prepareDatabase({ appRoot: appRoot, backupDir: backupDir });
+    }
 
     // 2) replace, one file at a time, each proven
     started = true;

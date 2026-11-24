@@ -11,7 +11,7 @@ const remote = require('../lib/remote');
 const selection = require('../lib/selection');
 const gate = require('../lib/gate');
 const { authorized } = require('../lib/worker-authorization');
-const { prepareDataCommand, executeDataCommand } = require('./warehouse-data-plan');
+const { prepareDataCommand, executeDataCommand, loadOrderQueueMigrations } = require('./warehouse-data-plan');
 const VERSION = 'warehouse-worker-v1';
 function arg(key) { const i = process.argv.indexOf(key); return i < 0 ? '' : process.argv[i + 1]; }
 async function must(query) { const r = await query; if (r.error) throw new Error(r.error.message); return r.data; }
@@ -40,13 +40,15 @@ async function executeRequest(db, request, config, warehouseRepo, worker, runner
       if (!item || item.id !== request.item_id || item.manifest?.sha !== request.sha || problems.length) throw new Error('Candidate validation failed: ' + problems.join(' '));
       for (const dep of item.dependsOn || []) if (!moves[dep]) throw new Error('Dependency is not on production: ' + dep);
       if (moves[item.id]) throw new Error('This change is already deployed.');
-      if (selection.supportedDataPlan(item)) {
+      if (selection.isPalletCorrection(item)) {
         const command = prepareDataCommand(item, Number(request.id), config.live.appRoot);
         touched = true;
         event = executeDataCommand(item, command, runner);
       } else {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-release-' + request.id + '-'));
         const localRoot = path.join(tmp, 'artifact');
+        const prepareDatabase = selection.isOrderQueueRelease(item) ?
+          loadOrderQueueMigrations(item, Number(request.id), warehouseRepo, tmp, runner) : null;
         for (const file of item.manifest.files) {
           const dest = path.join(localRoot, file.path);
           fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -59,11 +61,15 @@ async function executeRequest(db, request, config, warehouseRepo, worker, runner
         result = remote.deployLive({ runner, appRoot: config.live.appRoot, backupRoot: config.live.backupRoot, topic, stamp, sha: request.sha,
           files: item.manifest.files.map(f => f.path), allow: item.manifest.files.map(f => f.path), manifest: item.manifest,
           localRoot, cacheCmds: ['php artisan view:clear', ...(item.configChanged ? ['php artisan config:clear'] : []), ...(item.routesChanged ? ['php artisan route:clear'] : [])],
-          siteUrl: config.live.checkUrl, tmpDir: tmp });
-        if (result.ok && !result.lockStuck) event = { action: 'moved', detail: { title: item.title, backup: result.backupDir, files: result.replaced, note: 'Code fingerprints verified; HTTP ' + result.siteStatus + '. Functional verification pending.', dependsOn: item.dependsOn || [] } };
+          siteUrl: config.live.checkUrl, tmpDir: tmp, prepareDatabase });
+        const schemaNote = result.database ? ' ' + result.database.note + ' Database backup: ' + result.database.backup + '.' : '';
+        if (result.ok && !result.lockStuck) event = { action: 'moved', detail: { title: item.title, backup: result.backupDir, files: result.replaced, note: 'Code fingerprints verified; HTTP ' + result.siteStatus + '. Functional verification pending.' + schemaNote, dependsOn: item.dependsOn || [] } };
         else {
           const attempt = gate.attemptRecord(result, request.sha);
-          event = { action: attempt.outcome === 'recovery_incomplete' || result.lockStuck ? 'recovery_incomplete' : 'failed', detail: { title: item.title, backup: result.backupDir, outcome: attempt.outcome, note: attempt.problems.join(' | '), attempt } };
+          const uncertain = result.databaseStarted && !result.database;
+          event = { action: attempt.outcome === 'recovery_incomplete' || result.lockStuck || uncertain ? 'recovery_incomplete' : 'failed',
+            detail: { title: item.title, backup: result.backupDir, outcome: uncertain ? 'recovery_incomplete' : attempt.outcome,
+              note: attempt.problems.join(' | ') + schemaNote, attempt } };
         }
       }
     } else {

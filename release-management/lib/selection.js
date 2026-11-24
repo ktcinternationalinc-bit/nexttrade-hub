@@ -1,9 +1,13 @@
 'use strict';
 // Shared by the Hub and the office worker. Candidate files are immutable, reviewed code artifacts.
 var crypto = require('crypto');
-var DATA_WORKER_VERSION = 'warehouse-worker-v1-pallet-units';
+var DATA_WORKER_VERSION = 'warehouse-worker-v1-database-releases';
+var ORDER_QUEUE_MIGRATIONS = [
+  '2026_11_15_000001_add_release_columns_to_order_queues.php',
+  '2026_11_15_000002_add_released_by_to_order_queues.php',
+];
 function digest(manifest) { return crypto.createHash('sha256').update(JSON.stringify(manifest)).digest('hex'); }
-function supportedDataPlan(item) {
+function isPalletCorrection(item) {
   var plan = item && item.manifest && item.manifest.dataPlan;
   return !!(item?.id === 'wh-bug-001' && item.dataChange === true && plan?.kind === 'pallet-unit-correction-v1'
     && Number.isSafeInteger(plan.eligibleCount) && plan.eligibleCount > 0
@@ -11,6 +15,13 @@ function supportedDataPlan(item) {
     && /^[a-f0-9]{64}$/.test(plan.scriptHash || '')
     && Array.isArray(item.dependsOn) && item.dependsOn.length === 1 && item.dependsOn[0] === 'wh-bug-001-save-path');
 }
+function isOrderQueueRelease(item) {
+  var plan = item && item.manifest && item.manifest.dataPlan;
+  return !!(item?.id === 'wh-order-queue' && item.dataChange === true && plan?.kind === 'order-queue-schema-v1'
+    && Array.isArray(plan.migrations) && plan.migrations.length === ORDER_QUEUE_MIGRATIONS.length
+    && plan.migrations.every(function (file, index) { return file?.name === ORDER_QUEUE_MIGRATIONS[index] && /^[a-f0-9]{64}$/.test(file.sha256 || ''); }));
+}
+function supportedDataPlan(item) { return isPalletCorrection(item) || isOrderQueueRelease(item); }
 function codePath(p) {
   return typeof p === 'string' && /^(app\/|resources\/views\/|public\/assets\/|routes\/|config\/)[A-Za-z0-9._\/-]+\.(php|js|css|json|svg|png|jpg|jpeg|webp|woff2?)$/.test(p)
     && !p.split('/').some(function (s) { return s === '..' || s === '.' || s === '' || s.indexOf('.env') === 0; });
@@ -18,10 +29,10 @@ function codePath(p) {
 function candidateProblems(item) {
   var out = []; var m = item && item.manifest;
   if (!item || item.repo !== 'nextrade_WAREHOUSE') { return ['Not an NT Warehouse code change.']; }
-  var dataOnly = supportedDataPlan(item);
-  if (item.dataChange && !dataOnly) { return ['This database change needs a reviewed execution plan.']; }
+  var dataOnly = isPalletCorrection(item);
+  if (item.dataChange && !supportedDataPlan(item)) { return ['This database change needs a reviewed execution plan.']; }
   if (!m || !/^[0-9a-f]{40}$/.test(m.sha || '') || m.target !== 'production' || m.dataCompatible !== true ||
-      !Array.isArray(m.files) || (dataOnly ? m.files.length !== 0 : !m.files.length || m.dataPlan)) {
+      !Array.isArray(m.files) || (dataOnly ? m.files.length !== 0 : !m.files.length || (m.dataPlan && !isOrderQueueRelease(item)))) {
     out.push('Exact build, reviewed file fingerprints and data-compatible rollback confirmation are required.'); return out;
   }
   var seen = {};
@@ -46,7 +57,7 @@ function selectionPlan(items, states, ids, action) {
     if (!it) { problems.push('Unknown change: ' + id); return; }
     if (action === 'go') candidateProblems(it).forEach(function (p) { problems.push(it.title + ': ' + p); });
     if (!(action === 'go' ? st.canGo : st.canRollback)) problems.push(it.title + ': ' + (st.why || 'Not ready for this action.'));
-    if (it.dataChange && action === 'rollback') problems.push(it.title + ': data restoration requires a reviewed database operation.');
+    if (it.dataChange && action === 'rollback' && !isOrderQueueRelease(it)) problems.push(it.title + ': data restoration requires a reviewed database operation.');
     if (action === 'go') {
       ((it.manifest && it.manifest.files) || []).forEach(function (f) {
         if (paths[f.path]) problems.push('Selected fixes share ' + f.path + '. Prepare and test one combined candidate first.');
@@ -74,4 +85,4 @@ function selectionPlan(items, states, ids, action) {
   chosen.forEach(visit);
   return { ok: problems.length === 0, problems: problems, items: ordered };
 }
-module.exports = { DATA_WORKER_VERSION: DATA_WORKER_VERSION, digest: digest, codePath: codePath, supportedDataPlan: supportedDataPlan, candidateProblems: candidateProblems, selectionPlan: selectionPlan };
+module.exports = { DATA_WORKER_VERSION, digest, codePath, supportedDataPlan, isPalletCorrection, isOrderQueueRelease, candidateProblems, selectionPlan };

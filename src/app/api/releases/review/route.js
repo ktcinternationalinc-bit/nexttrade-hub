@@ -33,28 +33,25 @@ export async function POST(request) {
   if (!access.isSuperAdmin && items.some(item => item.dataChange)) {
     return reply({ error: 'A super admin must review and approve Warehouse database changes.' }, 403);
   }
+  let waitsForWorker = false;
   if (items.some(selection.supportedDataPlan)) {
     const worker = await db.from('release_worker_status').select('enabled,last_seen,version').eq('id', 1).maybeSingle();
-    if (worker.error || !worker.data?.enabled || worker.data.version !== selection.DATA_WORKER_VERSION ||
-        !(Date.now() - Date.parse(worker.data.last_seen) < 120000)) {
-      for (const item of items.filter(selection.supportedDataPlan)) {
-        states[item.id].canGo = false;
-        states[item.id].why = 'The Warehouse worker that applies this reviewed data correction needs to be online.';
-      }
-    }
+    waitsForWorker = !!worker.error || !worker.data?.enabled || worker.data.version !== selection.DATA_WORKER_VERSION ||
+      !(Date.now() - Date.parse(worker.data.last_seen) < 120000);
   }
   const results = items.map(item => {
     const id = item.id;
     return { id, title: item.title, sha: item.manifest?.sha || item.proposedBuild || '', passed: states[id].canGo,
       files: item.manifest?.files?.map(file => file.path) || [], note: states[id].why,
       evidence: item.manifest ? item.behavioralQa?.summary || '' : '', steps: item.releaseSteps || [],
-      dataChange: item.dataChange === true };
+      dataChange: item.dataChange === true,
+      migrations: item.manifest?.dataPlan?.migrations?.map(file => file.name) || [] };
   });
   const plan = selection.selectionPlan(register.items, states, ids, 'go');
   if (!plan.ok) return reply({ ok: true, passed: false, results, problems: [...new Set(plan.problems)] });
   const receipt = issueReview(who.userId, ids, register, heads);
   if (!receipt) return reply({ error: 'The review could not be signed.' }, 503);
-  return reply({ ok: true, passed: true, results, receipt,
+  return reply({ ok: true, passed: true, results, receipt, waitsForWorker,
     heads: Object.fromEntries(ids.map(id => [id, heads[id]])),
     builds: Object.fromEntries(plan.items.map(item => [item.id, item.manifest.sha])),
     digests: Object.fromEntries(plan.items.map(item => [item.id, selection.digest(item.manifest)])) });

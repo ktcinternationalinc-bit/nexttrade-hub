@@ -19,7 +19,12 @@ fs.writeFileSync(path.join(local, file), 'CANDIDATE\n');
 const sha = 'a'.repeat(40);
 const manifest = { sha, files: [{ path: file, before, after: remote.sha256File(path.join(local, file)) }] };
 const opts = { runner, appRoot: base + '/app', backupRoot: base + '/code-backups', topic: 'qa-fixture', stamp: id, sha, files: [file], allow: [file], manifest, localRoot: local, cacheCmds: [], siteUrl: config.live.checkUrl, tmpDir: local };
-const moved = remote.deployLive(opts); assert.ok(moved.ok && !moved.lockStuck, JSON.stringify(moved));
+const moved = remote.deployLive({ ...opts, prepareDatabase({ appRoot, backupDir }) {
+  assert.ok(run("sha256sum '" + appRoot + '/' + file + "'").startsWith(before));
+  assert.ok(run("sha256sum '" + backupDir + '/files/' + file + "'").startsWith(before));
+  return { backup: 'synthetic-schema-preflight' };
+} });
+assert.ok(moved.ok && !moved.lockStuck && moved.database?.backup === 'synthetic-schema-preflight', JSON.stringify(moved));
 assert.ok(run("sha256sum '" + base + '/app/' + file + "'").startsWith(manifest.files[0].after));
 const restored = remote.restoreLive({ runner, appRoot: opts.appRoot, backupDir: moved.backupDir, undoDir: base + '/code-backups/qa-undo', sha, cacheCmds: [], siteUrl: config.live.checkUrl, tmpDir: local });
 assert.ok(restored.ok, JSON.stringify(restored));

@@ -51,7 +51,7 @@ const review = require('../src/app/api/releases/review/route').POST;
 const worker = require('../release-management/deploy/worker');
 const rules = require('../src/lib/release-signoff');
 const { issueReview, reviewState } = require('../src/lib/release-review');
-const { prepareDataCommand, executeDataCommand } = require('../release-management/deploy/warehouse-data-plan');
+const { prepareDataCommand, executeDataCommand, loadOrderQueueMigrations } = require('../release-management/deploy/warehouse-data-plan');
 process.chdir(require('node:os').tmpdir());
 function body(ids = ['fix-a', 'fix-c']) {
   return { item_ids: ids, action: 'go', confirm: 'DEPLOY', heads: Object.fromEntries(ids.map(id => [id, 0])), builds: Object.fromEntries(ids.map(id => [id, 'a'.repeat(40)])), digests: Object.fromEntries(ids.map(id => [id, selection.digest(register.items.find(it => it.id === id).manifest)])), review_receipt: issueReview(caller, ids, register, reviewState(register, rows).heads) };
@@ -119,13 +119,48 @@ async function send(b) { return post({ json: async () => b }); }
   const corrected = executeDataCommand(palletData, data, { run: () => ({ code: 0, out: JSON.stringify({ state: 'moved', updated: data.eligibleCount }) }) });
   check(corrected.action === 'moved' && corrected.detail.backup === data.backup, 'data completion records the checked count and exact backup table');
   assert.throws(() => executeDataCommand(palletData, data, { run: () => ({ code: 0, out: '{}' }) }));
-  check(!rules.itemSignState(palletData, { where: 'live', dep: { ...moved, detail: corrected.detail } }).canRollback, 'database correction cannot be passed to code rollback');
-  register.items.push(palletData, liveRegister.items.find(it => it.id === 'wh-bug-001-save-path'));
-  const reviewData = () => review({ json: async () => ({ item_ids: ['wh-bug-001', 'wh-bug-001-save-path'] }) });
-  check(!(await reviewData()).body.passed, 'database review cannot clear with an older worker');
+  const movedPalletData = { ...moved, item_id: palletData.id, sha: palletData.manifest.sha, detail: corrected.detail };
+  check(!rules.itemSignState(palletData, rules.latestByItem([movedPalletData])[palletData.id]).canRollback, 'database correction cannot be passed to code rollback');
+  const orderQueue = liveRegister.items.find(it => it.id === 'wh-order-queue');
+  register.items.push(orderQueue, palletData, liveRegister.items.find(it => it.id === 'wh-bug-001-save-path'));
+  const reviewData = () => review({ json: async () => ({ item_ids: ['wh-bug-001', 'wh-bug-001-save-path', 'wh-order-queue'] }) });
+  const offlineData = await reviewData();
+  check(offlineData.body.passed && offlineData.body.waitsForWorker, 'a database plan can be approved offline and the screen explains that execution will wait');
   workerVersion = selection.DATA_WORKER_VERSION;
   const reviewedData = await reviewData();
-  check(reviewedData.body.passed && reviewedData.body.results[0].dataChange, 'super admin can review both pallet changes together with the upgraded worker');
+  check(reviewedData.body.passed && !reviewedData.body.waitsForWorker && reviewedData.body.results[0].dataChange && reviewedData.body.results[2].migrations.length === 2,
+    'super admin can review both pallet changes and the Order Queue with the upgraded worker');
+  check(selection.candidateProblems({ ...orderQueue, manifest: { ...orderQueue.manifest, dataPlan: {
+    ...orderQueue.manifest.dataPlan, migrations: orderQueue.manifest.dataPlan.migrations.slice(1) } } }).length > 0,
+    'arbitrary or incomplete migrations are rejected');
+  const movedOrder = { ...moved, item_id: orderQueue.id, sha: orderQueue.manifest.sha };
+  check(rules.itemSignState(orderQueue, rules.latestByItem([movedOrder])[orderQueue.id]).canRollback, 'Order Queue code rollback remains available after the additive migrations');
+  if (process.env.WAREHOUSE_ORDER_FIXTURE_REPO) {
+    const crypto = require('node:crypto');
+    const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'queue-migration-test-'));
+    const uploaded = new Map();
+    const runner = {
+      put(local, dest) { uploaded.set(dest, crypto.createHash('sha256').update(fs.readFileSync(local)).digest('hex')); return { code: 0 }; },
+      run(command) {
+        if (command.startsWith('mkdir ')) return { code: 0 };
+        if (command.startsWith('sha256sum ')) {
+          const to = command.split("'")[1];
+          return { code: 0, out: uploaded.get(to) + '  ' + to };
+        }
+        const wire = /printf '%s' '([A-Za-z0-9+/=]+)'/.exec(command);
+        assert.ok(wire);
+        const program = Buffer.from(wire[1], 'base64').toString('utf8');
+        assert.ok(program.includes('CREATE TABLE zz_order_queues_before_29'));
+        assert.ok(program.includes("'--realpath' => true") && program.includes('release_reason'));
+        return { code: 0, out: '{"state":"ready"}' };
+      }
+    };
+    const apply = loadOrderQueueMigrations(orderQueue, 29, process.env.WAREHOUSE_ORDER_FIXTURE_REPO, temp, runner);
+    check(apply({ appRoot: '/home/warehouse/public_html', backupDir: '/home/warehouse/code-backups/request-29-20261124120000' }).backup === 'zz_order_queues_before_29' && uploaded.size === 2,
+      'worker prepares exactly the two fingerprinted migration files before its backed-up apply step');
+    for (const file of orderQueue.manifest.dataPlan.migrations) fs.unlinkSync(path.join(temp, file.name));
+    fs.rmdirSync(temp);
+  }
   role = 'staff'; perms = [{ user_id: caller, module_name: 'releases.manage', has_access: true }];
   check((await reviewData()).status === 403, 'code release delegation does not authorize database approvals');
   console.log(checks + ' release controls checks passed');
