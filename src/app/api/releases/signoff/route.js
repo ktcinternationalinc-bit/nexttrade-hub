@@ -1,12 +1,12 @@
 // v55.83-YJ — Change Schedule: record Max's go, a roll-back request, or taking one back (Max, 24 Nov).
-// SUPER ADMIN ONLY (releases.access can read the schedule, never sign). The row is append-only
+// Only release managers can approve changes. The row is append-only
 // (sql/v55-83-YJ-release-signoffs.sql refuses UPDATE / DELETE / TRUNCATE). This route moves NOTHING:
 // the row is only Max's go for the exact build Codex passed; the gated deploy / rollback step reads it.
 // The stored sentence is made by the server, never taken from the browser. SWC-safe (var + concat).
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../../lib/verified-caller';
-import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, superAdminOnly, findItem, latestByItem, itemSignState, checkSignoff, tableMissing } from '../../../../lib/release-signoff';
+import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, requireReleaseManager, findItem, latestByItem, itemSignState, checkSignoff, tableMissing } from '../../../../lib/release-signoff';
 import bundledRegister from '../../../../../release-management/release-register.json';
 import selection from '../../../../../release-management/lib/selection';
 
@@ -26,12 +26,13 @@ export async function POST(request) {
   var db = admin();
   var who = await verifiedCaller(request, {}, admin);
   if (who.error) { return deny(who.error, who.status || 401); }
-  var sa = await superAdminOnly(db, who.userId);
+  var sa = await requireReleaseManager(db, who.userId);
   if (!sa.ok) { return deny(sa.error, sa.status); }
 
   var ids = Array.isArray(body.item_ids) ? body.item_ids : [body.item_id];
   if (!ids.length || ids.length > 20 || new Set(ids).size !== ids.length || ids.some(function (id) { return typeof id !== 'string' || !findItem(bundledRegister, id); })) { return deny('Select valid, different warehouse changes.', 400); }
   var action = String(body.action || '');
+  if (action !== 'go' && action !== 'rollback' && action !== 'withdraw') { return deny('Unknown release action.', 400); }
   if (Array.isArray(body.item_ids) && body.confirm !== (action === 'go' ? 'DEPLOY' : action === 'rollback' ? 'ROLLBACK' : 'WITHDRAW')) { return deny('Confirm the selected action first.', 400); }
   var sr = await db.from(SIGNOFF_TABLE).select(SIGNOFF_COLUMNS).eq('scope', 'warehouse').order('id', { ascending: true }).limit(5000);
   if (sr.error) {

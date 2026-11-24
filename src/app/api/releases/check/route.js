@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../../lib/verified-caller';
-import { superAdminOnly, latestByItem, SIGNOFF_COLUMNS } from '../../../../lib/release-signoff';
+import { requireReleaseManager, latestByItem, SIGNOFF_COLUMNS } from '../../../../lib/release-signoff';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY); }
@@ -9,7 +9,7 @@ function deny(error, status) { return NextResponse.json({ ok: false, error }, { 
 export async function POST(request) {
   const who = await verifiedCaller(request, {}, admin);
   if (who.error) return deny(who.error, who.status || 401);
-  const db = admin(); const permission = await superAdminOnly(db, who.userId);
+  const db = admin(); const permission = await requireReleaseManager(db, who.userId);
   if (!permission.ok) return deny(permission.error, permission.status);
   let body; try { body = await request.json(); } catch { return deny('Invalid request.', 400); }
   if (typeof body?.item_id !== 'string' || typeof body.note !== 'string' || body.note.trim().length < 10 || body.note.length > 2000) return deny('Record what you tested on production (10-2000 characters).', 400);

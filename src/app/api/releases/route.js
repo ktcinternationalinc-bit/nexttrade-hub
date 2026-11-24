@@ -3,9 +3,8 @@
 // Schedule tab shows: what is live on production, what is queued on fix staging, and what each
 // change still needs (Codex pass / Max's go / data-change flag).
 //
-// Codex pre-build point 3: protect the API itself, not just the tab. This route verifies the
-// caller's sign-in (verifiedCaller) and requires super-admin OR the 'releases.access' switch
-// (assertPermission) — it FAILS CLOSED. It takes NO caller input (no path, no query), reads a
+// This route verifies the caller's team sign-in and reads the current execution state.
+// It takes no caller input, reads a
 // FIXED file path (no traversal), performs no writes, and returns only the schedule fields —
 // no credentials. The register is release-management/release-register.json (hand-editable, or
 // appended to by the deploy/rollback tooling). The static import guarantees the file ships with
@@ -35,7 +34,7 @@ export async function GET(request) {
   var db = admin();
   var who = await verifiedCaller(request, {}, admin);
   if (who.error) { return deny(who.error, who.status || 401); }
-  // 2) Require super-admin OR releases.access. Fails closed.
+  // 2) Verify the team profile and its permissions.
   var ctx = await loadUserPermissions(db, who.userId);
   if (!ctx || !ctx.role || ctx.readError) { return deny('Your team access could not be verified.', 403); }
 
@@ -58,11 +57,11 @@ export async function GET(request) {
   var queued = items.filter(function (it) { return it && it.status !== 'live'; });
   var live = items.filter(function (it) { return it && it.status === 'live'; });
 
-  // v55.83-YJ — sign-off state per item. Only the super admin gets buttons; a missing table = no buttons, said plainly.
+  // A missing execution table disables release actions until setup is complete.
   var canSign = userHasPermission(ctx, 'releases.manage');
   var worker = null; var executions = []; var executionReady = false;
   try {
-    var wr = await db.from('release_worker_status').select('worker, version, enabled, last_seen').eq('id', 1).maybeSingle();
+    var wr = await db.from('release_worker_status').select('enabled, last_seen').eq('id', 1).maybeSingle();
     var er = await db.from('release_execution').select('request_id, phase, started_at, finished_at').in('phase', ['running', 'attention']);
     executionReady = !wr.error && !er.error;
     worker = wr.data || null; executions = er.data || [];

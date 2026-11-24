@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { transform } = require('sucrase');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.join(__dirname, '..');
+const deps = process.env.TEST_DEPS || path.join(root, 'node_modules');
 const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeScheduleTab.jsx'), 'utf8'), { transforms: ['jsx', 'imports'] }).code;
 (async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
@@ -14,8 +15,8 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
         const errors = []; page.on('pageerror', e => errors.push(e.message));
         await page.route('**/*', r => r.abort());
         await page.setContent('<div id="root"></div>');
-        await page.addScriptTag({ path: path.join(root, 'node_modules/react/umd/react.development.js') });
-        await page.addScriptTag({ path: path.join(root, 'node_modules/react-dom/umd/react-dom.development.js') });
+        await page.addScriptTag({ path: path.join(deps, 'react/umd/react.development.js') });
+        await page.addScriptTag({ path: path.join(deps, 'react-dom/umd/react-dom.development.js') });
         await page.evaluate(({ code, manager }) => {
           const items = ['One', 'Two', 'Three', 'Blocked'].map((name, i) => ({ id: 'fix-' + i, title: name, manifest: { sha: 'a'.repeat(40), files: [{ path: 'resources/views/' + name + '.blade.php' }] } }));
           const signoffs = Object.fromEntries(items.map((it, i) => [it.id, { head: 0, manifestDigest: 'b'.repeat(64), where: 'staging', canGo: manager && i < 3, canRollback: false, why: i === 3 ? 'Staging QA missing' : '' }]));

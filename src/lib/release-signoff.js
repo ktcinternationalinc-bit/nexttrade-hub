@@ -14,9 +14,8 @@ export var SIGNOFF_COLUMNS = 'id, item_id, scope, action, sha, approval_text, de
 function str(v) { return v === null || v === undefined ? '' : String(v); }
 function norm(v) { return str(v).replace(/\s+/g, ' ').trim().toLowerCase(); }
 
-// ---------------- who may sign: the super admin only (releases.access can read, never write)
-export async function superAdminOnly(db, userId) {
-  if (!userId) { return { ok: false, status: 403, error: 'Only the super admin can sign off or roll back.' }; }
+export async function requireReleaseManager(db, userId) {
+  if (!userId) { return { ok: false, status: 403, error: 'Warehouse release management permission is required.' }; }
   var ctx = await loadUserPermissions(db, userId);
   if (!ctx || !userHasPermission(ctx, 'releases.manage')) { return { ok: false, status: 403, error: 'Warehouse release management permission is required.' }; }
   var name = '';
@@ -198,8 +197,8 @@ export function itemSignState(item, latest) {
   }
   if (out.kind === 'none') {
     if (live) {
-      if (target) { out.canRollback = true; }
-      else { out.why = out.why || 'This change was moved by hand, so no build and backup folder are recorded for it. It can only be put back by hand; a roll back cannot be requested here.'; }
+      if (target && target.row) { out.canRollback = true; }
+      else { out.why = out.why || 'The worker needs a recorded production move with its build and backup before it can roll this change back.'; }
     }
     else if (!build) { out.why = out.why || 'Waiting for Codex to pass this exact build for production. It cannot be signed off before that.'; }
     else {

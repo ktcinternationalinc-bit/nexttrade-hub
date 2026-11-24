@@ -190,7 +190,7 @@ export default function ChangeScheduleTab() {
 
   function load() {
     setLoading(true); setErr('');
-    // The route is authenticated (super-admin OR releases.access), so send the sign-in bearer.
+    // The schedule is available to verified team members through the signed-in API.
     supabase.auth.getSession()
       .then(function (s) {
         var token = s && s.data && s.data.session ? s.data.session.access_token : '';
@@ -209,7 +209,7 @@ export default function ChangeScheduleTab() {
   useEffect(function () { load(); var timer = setInterval(load, 15000); return function () { clearInterval(timer); }; }, []);
 
   var items = (data && data.items) || [];
-  // v55.83-YJ — sign-off state comes from the server; buttons only for the super admin.
+  // Sign-off state and permission to take action come from the server.
   // Which list a change is in follows the recorded history (current), not only the register file.
   var signs = (data && data.signoffs) || {};
   var queued = items.filter(function (it) { return it && whereOf(it, signs[it.id]) === 'staging'; });
