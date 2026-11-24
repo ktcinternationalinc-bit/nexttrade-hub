@@ -283,6 +283,52 @@
       "files": "scan_in_inventories id=1325 created_at",
       "backup": "table zz_fix1325_scan_in_inventories_before_20261122 (never dropped)",
       "rollback": "restore created_at from that table"
+    },
+    {
+      "id": "wh-xb-receipts-feed",
+      "title": "Warehouse check: read-only receipts feed for the Hub (XB)",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "905ef4b81f7c63fd487e4ed372f66c37da9e13ff",
+      "date": "2026-11-24",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": true,
+      "needsMax": true,
+      "dataChange": false,
+      "meta": "24 Nov · Max: \"put it on live now\" · built on the live Order Queue build ae404ef4 · NOT on staging yet",
+      "desc": "Adds ONE read-only address, GET /api/hub-feed/receipts, so the Hub's Bills > Warehouse check can compare billed weight with what was scanned in. Answers only with the Hub's secret token; never writes; no prices, values, notes or driver fields. Live has no Hub feed today (404). After the code moves, the feed stays OFF until HUB_FEED_TOKEN (32+ characters) and HUB_FEED_SOURCE=nextrade-live are set in live .env by Max (the release system never touches .env), and the Hub reads it only when NEXTRADE_FEED_URL is pointed at live (a separate decision: the Orders report and shipping sync read the same address and live has no shipping feed).",
+      "files": "app/Http/Controllers/HubFeedController.php (new), routes/api.php (+1 route), config/services.php (+hub_feed token/source)",
+      "backup": "made by the release worker before replacement (routes/api.php, config/services.php); the new controller is moved aside on rollback",
+      "rollback": "Change Schedule roll back: restores the two files, moves the new controller aside; php artisan route:clear / config:clear",
+      "releaseSteps": [
+        "Staging first: the same read-only method on fix staging (Nextrade chat, on Max's own yes), with the staging lock letting exactly /api/hub-feed/receipts through, and a behavioural check by id and by reference.",
+        "Confirm the two live \"before\" fingerprints read-only (they are the 14 Nov baseline in CRLF, not yet measured on the server).",
+        "Move the exact three files; php artisan route:clear and config:clear.",
+        "Without the .env token the address answers 401 to everyone (feed off). Max sets HUB_FEED_TOKEN and HUB_FEED_SOURCE=nextrade-live in live .env himself, then config:clear.",
+        "Check: no token = 401 JSON; with token, ?ids=<real scan-in id> = 200 with that receipt whole; ?ids=999999999 = not_found_ids."
+      ],
+      "manifest": {
+        "sha": "905ef4b81f7c63fd487e4ed372f66c37da9e13ff",
+        "target": "production",
+        "dataCompatible": true,
+        "files": [
+          {
+            "path": "app/Http/Controllers/HubFeedController.php",
+            "before": "",
+            "after": "f5eb24f9b6d40ac1e00e8d885c6163b58fdf27a385312d1be0352fcf8a3c644d"
+          },
+          {
+            "path": "routes/api.php",
+            "before": "8fa686bc96516fef66a3c8c912012d9a826f0f8a1ff44784e6cea2a165e2b05a",
+            "after": "39edb117dbbe93dd3d6919d9e70e361e7b7aca05942af04145f5df673d9969e3"
+          },
+          {
+            "path": "config/services.php",
+            "before": "7e3ebb577903f3ece4a5d51a523e9dfc8f125270a2c9804a1a9e0fe23247045f",
+            "after": "7a908353d2016ea22de1c116ec6fd2213b23a0895a2f4f985307e9d76435f14f"
+          }
+        ]
+      }
     }
   ],
   "protocol": [

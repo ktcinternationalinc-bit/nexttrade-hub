@@ -137,10 +137,16 @@ async function send(b) { return post({ json: async () => b }); }
     return Object.fromEntries(Object.keys(value).sort((a, b) => a.length - b.length || a.localeCompare(b))
       .map(key => [key, jsonbOrder(value[key])]));
   }
-  for (const item of liveRegister.items.filter(item => item.manifest)) {
+  for (const item of liveRegister.items.filter(item => item.manifest && item.codexRef)) {
     const stored = jsonbOrder(item);
     check(selection.digest(stored.manifest) === item.codexRef.manifestDigest &&
       selection.candidateProblems(stored).length === 0, item.id + ' retains its reviewed digest after a JSONB round trip');
+  }
+  // a candidate with a manifest but no review / staging QA yet (e.g. wh-xb-receipts-feed) is listed but BLOCKED, never invented a PASS
+  for (const item of liveRegister.items.filter(item => item.manifest && !item.codexRef)) {
+    const p = selection.candidateProblems(jsonbOrder(item));
+    check(!item.behavioralQa && p.some(x => /Code review must pass/.test(x)) && p.some(x => /Staging functional QA must pass/.test(x)),
+      item.id + ' has a manifest but no review yet, so it stays blocked');
   }
   const altered = jsonbOrder(orderQueue);
   altered.manifest.files[0].before = '0'.repeat(64);
