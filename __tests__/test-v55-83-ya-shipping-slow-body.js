@@ -32,7 +32,7 @@ var FAST_MS = 80; var BODY_LATE_MS = 600; // the body arrives long after the (fa
 var realSetTimeout = global.setTimeout; var realClearTimeout = global.clearTimeout;
 var limitTimers = [];
 global.setTimeout = function (fn, ms) {
-  if (ms === 40000) {
+  if (ms === 150000) { // v55.83-YR (Max, Nov 24): the route's limit is now 150 s (FEED_WAIT_MS)
     var rec = { ms: ms, fired: false, cleared: false, firedAt: null };
     rec.h = realSetTimeout(function () { rec.fired = true; rec.firedAt = Date.now(); state.events.push('deadline'); fn(); }, FAST_MS);
     limitTimers.push(rec); state.events.push('timer-set');
@@ -115,7 +115,7 @@ function idx(e) { return state.events.indexOf(e); }
   check('it stopped at the deadline, not when the body would have finished', took < BODY_LATE_MS, took);
   check('the timer was cleared afterwards, once (finally), after the abort', limitTimers[0].cleared === true && idx('timer-cleared') > idx('body-aborted'), state.events);
   check('failRun recorded the run: finished_at set, ok false', runs(state.db).length === 1 && !!run.finished_at && run.ok === false, run);
-  check('… with the plain message (still arriving after 40 seconds and was cut off — may be sending it slowly)', run.error === H.feedIncompleteMessage(40) && /still arriving after 40 seconds and was cut off/.test(run.error) && /may be sending it slowly/.test(run.error), run.error);
+  check('… with the plain message (still arriving after 150 seconds and was cut off — may be sending it slowly)', run.error === H.feedIncompleteMessage(150) && /still arriving after 150 seconds and was cut off/.test(run.error) && /may be sending it slowly/.test(run.error), run.error);
   check('… the stored message ends with "Nothing was changed in the Hub." and states no size / compression', /Nothing was changed in the Hub\.$/.test(run.error) && !/10 MB|compress/i.test(run.error), run.error);
   check('the answer says the figures were kept, and never "answered 200"', /^SYNC FAILED — the figures already in the Hub were kept unchanged\. /.test(out.error || '') && !/answered 200/.test(out.error || ''), out.error);
   check('the token is in no message', String(out.error).indexOf('TOKEN-ya') < 0 && String(run.error).indexOf('TOKEN-ya') < 0);
@@ -150,7 +150,7 @@ function idx(e) { return state.events.indexOf(e); }
   console.log('YA rev2 — the route source');
   var src = fs.readFileSync(path.join(root, 'src/app/api/accounting/warehouse-shipping/route.js'), 'utf8');
   var blk = src.substring(src.indexOf('// 1. the warehouse feed'), src.indexOf('if (feedFail) { return await failRun(feedFail); }'));
-  check('production deadline is still 40000 ms and the timer is created before the try', /var ctl = new AbortController\(\); var tm = setTimeout\(function \(\) \{ ctl\.abort\(\); \}, 40000\);\r?\n\s*try \{/.test(blk));
+  check('production deadline is 150 s (v55.83-YR), inside maxDuration 300, and the timer is created before the try', /var ctl = new AbortController\(\); var tm = setTimeout\(function \(\) \{ ctl\.abort\(\); \}, FEED_WAIT_MS\);\r?\n\s*try \{/.test(blk) && /var FEED_WAIT_SECONDS = 150; var FEED_WAIT_MS = FEED_WAIT_SECONDS \* 1000;/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'src/app/api/accounting/warehouse-shipping/route.js'), 'utf8')) && /export const maxDuration = 300;/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'src/app/api/accounting/warehouse-shipping/route.js'), 'utf8')));
   check('clearTimeout appears only in the finally, after readFeedBody', (blk.match(/clearTimeout/g) || []).length === 1 && /finally \{ clearTimeout\(tm\); \}/.test(blk) && blk.indexOf('readFeedBody') < blk.indexOf('clearTimeout'));
   check('route keeps var + concatenation (no template literals, no let/const in the changed block)', !/`/.test(blk) && !/\b(let|const)\s/.test(blk));
 

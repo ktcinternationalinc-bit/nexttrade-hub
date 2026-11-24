@@ -31,7 +31,8 @@ import { readFeedBody } from '../../../../lib/warehouse-feed-read'; // v55.83-YA
 var API_BUILD_MARKER = 'v55.83-TG-warehouse-shipping';
 var PAGE = 1000; var MAX_ROWS = 40000; var STALE_RUN_MINUTES = 10;
 var SQL_HINT = 'Run sql/v55-83-TG-warehouse-shipping.sql in Supabase once (it only adds four new tables and two functions).';
-export const maxDuration = 60;
+export const maxDuration = 300; // v55.83-YR (Max, Nov 24): the warehouse sends its list slowly — wait up to 150 s for the WHOLE list instead of 40
+var FEED_WAIT_SECONDS = 150; var FEED_WAIT_MS = FEED_WAIT_SECONDS * 1000;
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY); }
 function bad(msg, status) { return NextResponse.json({ ok: false, error: msg, api_build_marker: API_BUILD_MARKER }, { status: status || 400 }); }
@@ -89,18 +90,18 @@ async function runSync(db, trigger, userId) {
     if (active.value !== cfg.source) { return await failRun('The feed is ' + cfg.source + ' but the Hub is set to read ' + active.value + '. Change one of them on purpose first.'); }
 
     // 1. the warehouse feed
-    // v55.83-YA rev2 (Codex 23 Nov 22:15) — ONE 40-second limit covers the headers AND the whole body read; the timer is cleared
-    // in finally on every path (non-200, thrown fetch, success), and failRun runs only after it, well inside maxDuration 60.
+    // v55.83-YA rev2 (Codex 23 Nov 22:15) — ONE time limit (150 s since v55.83-YR) covers the headers AND the whole body read; the timer is cleared
+    // in finally on every path (non-200, thrown fetch, success), and failRun runs only after it, well inside maxDuration 300.
     var feed = null; var feedFail = null;
-    var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
+    var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, FEED_WAIT_MS);
     try {
       var res = await fetch(cfg.url, { headers: { 'X-Hub-Feed-Token': cfg.token, 'Accept': 'application/json' }, signal: ctl.signal, cache: 'no-store', redirect: 'error' }); // UU (Codex 06:13) — no redirect carries the token
       if (!res.ok) { feedFail = 'The warehouse answered HTTP ' + res.status + (res.status === 401 ? ' (the token was refused)' : '') + '.'; }
       else {
-        var rdF = await readFeedBody(res, ctl, 40); // v55.83-YA — an incomplete or non-list answer is named plainly
+        var rdF = await readFeedBody(res, ctl, FEED_WAIT_SECONDS); // v55.83-YA — an incomplete or non-list answer is named plainly
         if (rdF.error) { feedFail = rdF.error; } else { feed = rdF.json; }
       }
-    } catch (eF) { feedFail = 'Could not read the warehouse feed (' + ((eF && eF.name === 'AbortError') ? 'no answer within 40 seconds' : ((eF && eF.message) || 'network error')) + ').'; }
+    } catch (eF) { feedFail = 'Could not read the warehouse feed (' + ((eF && eF.name === 'AbortError') ? 'no answer within ' + FEED_WAIT_SECONDS + ' seconds' : ((eF && eF.message) || 'network error')) + ').'; }
     finally { clearTimeout(tm); }
     if (feedFail) { return await failRun(feedFail); }
     if (!feed || feed.ok !== true || !Array.isArray(feed.orders) || !Array.isArray(feed.stages)) { return await failRun('The warehouse feed answered, but not in the expected shape.'); }

@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YR',
+    date: '2026-11-24',
+    title: 'Warehouse feed: the Hub now waits for the whole order list',
+    items: [
+      { text: '**Orders, Arrival reminders and the shipping-cost sync no longer give up after 40 seconds.** The warehouse sends its order list slowly; the Hub now waits up to two and a half minutes for all of it. When the warehouse is slow these screens take longer to open, but they open instead of showing “the order list was cut off”.' },
+      { text: 'If the list still has not arrived after that, the screen says so plainly, as before. Nothing is ever shown from half a list.' },
+      { superAdminOnly: true, text: 'Technical: no SQL, no warehouse change. order-monitor, arrival-reminders and warehouse-shipping routes: one FEED_WAIT_SECONDS = 150 limit over headers + body (was 40), maxDuration 300 (was 60). Pushed on Max’s order; the lasting fix (a smaller or compressed list from the warehouse) is still open.' },
+    ]
+  },
+  {
     version: 'v55.83-YQ',
     date: '2026-11-24',
     title: 'Change Schedule: a STOP switch for warehouse releases',

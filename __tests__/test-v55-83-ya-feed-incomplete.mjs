@@ -82,10 +82,10 @@ for (const f of ['src/app/api/accounting/order-monitor/route.js', 'src/app/api/a
   ok(/import \{ readFeedBody \} from '..\/..\/..\/..\/lib\/warehouse-feed-read'/.test(s) && /readFeedBody\(res, ctl, 40\)/.test(s), f + ' imports and uses readFeedBody');
   ok(/redirect: 'error'/.test(s) && /'X-Hub-Feed-Token': cfg\.token/.test(s), f + ' still sends the token only with redirect:error');
   // rev2 — the 40-second timer is set before the try and cleared ONLY in finally, after the body has been read
-  const a = s.indexOf('var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);');
+  const a = s.indexOf('var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, FEED_WAIT_MS);'); // v55.83-YR (Max, Nov 24): the limit is 150 s, named once per route
   const fin = s.indexOf('finally { clearTimeout(tm); }', a);
   const blk = a >= 0 && fin > a ? s.substring(a, fin) : '';
-  ok(!!blk && blk.indexOf('readFeedBody(res, ctl, 40)') > 0 && blk.indexOf('clearTimeout') < 0 && /^[^\n]*\n\s*try \{/.test(blk), f + ' keeps the 40-second timer through fetch AND readFeedBody, cleared only in finally');
+  ok(!!blk && blk.indexOf('readFeedBody(res, ctl, FEED_WAIT_SECONDS)') > 0 && s.indexOf('var FEED_WAIT_SECONDS = 150; var FEED_WAIT_MS = FEED_WAIT_SECONDS * 1000;') > 0 && s.indexOf('export const maxDuration = 300;') > 0 && blk.indexOf('clearTimeout') < 0 && /^[^\n]*\n\s*try \{/.test(blk), f + ' keeps the time limit (150 s since v55.83-YR, inside maxDuration 300) through fetch AND readFeedBody, cleared only in finally');
 }
 const lib = fs.readFileSync(path.join(root, 'src/lib/warehouse-feed-read.js'), 'utf8');
 ok(!/^['"]use client['"]/m.test(lib), 'the helper is server-safe (no use client)');

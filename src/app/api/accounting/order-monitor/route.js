@@ -20,7 +20,8 @@ import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private
 import { warehouseFeedConfig, feedIdentityProblem } from '../../../../lib/warehouse-feed-config'; // v55.83-UU — approved warehouse addresses only
 import { readFeedBody } from '../../../../lib/warehouse-feed-read'; // v55.83-YA
 
-export const maxDuration = 60;
+export const maxDuration = 300; // v55.83-YR (Max, Nov 24): the warehouse sends its list slowly — wait up to 150 s for the WHOLE list instead of 40
+var FEED_WAIT_SECONDS = 150; var FEED_WAIT_MS = FEED_WAIT_SECONDS * 1000;
 var API_BUILD_MARKER = 'v55.83-UU-order-monitor';
 var SQL_HINT = 'Run sql/v55-83-TI-order-monitor.sql in Supabase first.';
 var ARCHIVE_SQL_HINT = 'Run sql/v55-83-UC-order-report-archive.sql in Supabase first (the Non issue / Corrected archive).';
@@ -40,10 +41,10 @@ function feedConfig() {
   return { url: url, token: token, host: host, source: base.source, closeUrl: url.replace(/\/shipping\/?$/, '/close-order'), closeToken: String(process.env.NEXTRADE_CLOSE_TOKEN || '').trim() }; // TO — closing has its OWN token (Codex P1), never the read token
 }
 async function fetchFeed(cfg) {
-  var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
+  var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, FEED_WAIT_MS);
   try {
     var res = await fetch(cfg.url + '?shipped_since=2024-01-01', { headers: { 'X-Hub-Feed-Token': cfg.token, Accept: 'application/json' }, signal: ctl.signal, cache: 'no-store', redirect: 'error' }); // UU (Codex 06:13) — a redirect never carries the token elsewhere
-    var rd = await readFeedBody(res, ctl, 40); // v55.83-YA — a list cut off by the time limit says so plainly (not "answered 200")
+    var rd = await readFeedBody(res, ctl, FEED_WAIT_SECONDS); // v55.83-YA — a list cut off by the time limit says so plainly (not "answered 200")
     if (res.ok && rd.error) { throw new Error(rd.error); }
     var j = rd.json || null;
     if (!res.ok || !j || j.ok !== true) { throw new Error('The warehouse feed answered ' + res.status + (j && j.error ? ': ' + j.error : '')); }

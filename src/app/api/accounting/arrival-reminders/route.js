@@ -23,7 +23,8 @@ import { windowFloorFor } from '../../../../lib/visibility-window-server'; // th
 import { composeReminder, htmlOf, langOf, todayInNewYork, recipientsOf, LANGS, PHASE_WORDS, AUTO_MAX_PER_RUN, AUTO_MAX_OVERDUE_DAYS, REQUIRED_FROM } from '../../../../lib/arrival-reminders';
 import { buildReminderRows, reminderMailConfig, sendReminderMail, readSetting, writeSetting, autoIsOn, AUTO_SWITCH_KEY, AUTO_LAST_RUN_KEY, CC_KEY, ccFor, buildInvoiceAttachments, insertLog } from '../../../../lib/arrival-reminders-server';
 
-export const maxDuration = 60;
+export const maxDuration = 300; // v55.83-YR (Max, Nov 24): the warehouse sends its list slowly — wait up to 150 s for the WHOLE list instead of 40
+var FEED_WAIT_SECONDS = 150; var FEED_WAIT_MS = FEED_WAIT_SECONDS * 1000;
 var API_BUILD_MARKER = 'v55.83-XG-arrival-reminders';
 var SQL_HINT = 'Run sql/v55-83-XG-arrival-reminders.sql in Supabase first (the reminder log). Nothing is sent without the log.';
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
@@ -34,10 +35,10 @@ async function inChunks(db, table, cols, col, ids) { var out = []; for (var i = 
 function hashOf(subject, body) { return createHash('sha256').update(String(subject) + '\n\n' + String(body), 'utf8').digest('hex'); }
 
 async function fetchFeed(cfg) {
-  var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
+  var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, FEED_WAIT_MS);
   try {
     var res = await fetch(cfg.url + '?shipped_since=2024-01-01', { headers: { 'X-Hub-Feed-Token': cfg.token, Accept: 'application/json' }, signal: ctl.signal, cache: 'no-store', redirect: 'error' });
-    var rd = await readFeedBody(res, ctl, 40); // v55.83-YA — a list cut off by the time limit says so plainly (not "answered 200")
+    var rd = await readFeedBody(res, ctl, FEED_WAIT_SECONDS); // v55.83-YA — a list cut off by the time limit says so plainly (not "answered 200")
     if (res.ok && rd.error) { throw new Error(rd.error); }
     var j = rd.json || null;
     if (!res.ok || !j || j.ok !== true) { throw new Error('The warehouse feed answered ' + res.status + (j && j.error ? ': ' + j.error : '')); }
