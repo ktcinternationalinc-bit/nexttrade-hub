@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YS',
+    date: '2026-11-24',
+    title: 'Change Schedule: the STOP box keeps itself up to date',
+    items: [
+      { text: '**The “Warehouse releases: allowed / STOPPED” box now re-checks itself every 20 seconds**, and whenever you come back to the tab. If someone stops or restarts releases from another computer, your screen follows without a reload.' },
+      { text: 'If the Hub cannot check, the box says “NOT KNOWN — could not check” in amber instead of showing an old “allowed”. There is also a “Check now” button and the time of the last check.' },
+      { superAdminOnly: true, text: 'Technical: Codex 24 Nov 13:55 UTC P2 on YQ. ReleasePauseBar: 20 s interval + focus / visibilitychange + refreshKey from the parent’s own status read; stale state on a failed read. Server gates unchanged. No SQL.' },
+    ]
+  },
+  {
     version: 'v55.83-YR',
     date: '2026-11-24',
     title: 'Warehouse feed: the Hub now waits for the whole order list',
