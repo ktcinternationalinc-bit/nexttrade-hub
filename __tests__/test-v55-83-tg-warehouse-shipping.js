@@ -247,10 +247,10 @@ var ST = require(path.join(root, 'src/lib/shipping-terms.js')); var P0 = require
 var L = function (d, a) { return { description: d, amount: a }; };
 check('no choice → refused', !ST.checkShippingTerms('', null, [], P0.isTransportLine).ok);
 check('EXW, no shipping line, no cost → ok', ST.checkShippingTerms('EXW', '', [L('PVC', 1000)], P0.isTransportLine).ok);
-check('EXW, no shipping line, but a cost → refused', !ST.checkShippingTerms('EXW', '500', [L('PVC', 1000)], P0.isTransportLine).ok);
-check('EXW + shipping line needs the cost', !ST.checkShippingTerms('EXW', '', [L('PVC', 1000), L('Ocean freight', 600)], P0.isTransportLine).ok);
+check('YP (Max, Nov 24, replaces the Nov 16 rule): EXW never has a shipping cost — a typed cost is dropped, the invoice saves with none', (function () { var x = ST.checkShippingTerms('EXW', '500', [L('PVC', 1000)], P0.isTransportLine); return x.ok === true && x.value.shipping_cost_estimate === null; })());
+check('YP: EXW + a shipping line saves with no cost', (function () { var x = ST.checkShippingTerms('EXW', '', [L('PVC', 1000), L('Ocean freight', 600)], P0.isTransportLine); return x.ok === true && x.value.shipping_cost_estimate === null; })());
 var e7 = ST.checkShippingTerms('EXW', '600', [L('PVC', 1000), L('Ocean freight', 620)], P0.isTransportLine);
-check('EXW + shipping line 620 on cost 600 → warned (minimum 642)', e7.ok && e7.warnings.length === 1 && /642\.00/.test(e7.warnings[0]), e7);
+check('YP: EXW + shipping line 620 with a cost typed → no cost kept, no 7% warning', e7.ok && e7.warnings.length === 0 && e7.value.shipping_cost_estimate === null && !e7.markup, e7);
 check('CNF needs a cost', !ST.checkShippingTerms('CNF_INCLUDED', '', [L('PVC', 1000)], P0.isTransportLine).ok);
 var c7 = ST.checkShippingTerms('CNF_SEPARATE', '1000', [L('PVC', 9000), L('Freight charges', 1070)], P0.isTransportLine);
 check('CNF separate: line 1070 on cost 1000 → exactly +7%, no warning', c7.ok && c7.warnings.length === 0, c7);

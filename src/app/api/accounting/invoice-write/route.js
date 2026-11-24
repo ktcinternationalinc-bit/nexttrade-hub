@@ -11,7 +11,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { readInvoiceFromBase64 } from '../../../../lib/invoice-extract-server'; // v55.83-PQ
-import { SHIPPING_TERMS, basisOfTerms, markupShortfall, markupOverrideNote } from '../../../../lib/shipping-terms'; // v55.83-TG (+ XV override)
+import { SHIPPING_TERMS, basisOfTerms, markupShortfall, markupOverrideNote, releaseKeysOfText, breakdownIsComplete } from '../../../../lib/shipping-terms'; // v55.83-TG (+ XV override)
 import { isTransportLine } from '../../../../lib/profitability'; // v55.83-XV — the same shipping-line test the invoice screen and the profit report use
 import { audit } from '../../../../lib/audit-server'; // v55.83-TG
 
@@ -133,15 +133,23 @@ export async function POST(req) {
       if (SHIPPING_TERMS.indexOf(stt) < 0) { return NextResponse.json({ ok: false, error: 'Pick the shipping terms: EXW, CNF in the price, or CNF with a separate shipping line.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var sc = body.shipping_cost_estimate === null || body.shipping_cost_estimate === undefined || body.shipping_cost_estimate === '' ? null : Number(body.shipping_cost_estimate);
       if (sc !== null && (isNaN(sc) || sc < 0)) { return NextResponse.json({ ok: false, error: 'The shipping cost must be a number, zero or more.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (stt === 'EXW') { sc = null; } // v55.83-YP (Max, Nov 24): EXW never carries a shipping cost
       if (stt !== 'EXW' && !(sc > 0)) { return NextResponse.json({ ok: false, error: 'CNF needs the shipping cost we expect to pay.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var inv0 = await db.from('accounting_invoices').select('id').eq('id', invoiceId).maybeSingle();
+      var inv0 = await db.from('accounting_invoices').select('id, release_number').eq('id', invoiceId).maybeSingle();
       if (inv0.error || !inv0.data) { return NextResponse.json({ ok: false, error: 'Invoice not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       // v55.83-XV — cost + 7%: the server reads the SAVED lines itself. Below the minimum → refused unless a written reason came with
       // the request; the reason is written to the audit trail FIRST, and if that write fails nothing is saved.
       var liS = await db.from('accounting_invoice_items').select('description, quantity, unit_price, line_total').eq('invoice_id', invoiceId);
       if (liS.error) { return NextResponse.json({ ok: false, error: 'Could not read the invoice lines to check the shipping charge, so the shipping terms were not saved: ' + liS.error.message, api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
       var linesS = (liS.data || []).map(function (it) { var ltS = (it.line_total !== null && it.line_total !== undefined && Number(it.line_total) !== 0) ? Number(it.line_total) : (Number(it.quantity) || 0) * (Number(it.unit_price) || 0); return { description: it.description, amount: ltS }; });
-      var shortS = markupShortfall(stt, sc, linesS, isTransportLine);
+      // v55.83-YP (Max, Nov 24) — the cost + 7% check applies only once the ACTUAL costs are typed: the complete breakdown (trucking and
+      // freight) for every release on the invoice. The server reads that itself. Until then the cost is a guess and nothing is checked.
+      var actualS = false; var keysS = releaseKeysOfText(inv0.data.release_number);
+      if (stt === 'CNF_SEPARATE' && keysS.length) {
+        var peS = await db.from('pl_release_part_estimates').select('release_key, part, amount').in('release_key', keysS);
+        if (!peS.error) { actualS = breakdownIsComplete(peS.data || [], inv0.data.release_number); }
+      }
+      var shortS = markupShortfall(stt, sc, linesS, isTransportLine, { costIsActual: actualS });
       var overrideS = null;
       if (shortS) {
         var noteS = markupOverrideNote(body.markup_override_note);

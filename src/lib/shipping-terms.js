@@ -43,16 +43,22 @@ var FREIGHT_WORDS = /ship|freight|forward|truck|deliver|courier|cartage|drayage|
 export function isSurchargeOnlyLine(description) { var d = String(description || ''); return /surcharge/i.test(d) || (/over[\s-]?weight/i.test(d) && !FREIGHT_WORDS.test(d)); }
 export function isOverweightOnlyLine(description) { var d = String(description || ''); return /over[\s-]?weight/i.test(d) && !FREIGHT_WORDS.test(d); }
 
-export function checkShippingTerms(terms, cost, lines, isShippingLine) {
+// v55.83-YP (Max, Nov 24: "the 7% error mssg makes no sense there since you dont evven know my costs ... You can give me that error
+// message after i enter the actual costs..otherwise let it go" · "if it is exw there should be NO shipping cost or 0")
+//   · the cost + 7% check runs ONLY when opts.costIsActual === true (the complete breakdown is typed for the release)
+//   · EXW never carries a shipping cost: whatever was typed is dropped, nothing is checked
+export function checkShippingTerms(terms, cost, lines, isShippingLine, opts) {
+  var costIsActual = !!(opts && opts.costIsActual === true);
   var warnings = []; var markup = null; // v55.83-XV — set when the shipping charged is below cost + 7%
   if (SHIPPING_TERMS.indexOf(terms) < 0) { return { ok: false, error: 'Pick the shipping terms: EXW, CNF in the price, or CNF with a separate shipping line.' }; }
+  if (terms === 'EXW') { return { ok: true, warnings: warnings, markup: null, value: { shipping_terms: 'EXW', shipping_cost_estimate: null } }; } // YP: EXW = no shipping cost
   var c = num(cost);
   if (c !== null && (isNaN(c) || c < 0 || c > 10000000)) { return { ok: false, error: 'The shipping cost must be a number, zero or more.' }; }
   var shipLines = (lines || []).filter(function (l) { return isShippingLine && isShippingLine(l.description) && (Number(l.amount) || 0) > 0; });
   var charged = Math.round(shipLines.reduce(function (t, l) { return t + (Number(l.amount) || 0); }, 0) * 100) / 100;
   function markupWarn() {
     var need = minShippingCharge(c);
-    if (c > 0 && charged < need - 0.005) {
+    if (costIsActual && c > 0 && charged < need - 0.005) {
       var w7 = 'The shipping line(s) total $' + charged.toFixed(2) + ', but must be at least $' + need.toFixed(2) + ' (our shipping cost $' + c.toFixed(2) + ' + 7%).';
       warnings.push(w7); markup = { cost: c, charged: charged, need: need, short: Math.round((need - charged) * 100) / 100, warning: w7 };
     }
@@ -74,7 +80,7 @@ export function checkShippingTerms(terms, cost, lines, isShippingLine) {
   }
   if (c === null || !(c > 0)) { return { ok: false, error: 'CNF: type the shipping cost (freight + trucking) we expect to pay. It is an estimate; the bills replace it when they arrive.' }; }
   if (terms === 'CNF_SEPARATE') {
-    if (!shipLines.length) { warnings.push('CNF with a separate shipping line, but no line looks like a shipping charge. Add the shipping line (cost + 7% at least).'); }
+    if (!shipLines.length) { warnings.push('CNF with a separate shipping line, but no line looks like a shipping charge. Add the shipping line.'); }
     else { markupWarn(); }
   }
   if (terms === 'CNF_INCLUDED' && shipLines.some(function (l) { return !isSurchargeOnlyLine(l.description); })) { /* UE: a surcharge on CNF-included is extra transport income, no warning */ warnings.push('CNF in the price, but a line looks like a separate shipping charge (“' + shipLines[0].description + '”). Should it be “CNF with a separate line”?'); }
@@ -114,9 +120,43 @@ export function fillShippingLine(items, total, terms, isShippingLine, blankItem)
   if (terms !== 'CNF_SEPARATE') { return { items: list, changed: false, why: 'no_line_for_these_terms' }; }
   return { items: list.concat([Object.assign({}, blankItem ? blankItem() : {}, { description: 'Shipping Costs', quantity: '1', unit_price: String(t) })]), changed: true, why: 'added' };
 }
+// v55.83-YP (Max, Nov 24: "if i enter a shpping cost. it should automatically create a shipping line item with that cost")
+// On "CNF with a separate shipping line": no shipping line yet → one is added at the cost typed. One shipping line that the Hub
+// itself put there (still at the amount it put, or empty) → it follows the new cost. A line the person priced by hand, or several
+// shipping lines, are never touched. prevAuto = the amount the Hub last put in (null = none). Returns { items, changed, why, amount }.
+export function autoShippingLine(items, cost, prevAuto, terms, isShippingLine, blankItem) {
+  var list = items || []; var t = Math.round((Number(String(cost === null || cost === undefined ? '' : cost).replace(/[$,\s]/g, '')) || 0) * 100) / 100;
+  if (terms !== 'CNF_SEPARATE' || !(t > 0)) { return { items: list, changed: false, why: 'not_applicable' }; }
+  var idx = []; list.forEach(function (it, i) { if (isShippingLine && isShippingLine(it.description) && !isSurchargeOnlyLine(it.description)) { idx.push(i); } });
+  if (idx.length > 1) { return { items: list, changed: false, why: 'several_lines' }; }
+  if (idx.length === 1) {
+    var cur = list[idx[0]]; var amt = Math.round((Number(cur.quantity) || 0) * (Number(cur.unit_price) || 0) * 100) / 100;
+    if (amt === t) { return { items: list, changed: false, why: 'same', amount: t }; }
+    var ours = amt === 0 || (prevAuto !== null && prevAuto !== undefined && amt === Math.round(Number(prevAuto) * 100) / 100);
+    if (!ours) { return { items: list, changed: false, why: 'priced_by_hand' }; }
+    var c1 = list.slice(); c1[idx[0]] = Object.assign({}, cur, { quantity: '1', unit_price: String(t) });
+    return { items: c1, changed: true, why: 'updated', amount: t };
+  }
+  var blank = -1; list.forEach(function (it, i) { if (blank < 0 && !String(it.description || '').trim() && !(Number(it.unit_price) > 0)) { blank = i; } });
+  var line = Object.assign({}, blankItem ? blankItem() : {}, { description: 'Shipping Costs', quantity: '1', unit_price: String(t) });
+  return { items: list.concat([line]), changed: true, why: 'added', amount: t };
+}
+// the releases written in the invoice's Release # box, as keys (the same split as the breakdown box, Profitability and Orders)
+export function releaseKeysOfText(text) {
+  var out = []; var seen = {};
+  String(text || '').split(/\s*(?:[,;&\/+]|\band\b)\s*/i).forEach(function (part) { var k = String(part || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); if (k && !seen[k]) { seen[k] = true; out.push(k); } });
+  return out.slice(0, 6);
+}
+// are the ACTUAL shipping costs typed? = for EVERY release on the invoice both trucking and freight are typed (0 counts as typed) —
+// the same test that fills the "Our shipping cost" box. rows = pl_release_part_estimates rows { release_key, part, amount }.
+export function breakdownIsComplete(rows, releaseText) {
+  var keys = releaseKeysOfText(releaseText); if (!keys.length) { return false; }
+  var have = {}; (rows || []).forEach(function (r) { if (r && r.amount !== null && r.amount !== undefined && r.amount !== '' && !isNaN(Number(r.amount))) { have[String(r.release_key) + '|' + String(r.part)] = true; } });
+  return keys.every(function (k) { return have[k + '|trucking'] === true && have[k + '|freight'] === true; });
+}
 // null = the rule is met or does not apply · otherwise { cost, charged, need, short } for these terms, cost and lines
-export function markupShortfall(terms, cost, lines, isShippingLine) {
-  var r = checkShippingTerms(terms, cost, lines, isShippingLine);
+export function markupShortfall(terms, cost, lines, isShippingLine, opts) {
+  var r = checkShippingTerms(terms, cost, lines, isShippingLine, opts);
   return r && r.ok && r.markup ? { cost: r.markup.cost, charged: r.markup.charged, need: r.markup.need, short: r.markup.short } : null;
 }
 

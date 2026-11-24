@@ -14,7 +14,7 @@ import { canDeleteInvoices, INVOICE_DELETE_DENIED } from '../lib/invoice-delete-
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-UM — signed-in token on lifecycle calls
 import { dbDelete } from '../lib/supabase';
 import { invoiceLifecycle, proformaLifecycle, archivePatch, voidPatch, restorePatch } from '../lib/record-lifecycle';
-import { SHIPPING_TERMS, SHIPPING_TERMS_WORDS, checkShippingTerms, minShippingCharge, MARKUP_NOTE_MIN, fillShippingLine } from '../lib/shipping-terms'; // v55.83-TG (+ XV)
+import { SHIPPING_TERMS, SHIPPING_TERMS_WORDS, checkShippingTerms, minShippingCharge, MARKUP_NOTE_MIN, fillShippingLine, autoShippingLine } from '../lib/shipping-terms'; // v55.83-TG (+ XV)
 import { isTransportLine } from '../lib/profitability'; // v55.83-TG
 import ProformaLinkBox, { proformaLinksApi } from './ProformaLinkBox'; // v55.83-VZ — proforma ↔ invoice links + signed proforma
 import ProformaPeek from './ProformaPeek';
@@ -511,6 +511,16 @@ export default function AccountingInvoicesTab(props) {
 
   // v55.83-TZ (Yasmeen, Nov 17: "the system will not allow me to save") — why Save stopped, in red next to the button (the pop-up alone was missed)
   var sSb = useState(''); var saveBlock = sSb[0]; var setSaveBlock = sSb[1];
+  // v55.83-YP (Max, Nov 24) — shipActualFor = the Release # text whose COMPLETE breakdown is typed (the actual costs): only then is cost + 7% checked.
+  // autoShip = the amount the Hub itself last put on the shipping line, so a line priced by hand is never overwritten.
+  var sAc = useState(null); var shipActualFor = sAc[0]; var setShipActualFor = sAc[1];
+  var sAu = useState(null); var autoShip = sAu[0]; var setAutoShip = sAu[1];
+  function shipCostIsActual() { var r = String(hdr.release_number || '').trim(); return !!r && shipActualFor === r; }
+  function autoShipLine(costText, terms) {
+    if (locked(editing)) { return; }
+    var a = autoShippingLine(items, costText, autoShip, terms, isTransportLine, blankItem);
+    if (a.changed) { setItems(a.items); setAutoShip(a.amount); toast.success(a.why === 'added' ? ('Shipping line added at $' + Number(a.amount).toFixed(2) + ' (the cost you typed). Change the amount if you charge more or less.') : ('The shipping line now follows the cost: $' + Number(a.amount).toFixed(2) + '.')); }
+  }
   function save() {
     if (!mayEdit) { toast.error('You do not have permission to edit.'); return; }
     if (editing !== 'new' && locked(editing)) { toast.error('Approved invoice is locked. Reopen to edit.'); return; }
@@ -521,7 +531,7 @@ export default function AccountingInvoicesTab(props) {
     // v55.83-TG (Max): every invoice has ONE shipping-terms value, and a shipping line must cover our cost + 7%
     var shipCheck = null;
     if (isInvoice()) {
-      shipCheck = checkShippingTerms(hdr.shipping_terms, hdr.shipping_cost_estimate, clean.map(function (it) { return { description: it.description, amount: itemTotal(it) }; }), isTransportLine);
+      shipCheck = checkShippingTerms(hdr.shipping_terms, hdr.shipping_cost_estimate, clean.map(function (it) { return { description: it.description, amount: itemTotal(it) }; }), isTransportLine, { costIsActual: shipCostIsActual() /* v55.83-YP */ });
       if (!shipCheck.ok) { toast.error(shipCheck.error); setSaveBlock(shipCheck.error); return; } // TZ — also shown by the Save button
       setSaveBlock('');
       // v55.83-XV (Max, Nov 23) — below cost + 7% is saved only with a written reason (kept on the audit trail by the server)
@@ -602,7 +612,7 @@ export default function AccountingInvoicesTab(props) {
   // old browser dbUpdate was silently filtered to 0 rows by RLS (app auth is by email, users.id !=
   // auth.uid()), so "Approve" toasted success but the invoice stayed DRAFT and could never reach Wave.
   function setApproval(row, status) {
-    if (status === 'approved' && !mayApprove) { toast.error('Only an Owner/Admin or Accounting Manager can approve invoices.'); return; }
+    if (status === 'approved' && !mayApprove) { toast.error('You need the “Approve & reopen invoices” switch (Settings → Banking & Accounting Access → 3 · Bank work). Ask the super admin.'); return; }
     if (!mayEdit && status !== 'approved') { toast.error('No permission.'); return; }
     setBusy(true);
     hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: row.id, status: status, user_id: userProfile && userProfile.id }) })
@@ -673,7 +683,7 @@ export default function AccountingInvoicesTab(props) {
       .finally(function () { setBusy(false); });
   }
   function reopenInvoice(row) {
-    if (!mayApprove) { toast.error('Only an Owner/Admin or Accounting Manager can reopen.'); return; }
+    if (!mayApprove) { toast.error('You need the “Approve & reopen invoices” switch (Settings → Banking & Accounting Access → 3 · Bank work). Ask the super admin.'); return; }
     var reason = window.prompt('Reopen approved invoice for editing. Reason:') || '';
     if (!reason.trim()) { toast.error('Reason required.'); return; }
     setBusy(true);
@@ -996,26 +1006,28 @@ export default function AccountingInvoicesTab(props) {
             var st = hdr.shipping_terms || '';
             var shipAmt = items.reduce(function (t, it) { return t + (isTransportLine(it.description) ? itemTotal(it) : 0); }, 0);
             var c = Number(hdr.shipping_cost_estimate) || 0;
-            var noLineExw = st === 'EXW' && !(shipAmt > 0);
+            var noLineExw = st === 'EXW'; // v55.83-YP (Max, Nov 24): EXW never has a shipping cost
+            var actual7 = shipCostIsActual();
             return (
               <div id="nt-invoice-shipping" className="mb-2 rounded p-2" style={{ border: '2px solid ' + (st ? '#334155' : '#f59e0b'), background: st ? 'transparent' : 'rgba(245,158,11,0.08)' }}>
                 <div className="text-[11px] font-bold text-slate-200 mb-1">Shipping terms * <span className="font-normal text-slate-400">(pick one — required)</span></div>
                 <div className="flex flex-wrap gap-3 mb-1">
                   {SHIPPING_TERMS.map(function (k) { return (
                     <label key={k} className="flex items-center gap-1 text-xs text-slate-100 cursor-pointer">
-                      <input type="radio" name="ship_terms" checked={st === k} disabled={locked(editing)} onChange={function () { uh('shipping_terms', k); }} />{SHIPPING_TERMS_WORDS[k]}
+                      <input type="radio" name="ship_terms" checked={st === k} disabled={locked(editing)} onChange={function () { var costNow = k === 'EXW' ? '' : (hdr.shipping_cost_estimate || ''); setHdr(function (h) { var n = Object.assign({}, h, { shipping_terms: k }); if (k === 'EXW') { n.shipping_cost_estimate = ''; } return n; }); if (k === 'CNF_SEPARATE') { autoShipLine(costNow, k); } }} />{SHIPPING_TERMS_WORDS[k]}
                     </label>); })}
                 </div>
                 <label className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
-                  <span>{'Our shipping cost (freight + trucking)' + (st === 'EXW' ? ' — only if you add a shipping line' : '')}</span>
-                  <input id="nt-invoice-ship-cost" value={hdr.shipping_cost_estimate || ''} disabled={locked(editing) || noLineExw} onChange={function (e) { uh('shipping_cost_estimate', e.target.value); }} placeholder={noLineExw ? 'none on EXW' : 'e.g. 5325'} className={inp} style={{ maxWidth: '140px' }} />
+                  <span>{'Our shipping cost (freight + trucking)' + (st === 'EXW' ? ' — none on EXW' : '')}</span>
+                  <input id="nt-invoice-ship-cost" value={hdr.shipping_cost_estimate || ''} disabled={locked(editing) || noLineExw} onChange={function (e) { uh('shipping_cost_estimate', e.target.value); }} onBlur={function (e) { autoShipLine(e.target.value, st); }} placeholder={noLineExw ? 'none on EXW' : 'e.g. 5325'} className={inp} style={{ maxWidth: '140px' }} />
                   <span>estimate — the bills replace it when they arrive</span>
                 </label>
                 {/* v55.83-WH — the internal breakdown; saved for the release through the Profitability route, never into the invoice */}
-                <ShippingPartsBox key={'spb-' + (shipFocus ? 'open' : 'closed')} initialOpen={shipFocus} releaseText={hdr.release_number} charged={shipAmt} terms={st} userId={userProfile && userProfile.id} toast={toast} disabled={false} onTotal={function (tot, info) { if (locked(editing) || noLineExw) { return; } setHdr(function (h) { return Number(h.shipping_cost_estimate) === Number(tot) && String(h.shipping_cost_estimate || '') !== '' ? h : Object.assign({}, h, { shipping_cost_estimate: String(tot) }); }); if (info && info.fromSave) { var fl = fillShippingLine(items, tot, st, isTransportLine, blankItem); if (fl.changed) { setItems(fl.items); toast.success('The shipping line on this invoice is now $' + Number(tot).toFixed(2) + ' (the breakdown total). Save the invoice to keep it.'); } else if (fl.why === 'several_lines') { toast.error('This invoice has ' + fl.count + ' shipping lines, so the total was not put in for you. Set the amounts yourself.'); } } } /* v55.83-XV — the breakdown total fills the cost box; after a Save in the box, the shipping charge line too */} />
-                {(st === 'CNF_SEPARATE' || (st === 'EXW' && shipAmt > 0)) && c > 0 && <div className="text-[11px] mt-1" style={{ color: shipAmt + 0.005 >= minShippingCharge(c) ? '#86efac' : '#fca5a5' }}>{'Shipping line(s) must total at least $' + minShippingCharge(c).toFixed(2) + ' (cost + 7%). Now: $' + shipAmt.toFixed(2)}</div>}
+                <ShippingPartsBox key={'spb-' + (shipFocus ? 'open' : 'closed')} initialOpen={shipFocus} releaseText={hdr.release_number} charged={shipAmt} terms={st} userId={userProfile && userProfile.id} toast={toast} disabled={false} onTotal={function (tot, info) { setShipActualFor(String(hdr.release_number || '').trim() || null); /* v55.83-YP: the complete breakdown = the actual costs */ if (locked(editing) || noLineExw) { return; } setHdr(function (h) { return Number(h.shipping_cost_estimate) === Number(tot) && String(h.shipping_cost_estimate || '') !== '' ? h : Object.assign({}, h, { shipping_cost_estimate: String(tot) }); }); if (info && info.fromSave) { var fl = fillShippingLine(items, tot, st, isTransportLine, blankItem); if (fl.changed) { setItems(fl.items); toast.success('The shipping line on this invoice is now $' + Number(tot).toFixed(2) + ' (the breakdown total). Save the invoice to keep it.'); } else if (fl.why === 'several_lines') { toast.error('This invoice has ' + fl.count + ' shipping lines, so the total was not put in for you. Set the amounts yourself.'); } } } /* v55.83-XV — the breakdown total fills the cost box; after a Save in the box, the shipping charge line too */} />
+                {st === 'CNF_SEPARATE' && c > 0 && actual7 && <div className="text-[11px] mt-1" style={{ color: shipAmt + 0.005 >= minShippingCharge(c) ? '#86efac' : '#fca5a5' }}>{'Our actual shipping cost is typed, so the shipping line(s) should total at least $' + minShippingCharge(c).toFixed(2) + ' (cost + 7%). Now: $' + shipAmt.toFixed(2) + '. You may charge less with a written reason, or more freely.'}</div>}
+                {st === 'CNF_SEPARATE' && c > 0 && !actual7 && <div className="text-[11px] mt-1" style={{ color: '#cbd5e1' }}>{'The cost above is your estimate, so nothing is checked yet. Shipping line now: $' + shipAmt.toFixed(2) + '. The cost + 7% check starts once the actual trucking and freight are typed under “Inside the shipping”.'}</div>}
                 {/* v55.83-XV — the override: a written reason, required to save below cost + 7%, kept on the audit trail */}
-                {(st === 'CNF_SEPARATE' || (st === 'EXW' && shipAmt > 0)) && c > 0 && shipAmt > 0 && shipAmt + 0.005 < minShippingCharge(c) && <div id="nt-ship-override" className="rounded-lg p-2 mt-2" style={{ background: '#fef2f2', border: '2px solid #dc2626', color: '#450a0a' }}>
+                {st === 'CNF_SEPARATE' && actual7 && c > 0 && shipAmt > 0 && shipAmt + 0.005 < minShippingCharge(c) && <div id="nt-ship-override" className="rounded-lg p-2 mt-2" style={{ background: '#fef2f2', border: '2px solid #dc2626', color: '#450a0a' }}>
                   <div className="text-[12px] font-extrabold" style={{ color: '#7f1d1d' }}>{'Below cost + 7% by $' + (minShippingCharge(c) - shipAmt).toFixed(2) + ' — to save it anyway, write the reason'}</div>
                   <textarea value={hdr.markup_override_note || ''} disabled={locked(editing)} onChange={function (e) { uh('markup_override_note', e.target.value); }} rows={2} maxLength={500} placeholder="Why is the shipping charged below our cost + 7%? (for example: price agreed with the customer before the freight went up)" aria-label="Reason for charging shipping below cost plus 7 percent" className="nt-light w-full mt-1 px-2 py-1 rounded text-[12px]" style={{ background: '#ffffff', color: '#0f172a', border: '1px solid #dc2626' }} />
                   <div className="text-[11px] mt-1" style={{ color: '#7f1d1d' }}>{'Required to save (at least ' + MARKUP_NOTE_MIN + ' characters). Saved on the audit trail with your name, the cost, the amount charged and the shortfall. The invoice still shows as a warning on the profit report.'}</div>

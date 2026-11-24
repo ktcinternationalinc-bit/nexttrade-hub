@@ -40,6 +40,7 @@ export var BANKING_GROUPS = [
     { key: 'bank.view', label: 'See bank transactions', desc: 'Names and dates of bank lines (Bank Review & Matching).' },
     { key: 'bank.see_amounts', label: 'See transaction amounts', desc: 'Without it, amounts on bank lines are hidden.' },
     { key: 'bank.view_all_accounts', label: 'See every bank account', desc: 'Switch between accounts and see “All accounts”.' },
+    { key: 'accounting.reopen', label: 'Approve & reopen invoices', desc: 'Approve an invoice, and REOPEN an approved (read-only) invoice so it can be changed — the Reopen button on the invoice. A reason is asked for and kept with the person’s name. Changing the invoice afterwards also needs “Create / edit invoices” in 3b. Without this switch only the super admin and an Accounting Manager can reopen.', needsBooks: true }, // v55.83-YP (Max, Nov 24)
     { key: 'bank.classify', label: 'Categorize transactions', desc: 'Needed for ClickBooks → All Transactions and Categories & Rules.' },
     { key: 'bank.view_private', label: 'See private accounts 🔒', desc: 'Bank accounts the super admin marked private (Bank → account → 🔒 Make private). Only the super admin can switch this on.', sensitive: true },
     { key: 'cash.manage', label: 'Cash on Hand: record 💵', desc: 'Record cash received for invoices, bills paid in cash and cash taken to the bank (Accounting → Cash on Hand). Seeing the box also needs “See private accounts”. Only the super admin can switch this on.', sensitive: true }, // v55.83-YF

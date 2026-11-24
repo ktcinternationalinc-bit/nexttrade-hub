@@ -17,7 +17,7 @@ export var PERMISSION_ALIASES = {
   'invoices.view': ['Invoice: View', 'invoice.view'],
   'invoices.create': ['Invoice: Create', 'invoice.create'],
   'invoices.edit': ['Invoice: Edit', 'invoice.edit'],
-  'invoices.approve': ['Invoice: Approve', 'invoice.approve'],
+  'invoices.approve': ['Invoice: Approve', 'invoice.approve', 'Bank: Reopen', 'accounting.reopen' /* v55.83-YP (Max, Nov 24): the “Approve & reopen invoices” switch — the same key the invoice screen already reads */],
   'customers.view': ['Customer: View', 'customer.view'],
   'customers.create': ['Customer: Create', 'customer.create'],
   // ----- Bank / payments -----

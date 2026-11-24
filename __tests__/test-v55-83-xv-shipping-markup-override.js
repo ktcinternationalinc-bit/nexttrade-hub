@@ -14,19 +14,22 @@ console.log('XV — shipping below cost + 7%: override with a written reason, on
 var S = require(path.join(root, 'src/lib/shipping-terms.js'));
 var P = require(path.join(root, 'src/lib/profitability.js'));
 var LINES = [{ description: 'STOCK PVC ROLLS', amount: 24335.62 }, { description: 'Shipping Costs', amount: 3966 }];
-var r1 = S.checkShippingTerms('CNF_SEPARATE', '3966', LINES, P.isTransportLine);
+var ACT = { costIsActual: true }; // v55.83-YP (Max, Nov 24): the 7% rule applies only once the ACTUAL costs (the complete breakdown) are typed
+var r1 = S.checkShippingTerms('CNF_SEPARATE', '3966', LINES, P.isTransportLine, ACT);
 check('1: Max\'s invoice (cost 3966, shipping line 3966) is below cost + 7%: need 4243.62, short 277.62', r1.ok === true && r1.markup && r1.markup.need === 4243.62 && r1.markup.charged === 3966 && r1.markup.short === 277.62 && r1.markup.cost === 3966 && r1.warnings.indexOf(r1.markup.warning) >= 0, r1);
 check('2: charged exactly cost + 7% (or more) is not a shortfall', S.checkShippingTerms('CNF_SEPARATE', '3966', [{ description: 'Shipping Costs', amount: 4243.62 }], P.isTransportLine).markup === null && S.markupShortfall('CNF_SEPARATE', 3966, [{ description: 'Freight', amount: 5000 }], P.isTransportLine) === null);
 check('3: the rule does not apply to CNF in the price, nor to EXW with no shipping line', S.markupShortfall('CNF_INCLUDED', 3966, [{ description: 'Goods', amount: 100 }], P.isTransportLine) === null && S.markupShortfall('EXW', null, [{ description: 'Goods', amount: 100 }], P.isTransportLine) === null);
-check('4: EXW with a shipping line below cost + 7% is a shortfall too', (function () { var x = S.markupShortfall('EXW', 1000, [{ description: 'Trucking', amount: 1000 }], P.isTransportLine); return !!x && x.need === 1070 && x.short === 70; })());
+check('4 (YP, replaces the Nov 16 rule): EXW has no shipping cost, so there is never a shortfall on EXW — even with actual costs typed', S.markupShortfall('EXW', 1000, [{ description: 'Trucking', amount: 1000 }], P.isTransportLine, ACT) === null);
+check('4b (YP): with only an ESTIMATE typed (no actual costs) the same invoice has NO shortfall and no warning', (function () { var x = S.checkShippingTerms('CNF_SEPARATE', '3966', LINES, P.isTransportLine); return x.ok === true && !x.markup && x.warnings.length === 0 && S.markupShortfall('CNF_SEPARATE', 3966, LINES, P.isTransportLine) === null && S.markupShortfall('CNF_SEPARATE', 3966, LINES, P.isTransportLine, { costIsActual: false }) === null; })());
 check('5: the reason must be at least 10 characters after trimming; spaces alone do not count', S.markupOverrideNote('').ok === false && S.markupOverrideNote('   short   ').ok === false && S.markupOverrideNote(null).ok === false && S.markupOverrideNote('          ').ok === false && S.MARKUP_NOTE_MIN === 10);
 check('6: a real reason is accepted, tidied, and cut at 500 characters', S.markupOverrideNote('  Price agreed   before freight rose ').note === 'Price agreed before freight rose' && S.markupOverrideNote(new Array(700).join('x')).note.length === 500);
 
 // ── Part 2: the real route with stand-ins ──
 var state;
-function fresh(o) { state = Object.assign({ items: [{ description: 'STOCK PVC ROLLS', quantity: 24581.43, unit_price: 0.99, line_total: 24335.62 }, { description: 'Shipping Costs', quantity: 1, unit_price: 3966, line_total: 3966 }], itemsError: null, auditFail: false, audit: [], terms: null, log: [], perms: {}, parts: [], partRows: [] }, o || {}); }
+function fresh(o) { state = Object.assign({ items: [{ description: 'STOCK PVC ROLLS', quantity: 24581.43, unit_price: 0.99, line_total: 24335.62 }, { description: 'Shipping Costs', quantity: 1, unit_price: 3966, line_total: 3966 }], itemsError: null, auditFail: false, audit: [], terms: null, log: [], perms: {}, parts: [], partRows: [], release: '1002-77', actual: true /* YP: by default the complete breakdown is typed for the invoice's release */ }, o || {}); }
+var ACTUAL_ROWS = [{ release_key: '100277', part: 'trucking', amount: 1500 }, { release_key: '100277', part: 'freight', amount: 2466 }];
 function run(st, single) {
-  if (st.table === 'accounting_invoices') { return { data: { id: 'inv-1' }, error: null }; }
+  if (st.table === 'accounting_invoices') { return { data: { id: 'inv-1', release_number: state.release }, error: null }; }
   if (st.table === 'accounting_invoice_items') { state.log.push('read-lines'); return state.itemsError ? { data: null, error: { message: state.itemsError } } : { data: state.items, error: null }; }
   if (st.table === 'hub_audit_log') {
     if (st.op === 'insert') { if (state.auditFail && st.row.action === 'shipping_markup_override') { state.log.push('audit-FAILED'); return { data: null, error: { message: 'audit table is down' } }; } state.audit.push(st.row); state.log.push('audit:' + st.row.action); return { data: null, error: null }; }
@@ -34,7 +37,7 @@ function run(st, single) {
   }
   if (st.table === 'pl_release_part_estimates') {
     if (st.op === 'upsert') { state.partRows.push(st.row); state.log.push('save-part'); return { data: null, error: null }; }
-    return { data: state.parts, error: null };
+    return { data: state.parts.length ? state.parts : (state.actual ? ACTUAL_ROWS : []), error: null };
   }
   if (st.table === 'pl_invoice_terms') {
     if (st.op === 'upsert') { state.terms = st.row; state.log.push('save-terms'); return { data: [st.row], error: null }; }
@@ -135,7 +138,7 @@ var REASON = 'Price agreed with the customer before the freight went up';
   var fd = S.fillShippingLine(IT.concat([{ description: 'Overweight surcharge', quantity: '1', unit_price: '300' }]), 4000, 'CNF_SEPARATE', P.isTransportLine, blank);
   check('39: a surcharge line is never taken for the shipping line (it keeps its 300; the shipping line is filled)', fd.changed === true && fd.items[1].unit_price === '4000' && fd.items[2].unit_price === '300', fd);
   check('40: a total of 0, or the same amount already there, changes nothing', S.fillShippingLine(IT, 0, 'CNF_SEPARATE', P.isTransportLine, blank).changed === false && S.fillShippingLine(IT, 3966, 'CNF_SEPARATE', P.isTransportLine, blank).changed === false);
-  var after = S.checkShippingTerms('CNF_SEPARATE', '4000', fa.items.map(function (it) { return { description: it.description, amount: Number(it.quantity) * Number(it.unit_price) }; }), P.isTransportLine);
+  var after = S.checkShippingTerms('CNF_SEPARATE', '4000', fa.items.map(function (it) { return { description: it.description, amount: Number(it.quantity) * Number(it.unit_price) }; }), P.isTransportLine, ACT);
   check('41: charging exactly the cost is below cost + 7%, so the written reason is then required (4000 charged, 4280 needed)', !!after.markup && after.markup.need === 4280 && after.markup.short === 280, after);
 
   // ── Part 3: source checks of the screen ──
@@ -144,7 +147,7 @@ var REASON = 'Price agreed with the customer before the freight went up';
   check('20 (source): the red reason box is shown only while the shipping is below cost + 7%, and the reason goes to the server', tab.indexOf('id="nt-ship-override"') > 0 && tab.indexOf("shipAmt > 0 && shipAmt + 0.005 < minShippingCharge(c) && <div id=\"nt-ship-override\"") > 0 && tab.indexOf("markup_override_note: shipCheck.markup ? String(hdr.markup_override_note || '') : ''") > 0);
   check('21 (source): a copy of an invoice does not inherit the reason', tab.indexOf("Object.assign({}, h, t, { markup_override_note: ''") > 0);
   var box = fs.readFileSync(path.join(root, 'src/components/ShippingPartsBox.jsx'), 'utf8');
-  check('33 (source): the box hands the total to the invoice form only when complete; the form fills the cost box unless the invoice is locked or EXW without a shipping line', box.indexOf('if (data && agg.complete && props.onTotal) { props.onTotal(agg.total, { fromSave: fromSave }); }') > 0 && tab.indexOf('onTotal={function (tot, info) { if (locked(editing) || noLineExw) { return; }') > 0 && tab.indexOf("Object.assign({}, h, { shipping_cost_estimate: String(tot) })") > 0);
+  check('33 (source): the box hands the total to the invoice form only when complete; the form fills the cost box unless the invoice is locked or EXW without a shipping line', box.indexOf('if (data && agg.complete && props.onTotal) { props.onTotal(agg.total, { fromSave: fromSave }); }') > 0 && tab.indexOf('if (locked(editing) || noLineExw) { return; } setHdr(') > 0 && tab.indexOf("var noLineExw = st === 'EXW';") > 0 && tab.indexOf("Object.assign({}, h, { shipping_cost_estimate: String(tot) })") > 0);
   check('34 (source): the heading is coloured and says it can be clicked', box.indexOf("color: '#fde047', textDecoration: 'underline'") > 0 && box.indexOf("(open ? '' : 'Click to enter: ') + 'Inside the shipping") > 0);
   check('42 (source): the charge line is filled only after a Save in the box (never on merely opening it), with the real helper', box.indexOf('savedNow.current = true; load(); }') > 0 && tab.indexOf("if (info && info.fromSave) { var fl = fillShippingLine(items, tot, st, isTransportLine, blankItem); if (fl.changed) { setItems(fl.items);") > 0);
   var WN = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8'); var PG = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8');

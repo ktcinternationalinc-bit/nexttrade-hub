@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YP',
+    date: '2026-11-24',
+    title: 'New invoice: the shipping cost makes the shipping line; the 7% check waits for the real costs. New switch to reopen invoices',
+    items: [
+      { text: '**Type the shipping cost and the shipping line appears.** On “CNF — charged on a separate invoice line”, typing “Our shipping cost” adds a “Shipping Costs” line at that amount. Change the amount on the line if you charge more or less — once you have changed it by hand the Hub leaves it alone.' },
+      { text: '**No more 7% message on a guess.** The “cost + 7%” check now starts only after the actual trucking and freight are typed under “Inside the shipping” for the release. Before that, the cost is your estimate and the invoice saves without the message.' },
+      { text: '**Once the actual costs are in,** charging less than cost + 7% still needs a written reason, kept on the audit trail with your name. Charging more needs nothing.' },
+      { text: '**EXW has no shipping cost.** Picking EXW empties the cost box and locks it. An EXW invoice saves with no shipping cost, with or without a shipping line.' },
+      { text: '**New switch: “Approve & reopen invoices”** (Settings → Banking & Accounting Access → 3 · Bank work). Switch it on for a person and they get the Reopen button on approved, read-only invoices (and can approve). Until now only the super admin and an Accounting Manager could reopen.' },
+      { superAdminOnly: true, text: 'Technical: no SQL. lib/shipping-terms.js checkShippingTerms/markupShortfall take { costIsActual }; EXW returns cost null; new autoShippingLine, releaseKeysOfText, breakdownIsComplete. invoice-write set_shipping_terms reads pl_release_part_estimates for the invoice’s releases itself and checks 7% only when trucking + freight are typed for every release. Pushed on Max’s order, no Codex pass.' },
+    ]
+  },
+  {
     version: 'v55.83-YJ',
     date: '2026-11-24',
     title: 'Change Schedule: sign off a warehouse change, ask for a roll back, and a full change history',
