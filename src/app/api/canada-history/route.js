@@ -22,12 +22,13 @@ import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../lib/verified-caller';
 import { loadUserPermissions } from '../../../lib/server-permissions';
 import { readArchive, storeArchive, saveGoodsDecision, readKtcInvoicesForReleases, SQL_HINT } from '../../../lib/canada-history-server';
+import { readGradeFlow } from '../../../lib/canada-history-feed-server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-var API_BUILD_MARKER = 'v55.83-YK-canada-history';
+var API_BUILD_MARKER = 'v55.83-YO-canada-history';
 var PERM = 'canada_history.access';
 var MAX_FILE_CHARS = 2000000;
 
@@ -71,8 +72,14 @@ export async function GET(request) {
       var k = await readKtcInvoicesForReleases(db, a.shipments || []);
       if (k.ok) { ktc = k.invoices; } else { ktcNote = k.error; }
     }
+    // v55.83-YO — the new system after the archive: pounds by CGT grade and month, read from the NT Warehouse (read-only,
+    // pounds only). When the warehouse cannot be read the state says why; the screen then shows NOT CHECKED, never zero.
+    var flow = null;
+    if (a.loaded === true) {
+      try { flow = await readGradeFlow(process.env); } catch (eF) { flow = { state: 'unavailable', reason: 'the warehouse could not be read.' }; }
+    }
     return out({ ok: true, sql_missing: false, loaded: a.loaded === true, can_manage: isSuper, batch: a.batch || null,
-      receipts: a.receipts || [], shipments: a.shipments || [], decisions: a.decisions || [], ktc_invoices: ktc, ktc_invoices_note: ktcNote });
+      receipts: a.receipts || [], shipments: a.shipments || [], decisions: a.decisions || [], ktc_invoices: ktc, ktc_invoices_note: ktcNote, warehouse_flow: flow });
   } catch (e) {
     return bad('The Canada history could not be read right now.', 500);
   }

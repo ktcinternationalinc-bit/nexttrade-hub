@@ -294,6 +294,122 @@ export function buildCanadaHistory(receipts, shipments, eff, opts) {
   return { by: by, months: months, first_month: first, last_month: last, coverage: cov, notes: coverageNotes(cov), groups: out, total_in: r3(tin), total_out: r3(tout) };
 }
 
+// v55.83-YO — THE NEW SYSTEM AFTER THE ARCHIVE (Max / Codex 24 Nov 2026: the Canadian records after Jan 2024 are in the
+// NT Warehouse; connect them so periods can be compared, not just "N/A").
+// Other spellings a warehouse CGT grade may use for an archive type (compared ignoring case, spaces and punctuation).
+// A USA grade never matches. Kept in step with the warehouse app's resources/data/canada-history-flow.json.
+export var CGT_TYPE_ALIASES = {
+  'Seconds Canada': ['Second Canada'], 'Thirds Canada': ['Third Canada'], 'Obsoletes Canada': ['Obsolete Canada', 'Obsoletes CA'],
+  'Paper Canada': [], 'Roofing': ['Roofing Canada'], 'Pool Canada': [], 'Box Seconds': ['Box Second', 'Box Seconds Canada'],
+  'PVC': ['PVC Canada'], 'TPO': ['TPO Canada'], 'Fabrics Canada': ['Fabric Canada'], 'DRYLAM': ['Drylam Canada'],
+  'Boat Decking': ['Decking', 'Boat Decking Canada'], 'Others': ['Others Canada']
+};
+export function gradeKey(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+// the archive / CGT type a warehouse grade name stands for, or '' when it is not one of them
+export function archiveTypeForGrade(gradeName) {
+  var k = gradeKey(gradeName); if (!k) { return ''; }
+  var names = Object.keys(CGT_TYPE_ALIASES); var i; var j;
+  for (i = 0; i < names.length; i++) {
+    if (gradeKey(names[i]) === k) { return names[i]; }
+    for (j = 0; j < CGT_TYPE_ALIASES[names[i]].length; j++) { if (gradeKey(CGT_TYPE_ALIASES[names[i]][j]) === k) { return names[i]; } }
+  }
+  return '';
+}
+
+// flow = what the server read from the warehouse ("grade flow"), already reduced to the Canadian side:
+//   { state: 'ok', rows_in: [{ grade, ym, lb }], rows_out: [...], first_in, last_in, first_out, last_out ('YYYY-MM-DD'),
+//     through: 'YYYY-MM' (the month the warehouse answered in), site, generated_at, scope }
+//   or { state: 'unavailable' | 'not_configured', reason }.
+// Adds to a by-CGT-type history (buildCanadaHistory(..., {by:'cgt'})) the new system's own months, kept APART from the
+// archive (sys_inbound / sys_outbound next to inbound / outbound), with a status per month and side:
+//   'ok'        the warehouse was read and the month is inside its records — a 0 here is a real zero
+//   'na'        before the new system's first record on that side — nothing to know there
+//   'unchecked' the warehouse was not read (not set up, not reachable, or it cannot answer this yet) — unknown, not zero
+// Overlap (both sources have figures, Nov 2023 – Apr 2024): the old workbook gives NO weight for the rows it marks as
+// moved to the new system, so the two do not repeat each other; they are shown side by side and the months are listed.
+export function mergeWarehouseFlow(hist, flow) {
+  if (!hist || hist.by !== 'cgt') { return hist; }
+  var ok = !!(flow && flow.state === 'ok');
+  var months = hist.months.slice();
+  var lastYm = months.length ? months[months.length - 1] : null;
+  var through = ok && flow.through ? flow.through : null;
+  if (through && lastYm && through > lastYm) { months = monthsBetween(months[0], through); }
+  var nArch = hist.months.length; var n = months.length;
+  var firstIn = ok && flow.first_in ? String(flow.first_in).slice(0, 7) : null;
+  var firstOut = ok && flow.first_out ? String(flow.first_out).slice(0, 7) : null;
+  var inBy = {}; var outBy = {}; var unmatched = {}; var matched = {};
+  function add(target, rows) {
+    var i;
+    for (i = 0; i < (rows || []).length; i++) {
+      var r = rows[i]; if (!r || !r.ym) { continue; }
+      var t = archiveTypeForGrade(r.grade);
+      if (!t) { unmatched[String(r.grade)] = 1; continue; }
+      matched[String(r.grade)] = t;
+      if (!target[t]) { target[t] = {}; }
+      target[t][r.ym] = (target[t][r.ym] || 0) + (Number(r.lb) || 0);
+    }
+  }
+  if (ok) { add(inBy, flow.rows_in); add(outBy, flow.rows_out); }
+  function statusList(first) {
+    var st = []; var j;
+    for (j = 0; j < n; j++) { st.push(!ok ? 'unchecked' : (!first || months[j] < first ? 'na' : 'ok')); }
+    return st;
+  }
+  var sysInSt = statusList(firstIn); var sysOutSt = statusList(firstOut);
+  var overlap = []; var j;
+  for (j = 0; j < nArch; j++) { if (ok && ((sysInSt[j] === 'ok' && hist.groups.length && hist.groups[0].inbound_status[j] !== 'na') || (sysOutSt[j] === 'ok' && hist.groups.length && hist.groups[0].outbound_status[j] !== 'na'))) { overlap.push(months[j]); } }
+  var have = {}; var groups = []; var sIn = 0; var sOut = 0;
+  function one(g, key) {
+    var inbound = []; var outbound = []; var inSt = []; var outSt = []; var sysIn = []; var sysOut = []; var yr = {}; var order = []; var q;
+    var tIn = 0; var tOut = 0;
+    for (q = 0; q < n; q++) {
+      var a = (g && q < nArch) ? g.inbound[q] : null; var b = (g && q < nArch) ? g.outbound[q] : null;
+      inbound.push(a); outbound.push(b);
+      inSt.push(q < nArch ? hist.coverage.received.status[q] : 'na'); outSt.push(q < nArch ? hist.coverage.shipped.status[q] : 'na');
+      var si = sysInSt[q] === 'ok' ? r3((inBy[key] && inBy[key][months[q]]) || 0) : null;
+      var so = sysOutSt[q] === 'ok' ? r3((outBy[key] && outBy[key][months[q]]) || 0) : null;
+      sysIn.push(si); sysOut.push(so); tIn += si || 0; tOut += so || 0;
+      var y = months[q].slice(0, 4);
+      if (!yr[y]) { yr[y] = { year: y, in: null, out: null, sys_in: null, sys_out: null, in_ok: 0, out_ok: 0, in_cov: 0, out_cov: 0 }; order.push(y); }
+      if (a !== null) { yr[y].in = (yr[y].in || 0) + a; } if (b !== null) { yr[y].out = (yr[y].out || 0) + b; }
+      if (si !== null) { yr[y].sys_in = (yr[y].sys_in || 0) + si; } if (so !== null) { yr[y].sys_out = (yr[y].sys_out || 0) + so; }
+      if (inSt[q] === 'ok') { yr[y].in_ok++; } if (outSt[q] === 'ok') { yr[y].out_ok++; }
+      // a month is covered on one side when the archive OR the new system has a complete record of it
+      if (inSt[q] === 'ok' || sysInSt[q] === 'ok') { yr[y].in_cov++; } if (outSt[q] === 'ok' || sysOutSt[q] === 'ok') { yr[y].out_cov++; }
+    }
+    var yearly = order.map(function (y) {
+      var v = yr[y];
+      // a year is whole on one side only when each of its 12 months is covered by the archive or by the new system
+      return { year: y, in: v.in === null ? null : r3(v.in), out: v.out === null ? null : r3(v.out), sys_in: v.sys_in === null ? null : r3(v.sys_in), sys_out: v.sys_out === null ? null : r3(v.sys_out),
+        in_partial: v.in_ok < 12, out_partial: v.out_ok < 12,
+        in_whole_year: v.in_cov >= 12, out_whole_year: v.out_cov >= 12,
+        sys_checked: ok };
+    });
+    sIn += tIn; sOut += tOut;
+    return { key: key, matched: g ? g.matched : true, goods: g ? g.goods : [], months: months, labels: months.map(monthLabel),
+      inbound: inbound, outbound: outbound, inbound_status: inSt, outbound_status: outSt,
+      sys_inbound: sysIn, sys_outbound: sysOut, sys_inbound_status: sysInSt, sys_outbound_status: sysOutSt,
+      coverage: hist.coverage, yearly: yearly, total_in: g ? g.total_in : 0, total_out: g ? g.total_out : 0,
+      sys_total_in: ok ? r3(tIn) : null, sys_total_out: ok ? r3(tOut) : null,
+      other: g ? g.other : { opening: 0, conversion: 0, adjustment: 0, disposal: 0 }, undated_other: g ? g.undated_other : 0, customers: g ? g.customers : [], archive: !!g };
+  }
+  hist.groups.forEach(function (g) { have[g.key] = 1; groups.push(one(g, g.key)); });
+  // a Canadian type that exists only in the new system (no archive lines) still gets its card
+  Object.keys(inBy).concat(Object.keys(outBy)).forEach(function (t) { if (!have[t]) { have[t] = 1; groups.push(one(null, t)); } });
+  var notes = hist.notes.slice();
+  if (ok) {
+    notes.push('New system (NT Warehouse, read ' + String(flow.generated_at || '').slice(0, 10) + ' from ' + (flow.site || 'the warehouse') + '): scanned in from ' + dayLabel(flow.first_in) + ' to ' + dayLabel(flow.last_in) + ', shipped from ' + dayLabel(flow.first_out) + ' to ' + dayLabel(flow.last_out) + '. Inside those dates a blank month is a real zero.');
+    if (flow.scope) { notes.push(flow.scope); }
+    if (overlap.length) { notes.push('Both sources have figures for ' + monthLabel(overlap[0]) + ' to ' + monthLabel(overlap[overlap.length - 1]) + ': the old workbook has no weight for the goods it marks as moved to the new system, so the two are shown side by side and added, not repeated.'); }
+  } else {
+    notes.push('New system (NT Warehouse) after the archive: NOT CHECKED — ' + ((flow && flow.reason) || 'the warehouse was not read') + ' Those months are unknown, not zero.');
+  }
+  return { by: 'cgt', months: months, first_month: hist.first_month, last_month: months[n - 1], coverage: hist.coverage, notes: notes, groups: groups,
+    total_in: hist.total_in, total_out: hist.total_out, sys_state: ok ? 'ok' : ((flow && flow.state) || 'unavailable'), sys_total_in: ok ? r3(sIn) : null, sys_total_out: ok ? r3(sOut) : null,
+    sys_first_in: ok ? flow.first_in : null, sys_last_in: ok ? flow.last_in : null, sys_first_out: ok ? flow.first_out : null, sys_last_out: ok ? flow.last_out : null,
+    overlap_months: overlap, sys_grades_matched: matched, sys_grades_unmatched: Object.keys(unmatched).sort() };
+}
+
 // v55.83-YK — SALES HISTORY (Max, 24 Nov 2026: "make sure you are pulling the sales history as well for canada").
 // One row per Canadian release that shipped: date, customer, goods and pounds from the archive, plus — when the
 // Hub's own books hold a KTC invoice with that release number — the invoice number(s) and dollars.

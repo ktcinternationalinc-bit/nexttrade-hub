@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YO',
+    date: '2026-11-24',
+    title: 'Canada History: joined to the NT Warehouse records after the old workbook ends',
+    items: [
+      { text: '**The old workbook and the new system, side by side.** The Canada History cards (by current CGT type) now carry on past early 2024 with the pounds received and shipped that the NT Warehouse itself recorded, month by month and year by year, so a period before the move can be compared with a period after it.' },
+      { text: '**Three different things are never mixed up.** A real zero (the warehouse was read and nothing moved that month), N/A (that source has no records for that month), and NOT CHECKED (the warehouse could not be read). Not checked is never shown as zero.' },
+      { text: '**The months where both have figures** (Nov 2023 to Apr 2024, while Canada was moving over) are listed on the page. The old workbook has no weight for the goods it marks as moved to the new system, so the two are shown side by side and added, not counted twice.' },
+      { text: '**Until the warehouse can answer, the tab says NOT CHECKED.** The warehouse needs one small read-only addition before it can give pounds by grade and month; the Hub side is ready and starts showing the figures by itself once that is in place. Nothing in the old-workbook figures changes.' },
+      { superAdminOnly: true, text: 'Technical: no SQL. New src/lib/canada-history-feed-server.js reads GET {warehouse feed}/grade-flow (same token and approved-address rule as the other warehouse reads; grade, warehouse, month, pounds only). lib/canada-history.js mergeWarehouseFlow / archiveTypeForGrade. The warehouse endpoint is HubFeedController::gradeFlow on the warehouse branch claude/canada-history-cards (YN) — not on staging or live yet.' },
+      { text: '**Nothing is dropped quietly.** If the warehouse has a Canadian grade the Hub cannot tie to a goods type, its pounds are listed under “Warehouse grades not linked to a goods type” with a warning that the cards are a partial total, and the page shows that linked + not linked adds up to the warehouse total. A name is never guessed.' }
+    ]
+  },
+  {
     version: 'v55.83-YP',
     date: '2026-11-24',
     title: 'New invoice: the shipping cost makes the shipping line; the 7% check waits for the real costs. New switch to reopen invoices',

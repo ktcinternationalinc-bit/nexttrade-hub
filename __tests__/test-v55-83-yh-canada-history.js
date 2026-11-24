@@ -265,6 +265,58 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
   r = await ROUTE.GET(req());
   check('switched OFF again: refused', r.status === 403);
 
+  // ---------------- YO: the new system (NT Warehouse) after the archive
+  console.log('YO — the new system after the archive');
+  var F = require(path.join(root, 'src/lib/canada-history-feed-server.js'));
+  check('YO: the question lives beside the existing feed', F.gradeFlowUrl('https://nextrade-staging.com/api/hub-feed') === 'https://nextrade-staging.com/api/hub-feed/grade-flow' && F.gradeFlowUrl('https://nextrade-staging.com/api/hub-feed/shipping?x=1') === 'https://nextrade-staging.com/api/hub-feed/grade-flow');
+  check('YO: grade names find their type; a USA grade never does', H.archiveTypeForGrade('seconds  canada') === 'Seconds Canada' && H.archiveTypeForGrade('Drylam') === 'DRYLAM' && H.archiveTypeForGrade('Decking') === 'Boat Decking' && H.archiveTypeForGrade('Seconds USA') === '' && H.archiveTypeForGrade('Paper') === '' && H.archiveTypeForGrade('') === '');
+  var CFG = { source: 'nextrade-staging', host: 'nextrade-staging.com' };
+  var ANS = { ok: true, source: 'nextrade-staging', site: 'nextrade-staging.com', generated_at: '2023-06-15T10:00:00+00:00',
+    grades: [{ id: 1, grade_name: 'Roofing' }, { id: 2, grade_name: 'Seconds USA' }, { id: 3, grade_name: 'Paper Canada' }, { id: 4, grade_name: 'Pool Canada', price: 9.99 }],
+    warehouses: [{ id: 10, name: 'Cambridge' }, { id: 20, name: 'San Antonio' }],
+    inbound: [{ cgt_id: 1, warehouse_id: 10, ym: '2023-01', lb: '50.00' }, { cgt_id: 1, warehouse_id: 20, ym: '2023-01', lb: '999' }, { cgt_id: 2, warehouse_id: 20, ym: '2023-02', lb: 777 }, { cgt_id: 3, warehouse_id: 20, ym: '2023-05', lb: 30 }, { cgt_id: 4, warehouse_id: 10, ym: '2023-05', lb: 8 }, { cgt_id: 1, warehouse_id: 10, ym: 'bad', lb: 1 }],
+    outbound: [{ cgt_id: 1, warehouse_id: 10, ym: '2023-03', lb: 20 }],
+    bounds: { first_in: '2022-11-10', last_in: '2023-06-14', first_out: '2023-02-01', last_out: '2023-06-01' } };
+  var fl = F.normaliseGradeFlow(ANS, CFG);
+  check('YO: only the Canadian side is kept (Houston Roofing and USA grades dropped; a “… Canada” grade kept from any warehouse)', fl.state === 'ok' && fl.rows_in.length === 3 && fl.rows_in.map(function (x) { return x.grade + ':' + x.ym + ':' + x.lb; }).join() === 'Roofing:2023-01:50,Paper Canada:2023-05:30,Pool Canada:2023-05:8' && fl.rows_out.length === 1);
+  check('YO: only grade, month and pounds are kept (no price or other field)', fl.rows_in.every(function (x) { return Object.keys(x).sort().join() === 'grade,lb,ym'; }) && JSON.stringify(fl).indexOf('9.99') < 0);
+  check('YO: record dates and the month it was read', fl.first_in === '2022-11-10' && fl.last_out === '2023-06-01' && fl.through === '2023-06' && /Canadian warehouse/.test(fl.scope));
+  check('YO: an answer from the wrong warehouse copy is refused', F.normaliseGradeFlow(Object.assign({}, ANS, { source: 'nextrade-live' }), CFG).state === 'unavailable' && F.normaliseGradeFlow(Object.assign({}, ANS, { source: '' }), CFG).state === 'unavailable');
+  check('YO: an answer without first / last record dates is not used (zeros could not be told from gaps)', F.normaliseGradeFlow(Object.assign({}, ANS, { bounds: {} }), CFG).state === 'unavailable' && F.normaliseGradeFlow({ ok: true, source: 'nextrade-staging' }, CFG).state === 'unavailable');
+  var noCa = F.normaliseGradeFlow(Object.assign({}, ANS, { warehouses: [{ id: 20, name: 'San Antonio' }] }), CFG);
+  check('YO: when no Canadian warehouse is named, unnamed grades include every warehouse and the screen is told', noCa.rows_in.length === 4 && /every warehouse/.test(noCa.scope));
+  // the synthetic archive from part 1: receipts 1 Jan 2022 – 16 Jan 2023, shipments to 30 Apr 2023; the new system from 10 Nov 2022
+  var mg = H.mergeWarehouseFlow(hc, fl); var mR = grp(mg, 'Roofing'); var mP = grp(mg, 'Paper Canada');
+  check('YO: months run on to the month the warehouse was read', mg.months[0] === '2022-01' && mg.last_month === '2023-06' && mg.months.length === 18 && mR.labels.length === 18);
+  check('YO: archive figures and totals are untouched by the join', mR.total_in === rf.total_in && mR.total_out === rf.total_out && JSON.stringify(mR.inbound.slice(0, 16)) === JSON.stringify(rf.inbound) && mg.total_in === hc.total_in && mR.customers.length === rf.customers.length);
+  check('YO: before the new system started = N/A; inside its records a blank month is a REAL zero', mR.sys_inbound_status[9] === 'na' && mR.sys_inbound[9] === null && mR.sys_inbound_status[10] === 'ok' && mR.sys_inbound[10] === 0 && mR.sys_inbound[12] === 50 && mR.sys_outbound_status[12] === 'na' && mR.sys_outbound[14] === 20 && mR.sys_outbound[15] === 0);
+  check('YO: after the archive ends the archive is N/A while the new system has figures', mR.inbound[16] === null && mR.inbound_status[16] === 'na' && mR.outbound[17] === null && mP.sys_inbound[16] === 30 && mP.sys_inbound_status[17] === 'ok');
+  check('YO: a type that exists only in the new system still gets a card', !!grp(mg, 'Pool Canada') && grp(mg, 'Pool Canada').archive === false && grp(mg, 'Pool Canada').sys_total_in === 8 && grp(mg, 'Pool Canada').total_in === 0);
+  check('YO: by year both sources side by side; the new system fills the archive’s missing months', JSON.stringify(mR.yearly.map(function (y) { return [y.year, y.in, y.sys_in, y.out, y.sys_out, y.in_partial, y.in_whole_year, y.sys_checked]; })) === JSON.stringify([['2022', 1205, 0, 481, null, false, true, true], ['2023', 7, 50, 60, 20, true, false, true]]), mR.yearly);
+  check('YO: the overlap months are listed and explained', mg.overlap_months[0] === '2022-11' && mg.overlap_months[mg.overlap_months.length - 1] === '2023-04' && mg.notes.some(function (x) { return /shown side by side and added, not repeated/.test(x); }) && mg.notes.some(function (x) { return /a blank month is a real zero/.test(x); }));
+  check('YO: totals of the new system', mg.sys_state === 'ok' && mg.sys_total_in === 88 && mg.sys_total_out === 20 && mR.sys_total_in === 50 && mg.sys_grades_matched['Paper Canada'] === 'Paper Canada');
+  var un = H.mergeWarehouseFlow(hc, { state: 'unavailable', reason: 'the warehouse cannot answer yet.' }); var uR = grp(un, 'Roofing');
+  check('YO: warehouse not read = NOT CHECKED everywhere, never zero; archive unchanged', un.sys_state === 'unavailable' && un.months.length === hc.months.length && uR.sys_inbound.every(function (x) { return x === null; }) && uR.sys_inbound_status.every(function (x) { return x === 'unchecked'; }) && uR.sys_total_in === null && uR.yearly[0].sys_checked === false && uR.yearly[0].sys_in === null && uR.total_in === rf.total_in && un.notes.some(function (x) { return /NOT CHECKED/.test(x) && /unknown, not zero/.test(x); }));
+  check('YO: by old name there is no join (returned as it is)', H.mergeWarehouseFlow(hcg, fl) === hcg);
+  // the reader: address rule, token only in the header, no redirect, plain reasons
+  var calls = []; var oldFetch = global.fetch;
+  global.fetch = async function (url, init) { calls.push({ url: url, init: init }); if (world.feed === 'missing') { return { status: 404, ok: false }; } if (world.feed === 'down') { throw new Error('ECONNREFUSED'); } return { status: 200, ok: true, json: async function () { return ANS; } }; };
+  var ENV = { NEXTRADE_FEED_URL: 'https://nextrade-staging.com/api/hub-feed', NEXTRADE_FEED_TOKEN: 'tok-0123456789abcdef0123456789abcdef' };
+  var rd = await F.readGradeFlow(ENV);
+  check('YO: reads the staging warehouse with the token in the header and redirects refused', rd.state === 'ok' && calls.length === 1 && calls[0].url === 'https://nextrade-staging.com/api/hub-feed/grade-flow' && calls[0].init.headers['X-Hub-Feed-Token'] === ENV.NEXTRADE_FEED_TOKEN && calls[0].init.redirect === 'error' && calls[0].init.method === 'GET' && calls[0].url.indexOf('tok-') < 0);
+  world.feed = 'missing'; rd = await F.readGradeFlow(ENV);
+  check('YO: a warehouse that does not have the question yet says so plainly', rd.state === 'unavailable' && /cannot answer/.test(rd.reason));
+  world.feed = 'down'; rd = await F.readGradeFlow(ENV);
+  check('YO: an unreachable warehouse = unavailable', rd.state === 'unavailable' && /could not be reached/.test(rd.reason));
+  world.feed = null; calls = [];
+  rd = await F.readGradeFlow({ NEXTRADE_FEED_URL: 'https://evil.example/api/hub-feed', NEXTRADE_FEED_TOKEN: ENV.NEXTRADE_FEED_TOKEN });
+  check('YO: an address that is not an approved warehouse is refused before anything is sent', rd.state === 'not_configured' && calls.length === 0);
+  rd = await F.readGradeFlow({ NEXTRADE_FEED_URL: 'https://nextradeindustries.com/api/hub-feed', NEXTRADE_FEED_TOKEN: ENV.NEXTRADE_FEED_TOKEN });
+  check('YO: the LIVE warehouse is not read without Max’s switch', rd.state === 'not_configured' && calls.length === 0);
+  world.user = 'u-max'; r = await ROUTE.GET(req());
+  check('YO: the route hands the warehouse state to the screen (not set up here = said so, archive still shown)', r.status === 200 && r.body.loaded === true && r.body.warehouse_flow && r.body.warehouse_flow.state === 'not_configured' && calls.length === 0);
+  global.fetch = oldFetch;
+
   // ---------------- wiring (static)
   console.log('YH part 3 — the wiring');
   var page = read('src/app/page.jsx'); var settings = read('src/components/SettingsTab.jsx'); var wn = read('src/components/WhatsNewWidget.jsx');
@@ -281,14 +333,17 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
   check('the screen shows where each side stops, N/A instead of zero, partial years, recorded totals', comp.indexOf('hist.notes.map') >= 0 && comp.indexOf("st === 'na'") >= 0 && comp.indexOf("y.in === null ? 'N/A'") >= 0 && comp.indexOf('y.in_partial') >= 0 && comp.indexOf('Received (recorded)') >= 0 && comp.indexOf('Total recorded') >= 0);
   check('the screen says: pounds only, not connected to the warehouse cards; a proposal is shown as a proposal', comp.indexOf('pounds only, no dollar amounts') >= 0 && comp.indexOf('not connected to the warehouse system') >= 0 && comp.indexOf('Proposed — not confirmed yet') >= 0);
   check('the switch is in Settings', /\{ key: 'canada_history\.access', label: 'Archive: Canada History'/.test(settings));
-  check("What's New has YK and, under it, YH", wn.indexOf("version: 'v55.83-YK'") > 0 && wn.indexOf("version: 'v55.83-YH'") > wn.indexOf("version: 'v55.83-YK'"));
+  check("What's New has YO, YK and YH, newest first", wn.indexOf("version: 'v55.83-YO'") > 0 && wn.indexOf("version: 'v55.83-YK'") > wn.indexOf("version: 'v55.83-YO'") && wn.indexOf("version: 'v55.83-YH'") > wn.indexOf("version: 'v55.83-YK'"));
+  var feedLib = read('src/lib/canada-history-feed-server.js');
+  check('YO: the warehouse reader is server-only, read-only (GET), var + concatenation', feedLib.replace(/\/\/[^\n]*/g, '').indexOf("'use client'") < 0 && feedLib.indexOf("method: 'GET'") > 0 && !/method: '(POST|PUT|DELETE|PATCH)'/.test(feedLib) && !/\b(const|let)\s+[A-Za-z_$]/.test(feedLib.replace(/\/\/[^\n]*/g, '')) && feedLib.replace(/\/\/[^\n]*/g, '').indexOf('=>') < 0 && feedLib.indexOf('`') < 0);
+  check('YO: the screen shows NOT CHECKED and the new-system columns', comp.indexOf('NOT CHECKED') > 0 && comp.indexOf('mergeWarehouseFlow(hist') > 0 && comp.indexOf('Received (new system)') > 0 && comp.indexOf("st === 'unchecked'") > 0);
   [['route', route], ['server lib', server], ['rules lib', lib]].forEach(function (x) {
     var code = x[1].replace(/\/\/[^\n]*/g, '');
     check(x[0] + ': var + string concatenation only', !/\b(const|let)\s+[A-Za-z_$]/.test(code.replace(/export const (runtime|dynamic|maxDuration)\b/g, '')) && code.indexOf('`') < 0 && code.indexOf('=>') < 0);
   });
   check('the route never imports a component or a "use client" module', !/components\//.test(route) && !/lib\/supabase'/.test(route) && lib.indexOf("'use client'") < 0 && server.indexOf("'use client'") < 0);
   check('the route only stores through the fixed fingerprint', /storeArchive\(db, text, label\)/.test(route) && route.indexOf('storeArchiveExpecting') < 0);
-  check('the route and storage touch only the canada_history tables (+ users for the name, + a read of accounting_invoices)', (route + server).match(/\.from\('([a-z_]+)'\)/g).every(function (m) { return /canada_history_|'users'|'accounting_invoices'/.test(m); }) && (server.match(/from\('accounting_invoices'\)/g) || []).length === 1 && /from\('accounting_invoices'\)\.select\(/.test(server) && /if \(isSuper && a\.loaded === true\) \{\s*var k = await readKtcInvoicesForReleases/.test(route) && !/\.from\(table\)/.test(route));
+  check('the route and storage touch only the canada_history tables (+ users for the name, + a read of accounting_invoices)', (route + server + read('src/lib/canada-history-feed-server.js')).match(/\.from\('([a-z_]+)'\)/g).every(function (m) { return /canada_history_|'users'|'accounting_invoices'/.test(m); }) && (server.match(/from\('accounting_invoices'\)/g) || []).length === 1 && /from\('accounting_invoices'\)\.select\(/.test(server) && /if \(isSuper && a\.loaded === true\) \{\s*var k = await readKtcInvoicesForReleases/.test(route) && !/\.from\(table\)/.test(route));
   check('storage never updates a line and never deletes', server.indexOf('.delete(') < 0 && route.indexOf('.delete(') < 0 && (server.match(/\.update\(\{/g) || []).length === 1 && /from\('canada_history_batches'\)\.update\(\{ status: 'complete' \}\)/.test(server));
   check('the screen uses the route, not the tables', comp.indexOf("fetch('/api/canada-history'") >= 0 && comp.indexOf('.from(') < 0 && comp.indexOf("'use client'") === 0);
   check('the screen imports the helpers it calls', ['CANADA_GOODS', 'CURRENT_CGT_TYPES', 'KIND_LABELS', 'effectiveGoodsMap', 'unmatchedGoods', 'buildCanadaHistory', 'buildCanadaSales', 'fmtLb', 'fmtUsd', 'dayLabel'].every(function (n) { return new RegExp('import \\{[^}]*\\b' + n + '\\b[^}]*\\} from \'\\.\\./lib/canada-history\'').test(comp) && comp.split(n).length > 2; }));

@@ -8,11 +8,11 @@
 // inventory, bills, invoices, bank lines or P&L.
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { CANADA_GOODS, CURRENT_CGT_TYPES, KIND_LABELS, effectiveGoodsMap, unmatchedGoods, buildCanadaHistory, buildCanadaSales, fmtLb, fmtUsd, dayLabel } from '../lib/canada-history';
+import { CANADA_GOODS, CURRENT_CGT_TYPES, KIND_LABELS, effectiveGoodsMap, unmatchedGoods, buildCanadaHistory, buildCanadaSales, mergeWarehouseFlow, fmtLb, fmtUsd, dayLabel } from '../lib/canada-history';
 
 var C = {
   bg: '#f8fafc', card: '#ffffff', line: '#e2e8f0', ink: '#0f172a', muted: '#64748b',
-  inn: '#0e7490', out: '#b45309', warn: '#b91c1c', warnBg: '#fef2f2', ok: '#166534', okBg: '#f0fdf4', gold: '#92400e', goldBg: '#fffbeb'
+  inn: '#0e7490', out: '#b45309', sysIn: '#16a34a', sysOut: '#ca8a04', warn: '#b91c1c', warnBg: '#fef2f2', ok: '#166534', okBg: '#f0fdf4', gold: '#92400e', goldBg: '#fffbeb'
 };
 
 function bearer() {
@@ -27,23 +27,27 @@ function bearer() {
 function Bars(props) {
   var g = props.group;
   var max = 1; var i;
-  for (i = 0; i < g.months.length; i++) { if (g.inbound[i] > max) { max = g.inbound[i]; } if (g.outbound[i] > max) { max = g.outbound[i]; } }
+  var hasSys = Array.isArray(g.sys_inbound);
+  for (i = 0; i < g.months.length; i++) { if (g.inbound[i] > max) { max = g.inbound[i]; } if (g.outbound[i] > max) { max = g.outbound[i]; } if (hasSys && g.sys_inbound[i] > max) { max = g.sys_inbound[i]; } if (hasSys && g.sys_outbound[i] > max) { max = g.sys_outbound[i]; } }
   // v55.83-YH (Codex 24 Nov): a month with no data on one side is N/A — a grey mark, never a zero bar; an incomplete month is striped.
-  function tip(v, st) { return st === 'na' ? 'N/A (no data in this archive)' : (fmtLb(v) + ' lb' + (st === 'partial' ? ' (incomplete month)' : '')); }
+  function tip(v, st) { return st === 'unchecked' ? 'NOT CHECKED (warehouse not read)' : st === 'na' ? 'N/A (no data here)' : (fmtLb(v) + ' lb' + (st === 'partial' ? ' (incomplete month)' : '')); }
   function bar(v, st, color) {
+    if (st === 'unchecked') { return <div style={{ width: 8, height: 14, borderRadius: 2, border: '1px dashed #f59e0b', background: '#fef3c7' }}></div>; }
     if (st === 'na') { return <div style={{ width: 8, height: 14, borderRadius: 2, border: '1px dashed #94a3b8', background: '#e2e8f0' }}></div>; }
     return <div style={{ width: 8, height: Math.max(v > 0 ? 2 : 0, Math.round(160 * v / max)), borderRadius: '2px 2px 0 0', background: st === 'partial' ? 'repeating-linear-gradient(45deg, ' + color + ', ' + color + ' 3px, #ffffff 3px, #ffffff 5px)' : color }}></div>;
   }
   return (
     <div style={{ overflowX: 'auto', border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 8px 4px', background: C.bg }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 190, minWidth: g.months.length * 26 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 190, minWidth: g.months.length * (hasSys ? 44 : 26) }}>
         {g.months.map(function (m, idx) {
           var a = g.inbound[idx]; var b = g.outbound[idx]; var sa = g.inbound_status[idx]; var sb = g.outbound_status[idx];
           return (
-            <div key={m} title={g.labels[idx] + ' — received ' + tip(a, sa) + ', shipped ' + tip(b, sb)} style={{ flex: '1 0 22px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
+            <div key={m} title={g.labels[idx] + ' — old workbook: received ' + tip(a, sa) + ', shipped ' + tip(b, sb) + (hasSys ? ' · new system: received ' + tip(g.sys_inbound[idx], g.sys_inbound_status[idx]) + ', shipped ' + tip(g.sys_outbound[idx], g.sys_outbound_status[idx]) : '')} style={{ flex: '1 0 22px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 160 }}>
-                {bar(a, sa, C.inn)}
-                {bar(b, sb, C.out)}
+                {idx < g.coverage.received.status.length || !hasSys ? bar(a, sa, C.inn) : null}
+                {idx < g.coverage.received.status.length || !hasSys ? bar(b, sb, C.out) : null}
+                {hasSys && g.sys_inbound_status[idx] !== 'na' ? bar(g.sys_inbound[idx], g.sys_inbound_status[idx], C.sysIn) : null}
+                {hasSys && g.sys_outbound_status[idx] !== 'na' ? bar(g.sys_outbound[idx], g.sys_outbound_status[idx], C.sysOut) : null}
               </div>
               <div style={{ fontSize: 9, color: C.muted, marginTop: 4, whiteSpace: 'nowrap', transform: 'rotate(-55deg)', transformOrigin: 'center', height: 22 }}>{g.labels[idx]}</div>
             </div>
@@ -51,8 +55,9 @@ function Bars(props) {
         })}
       </div>
       <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
-        <span style={{ display: 'inline-block', width: 10, height: 10, background: C.inn, marginRight: 4 }}></span>Received
-        <span style={{ display: 'inline-block', width: 10, height: 10, background: C.out, margin: '0 4px 0 14px' }}></span>Shipped
+        <span style={{ display: 'inline-block', width: 10, height: 10, background: C.inn, marginRight: 4 }}></span>Received (old workbook)
+        <span style={{ display: 'inline-block', width: 10, height: 10, background: C.out, margin: '0 4px 0 14px' }}></span>Shipped (old workbook)
+        {hasSys ? <span><span style={{ display: 'inline-block', width: 10, height: 10, background: C.sysIn, margin: '0 4px 0 14px' }}></span>Received (new system)<span style={{ display: 'inline-block', width: 10, height: 10, background: C.sysOut, margin: '0 4px 0 14px' }}></span>Shipped (new system)<span style={{ display: 'inline-block', width: 10, height: 10, border: '1px dashed #f59e0b', background: '#fef3c7', margin: '0 4px 0 14px' }}></span>not checked</span> : null}
         <span style={{ display: 'inline-block', width: 10, height: 10, border: '1px dashed #94a3b8', background: '#e2e8f0', margin: '0 4px 0 14px' }}></span>N/A = no data in this archive (not zero)
         <span style={{ marginLeft: 14 }}>striped = incomplete month · pounds per month — hover a bar for the figure</span>
       </div>
@@ -120,6 +125,9 @@ export default function CanadaHistoryTab(props) {
   var canManage = !!(data && data.can_manage);
   var eff = effectiveGoodsMap((data && data.decisions) || []);
   var hist = data && data.loaded ? buildCanadaHistory(data.receipts, data.shipments, eff, { by: by }) : null;
+  // v55.83-YO — by current CGT type the new system's months (NT Warehouse) are joined on; by old name there is no such link
+  if (hist && by === 'cgt') { hist = mergeWarehouseFlow(hist, data.warehouse_flow || { state: 'unavailable', reason: 'the warehouse was not read.' }); }
+  var sysOk = !!(hist && hist.sys_state === 'ok');
   var unmatched = unmatchedGoods(eff);
   // v55.83-YK — sales history: one row per Canadian release that shipped. Dollars only when the server sent them (super admin).
   var sales = data && data.loaded ? buildCanadaSales(data.shipments, data.ktc_invoices === undefined ? null : data.ktc_invoices, eff) : null;
@@ -184,6 +192,7 @@ export default function CanadaHistoryTab(props) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
               <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Received (recorded)</div><div style={{ fontSize: 22, fontWeight: 800, color: C.inn }}>{fmtLb(hist.total_in)} lb</div><div style={{ fontSize: 11, color: C.muted }}>{dayLabel(hist.coverage.received.first)} → {dayLabel(hist.coverage.received.last)}</div></div>
               <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Shipped (recorded)</div><div style={{ fontSize: 22, fontWeight: 800, color: C.out }}>{fmtLb(hist.total_out)} lb</div><div style={{ fontSize: 11, color: C.muted }}>{dayLabel(hist.coverage.shipped.first)} → {dayLabel(hist.coverage.shipped.last)}</div></div>
+              {by === 'cgt' ? <div style={Object.assign({}, box, sysOk ? {} : { background: C.goldBg, borderColor: '#fde68a' })}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>New system (NT Warehouse), Canada</div>{sysOk ? <div><div style={{ fontSize: 15, fontWeight: 800, color: C.sysIn }}>in {fmtLb(hist.sys_total_in)} lb</div><div style={{ fontSize: 15, fontWeight: 800, color: C.sysOut }}>out {fmtLb(hist.sys_total_out)} lb</div><div style={{ fontSize: 11, color: C.muted }}>{dayLabel(hist.sys_first_in)} → {dayLabel(hist.sys_last_in)}</div></div> : <div style={{ fontSize: 15, fontWeight: 800, color: C.gold }}>NOT CHECKED</div>}</div> : null}
               <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Old names with no match</div><div style={{ fontSize: 22, fontWeight: 800, color: unmatched.length ? C.warn : C.ok }}>{unmatched.length}</div></div>
             </div>
 
@@ -214,6 +223,7 @@ export default function CanadaHistoryTab(props) {
                       : (by === 'cgt' ? <div style={{ fontSize: 11, color: C.muted }}>from: {g.goods.join(', ')}</div> : <div style={{ fontSize: 11, color: C.muted }}>{eff.map[g.key] ? ('counts as: ' + eff.map[g.key]) : 'no match yet'}</div>)}
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 13 }}><span style={{ color: C.muted }}>Received (recorded)</span><b style={{ color: C.inn }}>{fmtLb(g.total_in)} lb</b></div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}><span style={{ color: C.muted }}>Shipped (recorded)</span><b style={{ color: C.out }}>{fmtLb(g.total_out)} lb</b></div>
+                    {by === 'cgt' ? <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4, color: C.muted }}><span>New system in / out</span><span>{g.sys_total_in === null || g.sys_total_in === undefined ? 'not checked' : fmtLb(g.sys_total_in) + ' / ' + fmtLb(g.sys_total_out) + ' lb'}</span></div> : null}
                   </div>
                 );
               })}
@@ -222,7 +232,7 @@ export default function CanadaHistoryTab(props) {
             {open ? (
               <div style={Object.assign({}, box, { display: 'grid', gap: 14 })}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
-                  <h2 style={{ margin: 0, fontSize: '1.1rem', color: C.ink }}>{open.key} — Canada · received to {dayLabel(hist.coverage.received.last)} · shipped to {dayLabel(hist.coverage.shipped.last)}</h2>
+                  <h2 style={{ margin: 0, fontSize: '1.1rem', color: C.ink }}>{open.key} — Canada · old workbook to {dayLabel(hist.coverage.received.last)} (received) / {dayLabel(hist.coverage.shipped.last)} (shipped){by === 'cgt' ? (sysOk ? ' · new system to ' + dayLabel(hist.sys_last_in) : ' · new system NOT CHECKED') : ''}</h2>
                   <button style={btn} onClick={function () { setOpenKey(''); }}>Close</button>
                 </div>
                 <Bars group={open} />
@@ -230,10 +240,10 @@ export default function CanadaHistoryTab(props) {
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>By year (pounds recorded) — a year marked “partial” is not a whole year of records</div>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                      <thead><tr><th style={th}>Year</th><th style={thR}>Received</th><th style={thR}>Shipped</th></tr></thead>
+                      <thead><tr><th style={th}>Year</th><th style={thR}>Received (old workbook)</th>{by === 'cgt' ? <th style={thR}>Received (new system)</th> : null}<th style={thR}>Shipped (old workbook)</th>{by === 'cgt' ? <th style={thR}>Shipped (new system)</th> : null}</tr></thead>
                       <tbody>
-                        {open.yearly.map(function (y) { return <tr key={y.year}><td style={td}>{y.year}</td><td style={tdR}>{y.in === null ? 'N/A' : fmtLb(y.in)}{y.in !== null && y.in_partial ? <span style={{ color: C.warn, fontSize: 11 }}> partial</span> : null}</td><td style={tdR}>{y.out === null ? 'N/A' : fmtLb(y.out)}{y.out !== null && y.out_partial ? <span style={{ color: C.warn, fontSize: 11 }}> partial</span> : null}</td></tr>; })}
-                        <tr><td style={Object.assign({}, td, { fontWeight: 800 })}>Total recorded</td><td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(open.total_in)}</td><td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(open.total_out)}</td></tr>
+                        {open.yearly.map(function (y) { return <tr key={y.year}><td style={td}>{y.year}</td><td style={tdR}>{y.in === null ? 'N/A' : fmtLb(y.in)}{y.in !== null && y.in_partial ? <span style={{ color: C.warn, fontSize: 11 }}> partial</span> : null}</td>{by === 'cgt' ? <td style={tdR}>{!y.sys_checked ? <span style={{ color: C.gold }}>not checked</span> : y.sys_in === null ? 'N/A' : fmtLb(y.sys_in)}{y.in_whole_year ? <span style={{ color: C.ok, fontSize: 11 }}> · whole year covered</span> : <span style={{ color: C.warn, fontSize: 11 }}> · year not complete</span>}</td> : null}<td style={tdR}>{y.out === null ? 'N/A' : fmtLb(y.out)}{y.out !== null && y.out_partial ? <span style={{ color: C.warn, fontSize: 11 }}> partial</span> : null}</td>{by === 'cgt' ? <td style={tdR}>{!y.sys_checked ? <span style={{ color: C.gold }}>not checked</span> : y.sys_out === null ? 'N/A' : fmtLb(y.sys_out)}{y.out_whole_year ? <span style={{ color: C.ok, fontSize: 11 }}> · whole year covered</span> : <span style={{ color: C.warn, fontSize: 11 }}> · year not complete</span>}</td> : null}</tr>; })}
+                        <tr><td style={Object.assign({}, td, { fontWeight: 800 })}>Total recorded</td><td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(open.total_in)}</td>{by === 'cgt' ? <td style={Object.assign({}, tdR, { fontWeight: 800 })}>{open.sys_total_in === null ? 'not checked' : fmtLb(open.sys_total_in)}</td> : null}<td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(open.total_out)}</td>{by === 'cgt' ? <td style={Object.assign({}, tdR, { fontWeight: 800 })}>{open.sys_total_out === null ? 'not checked' : fmtLb(open.sys_total_out)}</td> : null}</tr>
                       </tbody>
                     </table>
                     <div style={{ fontWeight: 700, fontSize: 13, margin: '14px 0 4px' }}>Not counted as received (pounds)</div>
