@@ -15,7 +15,7 @@ function candidate(id) {
 }
 const register = { items: ['fix-a', 'fix-b', 'fix-c', 'fix-d'].map(candidate), events: [] };
 let caller = 'super'; let role = 'super_admin'; let perms = []; let rows = []; let failRpc = false; let permissionError = false; let workerVersion = 'warehouse-worker-v1';
-let calls = []; let seq = 0;
+let calls = []; let seq = 0; let executions = [];
 const db = {
   from(name) {
     const filters = []; let single = false;
@@ -24,7 +24,7 @@ const db = {
       in(k, vs) { filters.push(r => vs.includes(r[k])); return q; }, order() { return q; }, limit() { return q; },
       maybeSingle() { single = true; return q; },
       then(resolve, reject) {
-        let data = name === 'users' ? [{ id: caller, role, name: 'Verified fixture user', active: true }] : name === 'module_permissions' ? perms : name === 'release_signoffs' ? rows : name === 'release_worker_status' ? [{ id: 1, enabled: true, version: workerVersion, last_seen: new Date().toISOString(), worker: 'fixture' }] : [];
+        let data = name === 'users' ? [{ id: caller, role, name: 'Verified fixture user', active: true }] : name === 'module_permissions' ? perms : name === 'release_signoffs' ? rows : name === 'release_execution' ? executions : name === 'release_worker_status' ? [{ id: 1, enabled: true, version: workerVersion, last_seen: new Date().toISOString(), worker: 'fixture' }] : [];
         data = data.filter(r => filters.every(f => f(r)));
         return Promise.resolve({ data: single ? data[0] || null : data, error: permissionError && name === 'module_permissions' ? { message: 'unavailable' } : null }).then(resolve, reject);
       }
@@ -80,6 +80,15 @@ async function send(b) { return post({ json: async () => b }); }
   r = await send({ ...request, review_receipt: reviewed.body.receipt });
   check(r.status === 200 && r.body.moved === false && rows.map(r => r.item_id).join(',') === 'fix-a,fix-c', 'select two of four queues exactly those two, not all');
   check(rows.every(r => r.signed_by === 'super' && r.detail.candidate.manifest.sha === 'a'.repeat(40)), 'verified signer and immutable artifact snapshot saved');
+  let status = (await read({})).body.signoffs['fix-a'];
+  check(status.kind === 'go' && status.requestId === rows[0].id && !status.execution && !status.canGo, 'queued approval returns its request number without pretending it started');
+  executions = [{ request_id: rows[0].id, phase: 'running', started_at: '2026-11-24T13:15:00Z' }];
+  status = (await read({})).body.signoffs['fix-a'];
+  check(status.executing && status.execution.phase === 'running' && !status.canWithdraw, 'running status is attached to the correct request and cannot be withdrawn');
+  check(!(await read({})).body.signoffs['fix-c'].execution, 'another queued change is not reported as running');
+  executions[0].phase = 'attention';
+  check((await read({})).body.signoffs['fix-a'].execution.phase === 'attention', 'recovery status remains distinct from running');
+  executions = [];
   check((await send(body())).status === 409, 'duplicate click or stale screen rejected');
   rows = []; calls = []; seq = 0;
   let b = body(); b.builds['fix-a'] = 'd'.repeat(40);

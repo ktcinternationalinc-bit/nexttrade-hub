@@ -81,7 +81,9 @@ export async function GET(request) {
     var stt = itemSignState(it, latest[String(it.id)]);
     stt.manifestDigest = it.manifest ? selection.digest(it.manifest) : '';
     stt.head = signRows.filter(function (r) { return r.item_id === it.id; }).reduce(function (n, r) { return Math.max(n, Number(r.id)); }, 0);
-    stt.executing = executions.some(function (e) { return signRows.some(function (r) { return r.id === e.request_id && r.item_id === it.id; }); });
+    stt.requestId = (stt.kind === 'go' || stt.kind === 'rollback') ? latest[String(it.id)]?.id || null : null;
+    stt.execution = executions.find(function (e) { return signRows.some(function (r) { return r.id === e.request_id && r.item_id === it.id; }); }) || null;
+    stt.executing = !!stt.execution;
     stt.canCheck = canSign && readable && executionReady && !stt.executing && stt.where === 'deployed' && stt.kind === 'none';
     if (stt.executing) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; stt.why = 'Execution is running or needs recovery. No new request can replace it.'; }
     if (!executionReady) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; }

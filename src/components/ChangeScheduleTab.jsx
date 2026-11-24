@@ -103,6 +103,19 @@ function whereOf(it, sign) {
   return it && it.status === 'live' ? 'live' : 'staging';
 }
 
+function activeRequest(sign) {
+  return !!(sign && (sign.kind === 'go' || sign.kind === 'rollback' || sign.executing || sign.where === 'unknown'));
+}
+
+function requestStatus(sign, data) {
+  if (sign.execution?.phase === 'attention' || sign.where === 'unknown') return 'Blocked - recovery check required';
+  if (sign.execution?.phase === 'running') return data.workerOnline ? 'Running' : 'Started - worker contact lost; completion unconfirmed';
+  if (!data.executionReady) return 'Approved - execution status unavailable';
+  if (data.worker?.enabled === false) return 'Approved - waiting for worker activation';
+  if (!data.workerOnline) return 'Approved - waiting for worker connection';
+  return sign.kind === 'rollback' ? 'Approved - queued for code rollback' : 'Approved - queued for deployment';
+}
+
 // v55.83-YJ — the change history: every approval, request, move, check and roll back, newest first.
 function History(props) {
   var rows = props.rows || [];
@@ -143,6 +156,7 @@ function History(props) {
 
 function Row(props) {
   var it = props.item;
+  var active = activeRequest(props.sign);
   // v55.83-YJ — where the change IS comes from the recorded history when there is one (current at all times)
   var where = whereOf(it, props.sign);
   var leftColor = it.dataChange ? C.data : (where === 'staging' ? C.stage : C.prod);
@@ -153,13 +167,18 @@ function Row(props) {
   else { tags.push({ color: 'stage', label: 'On staging' }); }
   if (props.sign && props.sign.problem && where !== 'unknown') { tags.push({ color: 'max', label: 'Needs a look' }); }
   if (it.dataChange) { tags.push({ color: 'data', label: 'Data change' }); }
-  if (it.needsCodex) { tags.push({ color: 'codex', label: 'Codex reviewing' }); }
-  if (it.needsMax) { tags.push({ color: 'max', label: "Needs your go" }); }
+  if (!active && where === 'staging' && it.needsCodex) { tags.push({ color: 'codex', label: 'Codex reviewing' }); }
+  if (!active && where === 'staging' && it.needsMax) { tags.push({ color: 'max', label: "Needs your go" }); }
   return (
     <div className="warehouse-change-row" style={{ background: C.card, border: '1px solid ' + C.line, borderLeft: '3px solid ' + leftColor, borderRadius: 8, padding: '12px 14px', display: 'grid', gap: 10, alignItems: 'start' }}>
       <div style={{ minWidth: 0 }}>
-        {props.canSign && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}><input type="checkbox" aria-label={'Select ' + it.title} checked={!!props.selected} disabled={props.selectLocked} onChange={function () { props.onSelect(it.id); }} />Select change</label>}
+        {props.canSign && !active && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}><input type="checkbox" aria-label={'Select ' + it.title} checked={!!props.selected} disabled={props.selectLocked} onChange={function () { props.onSelect(it.id); }} />Select change</label>}
         <h3 style={{ margin: '0 0 3px', fontSize: '.98rem', color: C.ink }}>{it.title}</h3>
+        {active && <div role="status" style={{ color: C.max, margin: '6px 0', fontWeight: 700 }}>
+          {requestStatus(props.sign, props.data)}
+          {(props.sign.requestId || props.sign.execution?.request_id) && <div style={{ fontWeight: 400 }}>Request #{props.sign.requestId || props.sign.execution.request_id}</div>}
+          {props.sign.execution?.started_at && <div style={{ fontWeight: 400 }}>Started {fmtWhen(props.sign.execution.started_at)}</div>}
+        </div>}
         <div style={{ font: '600 11px ' + C.mono, color: C.muted }}>{it.meta || it.date || ''}</div>
         {it.desc && <div style={{ color: C.muted, fontSize: '.86rem', marginTop: 4, maxWidth: '70ch' }}>{it.desc}</div>}
         {(it.backup || it.rollback) && (
@@ -187,6 +206,7 @@ export default function ChangeScheduleTab() {
   var rq = useState(false); var reviewing = rq[0]; var setReviewing = rq[1];
   var ms = useState(''); var message = ms[0]; var setMessage = ms[1];
   var [headerHeight, setHeaderHeight] = useState(0);
+  var [checkedAt, setCheckedAt] = useState('');
   var toolbarRef = useRef(null);
   var reviewPanel = useRef(null);
   var reviewOpen = !!review;
@@ -204,7 +224,7 @@ export default function ChangeScheduleTab() {
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (!j || !j.ok) { setErr((j && j.error) || 'Could not read the release register.'); setData(null); }
-        else { setData(j); }
+        else { setData(j); setCheckedAt(new Date().toISOString()); }
       })
       .catch(function () { setErr('Could not reach the release register.'); setData(null); })
       .then(function () { setLoading(false); });
@@ -231,10 +251,13 @@ export default function ChangeScheduleTab() {
   // Sign-off state and permission to take action come from the server.
   // Which list a change is in follows the recorded history (current), not only the register file.
   var signs = (data && data.signoffs) || {};
-  var queued = items.filter(function (it) { return it && whereOf(it, signs[it.id]) === 'staging'; });
-  var live = items.filter(function (it) { return it && whereOf(it, signs[it.id]) !== 'staging'; });
+  var active = items.filter(function (it) { return it && activeRequest(signs[it.id]); });
+  var queued = items.filter(function (it) { return it && !activeRequest(signs[it.id]) && whereOf(it, signs[it.id]) === 'staging'; });
+  var live = items.filter(function (it) { return it && !activeRequest(signs[it.id]) && ['live', 'deployed'].includes(whereOf(it, signs[it.id])); });
   var canSign = !!(data && data.canSign);
-  var selectedIds = Object.keys(picked).filter(function (id) { return picked[id]; });
+  var selectedIds = Object.keys(picked).filter(function (id) { return picked[id] && !activeRequest(signs[id]); });
+  var workerLabel = data?.worker?.enabled === false ? 'Worker disabled - approved releases will not start until activation is authorized' :
+    data?.workerOnline ? 'Deployment worker online' : 'Worker offline - approved releases are waiting for connection';
   function select(id) { setPicked(function (p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); }
   function openReview(action) {
     var ids = selectedIds;
@@ -296,13 +319,16 @@ export default function ChangeScheduleTab() {
           </div>
         </header>
         {data && <div role="status" style={{ color: data.workerOnline ? C.prod : C.max }}>
-          {data.workerOnline ? 'Warehouse deployment worker online' : 'Warehouse deployment worker offline: requests remain queued until it reconnects'}
+          {workerLabel}
           {data.worker && data.worker.last_seen ? ' · Last contact ' + fmtWhen(data.worker.last_seen) : ''}
           {!canSign && <div style={{ color: C.muted }}>View only. Managing releases requires the NT Warehouse release permission.</div>}
           {!data.executionReady && <div>Execution database setup is not available. No release can be queued.</div>}
         </div>}
-        {data && (data.executions || []).map(function (job) { return <div key={job.request_id} role="status" style={{ color: C.max }}>Request #{job.request_id}: {job.phase === 'running' ? 'Executing' : 'Recovery check required'} · Started {fmtWhen(job.started_at)}</div>; })}
         {canSign && <div ref={toolbarRef} role="group" aria-label="Selected Warehouse changes" style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
+          <div role="status" style={{ color: data?.workerOnline ? C.prod : C.max, marginBottom: 8 }}>
+            {active.length} active request{active.length === 1 ? '' : 's'} · {workerLabel}
+            {checkedAt && <div style={{ color: C.muted, fontSize: 11 }}>Status checked {fmtWhen(checkedAt)}</div>}
+          </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <b>{selectedIds.length} selected</b>
             <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Review selected deployments</button>
@@ -362,15 +388,23 @@ export default function ChangeScheduleTab() {
           </div>
         )}
 
-        <section>
+        <section aria-label="Active release requests">
+          <h2 style={{ fontSize: '1.1rem', margin: '0 0 10px' }}>Approved requests and execution status ({active.length})</h2>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {active.length ? active.map(function (it) { return <Row key={it.id} item={it} sign={signs[it.id]} data={data} canSign={canSign} onDone={load} />; }) :
+              <div style={{ color: C.muted }}>No approved requests waiting or running.</div>}
+          </div>
+        </section>
+
+        <section aria-label="Changes awaiting approval">
           <h2 style={{ fontSize: '1.1rem', margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 9 }}>
-            Queued to move to production
+            Changes awaiting approval
             <span style={{ font: '700 10px ' + C.mono, padding: '2px 8px', borderRadius: 999, letterSpacing: '.05em', textTransform: 'uppercase', background: 'rgba(242,207,91,.15)', color: C.gold2 }}>{queued.length} items</span>
           </h2>
-          <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>All on fix staging. Each moves only after Codex passes it and you name it — then a backed-up, reversible deploy.</p>
+          <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>Not approved for execution yet. Review the selected builds before approving them.</p>
           <div style={{ display: 'grid', gap: 10 }}>
             {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} selected={picked[it.id]} selectLocked={reviewOpen} onSelect={select} />; })
-              : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'Nothing queued.'}</div>}
+              : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'No changes awaiting approval.'}</div>}
           </div>
         </section>
 
