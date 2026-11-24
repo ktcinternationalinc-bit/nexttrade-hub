@@ -21,7 +21,7 @@ function bundle(file) {
     if (!name.startsWith('.')) return all;
     let dest = path.resolve(path.dirname(file), name);
     if (!path.extname(dest)) dest += fs.existsSync(dest + '.js') ? '.js' : '.jsx';
-    if (dest.includes(path.join('src', 'components')) || /[\\/](supabase|hub-fetch)\.js$/.test(dest)) return 'require("stub")';
+    if ((dest.includes(path.join('src', 'components')) && !dest.endsWith('CustomerBalances.jsx')) || /[\\/](supabase|hub-fetch)\.js$/.test(dest)) return 'require("stub")';
     return 'require(' + JSON.stringify(bundle(dest)) + ')';
   });
   modules[id] = code;
@@ -34,6 +34,9 @@ const row = { key: 'fixture', label: 'Regression fixture', pounds: 100, goods_re
 const cell = { ...row, invoice_id: 'fixture', line_id: 'line', invoice: 'Test invoice', invoice_date: '2026-11-19', customer: 'fixture', product_key: 'fixture', product: 'Fixture product', description: 'Fixture shipment', release: '1002-1', release_raw: '1002-1', brokerage: 0, trucking_cost: 70, freight_cost: 80 };
 const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reconciled: { product: true, customer: true, invoice: true }, by_product: [row], by_customer: [row], by_invoice: [row], cells: [cell], flags: [], can_see_margin: true };
 (async () => {
+  const css = await require(path.join(deps, 'postcss'))([
+    require(path.join(deps, 'tailwindcss'))({ content: ['ProfitabilityTab', 'CustomerBalances', 'BooksHomeTab', 'AccountingDashboard'].map(name => path.join(root, 'src/components', name + '.jsx')), corePlugins: { preflight: true } }),
+  ]).process('@tailwind base; @tailwind components; @tailwind utilities;', { from: undefined });
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     for (const permissions of ['full', 'hide margin', 'hide revenue']) {
@@ -44,6 +47,7 @@ const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reco
       const errors = [];
       page.on('pageerror', err => { errors.push(err.message); console.error(err.message); });
       await page.setContent('<div id="root"></div>');
+      await page.addStyleTag({ content: css.css });
       await page.addScriptTag({ path: path.join(deps, 'react/umd/react.development.js') });
       await page.addScriptTag({ path: path.join(deps, 'react-dom/umd/react-dom.development.js') });
       const data = JSON.parse(JSON.stringify(fixture));
@@ -54,7 +58,13 @@ const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reco
         if (!canSeeRevenue) delete target.transport_revenue;
       }
       await page.evaluate(({ modules, entry, booksEntry, dashboardEntry, data, canSeeMargin }) => {
-        window.fetch = async () => ({ json: async () => data });
+        const balanceData = {
+          ok: true, as_of: '2026-11-24', totals: { held_cents: 2500, owed_cents: 90000 },
+          customers: [{ customer_id: 'fixture', customer: 'fixture', held_cents: 2500, owed_cents: 90000,
+            held: [{ kind: 'credit', id: 'credit-fixture', cents: 2500, date: '2026-11-01' }],
+            owed: [{ invoice_id: 'balance-fixture', number: 'Balance invoice fixture', date: '2026-11-01', total_cents: 100000, paid_cents: 10000, balance_cents: 90000, partly: true }], recon: [] }],
+        };
+        window.fetch = async (_, req) => ({ json: async () => JSON.parse(req.body).action === 'customer_balances' ? balanceData : data });
         URL.createObjectURL = blob => {
           window.reportCsv = blob.text();
           return '#test-export';
@@ -124,6 +134,40 @@ const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reco
         const table = page.getByRole('table').first();
         const headerCount = await table.locator('thead th').count();
         assert.equal(await table.locator('tbody > tr').first().locator('td').count(), headerCount, view + ' cells align with headers');
+        if (view === 'By customer') {
+          const details = page.locator('details').filter({ has: page.locator('summary', { hasText: 'Customer balances today:' }) });
+          assert.equal(await details.getAttribute('open'), null, 'balance list starts collapsed');
+          assert.equal(await table.locator('thead th').nth(1).innerText(), 'Held \u00b7 owed today', 'balance beside customer name');
+          const balance = table.locator('tbody > tr').first().locator('td').nth(1);
+          await balance.getByText('held $25.00', { exact: true }).waitFor();
+          assert.match(await balance.innerText(), /owed \$900\.00/);
+          assert.equal((await table.innerText()).includes('$1,269.06'), canSeeMargin, 'balances do not replace customer profit');
+          assert.ok((await table.boundingBox()).y < (await details.boundingBox()).y, 'P&L is above balance details');
+          await details.locator('summary').click();
+          await details.getByRole('row').filter({ hasText: 'fixture' }).first().click();
+          await details.getByText('Balance invoice fixture', { exact: true }).waitFor();
+          assert.match(await details.innerText(), /held \$25\.00.*customer credit/);
+          await details.locator('summary').click();
+          const search = page.getByRole('searchbox');
+          await search.fill('Regression');
+          assert.equal(await table.locator('tbody > tr').count(), 1, 'customer search keeps matching profit row');
+          await search.fill('nonexistent');
+          await table.getByText('No invoices in this period.').waitFor();
+          await search.fill('');
+          await page.getByRole('button', { name: /Full screen/ }).click();
+          await page.getByRole('dialog', { name: 'Profitability table, full screen' }).waitFor();
+          assert.match(await page.getByRole('dialog').innerText(), /owed \$900\.00/);
+          await page.getByRole('button', { name: /Exit full screen/ }).click();
+          for (const width of [1440, 390]) {
+            await page.setViewportSize({ width, height: 1000 });
+            const customerBox = await table.locator('thead th').first().boundingBox();
+            const balanceBox = await table.locator('thead th').nth(1).boundingBox();
+            assert.ok(balanceBox.x >= customerBox.x + customerBox.width - 1, 'customer and balance columns do not overlap at ' + width);
+            assert.ok((await table.boundingBox()).y < (await details.boundingBox()).y, 'profitability precedes collapsed balances at ' + width);
+            if (process.env.TEST_CUSTOMER_SCREENSHOT && canSeeMargin) await page.screenshot({ path: process.env.TEST_CUSTOMER_SCREENSHOT.replace('.png', '-' + width + '.png'), fullPage: true });
+          }
+          await page.setViewportSize({ width: 1440, height: 1000 });
+        }
         await table.getByText('Regression fixture', { exact: false }).click();
         assert.equal(await profitHeaders.count(), canSeeMargin ? 6 : 0, view + ' drill-down');
         assert.equal(await goodsRevenueHeaders.count(), canSeeMargin ? 4 : 0, view + ' drill-down goods sales columns');
@@ -146,7 +190,7 @@ const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reco
       assert.match(await stillOpen.innerText(), /\$2,001\.00/);
       assert.equal(await page.getByRole('button', { name: /^(INVOICED|PAID ON THESE|COLLECTED)/i }).count(), canSeeMargin ? 3 : 0, 'Books invoice activity cards');
       await stillOpen.click();
-      await page.getByText('Open invoice fixture', { exact: true }).last().waitFor();
+      await page.getByText('Open invoice fixture', { exact: true }).filter({ visible: true }).first().waitFor();
       assert.equal(await page.getByRole('columnheader', { name: /^(Original|Paid)$/ }).count(), canSeeMargin ? 2 : 0, 'Books still-open drill');
       await page.evaluate(() => window.renderScreen('dashboard'));
       await page.getByText(/^Open AR \(USD\)/).first().waitFor({ timeout: 10000 });

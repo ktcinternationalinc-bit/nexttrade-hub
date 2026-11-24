@@ -853,7 +853,7 @@ export default function ProfitabilityTab(props) {
   // one row's cells — the same columns for a top line and for an original description underneath it
   function rowTds(r, isInvoice, isOpen, sub) {
     var pc = sub ? 'px-2 py-1 text-right tabular-nums' : 'px-2 py-1.5 text-right tabular-nums';
-    return [
+    var cells = [
       <td key="c0" className={sub ? 'px-2 py-1' : 'px-2 py-1.5 font-bold'} style={Object.assign({ position: 'sticky', left: 0, zIndex: 1, background: 'inherit', minWidth: 220, maxWidth: 300 }, sub ? { paddingLeft: 26 } : {})}>{(isOpen ? '▾ ' : '▸ ') + r.label}
         {!sub && r.grouped && <span className="ml-1 text-[9px] font-semibold" style={{ color: '#64748b' }}>{'(' + r.name_list.length + ' names)'}</span>}
         {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] + (r.invoice.basis_source === 'customer' ? ' (customer’s usual)' : r.invoice.basis_source === 'inferred' ? ' (inferred by rule)' : r.invoice.basis_source === 'shipping_line_rule' ? ' (assumed — shipping line on the invoice, not in the price)' : r.invoice.basis_source === 'invoice_text' ? ' (stated on invoice)' : r.invoice.basis_source === 'invoice_form' ? (r.invoice.shipping_terms === 'CNF_SEPARATE' ? ' (separate shipping line — set on invoice)' : ' (set on invoice)') : '') : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}
@@ -875,7 +875,11 @@ export default function ProfitabilityTab(props) {
       showProfit && <td key="c14" className={pc}>{r.transport_profit === undefined ? '🔒' : r.transport_profit === null ? <span style={{ color: '#b45309' }}>unknown</span> : usd(r.transport_profit)}</td>,
       showProfit && <td key="c13" className={pc + ' font-extrabold'} style={{ color: r.complete ? (r.profit >= 0 ? '#065f46' : '#7f1d1d') : '#78350f' }}>{pf(r.profit)}{!r.complete && dot('known part only — some costs are missing')}</td>,
       <td key="c15" className="px-2 py-1 text-right">{statusChip(r)}</td>
-    ].concat(view === 'customer' && !sub ? [<td key="c16" className="px-2 py-1 text-right tabular-nums" style={{ background: '#f8fafc' }}><BalanceCell c={balanceOfCustomer(custBal.data, r.key)} loading={custBal.loading} error={custBal.error} /></td>] : []);
+    ];
+    if (view === 'customer' && !sub) {
+      cells.splice(1, 0, <td key="c16" className="px-2 py-1 text-right tabular-nums" style={{ background: '#f8fafc', minWidth: 150 }}><BalanceCell c={balanceOfCustomer(custBal.data, r.key)} loading={custBal.loading} error={custBal.error} /></td>);
+    }
+    return cells;
   }
   function detailRow(key, r, cs, isInvoice, columnCount) {
     return <tr key={key + ':d'}><td colSpan={columnCount} className="px-2 py-2" style={{ background: '#f1f5f9' }}>
@@ -886,6 +890,8 @@ export default function ProfitabilityTab(props) {
   }
   function viewTable(rowsAll, firstCol, isInvoice) {
     var columns = [[firstCol, ''], ['Pounds', 'Total pounds sold'], ['Goods revenue', 'Goods sold, after taking out shipping inside CNF prices. Hover a number to see the invoice amount.'], ['Avg $ / lb', 'Goods revenue ÷ pounds'], ['Transport charged', 'Shipping / trucking billed to the customer'], ['Goods cost', 'What we paid suppliers for these pounds'], ['Avg cost / lb', 'Goods cost ÷ pounds'], ['Avg cost all / lb', '(goods cost + commission + inbound allowance) ÷ pounds'], ['Commission', ''], ['Inbound allowance', 'Standard $0.02 per pound — an allowance, not a real payment'], ['Bonded / brokerage', '$200 per Houston container; not on paper / foil'], ['Total cost', 'Goods cost + commission + inbound + bonded. Outbound shipping is NOT included'], ['Goods profit', 'Goods revenue − total cost'], ['Trucking', 'Our trucking cost'], ['Freight', 'Our freight / shipping cost'], ['Transport profit', 'Transport charged − trucking − freight'], ['Total profit', 'Goods profit + transport profit'], ['', '']].concat(view === 'customer' ? [['Held · owed today', 'Customer balances as they are today — money held for the customer and invoice balances still owed. Not part of any profit figure and not in the tax P&L.']] : []).filter(function (column) { return showColumn(column[0]); });
+    // Keep today's balance beside the customer, separate from period profitability.
+    if (view === 'customer') { columns.splice(1, 0, columns.pop()); }
     var columnCount = columns.length;
     var rows = filterRowsBySearch(rowsAll, searchQ); // v55.83-VG — search only chooses which rows are shown
     // v55.83-TA — under each MERGED product, its original descriptions, each with its own totals and averages
@@ -1104,7 +1110,7 @@ export default function ProfitabilityTab(props) {
             return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#075985', color: '#ffffff' } : { background: '#e0f2fe', color: '#075985' }}>{v[1]}</button>; })}
         </span>
         <button onClick={function () { setView('setup'); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" title="Set-up, not a report: product names, units and which supplier bills belong to which product" style={view === 'setup' ? { background: '#7c2d12', color: '#ffffff', border: '2px solid #7c2d12' } : { background: '#ffffff', color: '#7c2d12', border: '2px dashed #c2410c' }}>⚙ Set-up: names, units and supplier links</button>
-        <span className="text-[11px] self-center" style={{ color: SUB }}>Click a product to see the names that make it up. Click a name to see its shipments.</span>
+        {view === 'product' && <span className="text-[11px] self-center" style={{ color: SUB }}>Click a product to see the names that make it up. Click a name to see its shipments.</span>}
         {(view === 'product' || view === 'customer' || view === 'invoice') && <span className="flex items-center gap-1 ml-auto">
           <input type="search" value={searchQ} onChange={function (e) { setSearchQ(e.target.value); setOpen(null); }} placeholder="🔎 Search invoice, customer, release, product…" aria-label="Search the rows of this table" className="nt-light px-2.5 py-1.5 rounded-lg text-[12px]" style={{ width: 290, border: '1px solid ' + LINE, background: '#ffffff', color: INK }} />
           {searchQ.trim() !== '' && <span className="text-[11px] font-bold" style={{ color: '#b45309' }}>{filterRowsBySearch(view === 'product' ? (data.by_product || []) : view === 'customer' ? (data.by_customer || []) : (data.by_invoice || []), searchQ).length + ' of ' + (view === 'product' ? (data.by_product || []) : view === 'customer' ? (data.by_customer || []) : (data.by_invoice || [])).length + ' shown — the totals above are for ALL rows'}</span>}
@@ -1113,8 +1119,11 @@ export default function ProfitabilityTab(props) {
       </div>
       {view === 'period' && periodView()}
       {view === 'product' && viewTable(data.by_product || [], 'Product', false)}
-      {view === 'customer' && <div className="mb-2 rounded" style={{ border: '1px solid #e2e8f0', background: '#ffffff' }}><CustomerBalances data={custBal.data} loading={custBal.loading} error={custBal.error} onOpenInvoice={showProfit ? setPeekId : undefined} /></div>}
       {view === 'customer' && viewTable(data.by_customer || [], 'Customer', false)}
+      {view === 'customer' && <details className="mt-3 rounded" style={{ border: '1px solid #e2e8f0', background: '#ffffff' }}>
+        <summary className="px-3 py-2 text-[12px] font-bold cursor-pointer" style={{ color: INK }}>Customer balances today: invoices owed and credits (separate from P&amp;L)</summary>
+        <CustomerBalances data={custBal.data} loading={custBal.loading} error={custBal.error} onOpenInvoice={showProfit ? setPeekId : undefined} />
+      </details>}
       {view === 'invoice' && viewTable(data.by_invoice || [], 'Invoice', true)}
       {view === 'setup' && setupView()}
       {view === 'containers' && containersView()}
