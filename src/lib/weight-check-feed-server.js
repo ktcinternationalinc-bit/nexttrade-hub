@@ -29,6 +29,25 @@ var LOOKUP_TABLES = ['product_types', 'cgt_grades', 'nt_grades', 'colors'];
 function pick(o, fields) { var out = {}; if (!o || typeof o !== 'object') { return out; } fields.forEach(function (f) { if (Object.prototype.hasOwnProperty.call(o, f)) { var v = o[f]; out[f] = (v !== null && typeof v === 'object') ? null : v; } }); return out; }
 function idStr(v) { return v === null || v === undefined ? '' : String(v).trim(); }
 
+// 24 Nov (Codex 14:30; Max "put it on live now"): the Warehouse check may read receipts from its OWN warehouse copy (e.g. live)
+// while the Orders report / shipping sync / arrival reminders keep NEXTRADE_FEED_URL. Vercel settings, all optional:
+//   NEXTRADE_RECEIPTS_URL   the receipts address (or that copy's …/api/hub-feed/shipping style base) — same address rules;
+//   NEXTRADE_RECEIPTS_TOKEN required with it (it never borrows the shipping feed's token);
+//   NEXTRADE_RECEIPTS_ALLOW_LIVE=yes  needed for the live warehouse (Max), separate from NEXTRADE_FEED_ALLOW_LIVE.
+// Not set → exactly as before: the shared feed settings.
+var RENAME = [[/NEXTRADE_FEED_URL/g, 'NEXTRADE_RECEIPTS_URL'], [/NEXTRADE_FEED_TOKEN/g, 'NEXTRADE_RECEIPTS_TOKEN'], [/NEXTRADE_FEED_ALLOW_LIVE/g, 'NEXTRADE_RECEIPTS_ALLOW_LIVE']];
+export function receiptsFeedConfig(env) {
+  var e = env || {};
+  var url = String(e.NEXTRADE_RECEIPTS_URL || '').trim();
+  if (!url) { var shared = warehouseFeedConfig(e); if (!shared.error) { shared.separate = false; } return shared; }
+  var tok = String(e.NEXTRADE_RECEIPTS_TOKEN || '').trim();
+  if (!tok) { return { error: 'NEXTRADE_RECEIPTS_URL is set but NEXTRADE_RECEIPTS_TOKEN is not (the receipts address never borrows the shipping feed token) — nothing was sent.' }; }
+  var c = warehouseFeedConfig({ NEXTRADE_FEED_URL: url, NEXTRADE_FEED_TOKEN: tok, NEXTRADE_FEED_ALLOW_LIVE: e.NEXTRADE_RECEIPTS_ALLOW_LIVE });
+  if (c.error) { var msg = c.error; RENAME.forEach(function (r) { msg = msg.replace(r[0], r[1]); }); return { error: msg }; }
+  c.separate = true;
+  return c;
+}
+
 // the receipts endpoint lives beside the existing feed. NEXTRADE_FEED_URL is really …/api/hub-feed/shipping (the Orders report and
 // the shipping sync read it as-is); …/api/hub-feed also works → …/api/hub-feed/receipts (24 Nov: it used to give …/shipping/receipts)
 export function receiptsUrl(feedUrl) {
@@ -76,7 +95,7 @@ export function receiptRefs(r) {
 
 // ask the warehouse. q = { ids: [...] } (authoritative look-up) or { refs: [...normalised] }. Never throws.
 export async function fetchReceipts(env, q, fetchImpl) {
-  var cfg = warehouseFeedConfig(env);
+  var cfg = receiptsFeedConfig(env);
   if (cfg.error) { return { ok: false, unavailable: true, error: cfg.error }; }
   var mode = q && Array.isArray(q.ids) && q.ids.length ? 'ids' : 'refs';
   var list = mode === 'ids' ? q.ids.map(idStr).filter(Boolean) : (q.refs || []).map(normRef).filter(Boolean);

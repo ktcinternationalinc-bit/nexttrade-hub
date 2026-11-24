@@ -26,7 +26,7 @@ import { audit } from '../../../../lib/audit-server';
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { assemble, recheckWarehouse, lastRun, billAllowed, sha, decisionSnapshot, missingTables, latestMaps } from '../../../../lib/weight-check-server';
 import { WC_BUILD, allowedDecisions, DECISION_PERM, reportStatus, normRef, vendorKey, billItemKey, OUTCOME_WORDS, STATE_WORDS, BASIS_LABEL } from '../../../../lib/weight-check';
-import { warehouseFeedConfig } from '../../../../lib/warehouse-feed-config';
+import { receiptsFeedConfig } from '../../../../lib/weight-check-feed-server';
 
 export const maxDuration = 300;
 var API_BUILD_MARKER = 'v55.83-XB-weight-check';
@@ -72,7 +72,7 @@ export async function POST(req) {
     var win = await windowFloorFor(db, ctx);
     if (win.error) { return bad(win.error, 503); }
     var floor = win.floor || null;
-    var cfg = warehouseFeedConfig(process.env);
+    var cfg = receiptsFeedConfig(process.env); // the Warehouse check's own receipts address when set, else the shared feed
     var source = cfg.source || 'nextrade-staging';
     var perms = { validate: await can('bills.weight_check.validate'), accept: await can('bills.weight_check.accept'), resolve: await can('bills.weight_check.resolve'), settings: await can('bills.weight_check.settings'), super_admin: isSuper };
 

@@ -88,7 +88,8 @@ stub(path.join(root, 'src/lib/audit-server.js'), { audit: async function (db, ac
 global.fetch = async function (url, init) {
   world.feedCalls++;
   if (init && init.redirect !== 'error') { throw new Error('redirect must be refused'); }
-  if (!init || !init.headers || init.headers['X-Hub-Feed-Token'] !== 'tok-0123456789abcdef0123456789abcdef') { return { ok: false, status: 401, json: async function () { return {}; } }; }
+  world.lastFeedHost = new URL(url).hostname; world.lastToken = init && init.headers && init.headers['X-Hub-Feed-Token'];
+  if (!init || !init.headers || init.headers['X-Hub-Feed-Token'] !== (world.acceptToken || 'tok-0123456789abcdef0123456789abcdef')) { return { ok: false, status: 401, json: async function () { return {}; } }; }
   if (world.feed === 'down') { throw new Error('ECONNREFUSED'); }
   if (world.feed === 'missing') { return { ok: false, status: 404, json: async function () { return {}; } }; }
   var u = new URL(url);
@@ -151,6 +152,24 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   var forms = ['https://fix.nextrade-staging.com/api/hub-feed/shipping', 'https://fix.nextrade-staging.com/api/hub-feed/shipping/', 'https://fix.nextrade-staging.com/api/hub-feed', 'https://fix.nextrade-staging.com/api/hub-feed/?x=1#y', 'https://fix.nextrade-staging.com/api/hub-feed/grade-flow'];
   check('receipts address = …/api/hub-feed/receipts whether the feed address ends in /shipping, /shipping/, /hub-feed, a query or /grade-flow', forms.every(function (f) { return FS.receiptsUrl(f) === 'https://fix.nextrade-staging.com/api/hub-feed/receipts'; }), forms.map(FS.receiptsUrl));
   world.lastFeedPath = null;
+  // ---- its own receipts address (Codex 24 Nov 14:30): the shared feed (Orders report / shipping) stays as it is
+  var WFC = require(path.join(root, 'src/lib/warehouse-feed-config.js'));
+  var SH = { NEXTRADE_FEED_URL: 'https://fix.nextrade-staging.com/api/hub-feed/shipping', NEXTRADE_FEED_TOKEN: 'tok-0123456789abcdef0123456789abcdef' };
+  var RT = 'rtok-live-0123456789abcdef0123456789abcdef';
+  var c0 = FS.receiptsFeedConfig(SH);
+  check('no receipts settings → the shared feed, exactly as before (staging, its token)', c0.source === 'nextrade-staging' && c0.separate === false && c0.token === SH.NEXTRADE_FEED_TOKEN, c0);
+  var c1 = FS.receiptsFeedConfig(Object.assign({}, SH, { NEXTRADE_RECEIPTS_URL: 'https://nextradeindustries.com/api/hub-feed/receipts' }));
+  check('receipts address without its own token → refused (never borrows the shipping token)', !!c1.error && /NEXTRADE_RECEIPTS_TOKEN/.test(c1.error) && !c1.token, c1);
+  var c2 = FS.receiptsFeedConfig(Object.assign({}, SH, { NEXTRADE_RECEIPTS_URL: 'https://nextradeindustries.com/api/hub-feed/receipts', NEXTRADE_RECEIPTS_TOKEN: RT, NEXTRADE_FEED_ALLOW_LIVE: 'yes' }));
+  check('LIVE receipts address needs NEXTRADE_RECEIPTS_ALLOW_LIVE=yes (the shipping feed\'s live switch does not count)', !!c2.error && /NEXTRADE_RECEIPTS_ALLOW_LIVE/.test(c2.error), c2);
+  var envLive = Object.assign({}, SH, { NEXTRADE_RECEIPTS_URL: 'https://nextradeindustries.com/api/hub-feed/receipts', NEXTRADE_RECEIPTS_TOKEN: RT, NEXTRADE_RECEIPTS_ALLOW_LIVE: 'yes' });
+  var c3 = FS.receiptsFeedConfig(envLive); var s3 = WFC.warehouseFeedConfig(envLive);
+  check('with all three set: receipts read the LIVE copy with the receipts token, while the shared feed (Orders / shipping) still reads staging', c3.source === 'nextrade-live' && c3.separate === true && c3.token === RT && s3.source === 'nextrade-staging' && s3.token === SH.NEXTRADE_FEED_TOKEN && FS.receiptsUrl(c3.url) === 'https://nextradeindustries.com/api/hub-feed/receipts', [c3.source, s3.source]);
+  var c4 = FS.receiptsFeedConfig(Object.assign({}, SH, { NEXTRADE_RECEIPTS_URL: 'https://evil.example.com/api/hub-feed/receipts', NEXTRADE_RECEIPTS_TOKEN: RT }));
+  var c5 = FS.receiptsFeedConfig(Object.assign({}, SH, { NEXTRADE_RECEIPTS_URL: 'http://nextradeindustries.com/api/hub-feed/receipts', NEXTRADE_RECEIPTS_TOKEN: RT, NEXTRADE_RECEIPTS_ALLOW_LIVE: 'yes' }));
+  check('the same address rules: another site refused, plain http refused (error names NEXTRADE_RECEIPTS_URL)', !!c4.error && /NEXTRADE_RECEIPTS_URL/.test(c4.error) && /not an approved/.test(c4.error) && !!c5.error && /https/.test(c5.error), [c4.error, c5.error]);
+  var nLive = FS.normaliseAnswer({ ok: true, source: 'nextrade-staging', receipts: [], logs: [] }, c3, 'ids', []);
+  check('…and an answer claiming to be another copy than the receipts address is refused (identity)', nLive.ok === false && /expected nextrade-live/.test(nLive.error), nLive);
 
   // ---- outage
   world.perms = STAFF; world.feed = 'down';
@@ -398,6 +417,16 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   world.dropLog = false;
   check('an incomplete answer (fewer scan rows than the receipt says) is not stored; the run says incomplete', inc.body.recheck.ok === true && inc.body.recheck.complete === false && tbl('wc_receipt_versions').length === before, inc.body.recheck);
   check('…and the audit trail recorded every recheck, link and decision', tbl('audit').filter(function (a) { return /weight_check_/.test(a.action); }).length >= 12);
+
+  // ---- the real route with its OWN receipts address + token (another staging sub-site here, so the fake's identity still fits)
+  var keep = { u: process.env.NEXTRADE_RECEIPTS_URL, t: process.env.NEXTRADE_RECEIPTS_TOKEN };
+  process.env.NEXTRADE_RECEIPTS_URL = 'https://receipts.nextrade-staging.com/api/hub-feed'; process.env.NEXTRADE_RECEIPTS_TOKEN = 'rtok-0123456789abcdef0123456789abcdef';
+  world.acceptToken = 'rtok-0123456789abcdef0123456789abcdef'; world.lastToken = null; world.lastFeedHost = null; world.lastFeedPath = null; world.feed = 'ok';
+  var own = await call({ action: 'recheck', bill_id: B1 });
+  check('the real route uses the receipts address and ITS token (not the shared feed\'s), and asks /api/hub-feed/receipts', own.status === 200 && own.body.recheck && own.body.recheck.ok === true && world.lastFeedHost === 'receipts.nextrade-staging.com' && world.lastToken === 'rtok-0123456789abcdef0123456789abcdef' && world.lastFeedPath === '/api/hub-feed/receipts', [world.lastFeedHost, world.lastFeedPath, own.body.recheck]);
+  world.acceptToken = null;
+  if (keep.u === undefined) { delete process.env.NEXTRADE_RECEIPTS_URL; } else { process.env.NEXTRADE_RECEIPTS_URL = keep.u; }
+  if (keep.t === undefined) { delete process.env.NEXTRADE_RECEIPTS_TOKEN; } else { process.env.NEXTRADE_RECEIPTS_TOKEN = keep.t; }
 
   module.exports = { pass: pass, fail: failN };
   if (require.main === module) { console.log('\nXB route: ' + pass + ' passed, ' + failN + ' failed'); process.exit(failN ? 1 : 0); }

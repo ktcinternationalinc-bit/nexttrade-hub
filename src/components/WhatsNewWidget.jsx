@@ -39,6 +39,8 @@ export const BUILD_HISTORY = [
     items: [
       { text: 'Bills → Warehouse check asked the warehouse at a wrong address, so it would have said “Warehouse unavailable / not checked” even after the warehouse offers its scan-in receipts. It now asks the right one.' },
       { text: 'Nothing changes on screen yet: the warehouse side (its read-only receipts list) still has to be put on the test warehouse first.' },
+      { text: 'The Warehouse check can now be pointed at its own warehouse (for example the LIVE warehouse) without moving the Orders report or the shipping costs, which keep reading the warehouse they read today. Until Max sets that up, it reads the same warehouse as before.' },
+      { superAdminOnly: true, text: 'Technical: optional Vercel settings NEXTRADE_RECEIPTS_URL + NEXTRADE_RECEIPTS_TOKEN (required with it, never the shipping token) + NEXTRADE_RECEIPTS_ALLOW_LIVE=yes for the live warehouse (separate from NEXTRADE_FEED_ALLOW_LIVE). Same https / approved-host / identity / no-redirect rules (receiptsFeedConfig). Not set = NEXTRADE_FEED_URL / TOKEN as before.' },
       { superAdminOnly: true, text: 'Technical: weight-check-feed-server receiptsUrl() strips a trailing /shipping (or /grade-flow, /receipts) from NEXTRADE_FEED_URL before adding /receipts — the configured address is …/api/hub-feed/shipping. Test fake now answers only on /api/hub-feed/receipts.' }
     ]
   },
