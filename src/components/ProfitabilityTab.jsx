@@ -36,7 +36,7 @@ var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 // scroll bars, invisible on these white tables. These are grey, 14 px, always there.
 var SCROLL_CSS = '.pl-scroll{scrollbar-width:auto;scrollbar-color:#94a3b8 #e2e8f0}.pl-scroll::-webkit-scrollbar{width:14px;height:14px}.pl-scroll::-webkit-scrollbar-track{background:#e2e8f0}.pl-scroll::-webkit-scrollbar-thumb{background:#94a3b8;border-radius:7px;border:3px solid #e2e8f0}.pl-scroll::-webkit-scrollbar-thumb:hover{background:#64748b}.pl-scroll::-webkit-scrollbar-corner{background:#e2e8f0}';
 function fmt(n) { if (n === undefined) { return '🔒'; } return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-XK — undefined = hidden by the server (🔒), never 0
-function usd(n) { return n === undefined ? '🔒' : usd(n); } // v55.83-XK
+function usd(n) { return n === undefined ? '🔒' : '$' + fmt(n); } // Keep hidden values redacted; format visible amounts without recursion.
 function pf(n) { return n === undefined ? '🔒 hidden' : usd(n); } // v55.83-TG — profit hidden without 'P&L: See profit & margin'
 function fmt0(n) { return (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 0 }); }
 function fmt4(n) { return n === undefined ? '🔒' : n === null ? '—' : '$' + Number(n).toFixed(4); } // v55.83-XK — 🔒 when hidden
