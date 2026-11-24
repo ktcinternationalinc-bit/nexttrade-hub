@@ -323,7 +323,7 @@ export default function AccountingInvoicesTab(props) {
     var today = new Date().toISOString().substring(0, 10);
     if (isInvoice()) setHdr({ invoice_number: '', release_number: '', accounting_customer_id: '', invoice_date: today, due_date: '', notes: '', terms: '', shipping_terms: '', shipping_cost_estimate: '' });
     else setHdr({ proforma_number: '', accounting_customer_id: '', proforma_date: today, valid_until: '', notes: '', terms: '' });
-    setItems([blankItem()]); setEditing('new');
+    setItems([blankItem()]); setEditing('new'); forgetShipActual(); // v55.83-YU: a new document knows nothing about actual costs yet
   }
   // v55.83-PQ (Max, 05:13): "upload invoices and from invoices it will create
   // the invoice based on data and show on both systems" — the reader proposes,
@@ -354,7 +354,7 @@ export default function AccountingInvoicesTab(props) {
               unit_price: String(li.unit_price !== null && li.unit_price !== undefined ? li.unit_price : (li.line_total !== null && li.line_total !== undefined ? li.line_total : 0)),
               sku: '', product_ref: '', wave_product_id: '', wave_product_name: '' };
           });
-          setItems(its.length ? its : [blankItem()]);
+          setItems(its.length ? its : [blankItem()]); forgetShipActual();
           setEditing('new');
           var msgs = (j.problems || []).slice();
           if (!pickedCust) { msgs.unshift(cands.length ? 'Pick the customer (best guesses are in the dropdown).' : 'Pick the customer.'); }
@@ -398,7 +398,7 @@ export default function AccountingInvoicesTab(props) {
     if (!invId) { return; }
     hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_shipping_terms', invoice_id: invId, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
-      .then(function (j) { if (j && j.ok) { cb({ shipping_terms: j.shipping_terms || '', shipping_cost_estimate: j.shipping_cost_estimate === null || j.shipping_cost_estimate === undefined ? '' : String(j.shipping_cost_estimate), markup_override_note: j.markup_override_note || '' /* v55.83-XV */ }); } })
+      .then(function (j) { if (j && j.ok) { /* v55.83-YU: the server already knows whether the actual costs are typed — no need to open the breakdown box */ setShipActualFor(j.cost_is_actual === true && String(j.release_number || '').trim() ? String(j.release_number).trim() : null); cb({ shipping_terms: j.shipping_terms || '', shipping_cost_estimate: j.shipping_cost_estimate === null || j.shipping_cost_estimate === undefined ? '' : String(j.shipping_cost_estimate), markup_override_note: j.markup_override_note || '' /* v55.83-XV */ }); } })
       .catch(function () {});
   }
   function startEdit(row) {
@@ -515,6 +515,7 @@ export default function AccountingInvoicesTab(props) {
   // autoShip = the amount the Hub itself last put on the shipping line, so a line priced by hand is never overwritten.
   var sAc = useState(null); var shipActualFor = sAc[0]; var setShipActualFor = sAc[1];
   var sAu = useState(null); var autoShip = sAu[0]; var setAutoShip = sAu[1];
+  function forgetShipActual() { setShipActualFor(null); setAutoShip(null); }
   function shipCostIsActual() { var r = String(hdr.release_number || '').trim(); return !!r && shipActualFor === r; }
   function autoShipLine(costText, terms) {
     if (locked(editing)) { return; }
@@ -589,13 +590,23 @@ export default function AccountingInvoicesTab(props) {
       });
     }).then(function (docId) {
       if (!shipCheck) { return docId; }
-      return hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_shipping_terms', invoice_id: docId, shipping_terms: shipCheck.value.shipping_terms, shipping_cost_estimate: shipCheck.value.shipping_cost_estimate, markup_override_note: shipCheck.markup ? String(hdr.markup_override_note || '') : '' /* v55.83-XV */, user_id: userProfile && userProfile.id }) })
+      return hubFetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_shipping_terms', invoice_id: docId, shipping_terms: shipCheck.value.shipping_terms, shipping_cost_estimate: shipCheck.value.shipping_cost_estimate, markup_override_note: String(hdr.markup_override_note || '') /* v55.83-XV; v55.83-YU: ALWAYS sent — the server decides whether it is needed, a saved reason is never stripped */, user_id: userProfile && userProfile.id }) })
         .then(function (r) { return r.json(); })
-        .then(function (j) { if (!(j && j.ok)) { throw { termsFailed: true, docId: docId, msg: (j && j.error) || 'unknown error' }; } return docId; }, function () { throw { termsFailed: true, docId: docId, msg: 'network' }; });
+        .then(function (j) { if (!(j && j.ok)) { throw { termsFailed: true, docId: docId, msg: (j && j.error) || 'unknown error', code: (j && j.code) || '' }; } return docId; }, function () { throw { termsFailed: true, docId: docId, msg: 'network' }; });
     }).then(function (docId) {
       return logActivity(userProfile && userProfile.id, (editing === 'new' ? 'Created ' : 'Updated ') + (isInvoice() ? 'invoice ' : 'proforma ') + (hpayload.invoice_number || hpayload.proforma_number || docId) + ' (' + fmt(total) + ')', 'accounting_' + mode);
     }).then(function () { toast.success('Saved'); setEditing(null); load(); })
       .catch(function (e) {
+        if (e && e.termsFailed && e.code === 'markup_note_needed') {
+          // v55.83-YU (Codex 24 Nov, P2) — the server found the ACTUAL costs typed and the shipping charged below cost + 7% with no reason.
+          // Show the reason box and say exactly what to do; never 'press Save again' on a save that will fail the same way.
+          setShipActualFor(String(hdr.release_number || '').trim() || null);
+          var mN = 'The invoice is saved, but its shipping terms are not yet: the actual shipping costs are typed for this release and the shipping line is below cost + 7%. Type the reason in the red box under the shipping cost, then press Save again.';
+          setSaveBlock(mN); toast.error(mN, { duration: 15000 });
+          if (editing === 'new') { setEditing(Object.assign({}, hdr, { id: e.docId, approval_status: 'draft' })); }
+          setTimeout(function () { try { var bx = document.getElementById('nt-ship-override'); if (bx) { bx.scrollIntoView({ block: 'center' }); var ta = bx.querySelector('textarea'); if (ta) { ta.focus(); } } } catch (eF) { /* the box is shown either way */ } }, 150);
+          load(); return;
+        }
         if (e && e.termsFailed) {
           // v55.83-TG (Codex P2) — PARTIAL save: the invoice and its lines are saved, the shipping terms are not. Stay in the editor
           // on the SAVED invoice (so pressing Save again updates it — never a duplicate) with the user's choices kept.

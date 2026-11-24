@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YU',
+    date: '2026-11-24',
+    title: 'Invoices: editing an invoice that charges shipping below cost + 7% saves again',
+    items: [
+      { text: '**Fixed:** an invoice whose actual shipping costs were already typed, with shipping charged below cost + 7% and a reason already written, could not be saved after a small edit — it kept saying “PARTLY SAVED … press Save again”. It now saves: the reason you wrote earlier is kept and sent.' },
+      { text: 'When an invoice is opened the Hub now already knows whether the actual shipping costs are typed, without opening “Inside the shipping”. If a reason is needed and missing, the red reason box appears and the message says exactly what to do.' },
+      { superAdminOnly: true, text: 'Technical: Codex 24 Nov 13:42 UTC P2 on YP. get_shipping_terms returns cost_is_actual + release_number (server reads the breakdown); the screen sets its actual-cost flag from that; markup_override_note is always sent; markup_note_needed shows / focuses the override box instead of the generic partial-save message. Server 7% and audit rules unchanged. No SQL.' },
+    ]
+  },
+  {
     version: 'v55.83-YS',
     date: '2026-11-24',
     title: 'Change Schedule: the STOP box keeps itself up to date',

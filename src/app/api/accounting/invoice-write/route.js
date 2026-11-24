@@ -124,7 +124,15 @@ export async function POST(req) {
       // v55.83-XV — the last written reason for charging below cost + 7% (shown again in the form; read failure = none shown)
       var lastO = null;
       try { var qo = await db.from('hub_audit_log').select('details, at').eq('entity', 'accounting_invoice').eq('entity_id', String(invoiceId)).eq('action', 'shipping_markup_override').order('at', { ascending: false }).limit(1); if (!qo.error && qo.data && qo.data.length) { lastO = qo.data[0]; } } catch (eO) { lastO = null; }
-      return NextResponse.json({ ok: true, shipping_terms: d0.shipping_terms || null, shipping_cost_estimate: d0.shipping_cost_estimate === undefined ? null : d0.shipping_cost_estimate, ready: !gt.data || Object.prototype.hasOwnProperty.call(gt.data, 'shipping_terms'), markup_override_note: lastO && lastO.details && lastO.details.reason ? String(lastO.details.reason) : '', markup_override_at: lastO ? lastO.at : null, api_build_marker: API_BUILD_MARKER });
+      // v55.83-YU (Codex 24 Nov, P2) — the screen must know this when the invoice is OPENED, not only after someone opens the breakdown box
+      var actG = false; var relG = '';
+      try {
+        var invG = await db.from('accounting_invoices').select('id, release_number').eq('id', invoiceId).maybeSingle();
+        relG = invG && invG.data && invG.data.release_number ? String(invG.data.release_number) : '';
+        var keysG = releaseKeysOfText(relG);
+        if (keysG.length) { var peG = await db.from('pl_release_part_estimates').select('release_key, part, amount').in('release_key', keysG); if (!peG.error) { actG = breakdownIsComplete(peG.data || [], relG); } }
+      } catch (eG) { actG = false; }
+      return NextResponse.json({ ok: true, cost_is_actual: actG, release_number: relG, shipping_terms: d0.shipping_terms || null, shipping_cost_estimate: d0.shipping_cost_estimate === undefined ? null : d0.shipping_cost_estimate, ready: !gt.data || Object.prototype.hasOwnProperty.call(gt.data, 'shipping_terms'), markup_override_note: lastO && lastO.details && lastO.details.reason ? String(lastO.details.reason) : '', markup_override_at: lastO ? lastO.at : null, api_build_marker: API_BUILD_MARKER });
     }
     if (action === 'set_shipping_terms') {
       var sg = await assertPermission(db, by, 'invoices.edit', req);
