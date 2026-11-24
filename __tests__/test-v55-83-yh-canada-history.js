@@ -19,11 +19,16 @@ check('kinds: stock count', H.entryKindOf('RECONCILIATION OF INVENTORY AS OF 4/2
 check('kinds: disposal + trashed trim', H.entryKindOf('DISPOSAL', null) === 'disposal' && H.entryKindOf('Remove Trashed Trim ', null) === 'disposal');
 check('kinds: an ordinary receipt', H.entryKindOf(80078879, 90089671) === 'received' && H.entryKindOf('Morbern - 14852.00', 'Proforma 2052') === 'received');
 
-var eff0 = H.effectiveGoodsMap([]);
-var un0 = H.unmatchedGoods(eff0);
-check('unmatched by default = the 8 names nobody decided', JSON.stringify(un0) === JSON.stringify(['Inspected', 'Decking', 'Foam', 'Mixed', 'Other', 'Morbern', 'Trim', 'Vintex']), un0);
-check('Max 24 Nov: PVC Black on Black/Grey + PVC Non Woven = Seconds Canada; PVC Film Rolls + PVC GAYLORDS = PVC', eff0.map['PVC Black on Black/Grey'] === 'Seconds Canada' && eff0.map['PVC Non Woven'] === 'Seconds Canada' && eff0.map['PVC Film Rolls'] === 'PVC' && eff0.map['PVC GAYLORDS'] === 'PVC');
-check('proposed links are marked proposed', eff0.source['Seconds Auto'] === 'proposed' && eff0.map['TPO Chips'] === 'TPO' && eff0.source.Decking === 'unmatched' && eff0.map.Decking === '');
+var effD = H.effectiveGoodsMap([]);
+check('after Max\'s decisions of 24 Nov no old name is left without a match', H.unmatchedGoods(effD).length === 0, H.unmatchedGoods(effD));
+check('Max 24 Nov: PVC Black on Black/Grey + PVC Non Woven = Seconds Canada; PVC Film Rolls + PVC GAYLORDS = PVC', effD.map['PVC Black on Black/Grey'] === 'Seconds Canada' && effD.map['PVC Non Woven'] === 'Seconds Canada' && effD.map['PVC Film Rolls'] === 'PVC' && effD.map['PVC GAYLORDS'] === 'PVC');
+check('Max 24 Nov: Inspected = Seconds, Decking = Boat Decking, Foam = PVC, the rest = Others', effD.map.Inspected === 'Seconds Canada' && effD.map.Decking === 'Boat Decking' && effD.map.Foam === 'PVC' &&
+  ['Mixed', 'Other', 'Morbern', 'Trim', 'Vintex'].every(function (k) { return effD.map[k] === 'Others'; }));
+check('what Max decided says Decided; what nobody confirmed still says Proposed', effD.source.Decking === 'decided' && effD.source.Trim === 'decided' && effD.source['PVC Non Woven'] === 'decided' &&
+  ['Seconds Auto', 'Thirds Auto', 'Obsolete', 'Paper', 'Roofing', 'Pool', 'Box Seconds', 'Drylam', 'TPO Rolls', 'TPO Scrap', 'TPO Chips', 'Fabric'].every(function (k) { return effD.source[k] === 'proposed'; }));
+// for the grouping checks below: Decking and Inspected put back to "keep separate" by a decision
+var eff0 = H.effectiveGoodsMap([{ goods_name: 'Decking', cgt_type: '', decided_at: '2026-11-24T09:00:00Z' }, { goods_name: 'Inspected', cgt_type: '', decided_at: '2026-11-24T09:00:00Z' }]);
+check('a name put back to "keep separate" is unmatched again', JSON.stringify(H.unmatchedGoods(eff0)) === JSON.stringify(['Inspected', 'Decking']) && eff0.source.Decking === 'decided-unmatched' && eff0.map['TPO Chips'] === 'TPO');
 var eff1 = H.effectiveGoodsMap([
   { goods_name: 'Decking', cgt_type: 'Roofing', decided_at: '2026-11-25T10:00:00Z' },
   { goods_name: 'Decking', cgt_type: 'PVC', decided_at: '2026-11-24T10:00:00Z' },
@@ -60,7 +65,7 @@ check('shipped total and month', sc.total_out === 400 && sc.outbound[0] === 400)
 var tpo = grp(h, 'TPO');
 check('TPO Rolls + TPO Scrap are one TPO card', !!tpo && tpo.total_in === 250.5 && tpo.total_out === 180 && tpo.goods.length === 2);
 check('a disposal with no date is kept apart and said to be undated', tpo.other.disposal === -20 && tpo.undated_other === -20);
-check('by year', JSON.stringify(tpo.yearly) === JSON.stringify([{ year: '2021', in: 250.5, out: 150 }, { year: '2022', in: 0, out: 30 }]), tpo.yearly);
+check('by year', JSON.stringify(tpo.yearly) === JSON.stringify([{ year: '2021', in: 250.5, out: 150, in_partial: true, out_partial: true }, { year: '2022', in: 0, out: 30, in_partial: true, out_partial: true }]), tpo.yearly);
 check('same shape as the warehouse CGT history chart', tpo.labels.length === tpo.inbound.length && tpo.inbound.length === tpo.outbound.length && tpo.labels[0] === 'Jun 21');
 var dk = grp(h, 'Decking');
 check('an unmatched name keeps its own name and is flagged', !!dk && dk.matched === false && dk.total_in === 300 && dk.total_out === 120);
@@ -71,6 +76,32 @@ var hg = H.buildCanadaHistory(REC, SHP, eff0, { by: 'goods' });
 check('by old name: TPO Rolls and TPO Scrap stay apart', !!grp(hg, 'TPO Rolls') && !!grp(hg, 'TPO Scrap') && !grp(hg, 'TPO') && hg.total_in === h.total_in && hg.total_out === h.total_out);
 var h2 = H.buildCanadaHistory(REC, SHP, eff1, { by: 'cgt' });
 check('after Max decides Decking = Roofing it moves; totals do not change', grp(h2, 'Roofing').total_in === 300 && !grp(h2, 'Decking') && h2.total_in === h.total_in && h2.total_out === h.total_out);
+// ---- Codex 24 Nov (YH e6c101a3 FAIL): received and shipped stop at DIFFERENT dates; no data is N/A, never zero
+var CR = []; var CS = []; var mm;
+for (mm = 1; mm <= 12; mm++) { CR.push({ source_row: mm, entry_date: '2022-' + (mm < 10 ? '0' + mm : mm) + '-01', entry_kind: 'received', goods_name: 'Roofing', weight_lb: 100 }); CR.push({ source_row: 50 + mm, entry_date: '2022-' + (mm < 10 ? '0' + mm : mm) + '-28', entry_kind: 'received', goods_name: 'Paper', weight_lb: 10 }); }
+CR.push({ source_row: 13, entry_date: '2022-12-31', entry_kind: 'received', goods_name: 'Roofing', weight_lb: 5 });
+CR.push({ source_row: 14, entry_date: '2023-01-16', entry_kind: 'received', goods_name: 'Roofing', weight_lb: 7 });   // receipts STOP 16 Jan 2023
+for (mm = 1; mm <= 12; mm++) { CS.push({ source_row: mm, ship_date: '2022-' + (mm < 10 ? '0' + mm : mm) + '-01', release_no: '1001-' + mm, customer: 'Customer A', goods_name: 'Roofing', weight_lb: 40 }); }
+CS.push({ source_row: 13, ship_date: '2022-12-31', release_no: '1001-13', customer: 'Customer A', goods_name: 'Roofing', weight_lb: 1 });
+CS.push({ source_row: 14, ship_date: '2023-02-10', release_no: '1001-14', customer: 'Customer A', goods_name: 'Roofing', weight_lb: 60 });
+CS.push({ source_row: 15, ship_date: '2023-04-30', release_no: '1001-15', customer: 'Customer A', goods_name: 'Paper', weight_lb: 90 });   // shipments run to 30 Apr 2023; none in Mar 2023
+var hc = H.buildCanadaHistory(CR, CS, effD, { by: 'cgt', notes: null });
+var rf = grp(hc, 'Roofing'); var pp = grp(hc, 'Paper Canada');
+check('coverage: received and shipped are reported separately', hc.coverage.received.first === '2022-01-01' && hc.coverage.received.last === '2023-01-16' && hc.coverage.shipped.first === '2022-01-01' && hc.coverage.shipped.last === '2023-04-30');
+check('coverage: months after the last receipt are N/A for received, not zero', hc.months.slice(-3).join() === '2023-02,2023-03,2023-04' && JSON.stringify(rf.inbound.slice(-3)) === '[null,null,null]' && JSON.stringify(rf.inbound_status.slice(-4)) === '["partial","na","na","na"]');
+check('coverage: shipped keeps its own figures in those months', rf.outbound[13] === 60 && rf.outbound_status[13] === 'ok' && rf.outbound_status[15] === 'ok');
+check('coverage: a month inside the records with no record at all is N/A and listed as a gap', rf.outbound[14] === null && rf.outbound_status[14] === 'na' && JSON.stringify(hc.coverage.shipped.gap_months) === '["2023-01","2023-03"]');
+check('coverage: a month the goods type simply had nothing in is a real zero', pp.outbound[0] === 0 && pp.outbound_status[0] === 'ok');
+check('coverage: a whole recorded year is not partial; the cut-off year is', JSON.stringify(rf.yearly) === JSON.stringify([{ year: '2022', in: 1205, out: 481, in_partial: false, out_partial: false }, { year: '2023', in: 7, out: 60, in_partial: true, out_partial: true }]), rf.yearly);
+check('coverage: recorded totals are kept as they are', rf.total_in === 1212 && rf.total_out === 541 && hc.total_in === 1332 && hc.total_out === 631);
+check('coverage: the sentences say where each side stops', hc.notes.some(function (n) { return n.indexOf('No receipt data in this archive after 16 Jan 2023') >= 0; }) && hc.notes.some(function (n) { return n.indexOf('shipment records through 30 Apr 2023') >= 0; }) && hc.notes.some(function (n) { return /N\/A, never zero/.test(n); }));
+var hcg = H.buildCanadaHistory(CR, CS, effD, { by: 'goods', notes: null });
+check('coverage: grouping by old name keeps the same totals AND the same coverage', hcg.total_in === hc.total_in && hcg.total_out === hc.total_out && JSON.stringify(hcg.coverage) === JSON.stringify(hc.coverage) &&
+  JSON.stringify(grp(hcg, 'Roofing').inbound_status) === JSON.stringify(rf.inbound_status) && JSON.stringify(grp(hcg, 'Paper').outbound_status) === JSON.stringify(pp.outbound_status) && JSON.stringify(grp(hcg, 'Paper').coverage) === JSON.stringify(hc.coverage));
+var hcn = H.buildCanadaHistory(CR, CS, effD, { by: 'cgt', notes: { received_incomplete_from: '2022-11', shipped_incomplete_from: '2022-12' } });
+check('coverage: months the source marks as moving to the new system are partial, and the year with them', grp(hcn, 'Roofing').inbound_status[9] === 'ok' && grp(hcn, 'Roofing').inbound_status[10] === 'partial' && grp(hcn, 'Roofing').outbound_status[10] === 'ok' && grp(hcn, 'Roofing').outbound_status[11] === 'partial' &&
+  grp(hcn, 'Roofing').yearly[0].in_partial === true && grp(hcn, 'Roofing').yearly[0].in === 1205 && hcn.coverage.received.incomplete_from === '2022-11');
+check('a year with no data at all on one side is N/A', (function () { var x = H.buildCanadaHistory([CR[0]], [CS[13]], effD, { by: 'cgt', notes: null }); var g = grp(x, 'Roofing'); return g.yearly[1].in === null && g.yearly[1].out === 60 && g.yearly[0].out === null && g.yearly[0].in === 100; })());
 check('pounds are written with commas', H.fmtLb(1234567.4) === '1,234,567' && H.fmtLb(-20) === '-20' && H.fmtLb(0) === '0');
 
 var FILE = { format: H.ARCHIVE_FORMAT, source_file: 'test.xlsm', source_sha256: 'abc', unit: 'lb', receipts: REC, shipments: SHP };
@@ -219,6 +250,8 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
   check('the tab has its own ARCHIVE group right under REPORTS, and a breadcrumb', /\{ group: 'REPORTS', items: \['reports'\] \},\s*\{ group: 'ARCHIVE', items: \['canadahistory'\] \},/.test(page) && /canadahistory:'Archive'/.test(page));
   check('the History icon is imported and used', /CalendarClock, History\s/.test(page) && /canadahistory: History,/.test(page));
   check('the badge says YH', page.indexOf('>v55.83-YH</span>') >= 0);
+  check('the screen shows where each side stops, N/A instead of zero, partial years, recorded totals', comp.indexOf('hist.notes.map') >= 0 && comp.indexOf("st === 'na'") >= 0 && comp.indexOf("y.in === null ? 'N/A'") >= 0 && comp.indexOf('y.in_partial') >= 0 && comp.indexOf('Received (recorded)') >= 0 && comp.indexOf('Total recorded') >= 0);
+  check('the screen says: pounds only, not connected to the warehouse cards; a proposal is shown as a proposal', comp.indexOf('pounds only, no dollar amounts') >= 0 && comp.indexOf('not connected to the warehouse system') >= 0 && comp.indexOf('Proposed — not confirmed yet') >= 0);
   check('the switch is in Settings', /\{ key: 'canada_history\.access', label: 'Archive: Canada History'/.test(settings));
   check("What's New has YH on top", /export const BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-YH',\s*date: '2026-11-24'/.test(wn));
   [['route', route], ['server lib', server], ['rules lib', lib]].forEach(function (x) {
@@ -256,6 +289,16 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
     var SHIPCOL = { 'Seconds Auto': 3792290.57, 'Thirds Auto': 2178355.36, 'Paper': 2430058.36, 'Roofing': 1718324.74 };
     check('shipped per goods name matches the workbook', Object.keys(SHIPCOL).every(function (k) { return Math.abs(grp(full, k).total_out - SHIPCOL[k]) < 0.01; }));
     var byCgt = H.buildCanadaHistory(obj.receipts, obj.shipments, H.effectiveGoodsMap([]), { by: 'cgt' });
+    // Codex 24 Nov: the real file — receipts stop 16 Jan 2024, shipments run to 30 Apr 2024; Feb–Apr 2024 received is N/A, not 0
+    var cv = byCgt.coverage; var sC = grp(byCgt, 'Seconds Canada'); var nM = byCgt.months.length;
+    check('real file: received 29 Jun 2021 – 16 Jan 2024, shipped 29 Jun 2021 – 30 Apr 2024', cv.received.first === '2021-06-29' && cv.received.last === '2024-01-16' && cv.shipped.first === '2021-06-29' && cv.shipped.last === '2024-04-30');
+    check('real file: Feb / Mar / Apr 2024 received is N/A while shipped has figures', byCgt.months.slice(-3).join() === '2024-02,2024-03,2024-04' && JSON.stringify(sC.inbound.slice(-3)) === '[null,null,null]' &&
+      sC.outbound.slice(-3).every(function (x) { return typeof x === 'number'; }) && byCgt.groups.every(function (g) { return g.inbound[nM - 1] === null && g.inbound[nM - 2] === null && g.inbound[nM - 3] === null && g.inbound_status[nM - 1] === 'na'; }));
+    check('real file: Dec 2023 has no received weight at all — N/A and listed', JSON.stringify(cv.received.gap_months) === '["2023-12"]' && sC.inbound[nM - 5] === null && cv.shipped.gap_months.length === 0);
+    check('real file: from Nov 2023 both sides are marked incomplete', cv.received.incomplete_from === '2023-11' && cv.shipped.incomplete_from === '2023-11' && sC.inbound_status[nM - 6] === 'partial' && sC.outbound_status[nM - 1] === 'partial' && sC.inbound_status[nM - 7] === 'ok');
+    check('real file: 2021, 2023 and 2024 are partial years; 2022 is whole', sC.yearly.map(function (y) { return y.year + (y.in_partial ? 'p' : 'w') + (y.out_partial ? 'p' : 'w'); }).join() === '2021pp,2022ww,2023pp,2024pp');
+    check('real file: the sentences are shown', byCgt.notes.some(function (n) { return n.indexOf('No receipt data in this archive after 16 Jan 2024') >= 0; }) && byCgt.notes.some(function (n) { return n.indexOf('shipment records through 30 Apr 2024') >= 0; }));
+    check('real file: by old name carries the same coverage', JSON.stringify(full.coverage) === JSON.stringify(cv) && JSON.stringify(grp(full, 'Roofing').inbound_status) === JSON.stringify(sC.inbound_status));
     check('grouping by current CGT type loses nothing', Math.abs(byCgt.total_in - full.total_in) < 0.01 && Math.abs(byCgt.total_out - full.total_out) < 0.01);
   } else {
     console.log('YH part 4 — skipped (the real archive file is not on this machine; it is never in the repository)');

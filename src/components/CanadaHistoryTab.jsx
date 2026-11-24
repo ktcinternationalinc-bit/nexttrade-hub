@@ -8,7 +8,7 @@
 // inventory, bills, invoices, bank lines or P&L.
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { CANADA_GOODS, CURRENT_CGT_TYPES, KIND_LABELS, effectiveGoodsMap, unmatchedGoods, buildCanadaHistory, fmtLb } from '../lib/canada-history';
+import { CANADA_GOODS, CURRENT_CGT_TYPES, KIND_LABELS, effectiveGoodsMap, unmatchedGoods, buildCanadaHistory, fmtLb, dayLabel } from '../lib/canada-history';
 
 var C = {
   bg: '#f8fafc', card: '#ffffff', line: '#e2e8f0', ink: '#0f172a', muted: '#64748b',
@@ -28,16 +28,22 @@ function Bars(props) {
   var g = props.group;
   var max = 1; var i;
   for (i = 0; i < g.months.length; i++) { if (g.inbound[i] > max) { max = g.inbound[i]; } if (g.outbound[i] > max) { max = g.outbound[i]; } }
+  // v55.83-YH (Codex 24 Nov): a month with no data on one side is N/A — a grey mark, never a zero bar; an incomplete month is striped.
+  function tip(v, st) { return st === 'na' ? 'N/A (no data in this archive)' : (fmtLb(v) + ' lb' + (st === 'partial' ? ' (incomplete month)' : '')); }
+  function bar(v, st, color) {
+    if (st === 'na') { return <div style={{ width: 8, height: 14, borderRadius: 2, border: '1px dashed #94a3b8', background: '#e2e8f0' }}></div>; }
+    return <div style={{ width: 8, height: Math.max(v > 0 ? 2 : 0, Math.round(160 * v / max)), borderRadius: '2px 2px 0 0', background: st === 'partial' ? 'repeating-linear-gradient(45deg, ' + color + ', ' + color + ' 3px, #ffffff 3px, #ffffff 5px)' : color }}></div>;
+  }
   return (
     <div style={{ overflowX: 'auto', border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 8px 4px', background: C.bg }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 190, minWidth: g.months.length * 26 }}>
         {g.months.map(function (m, idx) {
-          var a = g.inbound[idx]; var b = g.outbound[idx];
+          var a = g.inbound[idx]; var b = g.outbound[idx]; var sa = g.inbound_status[idx]; var sb = g.outbound_status[idx];
           return (
-            <div key={m} title={g.labels[idx] + ' — received ' + fmtLb(a) + ' lb, shipped ' + fmtLb(b) + ' lb'} style={{ flex: '1 0 22px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
+            <div key={m} title={g.labels[idx] + ' — received ' + tip(a, sa) + ', shipped ' + tip(b, sb)} style={{ flex: '1 0 22px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 160 }}>
-                <div style={{ width: 8, height: Math.max(a > 0 ? 2 : 0, Math.round(160 * a / max)), background: C.inn, borderRadius: '2px 2px 0 0' }}></div>
-                <div style={{ width: 8, height: Math.max(b > 0 ? 2 : 0, Math.round(160 * b / max)), background: C.out, borderRadius: '2px 2px 0 0' }}></div>
+                {bar(a, sa, C.inn)}
+                {bar(b, sb, C.out)}
               </div>
               <div style={{ fontSize: 9, color: C.muted, marginTop: 4, whiteSpace: 'nowrap', transform: 'rotate(-55deg)', transformOrigin: 'center', height: 22 }}>{g.labels[idx]}</div>
             </div>
@@ -47,7 +53,8 @@ function Bars(props) {
       <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
         <span style={{ display: 'inline-block', width: 10, height: 10, background: C.inn, marginRight: 4 }}></span>Received
         <span style={{ display: 'inline-block', width: 10, height: 10, background: C.out, margin: '0 4px 0 14px' }}></span>Shipped
-        <span style={{ marginLeft: 14 }}>pounds per month — hover a bar for the figure</span>
+        <span style={{ display: 'inline-block', width: 10, height: 10, border: '1px dashed #94a3b8', background: '#e2e8f0', margin: '0 4px 0 14px' }}></span>N/A = no data in this archive (not zero)
+        <span style={{ marginLeft: 14 }}>striped = incomplete month · pounds per month — hover a bar for the figure</span>
       </div>
     </div>
   );
@@ -127,6 +134,7 @@ export default function CanadaHistoryTab(props) {
           <p style={{ margin: 0, color: C.muted, fontSize: '.9rem', maxWidth: '95ch' }}>
             The old Cambridge workbook, kept for comparison and reports: goods <b>received</b> and goods <b>shipped</b>, in pounds, by type of goods and by month.
             It is a read-only archive. It does not change any stock, bill, invoice, bank line or profit figure.
+            It holds <b>pounds only, no dollar amounts</b>, and it is a Hub archive on its own: it is not connected to the warehouse system&apos;s own cards.
           </p>
           <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
             {loading ? 'Loading…' : (data && data.batch ? ('Source: ' + data.batch.source_file + ' · stored ' + String(data.batch.loaded_at || '').slice(0, 10) + ' · ' + data.batch.receipt_lines + ' received lines, ' + data.batch.shipment_lines + ' shipped lines') : '')}
@@ -161,10 +169,16 @@ export default function CanadaHistoryTab(props) {
         {hist ? (
           <div style={{ display: 'grid', gap: 16 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
-              <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Received</div><div style={{ fontSize: 22, fontWeight: 800, color: C.inn }}>{fmtLb(hist.total_in)} lb</div></div>
-              <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Shipped</div><div style={{ fontSize: 22, fontWeight: 800, color: C.out }}>{fmtLb(hist.total_out)} lb</div></div>
-              <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Period</div><div style={{ fontSize: 22, fontWeight: 800 }}>{hist.first_month} → {hist.last_month}</div></div>
+              <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Received (recorded)</div><div style={{ fontSize: 22, fontWeight: 800, color: C.inn }}>{fmtLb(hist.total_in)} lb</div><div style={{ fontSize: 11, color: C.muted }}>{dayLabel(hist.coverage.received.first)} → {dayLabel(hist.coverage.received.last)}</div></div>
+              <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Shipped (recorded)</div><div style={{ fontSize: 22, fontWeight: 800, color: C.out }}>{fmtLb(hist.total_out)} lb</div><div style={{ fontSize: 11, color: C.muted }}>{dayLabel(hist.coverage.shipped.first)} → {dayLabel(hist.coverage.shipped.last)}</div></div>
               <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Old names with no match</div><div style={{ fontSize: 22, fontWeight: 800, color: unmatched.length ? C.warn : C.ok }}>{unmatched.length}</div></div>
+            </div>
+
+            <div style={{ background: C.goldBg, border: '1px solid #fde68a', color: C.gold, borderRadius: 10, padding: '10px 14px', fontSize: 13 }}>
+              <b>How far this archive goes — read before comparing periods</b>
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {hist.notes.map(function (n, i) { return <li key={i}>{n}</li>; })}
+              </ul>
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -185,8 +199,8 @@ export default function CanadaHistoryTab(props) {
                     <div style={{ fontWeight: 800, fontSize: 14, color: C.ink }}>{g.key}</div>
                     {flagged ? <div style={{ fontSize: 11, fontWeight: 700, color: C.warn }}>NO MATCH YET — old Canadian name</div>
                       : (by === 'cgt' ? <div style={{ fontSize: 11, color: C.muted }}>from: {g.goods.join(', ')}</div> : <div style={{ fontSize: 11, color: C.muted }}>{eff.map[g.key] ? ('counts as: ' + eff.map[g.key]) : 'no match yet'}</div>)}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 13 }}><span style={{ color: C.muted }}>Received</span><b style={{ color: C.inn }}>{fmtLb(g.total_in)} lb</b></div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}><span style={{ color: C.muted }}>Shipped</span><b style={{ color: C.out }}>{fmtLb(g.total_out)} lb</b></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 13 }}><span style={{ color: C.muted }}>Received (recorded)</span><b style={{ color: C.inn }}>{fmtLb(g.total_in)} lb</b></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}><span style={{ color: C.muted }}>Shipped (recorded)</span><b style={{ color: C.out }}>{fmtLb(g.total_out)} lb</b></div>
                   </div>
                 );
               })}
@@ -195,18 +209,18 @@ export default function CanadaHistoryTab(props) {
             {open ? (
               <div style={Object.assign({}, box, { display: 'grid', gap: 14 })}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
-                  <h2 style={{ margin: 0, fontSize: '1.1rem', color: C.ink }}>{open.key} — Canada, {hist.first_month} to {hist.last_month}</h2>
+                  <h2 style={{ margin: 0, fontSize: '1.1rem', color: C.ink }}>{open.key} — Canada · received to {dayLabel(hist.coverage.received.last)} · shipped to {dayLabel(hist.coverage.shipped.last)}</h2>
                   <button style={btn} onClick={function () { setOpenKey(''); }}>Close</button>
                 </div>
                 <Bars group={open} />
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>By year (pounds)</div>
+                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>By year (pounds recorded) — a year marked “partial” is not a whole year of records</div>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                       <thead><tr><th style={th}>Year</th><th style={thR}>Received</th><th style={thR}>Shipped</th></tr></thead>
                       <tbody>
-                        {open.yearly.map(function (y) { return <tr key={y.year}><td style={td}>{y.year}</td><td style={tdR}>{fmtLb(y.in)}</td><td style={tdR}>{fmtLb(y.out)}</td></tr>; })}
-                        <tr><td style={Object.assign({}, td, { fontWeight: 800 })}>Total</td><td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(open.total_in)}</td><td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(open.total_out)}</td></tr>
+                        {open.yearly.map(function (y) { return <tr key={y.year}><td style={td}>{y.year}</td><td style={tdR}>{y.in === null ? 'N/A' : fmtLb(y.in)}{y.in !== null && y.in_partial ? <span style={{ color: C.warn, fontSize: 11 }}> partial</span> : null}</td><td style={tdR}>{y.out === null ? 'N/A' : fmtLb(y.out)}{y.out !== null && y.out_partial ? <span style={{ color: C.warn, fontSize: 11 }}> partial</span> : null}</td></tr>; })}
+                        <tr><td style={Object.assign({}, td, { fontWeight: 800 })}>Total recorded</td><td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(open.total_in)}</td><td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(open.total_out)}</td></tr>
                       </tbody>
                     </table>
                     <div style={{ fontWeight: 700, fontSize: 13, margin: '14px 0 4px' }}>Not counted as received (pounds)</div>
@@ -218,7 +232,7 @@ export default function CanadaHistoryTab(props) {
                     {open.undated_other ? <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{fmtLb(open.undated_other)} lb of this has no date in the workbook.</div> : null}
                   </div>
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Shipped to (customer as written in the workbook)</div>
+                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Shipped to (customer as written in the workbook) — recorded pounds</div>
                     <div style={{ maxHeight: 330, overflowY: 'auto', border: '1px solid ' + C.line, borderRadius: 8 }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead><tr><th style={th}>Customer</th><th style={thR}>Pounds</th></tr></thead>
@@ -236,7 +250,7 @@ export default function CanadaHistoryTab(props) {
             <div style={box}>
               <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 2 }}>Old Canadian name → current CGT goods type</div>
               <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
-                This is what makes the comparison like for like. A name with no match is never guessed: it stays under its own name until the super admin decides. Earlier decisions are kept.
+                This is what makes the comparison like for like. “Proposed” links are suggestions until the super admin saves them. A name with no match is never guessed: it stays under its own name until the super admin decides. Earlier decisions are kept.
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -250,7 +264,7 @@ export default function CanadaHistoryTab(props) {
                         <tr key={name} style={{ background: cur ? 'transparent' : C.warnBg }}>
                           <td style={Object.assign({}, td, { fontWeight: 700 })}>{name}</td>
                           <td style={td}>{cur || <span style={{ color: C.warn, fontWeight: 700 }}>No match yet</span>}</td>
-                          <td style={td}>{src === 'proposed' ? 'Proposed' : src === 'decided' ? 'Decided' : src === 'decided-unmatched' ? 'Decided: keep separate' : 'Waiting for a decision'}</td>
+                          <td style={td}>{src === 'proposed' ? <span style={{ color: C.gold, fontWeight: 700 }}>Proposed — not confirmed yet</span> : src === 'decided' ? <span style={{ color: C.ok, fontWeight: 700 }}>Decided</span> : src === 'decided-unmatched' ? 'Decided: keep separate' : <span style={{ color: C.warn, fontWeight: 700 }}>Waiting for a decision</span>}</td>
                           {canManage ? (
                             <td style={td}>
                               <select value={pick} onChange={function (e) { var n = Object.assign({}, picks); n[name] = e.target.value; setPicks(n); }} style={{ fontSize: 12, padding: '3px 6px', border: '1px solid ' + C.line, borderRadius: 6, background: '#fff', color: C.ink }}>
