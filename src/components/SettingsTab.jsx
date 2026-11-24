@@ -496,7 +496,7 @@ const ACTION_PERMS = [
   // v55.83-YH — Canada History tab (read-only archive). Default OFF; super admin always has it; a role never grants it.
   { key: 'canada_history.access', label: 'Archive: Canada History', desc: 'Open the 🍁 Canada History tab: a read-only archive of the old Cambridge workbook — goods received and shipped in pounds, by type of goods and month (2021–2024), with the customer each release went to. View only: loading the archive and deciding the goods names stay with the super admin.' },
   // v55.83-XH — release-governance: Change Schedule (Releases) tab. Default OFF; super admin always has it.
-  { key: 'releases.access', label: 'System: Change Schedule', desc: 'Open the 🗓️ Change Schedule (Releases) tab: a read-only register of what is live on production, what is queued on staging, and what each change still needs (Codex pass, your go, data flag). View only — nothing can be deployed from here.' },
+  { key: 'releases.manage', label: 'System: Manage NT Warehouse releases', desc: 'Approve selected code fixes, request code-only rollback and withdraw pending requests. Viewing Change Schedule is available to every signed-in team member. Only the super admin can grant this permission.' },
   { key: 'commercial.research', label: 'Commercial: Start web research', desc: 'Start the agent’s paid web research on a request (counted against the monthly web-search cap). Needs the Sourcing desk permission too.' },
   { key: 'commercial.approve', label: 'Commercial: Approve outgoing messages', desc: 'Approve the exact text of a message to a supplier or customer; it is then sent from info@ktcus.com signed by Roma, Executive Assistant to the CEO. Also: try a failed send again, and test the mailbox. Needs the Sourcing desk permission too.' },
   { key: 'recon.signoff', label: 'Order Recon: Reconcile & Approve', desc: 'Resolve saved order-reconciliation lines, mark a run reconciled, or approve one (approver must be a different person).' },
@@ -1136,7 +1136,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   const togglePermission = async (userId, module, displayedHasAccess) => {
     if (staleUsers[userId]) { if (toast) toast.error('This person’s switches may be only partly saved. Reload the page before changing more.'); return; } // v55.83-UG
     if (!isSuperAdmin) { if (toast) toast.error('Only the super admin can change permission switches.'); return; } // v55.83-WW — the server refuses it too
-    if (SENSITIVE_PERMS_UI[module] && !isSuperAdmin && !displayedHasAccess) { if (toast) toast.error('Only the super admin can switch on “' + module + '”.'); return; } // v55.83-TP
+    if ((SENSITIVE_PERMS_UI[module] || module === 'releases.manage') && !isSuperAdmin && !displayedHasAccess) { if (toast) toast.error('Only the super admin can switch on “' + module + '”.'); return; } // v55.83-TP
     // These grants use the verified-super-admin API, never the legacy map.
     if (['bank.view_account_balances', 'Bank: View Account Balances', 'bank_balances.view', 'dashboard.full', 'Full dashboard access', 'Banking information access'].includes(module)) {
       if (toast) toast.error('Use Settings → 🏦 Banking & Accounting Access to change these permissions.');

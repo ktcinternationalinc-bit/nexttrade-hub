@@ -22,6 +22,7 @@ var fs = require('fs');
 var path = require('path');
 var crypto = require('crypto');
 var cp = require('child_process');
+var selection = require('./selection');
 
 function str(v) { return v === null || v === undefined ? '' : String(v); }
 function q(p) { return "'" + str(p) + "'"; }                       // paths are charset-checked first, so no quote can occur
@@ -33,6 +34,7 @@ var SAFE_PATH = /^[A-Za-z0-9._\/-]+$/;
 // One relative file path of the change. Returns a problem string or null.
 function fileProblem(f) {
   var p = str(f);
+  if (!selection.codePath(p)) { return p + ': only reviewed application code/assets are deployable; data, uploads and migrations are excluded'; }
   if (!p) { return 'empty file path'; }
   if (!SAFE_PATH.test(p)) { return p + ': only letters, digits, dot, dash, underscore and / are allowed'; }
   if (p.charAt(0) === '/' || p.charAt(0) === '-' || p.charAt(p.length - 1) === '/') { return p + ': must be a relative file path'; }
@@ -156,7 +158,7 @@ Steps.prototype.readManifest = function (dir) {
 function siteOk(runner, url) {
   var st = 0;
   try { st = Number(runner.status(url)) || 0; } catch (e) { st = 0; }
-  return { ok: st >= 200 && st < 500, status: st };
+  return { ok: st >= 200 && st < 400, status: st };
 }
 function clearCaches(s, appRoot, cmds) {
   var list = cmds || [];
@@ -181,6 +183,7 @@ function restoreLive(o) {
     out.undoDir = undoDir;
     if (!s.isFile(appRoot + '/artisan')) { throw new Error('the app folder ' + appRoot + ' does not look like the warehouse app (no artisan file)'); }
     var m = s.readManifest(backupDir);
+    if (o.sha && m.sha !== o.sha) { throw new Error('The backup belongs to another release build.'); }
     if (s.exists(undoDir)) { throw new Error('the undo folder ' + undoDir + ' already exists; a folder is never reused'); }
     if (!o.lockHeld) {
       var root = dirOf(backupDir);
@@ -243,7 +246,7 @@ function restoreLive(o) {
     if (o.siteUrl) { var so = siteOk(o.runner, o.siteUrl); out.siteStatus = so.status; if (!so.ok) { throw new Error('the site answered ' + so.status + ' after the restore'); } }
     out.ok = true;
   } catch (e) { out.problems.push(e.message); }
-  if (!o.lockHeld && !s.dropLock()) { out.problems.push('the release lock could not be released; a person must move it aside before the next release'); }
+  if (!o.lockHeld && !s.dropLock()) { out.problems.push('the release lock could not be released; a person must move it aside before the next release'); out.lockStuck = true; out.ok = false; }
   return out;
 }
 
@@ -259,6 +262,13 @@ function deployLive(o) {
   try {
     var fp = checkFiles(o.files, o.allow);
     if (fp.length) { throw new Error(fp.join(' | ')); }
+    var expected = o.manifest;
+    if (!expected || expected.sha !== o.sha || !Array.isArray(expected.files) || expected.files.length !== o.files.length) { throw new Error('A candidate-bound expected-live manifest is required.'); }
+    var expectedByPath = {};
+    expected.files.forEach(function (f) {
+      if (!f || expectedByPath[f.path] || o.files.indexOf(f.path) < 0 || !(f.before === '' || /^[0-9a-f]{64}$/.test(f.before || '')) || !/^[0-9a-f]{64}$/.test(f.after || '')) throw new Error('Invalid expected-live manifest.');
+      expectedByPath[f.path] = f;
+    });
     if (!/^[a-z0-9-]{2,60}$/.test(str(o.topic))) { throw new Error('unsafe topic name'); }
     if (!/^[0-9]{14}$/.test(str(o.stamp))) { throw new Error('unsafe time stamp'); }
     var bad = dirProblem(o.appRoot, 'the app folder') || dirProblem(o.backupRoot, 'the backup root');
@@ -268,6 +278,7 @@ function deployLive(o) {
       var lp = path.join(o.localRoot, o.files[i]);
       if (!fs.existsSync(lp) || !fs.statSync(lp).isFile()) { throw new Error('the new file ' + o.files[i] + ' is not in the local warehouse copy'); }
       local[o.files[i]] = { path: lp, sha: sha256File(lp) };
+      if (local[o.files[i]].sha !== expectedByPath[o.files[i]].after) { throw new Error('Candidate bytes changed: ' + o.files[i]); }
     }
     appRoot = s.abs(o.appRoot);
     backupDir = s.abs(o.backupRoot) + '/' + o.topic + '-' + o.stamp;
@@ -275,6 +286,11 @@ function deployLive(o) {
     if (!s.isFile(appRoot + '/artisan')) { throw new Error('the app folder ' + appRoot + ' does not look like the warehouse app (no artisan file)'); }
     if (s.exists(backupDir)) { throw new Error('the backup folder ' + backupDir + ' already exists; a backup is never overwritten'); }
     s.takeLock(s.abs(o.backupRoot), o.topic + '-' + o.stamp);    // one release at a time on this server
+    // Check ALL files before backing up/replacing any. Never refresh this baseline during deployment.
+    for (i = 0; i < o.files.length; i++) {
+      f = o.files[i];
+      if (s.liveSha(appRoot + '/' + f) !== expectedByPath[f].before) { throw new Error('Production changed since review: ' + f + '. Integrate the newer code and re-test; nothing replaced.'); }
+    }
 
     // 1) BACK UP FIRST and prove each copy
     s.must('mkdir -p ' + q(backupDir + '/files'), 'making the backup folder');
@@ -321,17 +337,11 @@ function deployLive(o) {
 
 // The real runner: ssh / scp with the authorized key. Never a password. Only built when both switches are on.
 function sshRunner(cfg) {
-  var dest = cfg.sshUser + '@' + cfg.host;
-  var base = ['-i', cfg.keyPath, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new'];
+  var connection = require('./ssh-session').session(cfg);
   return {
-    run: function (cmd) {
-      try { return { code: 0, out: cp.execFileSync('ssh', base.concat(['-p', String(cfg.port), dest, cmd]), { stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 }).toString() }; }
-      catch (e) { return { code: typeof e.status === 'number' ? e.status : 1, out: str(e.stderr || e.message) }; }
-    },
-    put: function (local, remote) {
-      try { cp.execFileSync('scp', base.concat(['-P', String(cfg.port), local, dest + ':' + remote]), { stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000 }); return { code: 0, out: '' }; }
-      catch (e) { return { code: typeof e.status === 'number' ? e.status : 1, out: str(e.stderr || e.message) }; }
-    },
+    run: connection.run,
+    put: connection.put,
+    close: connection.close,
     status: function (url) {
       try { return Number(cp.execFileSync('curl', ['-s', '-o', process.platform === 'win32' ? 'NUL' : '/dev/null', '-w', '%{http_code}', '-m', '25', url], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 40000 }).toString().trim()) || 0; }
       catch (e) { return 0; }

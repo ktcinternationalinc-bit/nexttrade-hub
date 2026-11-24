@@ -2064,7 +2064,7 @@ function HubApp() {
       // v55.83-SV — the Sourcing desk shows only for people given its switch (Max: "Super admin. And those permissioned")
       if (t.id === 'sourcing') { return modulePerms['commercial.access'] === true; }
       // v55.83-XH — Change Schedule (Releases): super admin handled above; others only with the switch.
-      if (t.id === 'releases') { return modulePerms['releases.access'] === true; }
+      if (t.id === 'releases') { return true; } // All signed-in team members can view; release actions are server-permissioned.
       if (t.id === 'canadahistory') { return modulePerms['canada_history.access'] === true; } // v55.83-YH — the explicit switch only, never a role
       const moduleName = TAB_MODULE_MAP[t.id];
       // If permission explicitly set, use it
