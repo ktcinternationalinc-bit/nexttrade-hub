@@ -15,6 +15,7 @@ import { bestRule } from '../lib/expense-rules'; // v55.83-PI — suggest from l
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE — unified accounting permissions
+import { canSeeMargin } from '../lib/margin-visibility';
 
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { if (n == null) { return '•••'; } return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-QI — masked totals render as •••
@@ -167,7 +168,7 @@ export default function BooksHomeTab(props) {
     // v55.83-PN (Max, 04:16): "also need to see sales (with actual invoices)
     // as part of in and out section. add a new set of rows with this data."
     // Same period_stats engine as the 📉 Stats tab — one source of truth.
-    billsApi({ action: 'period_stats', from: f, to: t || TODAY }).then(function (j) {
+    billsApi({ action: 'period_stats', view: 'books', from: f, to: t || TODAY }).then(function (j) {
       if (j && j.ok) { setPs(j); } else { setPs(null); }
     }).catch(function () { setPs(null); });
   }
@@ -203,6 +204,9 @@ export default function BooksHomeTab(props) {
   // operational (Expected, Bills Due, Late, Total Overdue). Navigation is never
   // blanket-blocked: a card opens whenever its own group is allowed.
   var V = (cf && cf.vis) || (ps && ps.vis) || acctAccess(isSuperAdmin, modulePerms, userProfile && userProfile.role, 'ktc');
+  var showInvoiceActivity = canSeeMargin(isSuperAdmin, modulePerms) && !!ps && ps.books_open_only !== true;
+  var openInvoiceDetailsOnly = !!cfDrill && cfDrill.src === 'ps' && !showInvoiceActivity;
+  var canShowDrill = !cfDrill || cfDrill.src !== 'ps' || (V.inv && (showInvoiceActivity || cfDrill.keys[0].key === 'open_invoices'));
   var RESTRICTED = 'Restricted';
   function gv(ok, text) { return ok ? text : RESTRICTED; }
   function go(ok, fn) { return ok ? fn : null; }
@@ -221,7 +225,7 @@ export default function BooksHomeTab(props) {
   }
 
   return <div className="flex flex-col gap-3">
-    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); onGo('invoices'); }} />
+    <InvoicePeek invoiceId={openInvoiceDetailsOnly ? null : peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); onGo('invoices'); }} />
     {/* ── Period + cash flow ── */}
     <div className="bg-white rounded-xl border border-slate-200 p-3">
       <div className="flex gap-2 items-center flex-wrap mb-2">
@@ -265,15 +269,15 @@ export default function BooksHomeTab(props) {
           {ps && ps.invoices && <div>
             <div className="text-[11px] font-extrabold mb-1 rounded px-2 py-1" style={{ color: '#0f172a', background: '#e2e8f0', display: 'inline-block' }}>🧾 2 · INVOICES CREATED IN THIS PERIOD — and what happened to those exact invoices</div>
             <div className="flex gap-2 flex-wrap">
-              <Card label={'INVOICED' + (V.inv ? ' (' + (ps.invoices.count || 0) + ' invoices)' : '')} value={gv(V.inv, '$' + fmt(ps.invoices.invoiced))} bg="#eef2ff" border="#c7d2fe" fg="#312e81" sub="invoices issued in the period"
+              {showInvoiceActivity && <><Card label={'INVOICED' + (V.inv ? ' (' + (ps.invoices.count || 0) + ' invoices)' : '')} value={gv(V.inv, '$' + fmt(ps.invoices.invoiced))} bg="#eef2ff" border="#c7d2fe" fg="#312e81" sub="invoices issued in the period"
                 onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Invoiced — actual invoices issued in this period', keys: [{ key: 'invoiced', sign: 1 }] }); })} />
               <Card label={'PAID ON THESE' + (V.inv ? ' (' + (ps.invoices.collected_on_period_count || 0) + ' payments)' : '')} value={gv(V.inv, '$' + fmt(ps.invoices.collected_on_period || 0))} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="received in period, on THESE invoices only"
-                onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Paid in this period on invoices created in this period', keys: [{ key: 'collected_on_period', sign: 1 }] }); })} />
+                onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Paid in this period on invoices created in this period', keys: [{ key: 'collected_on_period', sign: 1 }] }); })} /></>}
               <Card label="STILL OPEN (from these)" value={gv(V.inv, '$' + fmt(ps.invoices.still_open_from_period))} bg="#fffbeb" border="#fcd34d" fg="#78350f" sub="invoiced in period, not yet paid (any date)"
                 onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Still open — invoiced in this period, not yet paid', keys: [{ key: 'open_invoices', sign: 1 }] }); })} />
             </div>
           </div>}
-          {ps && ps.invoices && <div>
+          {showInvoiceActivity && ps.invoices && <div>
             <div className="text-[11px] font-extrabold mb-1 rounded px-2 py-1" style={{ color: '#0f172a', background: '#e2e8f0', display: 'inline-block' }}>💰 3 · ALL INVOICE MONEY RECEIVED THIS PERIOD — whatever the invoice's date (old invoices included)</div>
             <div className="flex gap-2 flex-wrap">
               <Card label={'COLLECTED — ALL INVOICES' + (V.inv ? ' (' + (ps.invoices.collected_count || 0) + ' payments)' : '')} value={gv(V.inv, '$' + fmt(ps.invoices.collected))} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="each row says if its invoice is from this period or older"
@@ -319,7 +323,7 @@ export default function BooksHomeTab(props) {
           </div>}
         </div>}
       {cfDrill && cfDrill.src === 'ps' && !ps && <div className="mt-2 text-[11px] font-bold" style={{ color: '#431407', background: '#ffedd5', borderRadius: 8, padding: 8 }}>Could not load the invoice data for this period — check your Bills/AR permission.</div>}
-      {cfDrill && (cfDrill.src === 'ps' ? (ps && ps.drills) : (cf && cf.drills)) && (function () {
+      {cfDrill && canShowDrill && (cfDrill.src === 'ps' ? (ps && ps.drills) : (cf && cf.drills)) && (function () {
         var srcMap = cf && cf.drills;
         if (cfDrill.src === 'ps') {
           var inv2 = ps.invoices || {};
@@ -353,7 +357,7 @@ export default function BooksHomeTab(props) {
               return <div key={i7} className="py-2" style={{ borderBottom: '1px solid #e2e8f0', color: '#0f172a' }}>
                 <div className="flex gap-2 items-start">
                   <div className="flex-1 min-w-0">
-                    {r7.invoice_id
+                    {!openInvoiceDetailsOnly && r7.invoice_id
                       ? <button onClick={function () { setPeekId(r7.invoice_id); }} className="font-extrabold underline text-left text-[13px]" style={{ color: '#1d4ed8' }}>{r7.ref}{r7.rel ? ' · ' + r7.rel : ''}</button>
                       : <div className="font-extrabold text-[13px]">{r7.ref}</div>}
                     <div className="text-[12px] font-semibold" style={{ color: '#334155' }}>{String(r7.who || '').substring(0, 60)}</div>
@@ -361,7 +365,7 @@ export default function BooksHomeTab(props) {
                   <div className="text-[14px] font-extrabold tabular-nums whitespace-nowrap" style={{ color: r7.sign < 0 ? '#7f1d1d' : '#065f46' }}>{(r7.sign < 0 ? '−$' : '+$') + fmt(r7.amount)}</div>
                 </div>
                 <div className="text-[11px] mt-0.5" style={{ color: '#475569' }}>
-                  {(r7.date ? r7.date : '—') + (r7.due ? ' · due ' + r7.due : '') + (r7.total != null ? ' · original ' + nd(r7.total) : '') + (r7.paid != null ? ' · paid ' + nd(r7.paid) : '') + (r7.open != null ? ' · balance ' + nd(r7.open) : '')}
+                  {(r7.date ? r7.date : '—') + (r7.due ? ' · due ' + r7.due : '') + (!openInvoiceDetailsOnly && r7.total != null ? ' · original ' + nd(r7.total) : '') + (!openInvoiceDetailsOnly && r7.paid != null ? ' · paid ' + nd(r7.paid) : '') + (r7.open != null ? ' · balance ' + nd(r7.open) : '')}
                   {r7.source ? <span style={{ color: '#64748b' }}>{' · ' + r7.source}</span> : null}
                 </div>
               </div>;
@@ -371,20 +375,20 @@ export default function BooksHomeTab(props) {
             <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
               <th className="py-1 pr-2 text-left font-semibold">Ref</th><th className="py-1 pr-2 text-left font-semibold">Who / description</th>
               <th className="py-1 pr-2 text-left font-semibold">Date</th><th className="py-1 pr-2 text-left font-semibold">Due</th>
-              <th className="py-1 pr-2 text-right font-semibold">Original</th><th className="py-1 pr-2 text-right font-semibold">Paid</th>
+              {!openInvoiceDetailsOnly && <><th className="py-1 pr-2 text-right font-semibold">Original</th><th className="py-1 pr-2 text-right font-semibold">Paid</th></>}
               <th className="py-1 pr-2 text-right font-semibold">Balance</th>
               <th className="py-1 pr-2 text-right font-semibold">Amount</th><th className="py-1 text-left font-semibold">Where from</th></tr></thead>
             <tbody style={{ color: '#0f172a' }}>
               {shown2.map(function (r6, i2) {
                 return <tr key={i2} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td className="py-0.5 pr-2 whitespace-nowrap">{r6.invoice_id
+                  <td className="py-0.5 pr-2 whitespace-nowrap">{!openInvoiceDetailsOnly && r6.invoice_id
                     ? <button onClick={function () { setPeekId(r6.invoice_id); }} className="font-bold underline" style={{ color: '#1d4ed8' }} title="Open the invoice">{r6.ref}{r6.rel ? ' · ' + r6.rel : ''}</button>
                     : <span>{r6.ref}</span>}</td>
                   <td className="py-0.5 pr-2 font-semibold">{String(r6.who || '').substring(0, 48)}</td>
                   <td className="py-0.5 pr-2 whitespace-nowrap">{r6.date || '—'}</td>
                   <td className="py-0.5 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r6.due || '—'}</td>
-                  <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r6.total)}</td>
-                  <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r6.paid)}</td>
+                  {!openInvoiceDetailsOnly && <><td className="py-0.5 pr-2 text-right tabular-nums">{nd(r6.total)}</td>
+                  <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r6.paid)}</td></>}
                   <td className="py-0.5 pr-2 text-right font-bold tabular-nums" style={{ color: '#78350f' }}>{nd(r6.open)}</td>
                   <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: r6.sign < 0 ? '#7f1d1d' : '#065f46' }}>{(r6.sign < 0 ? '−$' : '+$') + fmt(r6.amount)}</td>
                   <td className="py-0.5" style={{ color: '#64748b' }}>{r6.source}</td></tr>;

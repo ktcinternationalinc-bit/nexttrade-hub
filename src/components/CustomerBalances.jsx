@@ -31,6 +31,10 @@ export default function CustomerBalances(props) {
   if (props.error) { return <div className="px-3 py-2 text-[11px]">{head}<div style={{ color: '#991b1b' }}>{props.error}</div></div>; }
   if (!d) { return null; }
   var t = d.totals || {}; var list = d.customers || []; var shown = props.compact ? list.slice(0, 8) : list;
+  function invoiceRef(row, color) {
+    if (!props.onOpenInvoice) { return <b>{row.number || 'invoice'}</b>; }
+    return <button type="button" onClick={function (e) { e.stopPropagation(); props.onOpenInvoice(row.invoice_id); }} style={{ color: color, fontWeight: 800, textDecoration: 'underline' }}>{row.number || 'invoice'}</button>;
+  }
   return (
     <div className="px-3 py-2 text-[11px]" style={{ color: '#0f172a' }}>
       {head}
@@ -49,9 +53,9 @@ export default function CustomerBalances(props) {
             <td className="py-1 text-right" style={{ color: OWED }}>{c.owed_cents ? 'owed ' + money(c.owed_cents) + ' (' + c.owed.length + ' invoice' + (c.owed.length === 1 ? '' : 's') + ')' : ''}</td>
           </tr>,
           isO ? <tr key={k + ':x'}><td colSpan={3} style={{ background: '#f8fafc', padding: 4 }}>
-            {c.owed.map(function (r) { return <div key={r.invoice_id} style={{ display: 'flex', gap: 8 }}><button type="button" onClick={function (e) { e.stopPropagation(); if (props.onOpenInvoice) { props.onOpenInvoice(r.invoice_id); } }} style={{ color: '#1d4ed8', fontWeight: 800, textDecoration: 'underline' }}>{r.number || 'invoice'}</button><span>{r.date + ' · total ' + money(r.total_cents) + ' · paid ' + money(r.paid_cents) + ' · '}<b style={{ color: OWED }}>{'owed ' + money(r.balance_cents)}</b>{(r.partly ? ' · part paid' : ' · not paid') + (r.age_days !== null && r.age_days !== undefined ? ' · ' + r.age_days + ' days' : '')}</span></div>; })}
+            {c.owed.map(function (r) { return <div key={r.invoice_id} style={{ display: 'flex', gap: 8 }}>{invoiceRef(r, '#1d4ed8')}<span>{r.date + (r.total_cents !== undefined ? ' · total ' + money(r.total_cents) + ' · paid ' + money(r.paid_cents) : '') + ' · '}<b style={{ color: OWED }}>{'owed ' + money(r.balance_cents)}</b>{(r.partly ? ' · part paid' : ' · not paid') + (r.age_days !== null && r.age_days !== undefined ? ' · ' + r.age_days + ' days' : '')}</span></div>; })}
             {c.held.map(function (h) { return <div key={h.kind + h.id}><b style={{ color: HELD }}>{'held ' + money(h.cents)}</b>{' · ' + (h.kind === 'credit' ? 'customer credit' : 'deposit not applied') + (h.date ? ' since ' + h.date : '') + ' — to return by wire or apply to a next invoice'}</div>; })}
-            {(c.recon || []).map(function (r) { return <div key={'r' + r.invoice_id} style={{ color: '#b45309' }}><button type="button" onClick={function (e) { e.stopPropagation(); if (props.onOpenInvoice) { props.onOpenInvoice(r.invoice_id); } }} style={{ color: '#b45309', fontWeight: 800, textDecoration: 'underline' }}>{r.number || 'invoice'}</button>{' to check: ' + (r.reason || 'its figures disagree') + ' — total ' + money(r.total_cents) + ', paid ' + money(r.paid_cents) + (r.credit_applied_cents ? ', credit applied ' + money(r.credit_applied_cents) : '') + ', balance on the invoice ' + money(r.balance_cents) + '. Not counted in either amount until checked.'}</div>; })}
+            {(c.recon || []).map(function (r) { return <div key={'r' + r.invoice_id} style={{ color: '#b45309' }}>{invoiceRef(r, '#b45309')}{' to check: ' + (r.reason || 'its figures disagree') + (r.total_cents !== undefined ? ' — total ' + money(r.total_cents) + ', paid ' + money(r.paid_cents) + (r.credit_applied_cents ? ', credit applied ' + money(r.credit_applied_cents) : '') + ', balance on the invoice ' + money(r.balance_cents) : '') + '. Not counted in either amount until checked.'}</div>; })}
             {Object.keys(c.other_currency || {}).map(function (cur) { return <div key={cur} style={{ color: SUB }}>{'Also owed in ' + cur + ': ' + ((c.other_currency[cur] || 0) / 100).toFixed(2) + ' ' + cur + ' (not added to the dollars)'}</div>; })}
           </td></tr> : null]; })}
       </tbody></table>

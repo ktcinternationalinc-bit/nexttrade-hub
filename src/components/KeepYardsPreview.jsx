@@ -22,7 +22,7 @@ export default function KeepYardsPreview(props) {
       {pv.skipped && pv.skipped.length > 0 && <div className="px-3 pb-2" style={{ color: '#b45309' }}>{'Left out: ' + pv.skipped.map(function (x) { return '“' + x.name + '” — ' + x.why; }).join('; ') + '.'}</div>}
       <table className="w-full text-[12px]"><thead><tr style={{ background: '#f1f5f9', color: '#334155' }}><th className="px-3 py-1 text-left">In the dates of the report</th><th className="px-3 py-1 text-right">Now</th><th className="px-3 py-1 text-right">After</th></tr></thead><tbody>
         {row('Quantity counted', qty(pv.before), qty(pv.after), on ? 'Yards are shown as yards and leave the Pounds total' : 'Yards become pounds again')}
-        {row('Goods revenue', money(pv.before.goods_revenue), money(pv.after.goods_revenue), 'What was sold does not change')}
+        {pv.before.goods_revenue !== undefined && row('Goods revenue', money(pv.before.goods_revenue), money(pv.after.goods_revenue), 'What was sold does not change')}
         {row('Goods cost', money(pv.before.base_cost), money(pv.after.base_cost), 'From supplier bills in yards — the same dollars')}
         {row('Commission', money(pv.before.commission), money(pv.after.commission), 'Only what is on the supplier bills; no rate is added')}
         {row('Inbound allowance ($0.02 per lb)', money(pv.before.inbound_allowance), money(pv.after.inbound_allowance), on ? 'Not charged on goods kept in yards' : 'Charged again on the converted pounds')}

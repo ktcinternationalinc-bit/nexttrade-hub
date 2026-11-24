@@ -117,6 +117,19 @@ export function maskPeriodStats(p, v) {
   return o;
 }
 
+// Books needs only open balances for staff without invoice activity visibility.
+export function booksOpenInvoices(p) {
+  return {
+    invoices: { still_open_from_period: p.invoices.still_open_from_period },
+    drills: {
+      open_invoices: p.drills.open_invoices.map(function (row) {
+        return { ref: row.ref, rel: row.rel, who: row.who, date: row.date, due: row.due, open: row.open, amount: row.open, source: row.source };
+      }),
+    },
+    books_open_only: true,
+  };
+}
+
 // Forecast: expected (D buckets), late (L buckets) and bills due stay with P1;
 // the net / running position and the bank balance are P2.
 export function maskForecast(p, v) {

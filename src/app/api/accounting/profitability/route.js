@@ -21,8 +21,8 @@ import { businessOfInvoice } from '../../../../lib/business-of';
 import { audit } from '../../../../lib/audit-server';
 import { termsOfBasis } from '../../../../lib/shipping-terms'; // v55.83-TG
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TG
-import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
-import { revenueScope, stripRevenue, REVENUE_REFUSAL } from '../../../../lib/revenue-visibility'; // v55.83-XK — researcher: no revenue
+import { MARGIN_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
+import { revenueScope, stripRevenue, stripProfitabilitySales, REVENUE_REFUSAL } from '../../../../lib/revenue-visibility'; // v55.83-XK — researcher: no revenue
 import { nameKey, relKey, PRICING_BASES, DEFAULT_UNIT_FACTORS, unitKey } from '../../../../lib/profitability';
 import { buildInboundTrucking } from '../../../../lib/inbound-trucking'; // v55.83-VR — tracking only
 import { assembleProfitability } from '../../../../lib/profitability-assemble';
@@ -53,6 +53,14 @@ async function fetchAll(buildQ) {
 function missingTable(msg) { return /pl_[a-z_]+/.test(String(msg || '')) && /does not exist|schema cache|not find/i.test(String(msg || '')); }
 function bad(msg, status) { return NextResponse.json({ ok: false, error: msg, api_build_marker: API_BUILD_MARKER }, { status: status || 400 }); }
 function unitOk(u) { return u === 'lb' || u === 'kg' || u === 't' || u === 'yd' || u === 'lm'; } // v55.83-SZ kilograms · v55.83-TA tons // v55.83-SZ — + kilograms
+
+function stripCustomerInvoiceAmounts(row) {
+  delete row.total_cents;
+  delete row.paid_cents;
+  delete row.credit_applied_cents;
+  delete row.over_cents;
+  delete row.expected_cents;
+}
 
 export async function POST(req) {
   var db = admin();
@@ -97,7 +105,7 @@ export async function POST(req) {
       // v55.83-YD (Codex 23 Nov) — vendor credits applied in these dates are NOT counted in these figures yet: said, as a pending adjustment
       var vcPend = await creditsPendingInWindow(db, body.date_from || null, body.date_to || null);
       if (!rs.canSee) { return NextResponse.json(stripRevenue(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), bills_note: billsNote, warehouse_note: whNote, window_floor: vwin.floor, vendor_credits_pending: vcPend, api_build_marker: API_BUILD_MARKER }, out))); } // XK
-      return NextResponse.json(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), can_see_margin: marginOk, bills_note: billsNote, warehouse_note: whNote, window_floor: vwin.floor, vendor_credits_pending: vcPend, api_build_marker: API_BUILD_MARKER }, marginOk ? out : stripProfit(out)));
+      return NextResponse.json(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), can_see_margin: marginOk, bills_note: billsNote, warehouse_note: whNote, window_floor: vwin.floor, vendor_credits_pending: vcPend, api_build_marker: API_BUILD_MARKER }, marginOk ? out : stripProfitabilitySales(out)));
     }
 
     // v55.83-VR (Max, Nov 19: "keep track of the real inbound trucking bills") — READ ONLY. Kronos freight against the pounds
@@ -121,6 +129,13 @@ export async function POST(req) {
       var cbAcc = {};
       for (var cbi = 0; cbi < cbTx.length; cbi += 200) { var cbB = await db.from('bank_transactions').select('id, account_id').in('id', cbTx.slice(cbi, cbi + 200)); if (cbB.error) { return bad('The bank lines behind the credits could not be read (' + cbB.error.message + ') — nothing shown.', 503); } (cbB.data || []).forEach(function (t) { cbAcc[t.id] = t.account_id; }); }
       var cbOut = customerBalances({ invoices: cbInv.map(function (i) { return Object.assign({}, i, { business: businessOfInvoice(i, cbTag) }); }), credits: cbCr.data || [], unapplied: cbUn.data || [], customerNames: cbNames, business: US_WAVE_BUSINESS_ID, floor: vwin.floor || null, priv: cbPriv || { all: true, hidden: {} }, accountOf: cbAcc });
+      var cbMargin = await assertPermission(db, userId, MARGIN_PERMISSION, req);
+      if (!cbMargin || cbMargin.ok !== true) {
+        cbOut.customers.forEach(function (customer) {
+          customer.owed.forEach(stripCustomerInvoiceAmounts);
+          customer.recon.forEach(stripCustomerInvoiceAmounts);
+        });
+      }
       return NextResponse.json(Object.assign({ ok: true, window_floor: vwin.floor || null, api_build_marker: API_BUILD_MARKER }, cbOut));
     }
     if (action === 'release_parts') {
@@ -299,7 +314,7 @@ export async function POST(req) {
       if (action === 'keep_preview') {
         var seeK = await assertPermission(db, userId, MARGIN_PERMISSION, req);
         if (!rs.canSee) { return NextResponse.json({ ok: true, preview: stripRevenue(pvK), revenue_hidden: true, api_build_marker: API_BUILD_MARKER }); } // XK
-        return NextResponse.json({ ok: true, preview: (seeK && seeK.ok === true) ? pvK : stripProfit(pvK), api_build_marker: API_BUILD_MARKER });
+        return NextResponse.json({ ok: true, preview: (seeK && seeK.ok === true) ? pvK : stripProfitabilitySales(pvK), api_build_marker: API_BUILD_MARKER });
       }
       var keysK = pvK.names.map(function (n) { return nameKey(n.name); });
       var upK = await db.from('pl_name_units').update({ keep_unit: keepOn, updated_by: userId, updated_at: now }).in('name_key', keysK).in('unit', ['yd', 'lm']).select('name_key');

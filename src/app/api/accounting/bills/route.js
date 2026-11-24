@@ -14,7 +14,8 @@ import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM, hidde
 import { loadPartyFunds, isMissingOpeningsTable, openingsUnavailable } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
 // v55.83-WF step C — periodAdjustments (the TX tax adjustments) is no longer used here: a transfer to RTM / NextTrade counts once, in full
 import { NextResponse } from 'next/server';
-import { assertPermission } from '../../../../lib/server-permissions';
+import { assertPermission, userHasPermission } from '../../../../lib/server-permissions';
+import { MARGIN_PERMISSION } from '../../../../lib/margin-visibility';
 import { createClient } from '@supabase/supabase-js';
 import { businessOfInvoice, US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { isArEligible } from '../../../../lib/ar-eligibility';
@@ -37,7 +38,7 @@ import { nextradeBillIds, markNextradeBills, NEXTRADE_PAY_POINTER } from '../../
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts // v55.83-TO (Codex P1: verified identity for money actions)
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
-import { maskCashflow, maskPeriodStats, maskForecast } from '../../../../lib/accounting-access'; // v55.83-RE — unified accounting permissions
+import { maskCashflow, maskPeriodStats, maskForecast, booksOpenInvoices } from '../../../../lib/accounting-access'; // v55.83-RE — unified accounting permissions
 import { revenueScope } from '../../../../lib/revenue-visibility'; // v55.83-XK
 
 // v55.83-QO (Max 15:53: "attempted to add bill from document and nothing
@@ -2242,6 +2243,7 @@ export async function POST(req) {
       var rsPs = await revenueScope(db, userId); if (rsPs.error) { return NextResponse.json({ ok: false, error: rsPs.error }, { status: rsPs.status }); }
       if (!rsPs.canSee) { vis = Object.assign({}, vis, { inv: false, fin: false }); }
       psPayload = maskPeriodStats(psPayload, vis); // v55.83-RE — invoice figures P3, bank/financial P2, bills owed P1
+      if (body.view === 'books' && !userHasPermission(rsPs.ctx, MARGIN_PERMISSION)) { psPayload = booksOpenInvoices(psPayload); }
       if (!rsPs.canSee) { psPayload.revenue_restricted = true; }
       if (xoRestrict) { psPayload.spending = null; psPayload.spending_restricted = { reason: xoRestrict.reason, hidden_starting_balances: xoRestrict.hidden_starting_balances, words: 'Spending, tax and P&L figures for these dates are withheld: they ' + xoRestrict.reason + '. Ask the super admin.' }; } // v55.83-XO
       psPayload.totals_masked = !canTotals; psPayload.rows_visible = canRows; psPayload.vis = vis; psPayload.date_filters_locked = pLocked;

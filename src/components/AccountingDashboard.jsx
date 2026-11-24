@@ -10,6 +10,7 @@ import { supabase, dbUpdate, logActivity } from '../lib/supabase';
 import { isPaymentVoid } from '../lib/payment-matching';
 import { canViewBank, canSeeAmounts, canViewCompanyTotals, canViewArSummary, canViewArCustomerBalances, canViewArOverdue, canViewArUpcomingDue, canViewArInvoiceBalances, canManageOverdueDashboard } from '../lib/bank-permissions';
 import { isArEligible } from '../lib/ar-eligibility';
+import { canSeeMargin } from '../lib/margin-visibility';
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
@@ -49,6 +50,7 @@ export default function AccountingDashboard(props) {
   seeTotals = AV.inv; seeCustBalances = AV.inv;
   seeUpcoming = AV.ops; seeOverdue = AV.ops; seeInvoiceBal = AV.access;
   var anyAccess = AV.access;
+  var showPaidInPeriod = canSeeMargin(isSuperAdmin, modulePerms);
   function csym() { return d && d.activeCur === 'EGP' ? 'EGP ' : '$'; }
   function money(n) { return (seeAmounts && AV.fin) ? (csym() + fmt(n)) : (AV.fin ? '•••••' : 'Restricted'); } // v55.83-RE — money received is a P2 value
   function tmoney(n) { return seeTotals ? (csym() + fmt(n)) : 'Restricted'; }
@@ -167,7 +169,8 @@ export default function AccountingDashboard(props) {
       // payment date). Balance = the invoice's REAL remaining balance today
       // (openOf), negative in violet = OVERPAID. Zero-amount rows are noise.
       var paidPeriodTotal = 0; var paidAgg = {}; var paidPayCount = 0;
-      pays.forEach(function (p) {
+      var periodPayments = showPaidInPeriod ? pays : [];
+      periodPayments.forEach(function (p) {
         if (isPaymentVoid(p)) { return; }
         var pd = p.payment_date || '';
         if (!pd) { return; }
@@ -314,7 +317,7 @@ export default function AccountingDashboard(props) {
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = (drill.title || 'drill').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.csv'; a.click();
   }
   function DrillPanel() {
-    if (!drill) { return null; }
+    if (!drill || (!showPaidInPeriod && drill.title === 'Paid in period')) { return null; }
     return (
       <div className="mt-3 bg-white text-slate-900 rounded-lg p-3 border-2 border-sky-400">
         <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
@@ -408,7 +411,7 @@ export default function AccountingDashboard(props) {
         <div className="mt-2 bg-white text-slate-900 rounded-lg p-3 text-[12px] leading-relaxed">
           <div className="font-extrabold mb-1">Every card, defined exactly (all: this business only, live invoices only — void/cancelled/archived and Wave-drafts never count):</div>
           <div><b>Open AR</b> — invoices DATED in the period whose balance is above zero TODAY (balance = total − everything ever paid). A fully-paid invoice can NEVER appear here.</div>
-          <div><b>Paid in period</b> — money RECEIVED during the period, counted by PAYMENT date (one line per invoice, installments summed). An invoice shows here even if dated before the period, and a 0.00 balance here is GOOD — fully collected. An invoice can appear in BOTH cards: paid something this period AND still owing.</div>
+          {showPaidInPeriod && <div><b>Paid in period</b> — money RECEIVED during the period, counted by PAYMENT date (one line per invoice, installments summed). An invoice shows here even if dated before the period, and a 0.00 balance here is GOOD — fully collected. An invoice can appear in BOTH cards: paid something this period AND still owing.</div>}
           <div><b>Overdue AR</b> — the slice of Open AR past its due date, ≥ $200 unless the toggle below shows all. Always ≤ Open AR.</div>
           <div><b>Customer credits</b> — invoices paid MORE than their total; money owed back. Never part of Open AR.</div>
           <div><b>Approvals pending</b> — Hub invoices sitting in review, ALL TIME (not period-scoped — labeled so).</div>
@@ -422,8 +425,8 @@ export default function AccountingDashboard(props) {
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
           <Stat title={'Open AR (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.openTotal)} sub={seeTotals ? (d.openCount + ' open · invoices DATED in this period · same number as Books → "Still open (from these)"') : ''} tone="bg-slate-800"
             onClick={seeTotals ? function () { openDrill('Open AR', d.currentRows.concat(d.overdueRows), 'Every invoice in the period with money still owed TODAY (current + overdue). A zero-balance row is impossible here by construction — fully-collected invoices that received money this period live in the Paid-in-period card instead.'); } : null} />
-          <Stat title={'Paid in period (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.paidPeriodTotal)} sub={seeTotals ? (d.paidPeriodRows.length + ' invoice(s) · ' + (d.paidPayCount || 0) + ' payment(s)') : ''} tone={d.paidPeriodTotal ? 'bg-emerald-900' : 'bg-slate-800'}
-            onClick={seeTotals ? function () { openDrill('Paid in period', d.paidPeriodRows, 'One row per INVOICE that RECEIVED money this period: Paid = everything received in the period (installments summed), Inv date = latest payment date, Balance = remaining balance TODAY. Balance 0.00 here is GOOD — fully collected. Still-owing rows also appear in Open AR; that overlap is correct. Negative violet = overpaid. Wave-imported lifetime paid amounts carry no per-payment dates and cannot appear here.', 'invoice(s)'); } : null} />
+          {showPaidInPeriod && <Stat title={'Paid in period (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.paidPeriodTotal)} sub={seeTotals ? (d.paidPeriodRows.length + ' invoice(s) · ' + (d.paidPayCount || 0) + ' payment(s)') : ''} tone={d.paidPeriodTotal ? 'bg-emerald-900' : 'bg-slate-800'}
+            onClick={seeTotals ? function () { openDrill('Paid in period', d.paidPeriodRows, 'One row per INVOICE that RECEIVED money this period: Paid = everything received in the period (installments summed), Inv date = latest payment date, Balance = remaining balance TODAY. Balance 0.00 here is GOOD — fully collected. Still-owing rows also appear in Open AR; that overlap is correct. Negative violet = overpaid. Wave-imported lifetime paid amounts carry no per-payment dates and cannot appear here.', 'invoice(s)'); } : null} />}
           <Stat title="Overdue AR (USD)" big={tover(overdueTotal)} sub={seeOverdue ? (shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')) : ''} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'}
             onClick={seeOverdue ? function () { openDrill('Overdue AR', shownOverdue, 'Invoices past their due date with a balance' + (showSmall ? '.' : ' (≥ $200 — tick the toggle below to include small/ignored).')); } : null} />
           <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub={seeTotals ? 'overpaid / not AR' : ''} tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'}

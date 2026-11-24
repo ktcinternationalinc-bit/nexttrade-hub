@@ -75,6 +75,28 @@ export function stripRevenue(answer) {
   return o;
 }
 
+// Profitability's margin switch also withholds goods sales and the prices that reveal them.
+var GOODS_SALES_FIELDS = {
+  goods_revenue: 1, invoiced: 1, orig_unit_price: 1, unit_price: 1,
+  avg_goods_price_per_lb: 1, avg_goods_price_per_yd: 1, uncounted_revenue: 1,
+};
+
+export function stripProfitabilitySales(answer) {
+  function project(value) {
+    if (Array.isArray(value)) { return value.map(project); }
+    if (!value || typeof value !== 'object' || value instanceof Date) { return value; }
+    var out = {};
+    Object.keys(value).forEach(function (key) {
+      if (GOODS_SALES_FIELDS[key] === 1 || (value.kind === 'embedded_exceeds_goods' && key === 'goods')) { return; }
+      out[key] = key === 'unknown_fields' && Array.isArray(value[key])
+        ? value[key].filter(function (field) { return GOODS_SALES_FIELDS[field] !== 1 && !/profit|margin/i.test(field); })
+        : project(value[key]);
+    });
+    return out;
+  }
+  return project(stripProfit(answer));
+}
+
 // warehouse shipping rows / history: each matched invoice is { id, number, date, total, currency, customer_id } — the total goes,
 // anywhere under an `invoices` list (also inside history `changes`); everything else (costs, releases, numbers) stays
 export function dropInvoiceTotals(v, parentKey) {

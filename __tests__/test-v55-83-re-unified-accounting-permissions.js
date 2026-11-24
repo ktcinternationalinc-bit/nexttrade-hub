@@ -61,9 +61,14 @@ var ps = { invoices: { invoiced: 9000, count: 5, collected: 6000, collected_coun
   bills: { billed: 2500, count: 3, paid: 1200, paid_count: 2, still_open_from_period: 1300 },
   months: [{ month: '2026-10', invoiced: 9000, invoiced_count: 5, collected: 6000, collected_count: 4, billed: 2500, billed_count: 3, bills_paid: 1200, net: 4800 }],
   spending: { total_out: 2000, categories: [] },
-  drills: { invoiced: [{ invoice_id: 'i1', amount: 9000 }], collected: [{ amount: 6000 }], collected_on_period: [{ amount: 3000 }], open_invoices: [{ amount: 6000 }],
+  drills: { invoiced: [{ invoice_id: 'i1', amount: 9000 }], collected: [{ amount: 6000 }], collected_on_period: [{ amount: 3000 }], open_invoices: [{ invoice_id: 'i1', ref: 'Test-1', total: 9000, paid: 3000, open: 6000, amount: 6000 }],
     billed: [{ amount: 2500 }], bills_paid: [{ amount: 1200 }], open_bills: [{ amount: 1300 }] } };
 var mps = A.maskPeriodStats(ps, u13);
+var openBooks = A.booksOpenInvoices(mps);
+ok('Books: only the open total and open rows are sent, without original amount, paid amount, or an invoice preview link',
+  openBooks.books_open_only === true && Object.keys(openBooks.invoices).join(',') === 'still_open_from_period' && openBooks.invoices.still_open_from_period === 6000 &&
+  Object.keys(openBooks.drills).join(',') === 'open_invoices' && openBooks.drills.open_invoices[0].amount === 6000 &&
+  openBooks.drills.open_invoices[0].total === undefined && openBooks.drills.open_invoices[0].paid === undefined && openBooks.drills.open_invoices[0].invoice_id === undefined);
 ok('5c: invoicing & collection summaries VISIBLE — Invoiced, Paid, Still Open, Collected — AND their underlying invoices/payments open',
   mps.invoices.invoiced === 9000 && mps.invoices.collected === 6000 && mps.invoices.collected_on_period === 3000 && mps.invoices.still_open_from_period === 6000 &&
   mps.drills.invoiced.length === 1 && mps.drills.collected.length === 1 && mps.drills.collected_on_period.length === 1 && mps.drills.open_invoices.length === 1 &&

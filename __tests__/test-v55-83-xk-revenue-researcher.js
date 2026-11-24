@@ -112,6 +112,9 @@ function has(o, n) { return JSON.stringify(o).indexOf(String(n)) >= 0; }
   var sup = await prof('tok-super', { action: 'report' }); var hold = await prof('tok-hold', { action: 'report' });
   check('super admin: the report has the sale values (the fixture works)', sup.status === 200 && has(sup.j, 1234) && has(sup.j, 321.09), { status: sup.status, err: sup.j.error });
   check('ordinary holder: revenue and profit as before', hold.status === 200 && has(hold.j, 1234) && hold.j.revenue_hidden !== true && (hold.j.cells || []).some(function (c) { return c.goods_profit !== undefined; }), { status: hold.status, err: hold.j.error });
+  var marginOff = await prof('tok-cand', { action: 'report' });
+  var restrictedCell = (marginOff.j.cells || []).find(function (c) { return c.invoice === 'INV-1'; }) || {};
+  check('margin off: actual report answers with costs and transport charges but without goods sales and sale prices', marginOff.status === 200 && marginOff.j.can_see_margin === false && marginOff.j.revenue_hidden !== true && !has(marginOff.j, 1234) && restrictedCell.goods_revenue === undefined && restrictedCell.orig_unit_price === undefined && restrictedCell.invoiced === undefined && restrictedCell.base_cost === 400 && typeof restrictedCell.transport_revenue === 'number', { status: marginOff.status, cell: restrictedCell });
   var RESEARCHERS = [['researcher', 'tok-res'], ['admin researcher', 'tok-admres'], ['researcher with an old margin ON row', 'tok-margres']];
   for (var i = 0; i < RESEARCHERS.length; i++) {
     var r = await prof(RESEARCHERS[i][1], { action: 'report' });

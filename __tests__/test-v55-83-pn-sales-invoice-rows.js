@@ -16,7 +16,7 @@ console.log('PN — invoice-backed sales rows on Books home');
 
 var bh = R('src/components/BooksHomeTab.jsx');
 ok('1 (PP superseded the single SALES row with groups 2+3): invoice cards fed by the SAME period_stats engine as the Stats tab',
-  /action: 'period_stats', from: f, to: t \|\| TODAY/.test(bh) &&
+  /action: 'period_stats', view: 'books', from: f, to: t \|\| TODAY/.test(bh) &&
   /INVOICES CREATED IN THIS PERIOD/.test(bh) &&
   /invoices issued in the period/.test(bh) &&
   /invoiced in period, not yet paid/.test(bh));
