@@ -21,7 +21,7 @@ function input(o) {
   return { windowDays: 90, warehouseOn: false,
     invoices: [{ id: 'i1', invoice_number: 'INV 1', accounting_customer_id: 'c1', invoice_date: '2026-06-10', record_status: 'active', currency: 'USD', release_number: '1002-9001' }],
     items: [{ id: 'l1', invoice_id: 'i1', description: 'Fabric by yd', quantity: 1000, unit_price: 2 }, { id: 'l2', invoice_id: 'i1', description: 'PVC roll', quantity: 5000, unit_price: 1 }],
-    customerNames: { c1: 'Alpha' }, terms: [{ invoice_id: 'i1', shipping_terms: 'EXW' }],
+    customerNames: { c1: 'Alpha' }, terms: [{ invoice_id: 'i1', shipping_terms: 'CNF_SEPARATE' }] /* v55.83-YE rev2: was EXW — an EXW release now costs $0 unless a bill, so the weight-share check uses a shipped term */,
     nameUnits: [{ name_key: PR.nameKey('Fabric by yd'), raw_name: 'Fabric by yd', unit: 'yd', keep_unit: opt.keep === true }, { name_key: PR.nameKey('PVC roll'), raw_name: 'PVC roll', unit: 'lb', keep_unit: opt.keepPvc === true }],
     groups: [{ id: 'g1', display_name: 'Fabric', active: true }, { id: 'g2', display_name: 'PVC', active: true }],
     groupNames: [{ group_id: 'g1', source: 'invoice', name_key: PR.nameKey('Fabric by yd'), raw_name: 'Fabric by yd', active: true }, { group_id: 'g1', source: 'bill', name_key: PR.nameKey('Fabric supplier'), raw_name: 'Fabric supplier', active: true },

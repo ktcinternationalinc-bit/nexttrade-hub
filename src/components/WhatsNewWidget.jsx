@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YE',
+    date: '2026-11-23',
+    title: 'Shipping cost of a release: your order',
+    items: [
+      { text: 'Profitability, the P&L and the Containers list now take the shipping cost of a release in this order: **1 the bill** (always, even when it comes in later and differs) → **2 the invoice’s “Our shipping cost” box** whenever it is filled → **3 figures typed by hand** in the Hub or the P&L boxes (also $0) → **4 the NextTrade warehouse** (a typed correction first, then Shipping In Progress). A release with nothing at all shows as missing and asks for a figure — never $0.' },
+      { text: '**EXW with no shipping line** (the customer ships it himself): our shipping cost is **$0** unless a bill comes in — a warehouse estimate from before the customer took the shipping over is not used. If a box or a typed amount is on such a release, the Hub flags it so a person looks.' },
+      { text: 'The invoice box is ONE amount for trucking and freight together. Example: box $4,000, a trucking bill of $1,500, no freight bill yet → the cost stays $4,000 (trucking $1,500 from the bill + $2,500 not separated). When the freight bill comes in, the two bills replace the box. If one bill alone is bigger than the box, the bill wins and it is flagged.' },
+      { text: 'The parts typed under “Inside the shipping” fill the box. If the box is changed afterwards, the box wins and the Hub flags that they no longer match. Splits over several releases stay as they were. The source of each figure is shown (bill / invoice box / typed / warehouse / EXW).' },
+      { superAdminOnly: true, text: 'Technical: src/lib/profitability-assemble.js — boxOf(rel) = invoiceEstimatesByRelease amount; rev2 part(): bill > EXW-only 0 (every invoice EXW, no shipping line) > (box filled → null) > typed part > (release total → null) > warehouse manual_* > *_used; !t && !f → box, else the release total; comb = (EXW-only → none) box first, then estimateOf (VS rule unchanged with the box as the combined amount); new flags typed_parts_differ_from_invoice_box and amount_on_customer_shipped_release; the Containers list (partOf / estimate_total / combined_estimate_from) follows the same order. No SQL. Impact list (read-only) in nextrade_WAREHOUSE/YE-shipping-order-impact.md. Test: test-v55-83-ye-shipping-order.js; VS pins realigned.' }
+    ]
+  },
+  {
     version: 'v55.83-YG',
     date: '2026-11-23',
     title: 'Wave History: NextTrade cash history, with its categories mapped',

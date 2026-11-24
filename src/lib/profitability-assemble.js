@@ -264,6 +264,19 @@ export function assembleProfitability(d) {
   //   2 a figure typed in the Hub for that part (this release)
   //   3 Nextrade "Shipping In Progress" (estimate)
   // A part with nothing stays empty; the other part is still shown and used. Older typed totals are used only when no part is known.
+  // v55.83-YE (Max, 23 Nov: "The first thing that always overrides everything is going to be the actual bill ... The shipping costs, the
+  // invoices shipping cost box, whenever it's filled, that becomes the first thing ... besides the actual [bill] ... whatever's in the
+  // next trade warehouse estimate, you use that third. And then the fourth would be typed by hand in either the hub or in the P&L
+  // boxes.") — THE ORDER NOW, for each release:
+  //   1 the bill for a part (always; a later bill that differs still wins)
+  //   2 the invoice's "Our shipping cost" box whenever filled (ONE amount for trucking + freight together)
+  //   3 typed by hand (rev2, Max 23 Nov: "if we manually enter it. So that will override it"): a part typed in the Hub (also $0), the total
+  //     typed for the release, the P&L boxes
+  //   4 NextTrade warehouse: a typed correction first, then Shipping In Progress
+  //   EXW with no shipping line on every invoice of the release (rev2: "if it's X work, then the shipping is zero, and our cost is zero
+  //   ... unless there's a bill that overrides it") = $0; only a bill changes that
+  // With the box filled, only BILLS count beside it: both parts billed → the bills; one part billed → the box stays the cost unless
+  // that bill alone is larger (VS rule, the box as the combined amount); no bill → the box.
   function numOrNull(v) { return v === null || v === undefined || v === '' || isNaN(Number(v)) ? null : r2(v); }
   var typedPart = {}; (d.partEstimates || []).forEach(function (e) { var o = typedPart[e.release_key] || (typedPart[e.release_key] = {}); var v = numOrNull(e.amount); if (v !== null && (e.part === 'trucking' || e.part === 'freight')) { o[e.part] = { amount: v, note: e.note || null }; } });
   // v55.83-WH (Max, Nov 20: "a way to signify what the charges are for in terms of shipping to break it down internally ... the 2100
@@ -286,28 +299,53 @@ export function assembleProfitability(d) {
   var relExw = {}; var relNotExw = {};
   engineInvoices.forEach(function (iv) { (iv.releases || []).forEach(function (k) { if (iv.shipping_terms === 'EXW' && !iv.has_shipping_line) { relExw[k] = true; } else { relNotExw[k] = true; } }); });
   var whUsed = {}; var partsUsed = {};
+  // v55.83-YE — the invoice box (rank 2) for a release, or null (shared by the cost and the Containers list)
+  function boxOf(rel) { return (invEst[rel] && invEst[rel].amount !== null && invEst[rel].amount !== undefined && !isNaN(Number(invEst[rel].amount))) ? r2(invEst[rel].amount) : null; }
   Object.keys(relKnown).forEach(function (rel) {
     var o = outbound[rel] || { actual: null, estimate: null, bills: [] };
     var wRows = warehouseOn ? (whByRel[rel] || []).filter(function (w) { return w.section === 'main' && !w.superseded; }) : [];
     if (wRows.length > 1) { flags.push({ kind: 'warehouse_cost_not_usable', release: relRaw[rel] || rel, why: 'release on several warehouse orders' }); }
     var wRow = wRows.length === 1 && !wRows[0].conflict ? wRows[0] : null;
     if (wRows.length === 1 && wRows[0].conflict) { flags.push({ kind: 'warehouse_cost_not_usable', release: relRaw[rel] || rel, why: 'test order or release on two warehouse orders' }); }
+    // YE — the invoice box for this release (1 combined amount), or null when no invoice of the release has it filled
+    var box = boxOf(rel);
+    // YE rev2 — every invoice of the release is EXW with no shipping line = the customer ships it himself (several invoices, one not EXW
+    // or with a shipping line → we ship part of it → the normal order, as before)
+    var exwOnly = !!(relExw[rel] && !relNotExw[rel]);
+    var relTotal = (estimateOf[rel] !== undefined && !isNaN(Number(estimateOf[rel]))) ? r2(estimateOf[rel]) : null;
+    if (exwOnly) {
+      var tpX = typedPart[rel] || {}; var typedNonZero = [tpX.trucking, tpX.freight].some(function (x) { return x && Number(x.amount) > 0; });
+      if (box !== null && box > 0 || typedNonZero || (relTotal !== null && relTotal > 0)) { flags.push({ kind: 'amount_on_customer_shipped_release', release: relRaw[rel] || rel, box: box, typed_trucking: tpX.trucking ? tpX.trucking.amount : null, typed_freight: tpX.freight ? tpX.freight.amount : null, release_total: relTotal, used: 0, why: 'EXW with no shipping line — the customer ships it himself; our cost is $0 unless a bill comes in' }); }
+    }
     function part(name, billType) {
       var bl = (o.bills || []).filter(function (b) { return b.type === billType; });
       if (bl.length) { return { amount: r2(bl.reduce(function (s0, b) { return s0 + (b.share !== undefined ? b.share : b.amount); }, 0)), kind: 'bill', from: 'bill ' + bl.map(function (b) { return b.bill_number; }).join(', ') }; }
+      // YE rev2 (Max 23 Nov: "if it's X work [EXW], then the shipping is zero, and our cost is zero ... unless there's a bill that overrides
+      // it. Otherwise, it's zero") — the customer ships it himself (every invoice of the release EXW with no shipping line): $0, only a bill
+      // changes that (a box, a typed figure or a warehouse estimate from before the customer took the shipping over is NOT used — flagged)
+      if (exwOnly) { return { amount: 0, kind: 'own_transport', from: 'EXW on the invoice — the customer arranges the shipping (no cost to us)' }; }
+      if (box !== null) { return null; } // YE 2 — the box is filled: only a BILL counts beside it (typed and warehouse figures are not used)
+      // YE rev2 3 (Max: "unless an override also overrides the estimate, shipping estimate ... from the warehouse ... if we manually enter
+      // it. So that will override it") — a figure typed by hand in the Hub (also $0) comes BEFORE the warehouse
       var tp = typedPart[rel] && typedPart[rel][name]; if (tp) { return { amount: tp.amount, kind: 'manual', from: 'typed in the Hub' + (tp.note ? ' — ' + tp.note : '') }; }
-      if (wRow) {
+      if (relTotal !== null) { return null; } // a total typed by hand for the release is ALSO a manual figure: it beats the warehouse parts
+      if (wRow) { // YE rev2 4 — NextTrade warehouse: a typed correction first, then Shipping In Progress
         var wm = numOrNull(wRow['manual_' + name]); if (wm !== null) { return { amount: wm, kind: 'manual', from: 'typed correction (warehouse)' }; }
         var u = numOrNull(wRow[name + '_used']); if (u !== null) { return { amount: u, kind: wRow[name + '_kind'] === 'own_transport' ? 'own_transport' : 'estimate', from: wRow[name + '_kind'] === 'own_transport' ? 'customer’s own transport (Nextrade)' : 'Nextrade Shipping In Progress' }; }
       }
-      if (relExw[rel] && !relNotExw[rel] && (estimateOf[rel] === undefined || isNaN(Number(estimateOf[rel]))) && !(invEst[rel] && invEst[rel].amount !== null && invEst[rel].amount !== undefined)) { return { amount: 0, kind: 'own_transport', from: 'EXW on the invoice — the customer arranges the shipping (no cost to us)' }; }
       return null;
     }
     var t = part('trucking', 'trucking'); var f = part('freight', 'shipping');
     var pu = { trucking: t, freight: f, legacy_total: null };
     partsUsed[rel] = pu;
+    // YE (b) — the parts typed under "Inside the shipping" fill the box (XV); when the box was changed afterwards they differ: the box wins, said
+    var tpB = typedPart[rel] || {};
+    if (box !== null && tpB.trucking && tpB.freight && Math.abs(r2(tpB.trucking.amount + tpB.freight.amount) - box) > 0.005) { flags.push({ kind: 'typed_parts_differ_from_invoice_box', release: relRaw[rel] || rel, typed_trucking: tpB.trucking.amount, typed_freight: tpB.freight.amount, box: box, used: 'invoice box' }); }
     if (!t && !f) {
-      if (estimateOf[rel] !== undefined && !isNaN(Number(estimateOf[rel]))) { var lo = outbound[rel] || (outbound[rel] = o); lo.actual = null; lo.estimate = r2(estimateOf[rel]); pu.legacy_total = lo.estimate; }
+      if (box !== null) { // YE 2 — no bill: the invoice box is the cost (before any warehouse or hand-typed figure)
+        var lb = outbound[rel] || (outbound[rel] = o); lb.actual = null; lb.estimate = box; lb.from_invoice_form = true; pu.legacy_total = box; pu.combined_from = 'invoice form';
+        if (invEst[rel].differ) { flags.push({ kind: 'invoice_shipping_estimates_differ', release: relRaw[rel] || rel, invoices: invEst[rel].invoices, used: invEst[rel].amount }); }
+      } else if (estimateOf[rel] !== undefined && !isNaN(Number(estimateOf[rel]))) { var lo = outbound[rel] || (outbound[rel] = o); lo.actual = null; lo.estimate = r2(estimateOf[rel]); pu.legacy_total = lo.estimate; }
       return;
     }
     var oo = outbound[rel] || (outbound[rel] = o);
@@ -319,9 +357,12 @@ export function assembleProfitability(d) {
     //   - exactly ONE part known    → the combined total STAYS the cost. The known part (also 0) is shown as that part; the rest
     //     stays "combined, breakdown not separated" — it is NOT relabelled as the other part, and nothing is counted twice.
     //     Only when the one known part alone is larger than the combined total does the larger figure win, and it is flagged.
-    var comb = estimateOf[rel] !== undefined && !isNaN(Number(estimateOf[rel])) ? r2(estimateOf[rel]) : null;
-    var combFromInvoice = false;
-    if (comb === null && invEst[rel] && invEst[rel].amount !== null && invEst[rel].amount !== undefined && !isNaN(Number(invEst[rel].amount))) { comb = r2(invEst[rel].amount); combFromInvoice = true; }
+    // YE — the combined amount: the invoice box first (rank 2), the total typed for the release only when the box is empty (rank 3, typed
+    // by hand); a release the customer ships himself (EXW, no shipping line) has none — its cost is $0 unless a bill (rev2)
+    var comb = null; var combFromInvoice = false;
+    if (exwOnly) { comb = null; }
+    else if (box !== null) { comb = box; combFromInvoice = true; }
+    else if (relTotal !== null) { comb = relTotal; }
     var combinedKept = false;
     if (comb !== null && (!t || !f)) {
       var one = t || f;
@@ -514,14 +555,20 @@ export function assembleProfitability(d) {
           var bill = bl.length ? r2(bl.reduce(function (s, b) { return s + (b.share !== undefined ? b.share : b.amount); }, 0)) : null;
           var est = null; var from = null;
           var typed = typedPart[k] && typedPart[k][name] ? typedPart[k][name].amount : null; // v55.83-TL — typed in the Hub for this part
-          if (typed !== null) { est = typed; from = 'typed in the Hub'; }
-          else if (wRow) {
-            var man = wRow['manual_' + name];
-            if (man !== null && man !== undefined && man !== '') { est = r2(man); from = 'typed correction'; }
-            else if (wRow[name + '_estimate'] !== null && wRow[name + '_estimate'] !== undefined) { est = r2(wRow[name + '_estimate']); from = 'warehouse quote'; }
-            else if (wRow[name + '_final'] !== null && wRow[name + '_final'] !== undefined) { est = r2(wRow[name + '_final']); from = 'warehouse payment (no quote)'; }
-            else if (wRow[name + '_kind'] === 'own_transport') { est = 0; from = 'customer’s own transport (inferred)'; }
-            else if (wRow[name + '_used'] !== null && wRow[name + '_used'] !== undefined && wRow[name + '_kind'] !== 'bill') { est = r2(wRow[name + '_used']); from = 'warehouse'; }
+          // v55.83-YE (rev2) — the same order as the cost: the customer ships it himself (EXW, no shipping line) → $0; the invoice box
+          // filled → no part has its own estimate (the box is ONE amount); a figure typed in the Hub (3rd) before the warehouse (4th); a
+          // total typed for the release (also by hand) keeps the warehouse parts out
+          if (relExw[k] && !relNotExw[k]) { est = 0; from = 'EXW — the customer ships it'; }
+          else if (boxOf(k) === null) {
+            if (typed !== null) { est = typed; from = 'typed in the Hub'; }
+            else if (wRow && !(estimateOf[k] !== undefined && !isNaN(Number(estimateOf[k])))) {
+              var man = wRow['manual_' + name];
+              if (man !== null && man !== undefined && man !== '') { est = r2(man); from = 'typed correction'; }
+              else if (wRow[name + '_estimate'] !== null && wRow[name + '_estimate'] !== undefined) { est = r2(wRow[name + '_estimate']); from = 'warehouse quote'; }
+              else if (wRow[name + '_final'] !== null && wRow[name + '_final'] !== undefined) { est = r2(wRow[name + '_final']); from = 'warehouse payment (no quote)'; }
+              else if (wRow[name + '_kind'] === 'own_transport') { est = 0; from = 'customer’s own transport (inferred)'; }
+              else if (wRow[name + '_used'] !== null && wRow[name + '_used'] !== undefined && wRow[name + '_kind'] !== 'bill') { est = r2(wRow[name + '_used']); from = 'warehouse'; }
+            }
           }
           var wire = wRow && wRow[name + '_final'] !== null && wRow[name + '_final'] !== undefined ? r2(wRow[name + '_final']) : null;
           var diff = bill !== null && est !== null ? r2(bill - est) : null;
@@ -530,9 +577,11 @@ export function assembleProfitability(d) {
             difference: diff, differs: diff !== null && Math.abs(diff) > 1, warehouse_payment: wire, payment_differs_from_bill: wire !== null && bill !== null && Math.abs(wire - bill) > 1 };
         }
         var pF = partOf('freight', 'shipping'); var pT = partOf('trucking', 'trucking');
-        var combEst = pF.estimate !== null && pT.estimate !== null ? r2(pF.estimate + pT.estimate) : (ob.from_invoice_form || estimateOf[k] !== undefined ? ob.estimate : null);
+        // YE — the invoice box (2nd) is the combined estimate whenever filled; then both parts' own estimates; then the release total
+        var exwK = !!(relExw[k] && !relNotExw[k]); var bxK = exwK ? null : boxOf(k); // rev2 — a customer-shipped release has no combined estimate
+        var combEst = exwK ? 0 : bxK !== null ? bxK : (pF.estimate !== null && pT.estimate !== null ? r2(pF.estimate + pT.estimate) : (ob.from_invoice_form || estimateOf[k] !== undefined ? ob.estimate : null));
         var parts = { freight: pF, trucking: pT, estimate_total: combEst, bill_total: pF.bill !== null || pT.bill !== null ? r2((pF.bill || 0) + (pT.bill || 0)) : null,
-          final_confirmed: pF.bill !== null && pT.bill !== null, combined_estimate_from: pF.estimate !== null && pT.estimate !== null ? 'warehouse' : (ob.from_invoice_form ? 'invoice form' : (estimateOf[k] !== undefined ? 'typed release estimate' : null)) };
+          final_confirmed: pF.bill !== null && pT.bill !== null, combined_estimate_from: exwK ? 'EXW — the customer ships it' : bxK !== null ? 'invoice form' : (pF.estimate !== null && pT.estimate !== null ? (pF.estimate_from === 'typed in the Hub' && pT.estimate_from === 'typed in the Hub' ? 'typed in the Hub' : (pF.estimate_from === 'typed in the Hub' || pT.estimate_from === 'typed in the Hub' ? 'typed in the Hub + warehouse' : 'warehouse')) : (ob.from_invoice_form ? 'invoice form' : (estimateOf[k] !== undefined ? 'typed release estimate' : null))) };
         parts.total_difference = parts.final_confirmed && combEst !== null ? r2(parts.bill_total - combEst) : null;
         parts.total_differs = parts.total_difference !== null && Math.abs(parts.total_difference) > 1;
         return { key: k, raw: o.raw, origin: o.origin, pounds: Math.round(o.pounds), invoices: Object.keys(o.invoices), customers: Object.keys(o.customers), parts: parts,
