@@ -19,7 +19,7 @@
 import { NextResponse } from 'next/server';
 import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server'; // v55.83-UD: employees see only their history window
 import { assertPermission } from '../../../../lib/server-permissions';
-import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
+import { MARGIN_PERMISSION, TYPED_PNL_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
 import { revenueScope, stripRevenue } from '../../../../lib/revenue-visibility'; // v55.83-XK
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TG
 import { createClient } from '@supabase/supabase-js';
@@ -89,7 +89,10 @@ export async function POST(req) {
 
     // ── everything below is P&L viewing
     var pv = await assertPermission(db, userId, 'pnl.view', req);
-    if (!pv || pv.ok !== true) { return NextResponse.json({ error: 'This needs the "P&L: View" permission — grant it in Settings → Module Access.' }, { status: 403 }); }
+    if (!pv || pv.ok !== true) { return NextResponse.json({ error: 'This needs Open Profitability in Settings → Banking & Accounting Access.' }, { status: pv?.status === 503 ? 503 : 403 }); }
+    if ((action === 'report' || action === 'report_typed') && pv.ctx?.deny?.[TYPED_PNL_PERMISSION] === true && !pv.ctx.isSuperAdmin) {
+      return NextResponse.json({ error: 'The typed-cost P&L is switched off in Banking & Accounting Access.' }, { status: 403 });
+    }
 
     // v55.83-UD (Codex 12:00 P1) — employees see ONLY the permitted history window; super admin sees all-time. Fails closed.
     var vwin = await windowFloorFor(db, pv.ctx); if (vwin.error) { return NextResponse.json({ error: vwin.error }, { status: 503 }); }
@@ -152,7 +155,7 @@ export async function POST(req) {
         source: 'Profitability cost engine: costs from the purchase bills (+ commission, inbound allowance, brokerage, bonded); CNF shipping taken out of the price; a P&L-typed cost only where no bill cost exists · CONFIRMED = bill costs + the standard allowances (inbound per lb, $200 bonded per Houston container), no estimate or missing data; TENTATIVE = something missing or estimated · margin on COSTED revenue only',
         api_build_marker: API_BUILD_MARKER };
       if (!rsP.canSee) { return NextResponse.json(researcherView(outE)); } // XK
-      return NextResponse.json(marginE ? outE : stripProfit(outE));
+      return NextResponse.json(marginE ? outE : researcherView(outE));
     }
 
     if (action === 'report_typed') {
@@ -273,7 +276,7 @@ export async function POST(req) {
         api_build_marker: API_BUILD_MARKER
       };
       if (!rsP.canSee) { return NextResponse.json(researcherView(pnlOut)); } // XK
-    return NextResponse.json(marginOk2 ? pnlOut : stripProfit(pnlOut));
+      return NextResponse.json(marginOk2 ? pnlOut : researcherView(pnlOut));
     }
 
     return NextResponse.json({ error: 'Unknown action.' }, { status: 400 });

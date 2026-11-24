@@ -151,6 +151,13 @@ function has(o, n) { return JSON.stringify(o).indexOf(String(n)) >= 0; }
   var pS = await pnl('tok-super', { action: 'report' }); var pR = await pnl('tok-res', { action: 'report' });
   check('P&L: super admin has revenue (fixture works)', pS.status === 200 && has(pS.j, 1234), { status: pS.status, err: pS.j.error });
   check('P&L: researcher answered with NO sale value, revenue or profit key', pR.status === 200 && pR.j.revenue_hidden === true && leaks(pR.j).length === 0, { status: pR.status, leaks: leaks(pR.j).slice(0, 10), err: pR.j.error });
+  var pM = await pnl('tok-cand', { action: 'report' });
+  check('P&L: margin-off cost data also excludes revenue and sale prices', pM.status === 200 && pM.j.revenue_hidden === true && !has(pM.j, 1234) && leaks(pM.j).length === 0, { status: pM.status, err: pM.j.error });
+  var switchTypedOff = await perm('tok-super', HOLD, 'pnl.open_typed', false);
+  var pOff = await pnl('tok-hold', { action: 'report' });
+  var pTypedOff = await pnl('tok-hold', { action: 'report_typed' });
+  var profitStillOpens = await prof('tok-hold', { action: 'report' });
+  check('Switching off the typed-cost P&L refuses both report modes and keeps Profitability open', switchTypedOff.status === 200 && pOff.status === 403 && pTypedOff.status === 403 && profitStillOpens.status === 200, { saved: switchTypedOff.status, report: pOff.status, typed: pTypedOff.status, profitability: profitStillOpens.status });
 
   // ── the permission-switch writer ──
   fresh(); world.guard = false;

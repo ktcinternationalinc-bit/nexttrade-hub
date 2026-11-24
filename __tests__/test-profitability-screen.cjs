@@ -129,7 +129,7 @@ const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reco
         assert.equal(await goodsRevenueHeaders.count(), canSeeMargin ? 4 : 0, view + ' drill-down goods sales columns');
         assert.equal(await table.locator('tbody > tr').nth(1).locator(':scope > td').getAttribute('colspan'), String(headerCount));
       }
-      await page.getByRole('button', { name: /P&L by period/ }).click();
+      await page.getByRole('button', { name: canSeeMargin ? /P&L by period/ : /Costs by period/ }).click();
       assert.equal(await profitHeaders.count() > 0, canSeeMargin, 'period columns');
       await page.getByRole('row').filter({ hasText: 'Nov 2026' }).first().click();
       assert.equal(await profitHeaders.count() > 0, canSeeMargin, 'period drill-down columns');

@@ -77,7 +77,7 @@ var rt = fs.readFileSync(path.join(root, 'src/app/api/accounting/pnl/route.js'),
 var ui = fs.readFileSync(path.join(root, 'src/components/PnLTab.jsx'), 'utf8');
 var pr = fs.readFileSync(path.join(root, 'src/app/api/accounting/profitability/route.js'), 'utf8');
 var ld = fs.readFileSync(path.join(root, 'src/lib/profitability-load-server.js'), 'utf8');
-check('route: report = shared loader + the same engine + the confirmed split; margin hidden without permission', /loadProfitabilityInput\(db\)/.test(rt) && /assembleProfitability\(/.test(rt) && /buildConfirmedPnl\(/.test(rt) && /marginE \? outE : stripProfit\(outE\)/.test(rt));
+check('route: report uses the shared engine and strips sales figures along with margin when restricted', /loadProfitabilityInput\(db\)/.test(rt) && /assembleProfitability\(/.test(rt) && /buildConfirmedPnl\(/.test(rt) && /marginE \? outE : researcherView\(outE\)/.test(rt));
 check('route: the older typed-costs-only view is kept (report_typed)', /action === 'report_typed'/.test(rt));
 check('Profitability uses the very same loader (one way to read the data)', /loadProfitabilityInput\(db\)/.test(pr) && /pl_release_part_estimates/.test(ld) && /pl_warehouse_shipping/.test(ld));
 check('screen: Confirmed / Tentative / All cards and filter, per-row badge with what is missing', /'✅ Confirmed'/.test(ui) && /Tentative \(missing data\)/.test(ui) && /setMode\(m\[0\]\)/.test(ui) && /missing: \{why\}/.test(ui));

@@ -2,6 +2,7 @@
 import { useCallback,useEffect,useMemo,useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useBankVisibility } from '../lib/use-bank-visibility';
+import { canSeeMargin, LEDGER_PNL_PERMISSION } from '../lib/margin-visibility';
 import PeriodStatsTab from './PeriodStatsTab'; // v55.83-VD — the full year from the Hub's own records
 const API='/api/accounting/clickbooks-us/reports';
 const reports=[['profit_loss','Profit & Loss'],['balance_sheet','Balance Sheet'],['tax_summary','Tax Summary'],['trial_balance','Trial Balance'],['general_ledger','General Ledger'],['cash_flow','Cash Flow'],['bank_reconciliation','Bank Reconciliation']];
@@ -13,10 +14,16 @@ const usd=c=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).fo
 function csv(rows){if(!rows?.length)return '';const keys=[...new Set(rows.flatMap(r=>Object.keys(r||{})))];const esc=v=>'"'+String(v??'').replaceAll('"','""')+'"';return [keys.map(esc).join(','),...rows.map(r=>keys.map(k=>esc(r[k])).join(','))].join('\n');}
 function download(name,text,type='text/csv'){const u=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
 export default function ClickBooksUSReports(props){
- const visibility=useBankVisibility(),[report,setReport]=useState('profit_loss'),[from,setFrom]=useState(new Date(new Date().getFullYear(),0,1).toISOString().slice(0,10)),[to,setTo]=useState(new Date().toISOString().slice(0,10));
- const [data,setData]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[settings,setSettings]=useState(null),[selected,setSelected]=useState(null);
+ const visibility=useBankVisibility(),[selectedReport,setReport]=useState(null),[from,setFrom]=useState(new Date(new Date().getFullYear(),0,1).toISOString().slice(0,10)),[to,setTo]=useState(new Date().toISOString().slice(0,10));
+ const perms=props.modulePerms||{};
+ const showPnl=visibility.isVerifiedSuperAdmin||(
+  canSeeMargin(false,perms)&&perms[LEDGER_PNL_PERMISSION]!==false&&perms['pnl.view_revenue']!==false
+ );
+ const report=showPnl ? selectedReport||'profit_loss' : selectedReport&&selectedReport!=='profit_loss' ? selectedReport : 'balance_sheet';
+ const [result,setResult]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[settings,setSettings]=useState(null),[selected,setSelected]=useState(null);
+ const data=result?.report===report ? result.data : null;
  const call=useCallback(async(path,options={})=>{const s=await supabase.auth.getSession(),token=s.data?.session?.access_token;if(!token)throw new Error('Sign in to verify financial permissions.');const r=await fetch(path,{...options,cache:'no-store',headers:{Authorization:'Bearer '+token,...(options.body?{'Content-Type':'application/json'}:{})}});if(!r.headers.get('content-type')?.includes('application/json'))throw new Error('ClickBooks report routes are not available on this deployment.');const b=await r.json();if(!r.ok||!b.ok)throw new Error(b.error||'Report request failed.');return b;},[]);
- const load=useCallback(async()=>{setBusy(true);try{const q=new URLSearchParams({report,from,to});const b=await call(API+'?'+q);setData(b.data);setError('');}catch(e){setData(null);setError(e.message);}finally{setBusy(false);}},[call,report,from,to]);
+ const load=useCallback(async()=>{setBusy(true);try{const q=new URLSearchParams({report,from,to});const b=await call(API+'?'+q);setResult({report,data:b.data});setError('');}catch(e){setResult(null);setError(e.message);}finally{setBusy(false);}},[call,report,from,to]);
  useEffect(()=>{if(visibility.loading)return;if(visibility.canViewFullDashboard||visibility.isVerifiedSuperAdmin)void load();},[load,visibility.loading,visibility.canViewFullDashboard,visibility.isVerifiedSuperAdmin]);
  async function loadSettings(){setBusy(true);try{const q=new URLSearchParams({report:'settings',from,to});const b=await call(API+'?'+q);setSettings(b.data);setError('');}catch(e){setError(e.message);}finally{setBusy(false);}}
  async function saveSetting(){if(!selected)return;setBusy(true);try{await call(API,{method:'POST',body:JSON.stringify({action:'save_setting',payload:{accountId:selected.accountId,cashFlowClass:selected.cashFlowClass,taxCategory:selected.taxCategory||'',taxFormLine:selected.taxFormLine||'',deductibility:selected.deductibility,notes:selected.notes||''}})});await loadSettings();setSelected(null);}catch(e){setError(e.message);}finally{setBusy(false);}}
@@ -31,7 +38,7 @@ export default function ClickBooksUSReports(props){
    <div className="mt-4 rounded-xl bg-white text-slate-900 p-2"><PeriodStatsTab {...props} initialFrom={new Date().getFullYear()+'-01-01'} /></div>
   </section>
   <section className={panel}><p className="text-xs uppercase tracking-widest text-sky-300">KTC U.S. / ClickBooks ledger reports</p><h2 className="text-2xl font-bold mt-2">Financial & tax reports — the ledger{data?.readiness?.openingCutoff?' (starts '+data.readiness.openingCutoff+')':''}</h2><p className="text-sm text-amber-200 mt-2">These ledger reports only hold entries dated after the ledger's opening date. For the months before it, use the full-year section above.</p><p className="text-sm text-slate-300 mt-2">These reports are generated from posted ClickBooks journals. They do not use Egyptian Treasury/Sales data. Until historical books are certified, report output remains preview-only and is not represented as tax-filing ready.</p>
-   <div className="flex flex-wrap gap-2 mt-4">{reports.map(([id,label])=><button key={id} className={button+(report===id?' border-sky-400':'')} disabled={busy||(bankOnly.has(id)&&!visibility.canViewBankBalances&&!visibility.isVerifiedSuperAdmin)} onClick={()=>setReport(id)}>{label}{bankOnly.has(id)&&!visibility.canViewBankBalances&&!visibility.isVerifiedSuperAdmin?' · banking access':''}</button>)}</div>
+   <div className="flex flex-wrap gap-2 mt-4">{reports.filter(([id])=>id!=='profit_loss'||showPnl).map(([id,label])=><button key={id} className={button+(report===id?' border-sky-400':'')} disabled={busy||(bankOnly.has(id)&&!visibility.canViewBankBalances&&!visibility.isVerifiedSuperAdmin)} onClick={()=>setReport(id)}>{label}{bankOnly.has(id)&&!visibility.canViewBankBalances&&!visibility.isVerifiedSuperAdmin?' · banking access':''}</button>)}</div>
    <div className="flex flex-wrap gap-3 mt-4"><label className="text-xs">From <input className={input+' block mt-1'} type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label className="text-xs">To / as of <input className={input+' block mt-1'} type="date" value={to} onChange={e=>setTo(e.target.value)}/></label><button className={button+' self-end'} disabled={busy} onClick={load}>Refresh report</button>{data&&<><button className={button+' self-end'} onClick={()=>download('ClickBooks-'+report+'-'+from+'-'+to+'.json',JSON.stringify(data,null,2),'application/json')}>Export JSON</button><button className={button+' self-end'} disabled={!rows.length} onClick={()=>download('ClickBooks-'+report+'-'+from+'-'+to+'.csv',csv(rows))}>Export CSV</button></>}</div>
   </section>
   {error&&<div role="alert" className="rounded border border-rose-600 p-3 text-rose-200">{error}</div>}

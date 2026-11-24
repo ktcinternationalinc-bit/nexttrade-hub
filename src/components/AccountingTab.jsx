@@ -20,6 +20,7 @@ import PnLTab from './PnLTab';
 import ArrivalRemindersTab from './ArrivalRemindersTab'; // v55.83-XG — arrival + final-payment reminders (Max, 22 Nov)
 import OrderMonitorTab from './OrderMonitorTab'; // v55.83-TI — order lifecycle, exceptions, deposits, 30-hour deadline
 import ProfitabilityTab from './ProfitabilityTab'; // v55.83-SY — profitability by product / customer / invoice (not the cash report)
+import { canOpenTypedPnl } from '../lib/margin-visibility';
 import BusinessBooksTab from './BusinessBooksTab';
 import BankReviewTab from './BankReviewTab';
 import PurchaseOrdersTab from './PurchaseOrdersTab';
@@ -153,6 +154,13 @@ export default function AccountingTab(props) {
   var mp = props.modulePerms || {};
   var userProfile = props.userProfile; // v55.83-RG — was referenced (Audit Trail tab, wires gate) but never declared
   var isSuper = props.isSuperAdmin === true || (props.userProfile && props.userProfile.role === 'super_admin');
+  var canOpenProfitability = isSuper || mp['pnl.view'] === true;
+  var canOpenPnl = canOpenTypedPnl(isSuper, mp);
+  tabs = tabs.filter(function (tab) {
+    if (tab[0] === 'profitability') { return canOpenProfitability; }
+    if (tab[0] === 'pnl') { return canOpenPnl; }
+    return true;
+  });
   // v55.83-YF — Cash on Hand is a PRIVATE account: the tab shows for the super admin or "Bank: See private accounts" (the server decides again)
   if (isSuper || mp['bank.view_private'] === true) { tabs.splice(tabs.findIndex(function (t) { return t[0] === 'balances'; }) + 1, 0, ['cash', '💵 Cash on Hand']); }
   // v55.83-SA (Max, Nov 12 07:27: "Why are people not seeing bills when they have permission") — owner / admin = every switch
@@ -197,7 +205,10 @@ export default function AccountingTab(props) {
       <b>Accounting is locked for your account.</b> Ask an admin for <b>P1a · ClickBooks (KTC Hub) Access</b> and/or <b>P1b · Wave Hub Access</b> in Settings → 🏦 Banking & Accounting Access — every other accounting permission takes effect only with one of them.</div></div>;
   }
   // v55.83-RF — never render a screen of a hub this user has no switch for (deep links, card jumps)
-  if (!hubAllows(sub)) { sub = acctV.ktc ? 'books_home' : 'dashboard'; }
+  if (sub === 'pnl' && !canOpenPnl && canOpenProfitability) { sub = 'profitability'; }
+  if (!hubAllows(sub) || (sub === 'profitability' && !canOpenProfitability) || (sub === 'pnl' && !canOpenPnl)) {
+    sub = acctV.ktc ? 'books_home' : 'dashboard';
+  }
   return (
     <div>
       <div className="p-3 border-b border-slate-800">

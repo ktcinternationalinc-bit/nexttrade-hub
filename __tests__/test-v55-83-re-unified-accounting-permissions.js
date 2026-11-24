@@ -148,7 +148,7 @@ ok('8c (RF): the retired RE switch still counts as BOTH hubs until the SQL moves
 ok('8d (RF): every accounting screen belongs to exactly one hub (audit serves both); the Accounting tab renders a screen only for its hub',
   A.screenHub('books_home') === 'ktc' && A.screenHub('all_txns') === 'ktc' && A.screenHub('clickbooks_reports') === 'ktc' &&
   A.screenHub('review') === 'wave' && A.screenHub('invoices') === 'wave' && A.screenHub('wavehub') === 'wave' && A.screenHub('audit') === 'both' &&
-  /if \(!hubAllows\(sub\)\) \{ sub = acctV\.ktc \? 'books_home' : 'dashboard'; \}/.test(at) &&
+  /if \(!hubAllows\(sub\).*\{\s+sub = acctV\.ktc \? 'books_home' : 'dashboard';/.test(at) &&
   /tabs\.filter\(function \(t\) \{ return hubAllows\(t\[0\]\) &&/.test(at));
 var sp = R('src/lib/permission-aliases.js'); // v55.83-UG moved the alias table here
 ok('8e (RF): server — "accounting.view" now means EITHER hub switch, so every P1 gate (Books, Stats, Forecast, categories, audit) accepts both',

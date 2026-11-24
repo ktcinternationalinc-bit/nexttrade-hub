@@ -1,3 +1,6 @@
+import { loadUserPermissions, userHasPermission } from './server-permissions.js';
+import { LEDGER_PNL_PERMISSION, MARGIN_PERMISSION } from './margin-visibility.js';
+
 const REPORTS=new Set(['readiness','profit_loss','balance_sheet','trial_balance','general_ledger','tax_summary','cash_flow','bank_reconciliation','settings']);
 const BANK_REQUIRED=new Set(['trial_balance','general_ledger','cash_flow','bank_reconciliation']);
 const HEADERS={'Cache-Control':'private, no-store, max-age=0',Pragma:'no-cache',Vary:'Authorization, Origin','X-Content-Type-Options':'nosniff'};
@@ -14,6 +17,12 @@ export function createReportsHandlers(authorize,env){
    const access=await authorize(request);if(!access?.authUserId)fail('Sign in again.',401);
    const superAdmin=access.isVerifiedSuperAdmin===true,dashboard=superAdmin||access.canViewFullDashboard===true,bank=superAdmin||access.canViewBankBalances===true;
    if(!dashboard)fail('Full dashboard permission is required.',403);
+   if(report==='profit_loss'&&!superAdmin){
+    const ctx=await loadUserPermissions(access.db,access.profileId);
+    if(ctx.readError)fail('Profit and loss permissions could not be verified.',503);
+    // Keep the report's super-admin decision tied to the verified session above.
+    if(ctx.deny[LEDGER_PNL_PERMISSION]||!userHasPermission({...ctx,isSuperAdmin:false},MARGIN_PERMISSION))fail('Open ClickBooks P&L and Show profit & margin are required.',403);
+   }
    if(BANK_REQUIRED.has(report)&&!bank)fail('Banking information access is required for this report.',403);
    let result;
    if(report==='settings'){
