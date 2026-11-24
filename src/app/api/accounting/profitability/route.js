@@ -73,7 +73,7 @@ export async function POST(req) {
     if (partsAction) { invEd = await assertPermission(db, userId, 'invoices.edit', req); }
     var invEdOk = !!(invEd && invEd.ok === true);
     var pnlViewOk = !!(pv && pv.ok === true);
-    if (!pnlViewOk && !(partsAction && invEdOk)) { return bad(partsAction ? 'Typing the shipping breakdown needs the invoicing permission (Invoices: Edit) or "P&L: View" — grant one in Settings → Module Access.' : 'This needs the "P&L: View" permission — grant it in Settings → Module Access.', 403); }
+    if (!pnlViewOk && !(partsAction && invEdOk)) { return bad(partsAction ? 'Typing the shipping breakdown needs Invoices: Edit or Open Profitability and P&L.' : 'Ask your super admin to turn on Open Profitability and P&L in Settings → Banking & Accounting Access.', 403); }
     if (!pnlViewOk) { pv = invEd; } // the window below is read from the grant that let this person in
 
     // v55.83-UD (Codex 12:00 P1) — employees see ONLY the permitted history window; super admin sees all-time. Fails closed.

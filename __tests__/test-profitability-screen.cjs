@@ -28,12 +28,15 @@ function bundle(file) {
   return id;
 }
 const entry = bundle(path.join(root, 'src/components/ProfitabilityTab.jsx'));
-const row = { key: 'fixture', label: 'Regression fixture', pounds: 100, goods_revenue: 1234.56, transport_revenue: 200, base_cost: 12, commission: 1.5, inbound_allowance: 2, outbound_cost: 150, bonded: 0, total_cost: 165.5, profit: 1269.06, transport_profit: 50, complete: true, invoice_ids: ['fixture'] };
-const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reconciled: { product: true, customer: true, invoice: true }, by_product: [row], by_customer: [row], by_invoice: [row], cells: [], flags: [], can_see_margin: true };
+const row = { key: 'fixture', label: 'Regression fixture', pounds: 100, goods_revenue: 1234.56, transport_revenue: 200, base_cost: 12, commission: 1.5, inbound_allowance: 2, outbound_cost: 150, bonded: 0, total_cost: 165.5, goods_profit: 1219.06, profit: 1269.06, transport_profit: 50, complete: true, invoice_ids: ['fixture'], release_list: ['1002-1'] };
+const cell = { ...row, invoice_id: 'fixture', line_id: 'line', invoice: 'Test invoice', invoice_date: '2026-11-19', customer: 'fixture', product_key: 'fixture', product: 'Fixture product', description: 'Fixture shipment', release: '1002-1', release_raw: '1002-1', brokerage: 0, trucking_cost: 70, freight_cost: 80 };
+const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reconciled: { product: true, customer: true, invoice: true }, by_product: [row], by_customer: [row], by_invoice: [row], cells: [cell], flags: [], can_see_margin: true };
 (async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
-    for (const hidden of [false, true]) {
+    for (const permissions of ['full', 'hide margin', 'hide revenue']) {
+      const canSeeMargin = permissions === 'full';
+      const canSeeRevenue = permissions !== 'hide revenue';
       const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
       await page.route('**/*', route => route.abort());
       const errors = [];
@@ -42,15 +45,26 @@ const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reco
       await page.addScriptTag({ path: path.join(deps, 'react/umd/react.development.js') });
       await page.addScriptTag({ path: path.join(deps, 'react-dom/umd/react-dom.development.js') });
       const data = JSON.parse(JSON.stringify(fixture));
-      if (hidden) {
-        data.revenue_hidden = true; data.can_see_margin = false;
-        for (const target of [data.totals, ...data.by_product, ...data.by_customer, ...data.by_invoice]) {
-          for (const key of ['goods_revenue', 'transport_revenue', 'profit', 'transport_profit']) delete target[key];
-        }
+      data.can_see_margin = canSeeMargin;
+      data.revenue_hidden = !canSeeRevenue;
+      for (const target of [data.totals, ...data.by_product, ...data.by_customer, ...data.by_invoice, ...data.cells]) {
+        if (!canSeeMargin) for (const key of ['goods_profit', 'profit', 'transport_profit']) delete target[key];
+        if (!canSeeRevenue) for (const key of ['goods_revenue', 'transport_revenue']) delete target[key];
       }
       await page.evaluate(({ modules, entry, data }) => {
         window.fetch = async () => ({ json: async () => data });
-        const stub = { __esModule: true, default: () => null, supabase: { auth: { getSession: async () => ({ data: { session: { access_token: 'fixture' } } }) } } };
+        URL.createObjectURL = blob => {
+          window.reportCsv = blob.text();
+          return '#test-export';
+        };
+        HTMLAnchorElement.prototype.click = () => {};
+        const stub = {
+          __esModule: true,
+          default: () => null,
+          BalanceCell: () => null,
+          hubFetch: async () => ({ ok: false, json: async () => ({ ok: false, error: 'Fixture only' }) }),
+          supabase: { auth: { getSession: async () => ({ data: { session: { access_token: 'fixture' } } }) } },
+        };
         const cache = {};
         function load(id) {
           if (id === 'react') return React;
@@ -68,13 +82,30 @@ const fixture = { ok: true, totals: row, counts: { invoices_in_period: 1 }, reco
       assert.deepEqual(errors, []);
       const text = await page.locator('body').innerText();
       assert.ok(text.includes('$12.00'), 'visible goods costs render');
-      assert.equal(text.includes('$1,234.56'), !hidden, 'revenue redaction preserved');
-      if (hidden) assert.ok(text.includes('\uD83D\uDD12'));
-      await page.getByRole('button', { name: 'By invoice', exact: true }).click();
-      await page.getByRole('button', { name: 'By product', exact: true }).click();
+      assert.equal(text.includes('$1,234.56'), canSeeRevenue, 'revenue redaction preserved');
+      assert.equal(text.includes('$1,269.06'), canSeeMargin, 'profit amount matches permission');
+      const profitHeaders = page.getByRole('columnheader', { name: /\b(profit|margin)\b|final p&l/i });
+      for (const view of ['By product', 'By invoice', 'By customer']) {
+        await page.getByRole('button', { name: view, exact: true }).click();
+        assert.equal(await profitHeaders.count(), canSeeMargin ? 3 : 0, view);
+        const table = page.getByRole('table').first();
+        const headerCount = await table.locator('thead th').count();
+        assert.equal(await table.locator('tbody > tr').first().locator('td').count(), headerCount, view + ' cells align with headers');
+        await table.getByText('Regression fixture', { exact: false }).click();
+        assert.equal(await profitHeaders.count(), canSeeMargin ? 6 : 0, view + ' drill-down');
+        assert.equal(await table.locator('tbody > tr').nth(1).locator(':scope > td').getAttribute('colspan'), String(headerCount));
+      }
+      await page.getByRole('button', { name: /P&L by period/ }).click();
+      assert.equal(await profitHeaders.count() > 0, canSeeMargin, 'period columns');
+      await page.getByRole('row').filter({ hasText: 'Nov 2026' }).first().click();
+      assert.equal(await profitHeaders.count() > 0, canSeeMargin, 'period drill-down columns');
+      await page.getByRole('button', { name: /CSV/ }).click();
+      const csv = await page.evaluate(() => window.reportCsv);
+      assert.ok(csv.startsWith('Period,Lines,Pounds,'));
+      assert.equal(/\b(profit|margin)\b|final p&l/i.test(csv.split('\n')[0]), canSeeMargin, 'restricted headers omitted from export');
       assert.deepEqual(errors, []);
-      if (process.env.TEST_SCREENSHOT && !hidden) await page.screenshot({ path: process.env.TEST_SCREENSHOT, fullPage: true });
-      console.log('PASS real screen: ' + (hidden ? 'revenue hidden, costs visible' : 'amounts visible') + ', report loaded and tabs switched');
+      if (process.env.TEST_SCREENSHOT && canSeeMargin) await page.screenshot({ path: process.env.TEST_SCREENSHOT, fullPage: true });
+      console.log('PASS real screen: ' + permissions + ', including detail tables and CSV');
       await page.close();
     }
   } finally { await browser.close(); }
