@@ -26,6 +26,7 @@ export var BANKING_GROUPS = [
     { key: 'pnl.view', label: 'P&L and Profitability', desc: 'Profitability, Sales P&L and Inventory P&L screens: revenue and cost of goods per product, customer and invoice.', needsBooks: true },
     { key: 'pnl.view_margin', label: 'Profit & margin 🔒', desc: 'The PROFIT and MARGIN numbers on those screens. Without it they show 🔒. Only the super admin can switch this on.', needsBooks: true, sensitive: true },
     { key: 'payroll.view', label: 'Payroll / salaries: view 🔒', desc: 'Warehouse salary (payroll) amounts. Without it payroll shows as "Warehouse staff" with 🔒. Today: Nextrade books and Nextrade bills; Bills, wires and P&L follow. Only the super admin can switch this on.', sensitive: true }, // v55.83-XE
+    { key: 'pnl.view_revenue', label: 'See sales & revenue', desc: 'ON for everyone with P&L unless switched OFF. OFF = a RESEARCHER: they fill in and check costs, pounds, releases and what remains open, but see no sale price, invoiced amount, revenue, profit or margin anywhere in the Hub. The Hub refuses OFF while the person has invoice, customer, bank, Wave or other accounting switches on (it lists them), and until the database step is installed.', needsBooks: true }, // v55.83-XK
     { key: 'pnl.edit_costs', label: 'Edit product costs', desc: 'Type or change product costs (with the date they start). The most sensitive accounting change.', needsBooks: true },
     { key: 'accounting.view_invoicing', label: 'Invoices & collections', desc: 'Invoiced, Paid, Still Open, Collected — and the invoices behind them.', needsBooks: true },
     { special: 'canViewBankBalances', label: 'Bank balances', desc: 'Account balances, trial balance, general ledger, cash flow, bank reconciliation. Super admin grants only.' },
@@ -148,7 +149,10 @@ export default function BankingAccessPanel(props) {
     } catch (e) { setGErr(e.message); } finally { setSaving(null); }
   }
   // v55.83-UG (Codex QA 18:06) — show what the server will actually allow, counting every name of the switch
-  function has(u, key) { var m = permissions[u.id] || {}; var on = {}, off = {}; Object.keys(m).forEach(function (k) { if (m[k] === true) { on[k] = true; } else if (m[k] === false) { off[k] = true; } }); return effectiveSwitch(on, off, key) === true; }
+  function has(u, key) { var m = permissions[u.id] || {}; var on = {}, off = {}; Object.keys(m).forEach(function (k) { if (m[k] === true) { on[k] = true; } else if (m[k] === false) { off[k] = true; } });
+    // v55.83-XK — "P&L: See sales & revenue" is ON with P&L unless the super admin switched it OFF (same rule as the server)
+    if (key === 'pnl.view_revenue') { return effectiveSwitch(on, off, key) !== false && effectiveSwitch(on, off, 'pnl.view') === true; }
+    return effectiveSwitch(on, off, key) === true; }
   var shownUsers = users.filter(function (u) { var t = (String(u.name || '') + ' ' + String(u.email || '') + ' ' + String(u.role || '')).toLowerCase(); return !q.trim() || t.indexOf(q.trim().toLowerCase()) >= 0; });
   var u = users.filter(function (x) { return x.id === sel; })[0] || null;
   var boss = !!(u && u.role === 'super_admin'); // v55.83-UG (Max, Nov 18) — only the super admin has everything; admins / owners use their switches

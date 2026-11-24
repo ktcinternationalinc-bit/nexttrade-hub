@@ -402,7 +402,8 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {subtab === 'layers' && (
         <LayersLedger skus={skus} warehouses={warehouses} toast={toast} />
       )}
-      {subtab === 'pnl' && (
+      {subtab === 'pnl' && (isSuperAdmin !== true && modulePerms && modulePerms['pnl.view_revenue'] === false) && <div className="p-4 text-[13px] font-bold" style={{ color: '#92400e' }}>🔒 This screen shows sales, and “P&L: See sales & revenue” is off for you. Profitability (Accounting) has the costs, pounds and what remains open.</div>}
+      {subtab === 'pnl' && !(isSuperAdmin !== true && modulePerms && modulePerms['pnl.view_revenue'] === false) && ( /* v55.83-XK */
         <InventoryPnL skus={skus} toast={toast} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} />
       )}
       {/* v55.83-T — System B AdjustmentsManager (writes inv_layers) REMOVED.
@@ -457,11 +458,13 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       )}
 
       {/* v55.83-FW — Bilingual Inventory Report Center (snapshot + virtual mix) */}
-      {subtab === 'reportcenter' && (
+      {subtab === 'reportcenter' && (isSuperAdmin !== true && modulePerms && modulePerms['pnl.view_revenue'] === false) && <div className="p-4 text-[13px] font-bold" style={{ color: '#92400e' }}>🔒 This screen shows sales, and “P&L: See sales & revenue” is off for you. Profitability (Accounting) has the costs, pounds and what remains open.</div>}
+      {subtab === 'reportcenter' && !(isSuperAdmin !== true && modulePerms && modulePerms['pnl.view_revenue'] === false) && ( /* v55.83-XK */
         <InventoryReportCenter userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
       {/* v55.83-A.6.27.62 — Inventory P&L Reports */}
-      {subtab === 'pnlreports' && (
+      {subtab === 'pnlreports' && (isSuperAdmin !== true && modulePerms && modulePerms['pnl.view_revenue'] === false) && <div className="p-4 text-[13px] font-bold" style={{ color: '#92400e' }}>🔒 This screen shows sales, and “P&L: See sales & revenue” is off for you. Profitability (Accounting) has the costs, pounds and what remains open.</div>}
+      {subtab === 'pnlreports' && !(isSuperAdmin !== true && modulePerms && modulePerms['pnl.view_revenue'] === false) && ( /* v55.83-XK */
         <InventoryPnLReports userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
       {/* v55.83-A.6.27.62 — Warehouse Advances workflow */}
@@ -474,7 +477,8 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
         <FxRatesPanel userProfile={userProfile} toast={toast} canEdit={isSuperAdmin || (modulePerms && modulePerms['Edit Treasury'] === true)} />
       )}
       {/* v55.83-A.6.27.63 — FX P&L report (real margin vs FX gain/loss) */}
-      {subtab === 'fxpnl' && (
+      {subtab === 'fxpnl' && (isSuperAdmin !== true && modulePerms && modulePerms['pnl.view_revenue'] === false) && <div className="p-4 text-[13px] font-bold" style={{ color: '#92400e' }}>🔒 This screen shows sales, and “P&L: See sales & revenue” is off for you. Profitability (Accounting) has the costs, pounds and what remains open.</div>}
+      {subtab === 'fxpnl' && !(isSuperAdmin !== true && modulePerms && modulePerms['pnl.view_revenue'] === false) && ( /* v55.83-XK */
         <FxPnLReport userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 

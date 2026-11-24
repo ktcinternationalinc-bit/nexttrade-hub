@@ -14,6 +14,7 @@ stub('src/lib/server-permissions.js', {
   assertPermission: function () { return Promise.resolve({ ok: true, ctx: { isSuperAdmin: state.superAdmin } }); },
   loadUserPermissions: function () { return Promise.resolve({ isSuperAdmin: state.superAdmin, mp: {} }); },
   userHasPermission: function () { return true; },
+  revenueSwitchedOff: function () { return false; }, // v55.83-XK stand-in: nobody is a researcher here
 });
 stub('src/lib/visibility-window-server.js', { windowFloorFor: function () { return Promise.resolve({ floor: state.superAdmin ? null : state.floor }); }, clampFrom: function (d, f) { return !f ? d || null : (!d || d < f ? f : d); } });
 var supa = require.resolve('@supabase/supabase-js', { paths: [root] });

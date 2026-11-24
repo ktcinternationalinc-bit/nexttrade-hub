@@ -175,7 +175,7 @@ check('…an invoice that truly has NO release number still says so', e3c.tasks.
 // the screen
 var tab = fs.readFileSync(path.join(root, 'src/components/ProfitabilityTab.jsx'), 'utf8');
 var route = fs.readFileSync(path.join(root, 'src/app/api/accounting/profitability/route.js'), 'utf8');
-check('the screen imports openTasks and shows the list at the top of the Lines-to-fix box', /import \{ [^}]*openTasks[^}]* \} from '\.\.\/lib\/pnl-period';/.test(tab) && tab.indexOf('var ot = openTasks(cs, hidden);') > 0 && tab.indexOf('{openBox}') > 0 && tab.indexOf("'What remains open in ' + r.label + ': '") > 0);
+check('the screen imports openTasks and shows the list at the top of the Lines-to-fix box', /import \{ [^}]*openTasks[^}]* \} from '\.\.\/lib\/pnl-period';/.test(tab) && tab.indexOf('var ot = openTasks(cs, revH ? false : hidden, { revenueHidden: revH });') > 0 /* v55.83-XK: a researcher keeps the list */ && tab.indexOf('{openBox}') > 0 && tab.indexOf("'What remains open in ' + r.label + ': '") > 0);
 check('trucking / freight are typed right in the list and saved with the existing action; an empty box cannot be saved', tab.indexOf("act({ action: 'set_part_estimate', release: t.release, part: t.part, amount: draft[tk] }") > 0 && tab.indexOf("disabled={draft[tk] === undefined || String(draft[tk]).trim() === ''}") > 0);
 check('saving reloads the report, so a resolved row leaves the list by itself', /function act\(payload, okMsg\) \{[\s\S]{0,260}load\(\); return true;/.test(tab));
 check('the server accepts 0 as an amount (only a negative or a non-number is refused)', route.indexOf("if (isNaN(pv) || pv < 0) { return bad('The amount must be a number, zero or more.'); }") > 0);

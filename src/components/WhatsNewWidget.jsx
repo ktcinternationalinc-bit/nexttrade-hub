@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-XK',
+    date: '2026-11-24',
+    title: 'P&L: See sales & revenue — a researcher can fill in costs without seeing sales',
+    items: [
+      { text: '**New switch: P&L: See sales & revenue.** It is ON for everyone who can open P&L today — nobody loses anything. Switch it OFF for a person to make them a RESEARCHER: Settings → 🏦 Banking & Accounting Access → the person → **See sales & revenue** → off.' },
+      { text: 'A researcher sees costs, pounds, releases, trucking and freight costs, and the list of **what remains open**, and can type costs (with P&L: Edit Product Costs). They see no sale price, invoiced amount, revenue, profit or margin anywhere: Profitability and P&L show 🔒 in those places, never $0.' },
+      { text: 'The Hub refuses to make someone a researcher while they still have invoice, customer, bank, Wave or other accounting switches on — it lists them so you can switch them off first. Their Accounting area shows only Profitability and P&L.' },
+      { text: '**Needs a database step before anyone can be made a researcher** (it stops the screens that read sales straight from the database). Until then the switch cannot be turned off.' },
+      { text: 'Also fixed: ten Wave screens (import, reconcile, push invoice / payment) now check who is really signed in — before, the browser could name any user.' },
+      { superAdminOnly: true, text: 'Technical: lib/revenue-visibility.js (revenueScope: one permission read per answer, a failed read refuses; stripRevenue: profit first, then revenue by contract — warning flags by kind, missing-weight warnings by cost-or-customer context, a final key pass as safety net); server-permissions: failed reads grant nothing, a researcher holds only pnl.view / pnl.edit_costs (+ the screen-opening switches in Settings); revenue-researcher-gate.js used by /api/admin/permissions and the bank-visibility writer; refusals in ask / ask-v2 / ai-reports / nadia money alerts / reconcile-nexttrade / wave invoice-diagnostic, import-preview / wave-history; warehouse-shipping drops invoice totals; lib/wave-caller.js on 10 Wave routes. SQL sql/v55-83-XK-revenue-researcher.sql NOT installed (real Postgres 20/20). Tests: test-v55-83-xk-revenue-researcher.js 44/44.' }
+    ]
+    ]
+  },
+  {
     version: 'v55.83-YF',
     date: '2026-11-23',
     title: 'Cash on Hand: invoices received in cash, bills paid in cash, cash taken to the bank',

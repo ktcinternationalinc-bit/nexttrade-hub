@@ -66,7 +66,7 @@ function chain(table) { var q = { f: [] };
 stub(path.join(root, 'node_modules/next/server.js'), { NextResponse: { json: function (body, init) { return { status: (init && init.status) || 200, body: body }; } } });
 stub('@supabase/supabase-js', { createClient: function () { return { from: chain, rpc: function () { return Promise.resolve({ data: null, error: null }); } }; } });
 stub(path.join(root, 'src/lib/verified-caller.js'), { verifiedCaller: async function () { return { userId: 'u1' }; } });
-stub(path.join(root, 'src/lib/server-permissions.js'), { assertPermission: async function (db, userId, key) { return world.perms[key] ? { ok: true, ctx: {} } : { ok: false }; }, loadUserPermissions: async function () { return {}; }, userHasPermission: function () { return false; } });
+stub(path.join(root, 'src/lib/server-permissions.js'), { revenueSwitchedOff: function () { return false; } /* v55.83-XK */, assertPermission: async function (db, userId, key) { return world.perms[key] ? { ok: true, ctx: {} } : { ok: false }; }, loadUserPermissions: async function () { return {}; }, userHasPermission: function () { return false; } });
 stub(path.join(root, 'src/lib/visibility-window-server.js'), { windowFloorFor: async function () { return { floor: world.floor || null }; }, clampFrom: function (d0) { return d0; } });
 stub(path.join(root, 'src/lib/private-accounts-server.js'), { privateScope: async function () { return world.priv; }, dropPrivate: function (r) { return r; }, isPrivateRow: function () { return false; } });
 var US = require(path.join(root, 'src/lib/business-of.js')).US_WAVE_BUSINESS_ID;

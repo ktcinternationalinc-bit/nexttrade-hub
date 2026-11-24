@@ -54,7 +54,7 @@ Module._load = function (request, parent, isMain) {
   if (request === 'next/server') { return { NextResponse: { json: function (body, init) { return { body: body, status: (init && init.status) || 200 }; } } }; }
   if (request === '@supabase/supabase-js') { return { createClient: function () { return { from: q }; } }; }
   if (/lib\/verified-caller$/.test(request)) { return { verifiedCaller: function () { return Promise.resolve({ userId: 'user-1' }); } }; }
-  if (/lib\/server-permissions$/.test(request)) { return { assertPermission: function () { return Promise.resolve({ ok: true }); } }; }
+  if (/lib\/server-permissions$/.test(request)) { return { loadUserPermissions: async function () { return {}; }, revenueSwitchedOff: function () { return false; } /* v55.83-XK stand-in: nobody is a researcher here */, assertPermission: function () { return Promise.resolve({ ok: true }); } }; }
   if (/lib\/invoice-extract-server$/.test(request)) { return { readInvoiceFromBase64: function () { return Promise.resolve(null); } }; }
   return realLoad.apply(this, arguments);
 };
@@ -63,7 +63,7 @@ Module._load = realLoad;
 // the Profitability route (shipping breakdown actions): same database stand-in; here the PERMISSION stand-in answers from state.perms
 function stub(rel, exportsObj) { var p = require.resolve(path.join(root, rel)); require.cache[p] = { id: p, filename: p, loaded: true, exports: exportsObj }; }
 stub('src/lib/verified-caller.js', { verifiedCaller: function () { return Promise.resolve({ userId: 'user-1' }); } });
-stub('src/lib/server-permissions.js', { assertPermission: function (db, uid, perm) { return Promise.resolve(state.perms[perm] ? { ok: true, ctx: { isSuperAdmin: false, mp: state.perms } } : { ok: false, status: 403, error: 'no ' + perm }); }, loadUserPermissions: function () { return Promise.resolve({ isSuperAdmin: false, mp: state.perms }); }, userHasPermission: function (ctx, perm) { return !!(ctx && ctx.mp && ctx.mp[perm]); } });
+stub('src/lib/server-permissions.js', { revenueSwitchedOff: function () { return false; } /* v55.83-XK */, assertPermission: function (db, uid, perm) { return Promise.resolve(state.perms[perm] ? { ok: true, ctx: { isSuperAdmin: false, mp: state.perms } } : { ok: false, status: 403, error: 'no ' + perm }); }, loadUserPermissions: function () { return Promise.resolve({ isSuperAdmin: false, mp: state.perms }); }, userHasPermission: function (ctx, perm) { return !!(ctx && ctx.mp && ctx.mp[perm]); } });
 stub('src/lib/visibility-window-server.js', { windowFloorFor: function () { return Promise.resolve({ floor: null }); }, clampFrom: function (x) { return x; } });
 var supaP = require.resolve('@supabase/supabase-js', { paths: [root] });
 require.cache[supaP] = { id: supaP, filename: supaP, loaded: true, exports: { createClient: function () { return { from: q }; } } };
