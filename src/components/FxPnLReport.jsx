@@ -41,7 +41,7 @@ export default function FxPnLReport(props) {
   var isSuperAdmin = !!props.isSuperAdmin;
   var toast = props.toast || { success: function(){}, error: function(){}, info: function(){} };
 
-  var canSeePnL = isSuperAdmin || canSeeInventoryPnL(modulePerms);
+  var canSeePnL = isSuperAdmin || canSeeInventoryPnL(userProfile, modulePerms);
 
   var [layers, setLayers] = useState([]);
   var [movements, setMovements] = useState([]);

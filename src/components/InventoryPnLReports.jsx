@@ -59,7 +59,7 @@ export default function InventoryPnLReports(props) {
   var isSuperAdmin = !!props.isSuperAdmin;
   var toast = props.toast || { success: function(){}, error: function(){}, info: function(){} };
 
-  var canSeePnL = isSuperAdmin || canSeeInventoryPnL(modulePerms);
+  var canSeePnL = isSuperAdmin || canSeeInventoryPnL(userProfile, modulePerms);
   var seeM = canSeeMargin(isSuperAdmin, modulePerms); // v55.83-TG — profit / margin need 'P&L: See profit & margin'
 
   var [products, setProducts] = useState([]);

@@ -3,6 +3,8 @@
 // The SERVER removes every profit / margin figure from a report before it is sent, so a hidden column cannot be read from the
 // browser either. Pure, no database. SWC-safe (var + concat).
 export var MARGIN_PERMISSION = 'pnl.view_margin';
+export var TYPED_PNL_PERMISSION = 'pnl.open_typed';
+export var LEDGER_PNL_PERMISSION = 'pnl.open_clickbooks';
 var PROFIT_KEY = /profit|margin/i;
 
 // returns a deep copy with every key whose name contains "profit" or "margin" removed
@@ -18,3 +20,12 @@ export function stripProfit(v) {
 
 // client side: may this person see profit / margin? (the server enforces it as well)
 export function canSeeMargin(isSuperAdmin, modulePerms) { return isSuperAdmin === true || !!(modulePerms && modulePerms[MARGIN_PERMISSION] === true); }
+
+export function canOpenTypedPnl(isSuperAdmin, modulePerms) {
+  return isSuperAdmin === true || (
+    canSeeMargin(false, modulePerms) &&
+    modulePerms['pnl.view'] === true &&
+    modulePerms[TYPED_PNL_PERMISSION] !== false &&
+    modulePerms['pnl.view_revenue'] !== false
+  );
+}

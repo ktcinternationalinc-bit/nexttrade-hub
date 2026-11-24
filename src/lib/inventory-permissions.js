@@ -1,3 +1,5 @@
+import { canSeeMargin } from './margin-visibility';
+
 // v55.83-A — Inventory Module Permissions
 //
 // Three-tier visibility model agreed with Max:
@@ -37,8 +39,10 @@ export function canSeeInventoryPnL(userProfile, modulePerms) {
   if (!userProfile) return false;
   if (userProfile.role === 'super_admin') return true;
   if (!modulePerms) return false;
-  return modulePerms['inv.see_pnl'] === true
-      || modulePerms['Inventory P&L'] === true;
+  if (!canSeeMargin(false, modulePerms) || modulePerms['pnl.view_revenue'] === false) return false;
+  var keys = ['inv.see_pnl', 'Inventory P&L', 'See Inventory P&L'];
+  if (keys.some(function (key) { return modulePerms[key] === false; })) return false;
+  return keys.some(function (key) { return modulePerms[key] === true; });
 }
 
 /**

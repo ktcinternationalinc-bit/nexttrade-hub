@@ -1095,7 +1095,7 @@ export default function ProfitabilityTab(props) {
         {/* v55.83-VL (Max, Nov 19: "Names, units and supplier links should be in a separate place ... different button and look" · "just make them look separated somehow") — three groups: reports, shipping, set-up */}
         <span className="flex gap-1.5 flex-wrap items-center px-1.5 py-1 rounded-lg" style={{ border: '1px solid ' + LINE }}>
           <span className="text-[10px] font-extrabold uppercase" style={{ color: SUB }}>Reports</span>
-          {[['period', '📅 P&L by period (goods · transport)'], ['product', 'By product'], ['customer', 'By customer'], ['invoice', 'By invoice']].map(function (v) {
+          {[['period', showProfit ? '📅 P&L by period (goods · transport)' : '📅 Costs by period (goods · transport)'], ['product', 'By product'], ['customer', 'By customer'], ['invoice', 'By invoice']].map(function (v) {
             return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{v[1]}</button>; })}
         </span>
         <span className="flex gap-1.5 flex-wrap items-center px-1.5 py-1 rounded-lg" style={{ border: '1px solid #7dd3fc', background: '#f0f9ff' }}>

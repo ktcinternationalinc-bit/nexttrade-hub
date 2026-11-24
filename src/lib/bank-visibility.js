@@ -1,7 +1,7 @@
 // Independent server-only dashboard and bank balance authorities. Operational transactions, invoice payments,
 // bills and categorization retain their own permissions. Neither a legacy role
 // nor a writable module_permissions row can grant account balances.
-import { effectiveSwitch } from './permission-aliases'; // v55.83-XK — the researcher check (no import of server-permissions: no cycle)
+import { effectiveSwitch } from './permission-aliases.js'; // v55.83-XK — the researcher check (no import of server-permissions: no cycle)
 export class BankVisibilityError extends Error {
   constructor(message, status) { super(message); this.name = 'BankVisibilityError'; this.status = status; }
 }

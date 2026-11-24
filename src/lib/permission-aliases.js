@@ -5,6 +5,7 @@
 //  • otherwise any name ON → ON; otherwise not set (null).
 //  • 'accounting.view' (old "both hubs" key) can still GRANT either hub, but an OFF on one hub never turns off the other.
 export var PERMISSION_ALIASES = {
+  'inv.see_pnl': ['Inventory P&L', 'See Inventory P&L'],
   // ----- AR (first-class, NOT bundled into invoice view) -----
   'ar.view_summary': ['AR: View Summary', 'ar.view_summary', 'Finance: View Company Totals', 'finance.view_company_totals'],
   'ar.view_customer_balances': ['AR: View Customer Balances', 'ar.view_customer_balances', 'Finance: View All Customer Balances', 'finance.view_all_customer_balances'],

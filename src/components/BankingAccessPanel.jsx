@@ -11,6 +11,7 @@
 // (their own protected table), shown here in the same box.
 import React, { useState, useEffect } from 'react';
 import { effectiveSwitch } from '../lib/permission-aliases'; // v55.83-UG
+import { canOpenTypedPnl, LEDGER_PNL_PERMISSION, TYPED_PNL_PERMISSION } from '../lib/margin-visibility';
 import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import { useBankVisibility, refreshBankVisibility } from '../lib/use-bank-visibility';
@@ -23,12 +24,15 @@ export var BANKING_GROUPS = [
   ] },
   { title: '2 · Which money can they see?', items: [
     { key: 'accounting.view_totals', label: 'Money totals', desc: 'Came In, Went Out, Sales, Net Moved, Projected Net. Without it these show “Restricted”.', needsBooks: true },
-    { key: 'pnl.view', label: 'Open Profitability and P&L', desc: 'Keeps Profitability, Sales P&L and Inventory P&L available. Leave this on for people who need the reports.', needsBooks: true },
-    { key: 'pnl.view_margin', label: 'Show profit & margin 🔒', desc: 'Turn this off to hide profit, margin and goods revenue in Profitability. Books keeps Still Open and hides invoice and collection totals. The Accounting Dashboard hides Paid in period. Only the super admin can switch this on.', needsBooks: true, sensitive: true },
+    { key: 'pnl.view', label: 'Open Profitability', desc: 'Opens the Profitability tab. Leave this on for people who need the cost and shipment reports.', needsBooks: true },
+    { key: 'pnl.view_margin', label: 'Show profit & margin 🔒', desc: 'Off hides profit, margin and goods revenue in Profitability, invoice activity in Books, and Paid in period on the Accounting Dashboard. It also hides the full P&L links below. Still Open in Books requires Invoices & collections.', needsBooks: true, sensitive: true },
+    { key: TYPED_PNL_PERMISSION, label: 'Open P&L (typed costs)', desc: 'Controls the separate Accounting → P&L (typed costs) link. Requires Open Profitability, Wave Hub and Show profit & margin. Existing access stays on until switched off.', needsBooks: true },
+    { key: 'inv.see_pnl', label: 'Open Inventory P&L', desc: 'Controls Inventory → P&L Reports and FX P&L. Requires Inventory access and Show profit & margin.', sensitive: true },
+    { key: LEDGER_PNL_PERMISSION, label: 'Open ClickBooks P&L', desc: 'Controls Profit & Loss inside Financial Reports. Requires Show profit & margin and Company financial overview & ClickBooks reports. Money totals separately controls the cash income statement.', needsKtc: true },
     { key: 'payroll.view', label: 'Payroll / salaries: view 🔒', desc: 'Warehouse salary (payroll) amounts. Without it payroll shows as "Warehouse staff" with 🔒. Today: Nextrade books and Nextrade bills; Bills, wires and P&L follow. Only the super admin can switch this on.', sensitive: true }, // v55.83-XE
-    { key: 'pnl.view_revenue', label: 'See sales & revenue', desc: 'On by default when Open Profitability and P&L is on. Turning this off hides sale prices, invoiced amounts, revenue, profit and margin across the Hub. Researchers can still check costs, pounds, releases and open tasks. The Hub lists conflicting permissions and requires the database setup before saving.', needsBooks: true }, // v55.83-XK
+    { key: 'pnl.view_revenue', label: 'See sales & revenue', desc: 'On by default with Open Profitability. Turning it off enables researcher restrictions across the Hub. The Hub checks for conflicting permissions before saving.', needsBooks: true }, // v55.83-XK
     { key: 'pnl.edit_costs', label: 'Edit product costs', desc: 'Type or change product costs (with the date they start). The most sensitive accounting change.', needsBooks: true },
-    { key: 'accounting.view_invoicing', label: 'Invoices & collections', desc: 'Invoiced, Paid, Still Open, Collected — and the invoices behind them.', needsBooks: true },
+    { key: 'accounting.view_invoicing', label: 'Invoices & collections', desc: 'Lets staff open Still Open in Books. Show profit & margin also controls the other invoice activity cards in Books.', needsBooks: true },
     { special: 'canViewBankBalances', label: 'Bank balances', desc: 'Account balances, trial balance, general ledger, cash flow, bank reconciliation. Super admin grants only.' },
     { special: 'canViewFullDashboard', label: 'Company financial overview & ClickBooks reports', desc: 'The company-wide financial dashboard and the ClickBooks Financial Reports tab. Super admin grants only.' },
   ] },
@@ -152,6 +156,8 @@ export default function BankingAccessPanel(props) {
   function has(u, key) { var m = permissions[u.id] || {}; var on = {}, off = {}; Object.keys(m).forEach(function (k) { if (m[k] === true) { on[k] = true; } else if (m[k] === false) { off[k] = true; } });
     // v55.83-XK — "P&L: See sales & revenue" is ON with P&L unless the super admin switched it OFF (same rule as the server)
     if (key === 'pnl.view_revenue') { return effectiveSwitch(on, off, key) !== false && effectiveSwitch(on, off, 'pnl.view') === true; }
+    if (key === TYPED_PNL_PERMISSION) { return m[key] ?? (effectiveSwitch(on, off, 'pnl.view') === true); }
+    if (key === LEDGER_PNL_PERMISSION) { var grant = grantFor(u); return m[key] ?? !!(grant && grant.canViewFullDashboard); }
     return effectiveSwitch(on, off, key) === true; }
   var shownUsers = users.filter(function (u) { var t = (String(u.name || '') + ' ' + String(u.email || '') + ' ' + String(u.role || '')).toLowerCase(); return !q.trim() || t.indexOf(q.trim().toLowerCase()) >= 0; });
   var u = users.filter(function (x) { return x.id === sel; })[0] || null;
@@ -217,6 +223,9 @@ export default function BankingAccessPanel(props) {
                   : <Switch on={has(u, it.key)} onClick={function () { toggle(u.id, it.key, has(u, it.key)); }} />;
                 if (!boss && has(u, it.key) && it.needsKtc && !ktc) { warn = 'Not working yet — turn on ClickBooks (KTC Hub) in group 1.'; }
                 else if (!boss && has(u, it.key) && it.needsBooks && !books) { warn = 'Not working yet — turn on ClickBooks or Wave Hub in group 1.'; }
+                else if (!boss && it.key === TYPED_PNL_PERMISSION && on && (!canOpenTypedPnl(false, permissions[u.id]) || !has(u, 'accounting.wavehub.access'))) {
+                  warn = 'Link hidden by the person’s other access settings.';
+                }
               }
               return <div key={it.key || it.special} className="flex gap-3 items-center py-2" style={{ borderTop: '1px solid #e2e8f0' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>

@@ -11,12 +11,38 @@ const rpcDb=(fn)=>({rpc:async(name,args)=>fn(name,args)});
 const ok=(data)=>({data,error:null});
 const err=(message)=>({data:null,error:{message}});
 async function body(r){return await r.json();}
+function reportsDb(permissions, rpc) {
+  return {
+    ...rpcDb(rpc),
+    from(table) {
+      return { select() { return { eq() {
+        return table === 'users' ? { limit: async () => ok([{ role: 'team' }]) } : Promise.resolve(ok(permissions));
+      } }; } };
+    },
+  };
+}
 
 const reportEnv={CLICKBOOKS_US_ENABLED:'true',CLICKBOOKS_US_REPORTS_ENABLED:'true',CLICKBOOKS_US_REPORT_SETTINGS_WRITES_ENABLED:'true'};
 test('reports fail closed when disabled',async()=>{const h=createReportsHandlers(async()=>({}),{});assert.equal((await h.GET(req('https://hub.test/api?report=readiness&from=2026-10-01&to=2026-11-02'))).status,503);});
 test('reports require full dashboard',async()=>{const h=createReportsHandlers(async()=>({authUserId:'x',canViewFullDashboard:false,canViewBankBalances:false,db:rpcDb(()=>ok({}))}),reportEnv);assert.equal((await h.GET(req('https://hub.test/api?report=profit_loss&from=2026-10-01&to=2026-11-02'))).status,403);});
 test('bank-sensitive reports require banking permission',async()=>{const h=createReportsHandlers(async()=>({authUserId:'x',canViewFullDashboard:true,canViewBankBalances:false,db:rpcDb(()=>ok({}))}),reportEnv);assert.equal((await h.GET(req('https://hub.test/api?report=general_ledger&from=2026-10-01&to=2026-11-02'))).status,403);});
-test('P&L passes bank=false for dashboard-only user',async()=>{let call;const h=createReportsHandlers(async()=>({authUserId:'x',canViewFullDashboard:true,canViewBankBalances:false,db:rpcDb((n,a)=>{call=[n,a];return ok({report:'profit_loss'});})}),reportEnv);const r=await h.GET(req('https://hub.test/api?report=profit_loss&from=2026-10-01&to=2026-11-02'));assert.equal(r.status,200);assert.equal(call[0],'clickbooks_us_report_read');assert.equal(call[1].p_with_bank,false);});
+test('P&L with margin access passes bank=false for a dashboard user without bank access',async()=>{
+  let call;
+  const db=reportsDb([{module_name:'pnl.view_margin',has_access:true}],(n,a)=>{call=[n,a];return ok({report:'profit_loss'});});
+  const h=createReportsHandlers(async()=>({authUserId:'x',profileId:'staff',canViewFullDashboard:true,canViewBankBalances:false,db}),reportEnv);
+  const r=await h.GET(req('https://hub.test/api?report=profit_loss&from=2026-10-01&to=2026-11-02'));
+  assert.equal(r.status,200);assert.equal(call[0],'clickbooks_us_report_read');assert.equal(call[1].p_with_bank,false);
+});
+test('ledger P&L refuses a dashboard user with margin or the P&L link switched off',async()=>{
+  for(const permissions of [
+    [{module_name:'pnl.view_margin',has_access:false}],
+    [{module_name:'pnl.view_margin',has_access:true},{module_name:'pnl.open_clickbooks',has_access:false}],
+  ]){
+    const db=reportsDb(permissions,()=>assert.fail('A denied report must not reach the ledger'));
+    const h=createReportsHandlers(async()=>({authUserId:'x',profileId:'staff',canViewFullDashboard:true,db}),reportEnv);
+    assert.equal((await h.GET(req('https://hub.test/api?report=profit_loss&from=2026-10-01&to=2026-11-02'))).status,403);
+  }
+});
 test('balance sheet can load redacted without bank permission',async()=>{let call;const h=createReportsHandlers(async()=>({authUserId:'x',canViewFullDashboard:true,canViewBankBalances:false,db:rpcDb((n,a)=>{call=[n,a];return ok({});})}),reportEnv);assert.equal((await h.GET(req('https://hub.test/api?report=balance_sheet&from=2026-10-01&to=2026-11-02'))).status,200);assert.equal(call[1].p_with_bank,false);});
 test('report settings are super-admin only',async()=>{const h=createReportsHandlers(async()=>({authUserId:'x',canViewFullDashboard:true,canViewBankBalances:true,isVerifiedSuperAdmin:false,db:rpcDb(()=>ok([]))}),reportEnv);assert.equal((await h.GET(req('https://hub.test/api?report=settings&from=2026-10-01&to=2026-11-02'))).status,403);});
 test('report setting writes reject cross-site',async()=>{const h=createReportsHandlers(async()=>({}),reportEnv);const r=await h.POST(req('https://hub.test/api',{method:'POST',headers:{origin:'https://evil.test','content-type':'application/json'},body:'{}'}));assert.equal(r.status,403);});
