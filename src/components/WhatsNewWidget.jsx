@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YI',
+    date: '2026-11-24',
+    title: 'More room for the warehouse inside the Hub',
+    items: [
+      { text: 'NT Warehouse now fills the available width. The compact toolbar leaves more space for warehouse tables and orders.' },
+      { text: 'When the warehouse is wider than the screen, visible scrollbars at the top and bottom move together. Use Expand to cover the Hub sidebar; Restore brings it back without reloading the warehouse.' },
+      { text: 'Both live and staging have the same controls. STAGING / TEST stays clearly marked, and the separate-window button is still available.' },
+      { superAdminOnly: true, text: 'Hub display only: shared NTWarehousePanel, scoped scrollbar styles and warehouse-only layout. No SQL, warehouse server changes, data changes or permission changes.' },
+    ]
+  },
+  {
     version: 'v55.83-XY',
     date: '2026-11-23',
     title: 'Reminders: copy to the office, invoice attached, customer language, and automatic sending (off until switched on)',

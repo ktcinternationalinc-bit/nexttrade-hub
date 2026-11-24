@@ -4,6 +4,8 @@ const path = require('path');
 const assert = require('assert');
 const root = path.join(__dirname, '..');
 const page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8');
+const shared = fs.readFileSync(path.join(root, 'src/components/NTWarehousePanel.jsx'), 'utf8');
+const css = fs.readFileSync(path.join(root, 'src/components/NTWarehousePanel.module.css'), 'utf8');
 const whatsnew = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); console.log('  ok: ' + msg); pass++; }
@@ -12,30 +14,31 @@ function ok(cond, msg) { assert.ok(cond, msg); console.log('  ok: ' + msg); pass
 function block(tabId) {
   const i = page.indexOf("tab === '" + tabId + "' && (");
   assert.ok(i >= 0, "block for " + tabId + " exists");
-  return page.slice(i, i + 2400);
+  assert.ok(page.slice(i, i + 180).includes('<NTWarehousePanel'), 'YI shared viewport is mounted');
+  return shared;
 }
 
 ['ntwarehouse', 'ntwarehouse-staging'].forEach(function (tabId) {
   const b = block(tabId);
   // The iframe is wrapped in a horizontally-scrolling div.
-  ok(/overflow-x-auto/.test(b) && /overflow-y-hidden/.test(b), tabId + ': iframe wrapper scrolls horizontally (overflow-x-auto, overflow-y-hidden)');
+  ok(/overflow-x: scroll/.test(css) && /overflow-y: hidden/.test(css), tabId + ': iframe wrapper scrolls horizontally');
   // The iframe lays out at its full min-width so nothing is clipped.
-  ok(/minWidth: 1440/.test(b), tabId + ': iframe has min-width 1440 so the full layout shows');
-  ok(/width: '100%'/.test(b), tabId + ': iframe width 100%');
+  ok(/min-width: 1440px/.test(css), tabId + ': iframe has min-width 1440 so the full layout shows');
+  ok(/\.frame \{[^}]*width: 100%/.test(css), tabId + ': iframe width 100%');
   // The iframe is still inside the wrapper div (wrapper opens before the iframe tag).
-  const wrapIdx = b.indexOf('overflow-x-auto');
+  const wrapIdx = b.indexOf('<div ref={viewportRef}');
   const iframeIdx = b.indexOf('<iframe');
   ok(wrapIdx >= 0 && iframeIdx > wrapIdx, tabId + ': the iframe sits inside the scroll wrapper');
   // Still the right src + the open-in-window fallback.
   const src = tabId === 'ntwarehouse' ? 'https://nextradeindustries.com/admin' : 'https://fix.nextrade-staging.com/admin';
-  ok(b.indexOf('<iframe src="' + src + '"') >= 0, tabId + ': iframe still points at ' + src);
-  ok(/Open in its own window/.test(b), tabId + ': open-in-window fallback still present');
+  ok(b.includes(src) && b.includes('<iframe src={src}'), tabId + ': iframe still points at ' + src);
+  ok(/Open warehouse in its own window/.test(b), tabId + ': open-in-window fallback still present');
   // No Hub data crosses the frame.
   ok(!/<iframe[^>]*(token|userProfile|modulePerms|session)/i.test(b), tabId + ': iframe carries no Hub token/profile/session');
 });
 
 // Staging panel keeps its STAGING · TEST distinction.
-ok(/STAGING · TEST/.test(block('ntwarehouse-staging')), 'staging panel keeps the STAGING · TEST marking');
+ok(/STAGING \/ TEST/.test(block('ntwarehouse-staging')), 'staging panel keeps its TEST marking');
 
 // No stale "NEW TAB" wording left in the sidebar comment.
 ok(!/opens the staging\s*\n?\s*copy in a NEW TAB/.test(page) && page.indexOf('NEW TAB') < 0, 'the stale "NEW TAB" sidebar comment is fixed');
