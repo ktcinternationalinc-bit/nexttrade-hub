@@ -6,7 +6,8 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../../lib/verified-caller';
-import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, requireReleaseManager, findItem, latestByItem, itemSignState, checkSignoff, tableMissing } from '../../../../lib/release-signoff';
+import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, requireReleaseManager, findItem, checkSignoff, tableMissing } from '../../../../lib/release-signoff';
+import { matchesReview, reviewState } from '../../../../lib/release-review';
 import bundledRegister from '../../../../../release-management/release-register.json';
 import selection from '../../../../../release-management/lib/selection';
 
@@ -40,11 +41,12 @@ export async function POST(request) {
     return deny('The sign-offs could not be read right now. Nothing was recorded.', 500);
   }
   if ((sr.data || []).length === 5000) { return deny('Full history is required before another release.', 409); }
-  var latest = latestByItem(sr.data || []); var states = {}; var heads = {};
-  bundledRegister.items.forEach(function (it) { states[it.id] = itemSignState(it, latest[it.id]); heads[it.id] = 0; });
-  (sr.data || []).forEach(function (r) { heads[r.item_id] = Math.max(heads[r.item_id] || 0, Number(r.id)); });
+  var { latest, states, heads } = reviewState(bundledRegister, sr.data || []);
   // The screen must name the state it reviewed. Replayed/stale confirmations cannot approve a newer candidate.
   if (!body.heads || ids.some(function (id) { return Number(body.heads[id]) !== heads[id] || body.heads[id] === undefined; })) { return deny('This change has moved since your screen loaded. Refresh and review again.', 409); }
+  if (action === 'go' && !matchesReview(body.review_receipt, who.userId, ids, bundledRegister, heads)) {
+    return deny('Run the deployment review again before approving this selection.', 409);
+  }
   var ordered = ids.map(function (id) { return findItem(bundledRegister, id); });
   if (action !== 'withdraw') {
     var plan = selection.selectionPlan(bundledRegister.items, states, ids, action);

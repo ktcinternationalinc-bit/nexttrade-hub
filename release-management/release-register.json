@@ -73,30 +73,76 @@
       "where": "staging",
       "status": "queued",
       "needsCodex": false,
-      "needsMax": true,
-      "dataChange": false,
+      "needsMax": false,
+      "dataChange": true,
       "meta": "15 Nov",
       "desc": "USA/Canada sections, kept reservations (no double-deduction), release-with-reason, save & create picking PDF.",
+      "proposedBuild": "c8e70efafe514337c54d54fbcdcf897366a3deee",
+      "releaseSteps": [
+        "Production is missing released_at, release_reason and released_by. Fix staging has all three.",
+        "The proposed build includes two additive migrations before the Order Queue code. Review the migrations, reservation flow and code rollback as one release."
+      ],
       "files": "order queue views + controllers",
       "backup": "staging backup bundle",
       "rollback": "restore bundle + php artisan view:clear"
     },
     {
       "id": "wh-bug-001",
-      "title": "BUG-001 — empty pallet unit fixed",
+      "title": "BUG-001 — correct existing pallet units",
       "repo": "nextrade_WAREHOUSE",
       "build": "",
       "date": "2026-11-15",
       "where": "staging",
       "status": "queued",
       "needsCodex": false,
+      "needsMax": false,
+      "dataChange": true,
+      "meta": "15 Nov",
+      "desc": "Restore pallets with a weight skew and a blank unit to the Inventory Summary. The last production check found 2,776 matching records.",
+      "releaseSteps": [
+        "Approve and deploy BUG-001 — prevent blank pallet units first so new scans use the fix.",
+        "Review the database correction separately. Recount and back up only matching records, set their unit to W, then verify counts and totals."
+      ],
+      "files": "scan_in_logs.unit for confirmed weight skews with blank units"
+    },
+    {
+      "id": "wh-bug-001-save-path",
+      "title": "BUG-001 — prevent blank pallet units",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "f8572e1bbd445f537e1959875e3f4964f03270fe",
+      "date": "2026-11-24",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": false,
       "needsMax": true,
       "dataChange": false,
-      "meta": "15 Nov",
-      "desc": "~2,685 pallets that had dropped out of the Inventory Summary are restored (unit derived from the skew number).",
-      "files": "inventory summary logic",
-      "backup": "staging backup bundle",
-      "rollback": "restore bundle + php artisan view:clear"
+      "desc": "Derives a missing unit from the pallet skew when saving a scan.",
+      "manifest": {
+        "sha": "f8572e1bbd445f537e1959875e3f4964f03270fe",
+        "target": "production",
+        "dataCompatible": true,
+        "files": [
+          {
+            "path": "app/Http/Controllers/Admin/ScanInController.php",
+            "before": "9958610e06233576db06eebb84102f18e77c0e03171ddb14ec4080773e001f30",
+            "after": "e505fc6de87388bbbe4c213553a9c5d77b162de6abd4a40e02ef4c2b021b4a64"
+          }
+        ]
+      },
+      "codexRef": {
+        "sha": "f8572e1bbd445f537e1959875e3f4964f03270fe",
+        "target": "production",
+        "manifestDigest": "098a4194bd28c72e1e8b819ee34d40c8eaf21c13fda96a22dbba5087d9b516bf",
+        "feedbackRef": "docs/2026-11-24-warehouse-release-review.md#pallet-unit-prevention"
+      },
+      "behavioralQa": {
+        "sha": "f8572e1bbd445f537e1959875e3f4964f03270fe",
+        "target": "production",
+        "manifestDigest": "098a4194bd28c72e1e8b819ee34d40c8eaf21c13fda96a22dbba5087d9b516bf",
+        "kind": "behavioral",
+        "result": "PASS",
+        "summary": "Fix staging passed eight PHP unit-resolution cases. All four save paths were reviewed. This approval covers the code that prevents the issue."
+      }
     },
     {
       "id": "wh-bug-002",

@@ -23,7 +23,19 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           const data = { ok: true, items, signoffs, canSign: manager, workerOnline: true, executionReady: true, history: [] };
           window.posts = [];
           window.fetch = async (url, opts) => ({ json: async () => {
-            if (opts?.method === 'POST') { window.posts.push(JSON.parse(opts.body)); return { ok: true, note: 'Queued for execution, not yet deployed.' }; }
+            if (opts?.method === 'POST') {
+              const body = JSON.parse(opts.body);
+              window.posts.push(body);
+              if (url === '/api/releases/review') {
+                const passed = body.item_ids.every(id => signoffs[id].canGo);
+                const results = items.filter(it => body.item_ids.includes(it.id)).map(it => ({ id: it.id, sha: it.manifest.sha, files: it.manifest.files.map(file => file.path), steps: [], note: signoffs[it.id].why }));
+                return { ok: true, passed, results, receipt: passed ? 'review-fixture' : null,
+                  heads: Object.fromEntries(body.item_ids.map(id => [id, 0])),
+                  builds: Object.fromEntries(body.item_ids.map(id => [id, 'a'.repeat(40)])),
+                  digests: Object.fromEntries(body.item_ids.map(id => [id, 'b'.repeat(64)])) };
+              }
+              return { ok: true, note: 'Queued for execution, not yet deployed.' };
+            }
             return data;
           } });
           const mod = { exports: {} };
@@ -34,21 +46,26 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
         if (manager) {
           await page.getByRole('checkbox', { name: 'Select One', exact: true }).check();
           await page.getByRole('checkbox', { name: 'Select Three', exact: true }).check();
-          await page.getByRole('button', { name: 'Review selected deployments', exact: true }).click();
+          await page.getByRole('button', { name: 'Run review for selected changes', exact: true }).click();
           const dialog = page.getByRole('dialog');
           assert.ok((await dialog.innerText()).includes('One') && !(await dialog.innerText()).includes('Two'));
-          await dialog.getByRole('button', { name: 'Confirm and queue deployment', exact: true }).click();
+          await dialog.getByText('Review passed.', { exact: false }).waitFor();
+          assert.equal(await page.evaluate(() => window.posts.length), 1);
+          await dialog.getByRole('button', { name: 'Approve and queue deployment', exact: true }).click();
           await page.getByText('Queued for execution, not yet deployed.').waitFor();
           const posts = await page.evaluate(() => window.posts);
           assert.deepEqual(posts[0].item_ids, ['fix-0', 'fix-2']);
-          assert.equal(posts[0].digests['fix-0'], 'b'.repeat(64));
+          assert.deepEqual(posts[1].item_ids, ['fix-0', 'fix-2']);
+          assert.equal(posts[1].digests['fix-0'], 'b'.repeat(64));
+          assert.equal(posts[1].review_receipt, 'review-fixture');
           await page.getByRole('checkbox', { name: 'Select Blocked', exact: true }).check();
-          await page.getByRole('button', { name: 'Review selected deployments', exact: true }).click();
-          assert.ok(await page.getByRole('button', { name: 'Confirm and queue deployment', exact: true }).isDisabled());
+          await page.getByRole('button', { name: 'Run review for selected changes', exact: true }).click();
+          await page.getByText('Staging QA missing', { exact: true }).last().waitFor();
+          assert.ok(await page.getByRole('button', { name: 'Approve and queue deployment', exact: true }).isDisabled());
           if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: process.env.TEST_SCREENSHOT.replace('.png', '-' + width + '.png'), fullPage: true });
         } else {
           assert.equal(await page.getByRole('checkbox').count(), 0);
-          assert.equal(await page.getByRole('button', { name: /Review selected/ }).count(), 0);
+          assert.equal(await page.getByRole('button', { name: /Review selected|Run review/ }).count(), 0);
         }
         assert.deepEqual(errors, []);
         const sizes = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, width: innerWidth }));

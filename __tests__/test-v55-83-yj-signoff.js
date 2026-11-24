@@ -83,12 +83,13 @@ process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://test.invalid'; process.env.SUPABA
 var relRoute = require(path.join(root, 'src/app/api/releases/route.js'));
 var signRoute = require(path.join(root, 'src/app/api/releases/signoff/route.js'));
 var lib = require(path.join(root, 'src/lib/release-signoff.js'));
+var review = require(path.join(root, 'src/lib/release-review.js'));
 function req(body) {
   if (body && body.item_id) {
     var id = body.item_id;
     var item = REG.items.find(function (entry) { return entry.id === id; });
     var head = world.rows.reduce(function (max, row) { return row.item_id === id ? Math.max(max, row.id) : max; }, 0);
-    body = Object.assign({ heads: { [id]: head } }, item && item.manifest ? { builds: { [id]: item.manifest.sha }, digests: { [id]: selection.digest(item.manifest) } } : {}, body);
+    body = Object.assign({ heads: { [id]: head }, review_receipt: review.issueReview(world.caller, [id], REG, { [id]: head }) }, item && item.manifest ? { builds: { [id]: item.manifest.sha }, digests: { [id]: selection.digest(item.manifest) } } : {}, body);
   }
   return { json: function () { return Promise.resolve(body); }, headers: { get: function () { return ''; } } };
 }
@@ -158,7 +159,7 @@ function req(body) {
   world.caller = 'u-max'; r = await relRoute.GET(req());
   s = r.body.signoffs;
   check('super admin: canSign, signed change shows the go and offers only "take it back"', r.body.canSign === true && s['wh-ready'].kind === 'go' && s['wh-ready'].canWithdraw && !s['wh-ready'].canGo && s['wh-ready'].by === 'Max', s['wh-ready']);
-  check('no Codex pass: no button and the reason is given', s['wh-nocodex'].canGo === false && /Codex/.test(s['wh-nocodex'].why));
+  check('no Codex pass: no button and the missing build and staging test requirements are shown', s['wh-nocodex'].canGo === false && /committed build.*passing staging test/.test(s['wh-nocodex'].why));
   check('live change with an open roll-back request shows it', s['wh-live'].kind === 'rollback' && s['wh-live'].canWithdraw === true && s['wh-live'].canRollback === false);
   world.caller = 'u-staff'; r = await relRoute.GET(req()); s = r.body.signoffs;
   check('staff with releases.access can READ the state but gets no buttons', r.status === 200 && r.body.canSign === false && s['wh-ready'].kind === 'go' && Object.keys(s).every(function (k) { return !s[k].canGo && !s[k].canRollback && !s[k].canWithdraw; }), s);
@@ -294,7 +295,7 @@ function req(body) {
   check('/api/releases itself is still read-only (no POST, no insert)', !/export async function (POST|PUT|DELETE|PATCH)/.test(routes[0]) && !/\.(insert|update|delete|upsert)\s*\(/.test(routes[0]));
   var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
   check("What's New has a v55.83-YJ entry", /version: 'v55\.83-YJ'/.test(wn));
-  check('the badge names the newest What\'s New entry', (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
+  check('the badge names the newest What\'s New entry or a patch of it', (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(wn); return !!top && (page.includes('>' + top[1] + '</span>') || page.includes('>' + top[1] + '.')); })());
   var sql = fs.readFileSync(path.join(root, 'sql/v55-83-YJ-release-signoffs.sql'), 'utf8');
   check('the SQL has no DROP TABLE / DELETE / TRUNCATE statement of its own', !/DROP TABLE|^\s*DELETE\s|^\s*TRUNCATE\s/im.test(sql));
 

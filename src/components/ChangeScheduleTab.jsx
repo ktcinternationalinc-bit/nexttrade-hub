@@ -186,6 +186,7 @@ export default function ChangeScheduleTab() {
   var ps = useState({}); var picked = ps[0]; var setPicked = ps[1];
   var rs = useState(null); var review = rs[0]; var setReview = rs[1];
   var bs = useState(false); var sending = bs[0]; var setSending = bs[1];
+  var rq = useState(false); var reviewing = rq[0]; var setReviewing = rq[1];
   var ms = useState(''); var message = ms[0]; var setMessage = ms[1];
 
   function load() {
@@ -219,18 +220,36 @@ export default function ChangeScheduleTab() {
   function select(id) { setPicked(function (p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); }
   function openReview(action, id) {
     var ids = id ? [id] : selectedIds;
-    setReview({ action: action, items: ids.map(function (key) { return items.find(function (it) { return it.id === key; }); }).filter(Boolean), heads: Object.assign({}, signs) });
+    var chosen = { action: action, items: ids.map(function (key) { return items.find(function (it) { return it.id === key; }); }).filter(Boolean), heads: Object.assign({}, signs) };
+    setReview(chosen);
     setMessage('');
+    if (action === 'go') {
+      setReviewing(true);
+      callApi('/api/releases/review', 'POST', { item_ids: ids })
+        .then(function (j) {
+          if (!j || !j.ok) throw new Error((j && j.error) || 'Could not complete the release review.');
+          setReview(function (current) { return current === chosen ? Object.assign({}, current, { result: j }) : current; });
+        })
+        .catch(function (e) { setMessage(e.message); })
+        .finally(function () { setReviewing(false); });
+    }
   }
   function confirmReview() {
-    var heads = {}; var builds = {}; var digests = {};
-    review.items.forEach(function (it) { heads[it.id] = (review.heads[it.id] || {}).head; builds[it.id] = it.manifest && it.manifest.sha; digests[it.id] = (review.heads[it.id] || {}).manifestDigest; });
+    var payload = { item_ids: review.items.map(function (it) { return it.id; }), action: review.action };
+    if (review.action === 'go') {
+      if (!review.result?.passed) return;
+      Object.assign(payload, { confirm: 'DEPLOY', review_receipt: review.result.receipt,
+        heads: review.result.heads, builds: review.result.builds, digests: review.result.digests });
+    } else {
+      payload.confirm = 'ROLLBACK';
+      payload.heads = Object.fromEntries(review.items.map(function (it) { return [it.id, (review.heads[it.id] || {}).head]; }));
+    }
     setSending(true);
-    callApi('/api/releases/signoff', 'POST', { item_ids: review.items.map(function (it) { return it.id; }), action: review.action, heads: heads, builds: builds, digests: digests, confirm: review.action === 'go' ? 'DEPLOY' : 'ROLLBACK' })
+    callApi('/api/releases/signoff', 'POST', payload)
       .then(function (j) { if (!j || !j.ok) throw new Error((j && j.error) || 'Could not queue the release.'); setMessage(j.note); setPicked({}); setReview(null); load(); })
       .catch(function (e) { setMessage(e.message); }).finally(function () { setSending(false); });
   }
-  var reviewBlocked = review && review.items.some(function (it) { var s = review.heads[it.id] || {}; return review.action === 'go' ? !s.canGo : !s.canRollback; });
+  var reviewBlocked = review && (review.action === 'go' ? !review.result?.passed : review.items.some(function (it) { return !review.heads[it.id]?.canRollback; }));
 
   return (
     <div className="warehouse-release-manager" style={{ background: C.bg, color: C.ink, border: '1px solid ' + C.line, padding: '24px 22px 30px', fontFamily: 'system-ui, sans-serif', lineHeight: 1.5, overflowWrap: 'anywhere' }}>
@@ -267,22 +286,36 @@ export default function ChangeScheduleTab() {
         {data && (data.executions || []).map(function (job) { return <div key={job.request_id} role="status" style={{ color: C.max }}>Request #{job.request_id}: {job.phase === 'running' ? 'Executing' : 'Recovery check required'} · Started {fmtWhen(job.started_at)}</div>; })}
         {canSign && <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <b>{selectedIds.length} selected</b>
-          <button disabled={!selectedIds.length || sending} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Review selected deployments</button>
-          <button disabled={!selectedIds.length || sending} style={btn(C.max, false)} onClick={function () { openReview('rollback'); }}>Review selected code rollbacks</button>
+          <button disabled={!selectedIds.length || sending || reviewing} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Run review for selected changes</button>
+          <button disabled={!selectedIds.length || sending || reviewing} style={btn(C.max, false)} onClick={function () { openReview('rollback'); }}>Review selected code rollbacks</button>
           <button disabled={!selectedIds.length} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
         </div>}
         {message && <div role="status" style={{ color: C.max }}>{message}</div>}
         {review && <section role="dialog" aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
-          <h2>{review.action === 'go' ? 'Confirm selected deployments' : 'Confirm selected code rollbacks'}</h2>
-          <p>NT Warehouse production only. Database records, orders, scans, bills and uploads are not restored or changed by this operation.</p>
+          <h2>{review.action === 'go' ? 'Production release review' : 'Confirm selected code rollbacks'}</h2>
+          {review.action === 'rollback' && <p>This restores the selected Warehouse code files. Business records and uploads stay as they are.</p>}
+          {review.action === 'go' && <p role="status" style={{ color: review.result?.passed ? C.prod : C.max }}>
+            {reviewing ? 'Checking the selected changes, staging test evidence and current release state…' :
+              review.result?.passed ? 'Review passed. You can approve this exact build for production.' :
+                review.result ? 'Review blocked. See what each change still needs below.' : 'Review incomplete. Run it again to continue.'}
+          </p>}
           {review.items.map(function (it) { var s = review.heads[it.id] || {}; return <div key={it.id} style={{ padding: '10px 0', borderTop: '1px solid ' + C.line }}>
-            <b>{it.title}</b><div>Build: {review.action === 'go' ? (it.manifest && it.manifest.sha) || 'Not prepared' : s.liveBuild || 'No recorded target'}</div>
-            <div>{review.action === 'go' ? 'Files: ' + (((it.manifest || {}).files || []).map(function (f) { return f.path; }).join(', ') || 'No reviewed file list') : 'Backup: ' + (s.liveBackup || 'Not recorded')}</div>
-            {s.why && <div style={{ color: C.max }}>{s.why}</div>}
+            <b>{it.title}</b>
+            {review.action === 'go' ? (function () {
+              var result = review.result?.results?.find(function (detail) { return detail.id === it.id; });
+              return result && <div>
+                <div>Build: {result.sha || 'Not prepared'}</div>
+                {result.files.length > 0 && <div>Files: {result.files.join(', ')}</div>}
+                {result.note && <div style={{ color: C.max }}>{result.note}</div>}
+                {result.evidence && <div>{result.evidence}</div>}
+                {result.steps.length > 0 && <ul>{result.steps.map(function (step) { return <li key={step}>{step}</li>; })}</ul>}
+              </div>;
+            })() : <div><div>Build: {s.liveBuild || 'No recorded target'}</div><div>Backup: {s.liveBackup || 'Not recorded'}</div>{s.why && <div style={{ color: C.max }}>{s.why}</div>}</div>}
           </div>; })}
+          {review.result?.problems?.length > 0 && <ul style={{ color: C.max }}>{review.result.problems.map(function (problem) { return <li key={problem}>{problem}</li>; })}</ul>}
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-            <button disabled={sending || reviewBlocked || !review.items.length || !canSign} style={btn(C.prod, true)} onClick={confirmReview}>{sending ? 'Queuing...' : review.action === 'go' ? 'Confirm and queue deployment' : 'Confirm and queue code rollback'}</button>
-            <button disabled={sending} style={btn(C.muted, false)} onClick={function () { setReview(null); }}>Cancel</button>
+            <button disabled={sending || reviewing || reviewBlocked || !review.items.length || !canSign} style={btn(C.prod, true)} onClick={confirmReview}>{sending ? 'Queuing...' : review.action === 'go' ? 'Approve and queue deployment' : 'Confirm and queue code rollback'}</button>
+            <button disabled={sending || reviewing} style={btn(C.muted, false)} onClick={function () { setReview(null); }}>Close</button>
           </div>
         </section>}
 

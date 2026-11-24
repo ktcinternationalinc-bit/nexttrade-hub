@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
 require('sucrase/register');
+process.env.SUPABASE_SERVICE_ROLE_KEY = 'synthetic-test-only';
 const root = path.join(__dirname, '..');
 const selection = require('../release-management/lib/selection');
 let checks = 0;
@@ -46,11 +47,13 @@ Module._load = function (name, parent) {
 };
 const read = require('../src/app/api/releases/route').GET;
 const post = require('../src/app/api/releases/signoff/route').POST;
+const review = require('../src/app/api/releases/review/route').POST;
 const worker = require('../release-management/deploy/worker');
 const rules = require('../src/lib/release-signoff');
+const { issueReview, reviewState } = require('../src/lib/release-review');
 process.chdir(require('node:os').tmpdir());
 function body(ids = ['fix-a', 'fix-c']) {
-  return { item_ids: ids, action: 'go', confirm: 'DEPLOY', heads: Object.fromEntries(ids.map(id => [id, 0])), builds: Object.fromEntries(ids.map(id => [id, 'a'.repeat(40)])), digests: Object.fromEntries(ids.map(id => [id, selection.digest(register.items.find(it => it.id === id).manifest)])) };
+  return { item_ids: ids, action: 'go', confirm: 'DEPLOY', heads: Object.fromEntries(ids.map(id => [id, 0])), builds: Object.fromEntries(ids.map(id => [id, 'a'.repeat(40)])), digests: Object.fromEntries(ids.map(id => [id, selection.digest(register.items.find(it => it.id === id).manifest)])), review_receipt: issueReview(caller, ids, register, reviewState(register, rows).heads) };
 }
 async function send(b) { return post({ json: async () => b }); }
 (async () => {
@@ -67,7 +70,13 @@ async function send(b) { return post({ json: async () => b }); }
   permissionError = false; caller = null;
   check((await read({})).status === 401 && (await send(body())).status === 401, 'anonymous read and write denied');
   caller = 'super'; role = 'super_admin'; perms = [];
-  r = await send(body());
+  const request = body();
+  check((await send({ ...request, review_receipt: '' })).status === 409 && calls.length === 0, 'approval without a background review refused');
+  const reviewed = await review({ json: async () => ({ item_ids: request.item_ids }) });
+  check(reviewed.body.passed && reviewed.body.receipt && calls.length === 0, 'background review reads release state without approval or writes');
+  check((await send({ ...request, item_ids: [...request.item_ids].reverse(), review_receipt: reviewed.body.receipt })).status === 409, 'review receipt is bound to the selected changes');
+  check((await send({ ...request, review_receipt: issueReview(caller, request.item_ids, register, request.heads, Date.now() - 16 * 60000) })).status === 409, 'old review receipts expire');
+  r = await send({ ...request, review_receipt: reviewed.body.receipt });
   check(r.status === 200 && r.body.moved === false && rows.map(r => r.item_id).join(',') === 'fix-a,fix-c', 'select two of four queues exactly those two, not all');
   check(rows.every(r => r.signed_by === 'super' && r.detail.candidate.manifest.sha === 'a'.repeat(40)), 'verified signer and immutable artifact snapshot saved');
   check((await send(body())).status === 409, 'duplicate click or stale screen rejected');

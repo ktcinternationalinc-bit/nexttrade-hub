@@ -50,7 +50,7 @@ ok(cj.cases.every(c => ['lint', 'governance', 'behavioral', 'manual'].includes(c
 
 // Badge + What's New
 ok(/version: 'v55\.83-XH'/.test(whatsnew), "What's New keeps the v55.83-XH entry");
-ok((function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(whatsnew); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })(), 'badge names the newest What\'s New entry (v55.83-XH or later)');
+ok((function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(whatsnew); return !!top && (page.includes('>' + top[1] + '</span>') || page.includes('>' + top[1] + '.')); })(), 'badge names the newest What\'s New entry or its patch');
 ok(/version: 'v55\.83-XH'/.test(whatsnew), "What's New has a v55.83-XH entry");
 
 console.log('\nXH change-schedule: ' + pass + '/' + pass + ' checks passed');
