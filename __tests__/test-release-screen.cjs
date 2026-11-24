@@ -22,6 +22,8 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           const signoffs = Object.fromEntries(items.map((it, i) => [it.id, { head: 0, manifestDigest: 'b'.repeat(64), where: 'staging', canGo: manager && i < 3, canRollback: false, why: i === 3 ? 'Staging QA missing' : '' }]));
           const data = { ok: true, items, signoffs, canSign: manager, workerOnline: false, worker: { enabled: false, last_seen: '2026-11-24T12:49:07Z' }, executionReady: true, history: [] };
           window.releaseData = data;
+          window.releaseReads = 0;
+          window.delayNextReleaseRead = 0;
           window.posts = [];
           window.fetch = async (url, opts) => ({ json: async () => {
             if (opts?.method === 'POST') {
@@ -39,7 +41,12 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
                 at: '2026-11-24T13:12:14Z', by: 'Max', sha: 'a'.repeat(40), canGo: false, canWithdraw: true }); });
               return { ok: true, note: 'Queued for execution, not yet deployed.' };
             }
-            return data;
+            window.releaseReads++;
+            const snapshot = structuredClone(data);
+            const delay = window.delayNextReleaseRead;
+            window.delayNextReleaseRead = 0;
+            if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+            return snapshot;
           } });
           const mod = { exports: {} };
           new Function('require', 'module', 'exports', code)(id => id === 'react' ? React : { supabase: { auth: { getSession: async () => ({ data: { session: { access_token: 'test' } } }) } } }, mod, mod.exports);
@@ -94,15 +101,40 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           await page.evaluate(() => { window.releaseData.signoffs['fix-0'].execution.phase = 'attention'; });
           await page.getByRole('button', { name: 'Refresh', exact: true }).click();
           await active.getByText('Blocked - recovery check required', { exact: false }).waitFor();
-          await page.evaluate(() => { Object.assign(window.releaseData.signoffs['fix-0'], { kind: 'none', where: 'deployed', executing: false, execution: null, requestId: null, canCheck: true }); });
+          const staleRead = await page.evaluate(() => { window.delayNextReleaseRead = 350; return window.releaseReads + 1; });
           await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+          await page.waitForFunction(reads => window.releaseReads >= reads, staleRead);
+          await page.evaluate(() => {
+            Object.assign(window.releaseData.signoffs['fix-0'], { kind: 'none', where: 'deployed', executing: false,
+              execution: null, requestId: null, canCheck: true, canRollback: true, liveBuild: 'a'.repeat(40), liveBackup: 'fixture' });
+            window.dispatchEvent(new Event('focus'));
+          });
           await page.getByText('On production — not yet checked', { exact: true }).waitFor();
+          const production = page.getByRole('region', { name: 'Already on production' });
+          assert.equal(await production.getByRole('checkbox').count(), 0);
           assert.equal(await active.getByRole('heading', { name: 'One', exact: true }).count(), 0);
           assert.equal(await future.getByRole('heading', { name: 'One', exact: true }).count(), 0);
+          await toolbar.getByRole('button', { name: 'Select code rollbacks', exact: true }).click();
+          await production.getByRole('checkbox', { name: 'Select for rollback One', exact: true }).check();
+          assert.equal(await future.getByRole('checkbox').count(), 0);
+          assert.equal(await reviewButton.count(), 0);
+          await toolbar.getByRole('button', { name: 'Review selected code rollbacks', exact: true }).click();
+          await dialog.getByRole('heading', { name: 'Confirm selected code rollbacks' }).waitFor();
+          assert.ok((await dialog.innerText()).includes('One'));
+          await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+          await toolbar.getByRole('button', { name: 'Return to deployments', exact: true }).click();
+          assert.equal(await production.getByRole('checkbox').count(), 0);
           await page.getByRole('checkbox', { name: 'Select Blocked', exact: true }).check();
           await reviewButton.click();
           await page.getByText('Staging QA missing', { exact: true }).last().waitFor();
           assert.ok(await page.getByRole('button', { name: 'Approve and queue deployment', exact: true }).isDisabled());
+          await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+          await page.evaluate(() => {
+            window.releaseData.signoffsError = 'Fixture status unavailable';
+            window.dispatchEvent(new Event('focus'));
+          });
+          await page.getByRole('alert').getByText('Live release status is unavailable.', { exact: false }).waitFor();
+          assert.equal(await page.getByRole('checkbox').count(), 0);
           if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: process.env.TEST_SCREENSHOT.replace('.png', '-' + width + '.png'), fullPage: true });
         } else {
           assert.equal(await page.getByRole('checkbox').count(), 0);

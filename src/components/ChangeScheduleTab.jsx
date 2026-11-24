@@ -172,7 +172,10 @@ function Row(props) {
   return (
     <div className="warehouse-change-row" style={{ background: C.card, border: '1px solid ' + C.line, borderLeft: '3px solid ' + leftColor, borderRadius: 8, padding: '12px 14px', display: 'grid', gap: 10, alignItems: 'start' }}>
       <div style={{ minWidth: 0 }}>
-        {props.canSign && !active && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}><input type="checkbox" aria-label={'Select ' + it.title} checked={!!props.selected} disabled={props.selectLocked} onChange={function () { props.onSelect(it.id); }} />Select change</label>}
+        {props.selection && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <input type="checkbox" aria-label={(props.selection === 'rollback' ? 'Select for rollback ' : 'Select ') + it.title} checked={!!props.selected} disabled={props.selectLocked} onChange={function () { props.onSelect(it.id); }} />
+          {props.selection === 'rollback' ? 'Select for code rollback' : 'Select for deployment'}
+        </label>}
         <h3 style={{ margin: '0 0 3px', fontSize: '.98rem', color: C.ink }}>{it.title}</h3>
         {active && <div role="status" style={{ color: C.max, margin: '6px 0', fontWeight: 700 }}>
           {requestStatus(props.sign, props.data)}
@@ -207,11 +210,14 @@ export default function ChangeScheduleTab() {
   var ms = useState(''); var message = ms[0]; var setMessage = ms[1];
   var [headerHeight, setHeaderHeight] = useState(0);
   var [checkedAt, setCheckedAt] = useState('');
+  var [selectionAction, setSelectionAction] = useState('go');
+  var loadRevision = useRef(0);
   var toolbarRef = useRef(null);
   var reviewPanel = useRef(null);
   var reviewOpen = !!review;
 
   function load() {
+    var revision = ++loadRevision.current;
     setLoading(true); setErr('');
     // The schedule is available to verified team members through the signed-in API.
     supabase.auth.getSession()
@@ -223,13 +229,31 @@ export default function ChangeScheduleTab() {
       })
       .then(function (r) { return r.json(); })
       .then(function (j) {
+        if (revision !== loadRevision.current) return;
         if (!j || !j.ok) { setErr((j && j.error) || 'Could not read the release register.'); setData(null); }
         else { setData(j); setCheckedAt(new Date().toISOString()); }
       })
-      .catch(function () { setErr('Could not reach the release register.'); setData(null); })
-      .then(function () { setLoading(false); });
+      .catch(function () {
+        if (revision !== loadRevision.current) return;
+        setErr('Could not reach the release register.'); setData(null);
+      })
+      .finally(function () { if (revision === loadRevision.current) setLoading(false); });
   }
-  useEffect(function () { load(); var timer = setInterval(load, 15000); return function () { clearInterval(timer); }; }, []);
+  useEffect(function () {
+    function refreshVisible() { if (document.visibilityState === 'visible') load(); }
+    load();
+    var timer = setInterval(refreshVisible, 15000);
+    document.addEventListener('visibilitychange', refreshVisible);
+    window.addEventListener('focus', refreshVisible);
+    window.addEventListener('pageshow', refreshVisible);
+    return function () {
+      loadRevision.current++;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshVisible);
+      window.removeEventListener('focus', refreshVisible);
+      window.removeEventListener('pageshow', refreshVisible);
+    };
+  }, []);
   useEffect(function () {
     var header = document.querySelector('[role="banner"][aria-label="App header"]');
     if (!header) return undefined;
@@ -247,7 +271,8 @@ export default function ChangeScheduleTab() {
     panel.focus({ preventScroll: true });
   }, [reviewOpen, headerHeight]);
 
-  var items = (data && data.items) || [];
+  var statusReadable = !!(data && data.signoffsInstalled !== false && !data.signoffsError && data.historyComplete !== false);
+  var items = statusReadable ? (data.items || []) : [];
   // Sign-off state and permission to take action come from the server.
   // Which list a change is in follows the recorded history (current), not only the register file.
   var signs = (data && data.signoffs) || {};
@@ -255,11 +280,18 @@ export default function ChangeScheduleTab() {
   var queued = items.filter(function (it) { return it && !activeRequest(signs[it.id]) && whereOf(it, signs[it.id]) === 'staging'; });
   var live = items.filter(function (it) { return it && !activeRequest(signs[it.id]) && ['live', 'deployed'].includes(whereOf(it, signs[it.id])); });
   var canSign = !!(data && data.canSign);
-  var selectedIds = Object.keys(picked).filter(function (id) { return picked[id] && !activeRequest(signs[id]); });
+  var rollbackItems = live.filter(function (it) { return signs[it.id]?.canRollback; });
+  var selectableIds = new Set((selectionAction === 'rollback' ? rollbackItems : queued).map(function (it) { return it.id; }));
+  var selectedIds = Object.keys(picked).filter(function (id) { return picked[id] && selectableIds.has(id); });
   var workerLabel = data?.worker?.enabled === false ? 'Worker disabled - approved releases will not start until activation is authorized' :
     data?.workerOnline ? 'Deployment worker online' : 'Worker offline - approved releases are waiting for connection';
   function select(id) { setPicked(function (p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); }
+  function switchSelection(action) {
+    setPicked({});
+    setSelectionAction(action);
+  }
   function openReview(action) {
+    if (!statusReadable || !selectedIds.length || action !== selectionAction) return;
     var ids = selectedIds;
     var chosen = { action: action, items: ids.map(function (key) { return items.find(function (it) { return it.id === key; }); }).filter(Boolean), heads: Object.assign({}, signs) };
     setReview(chosen);
@@ -276,6 +308,7 @@ export default function ChangeScheduleTab() {
     }
   }
   function confirmReview() {
+    if (reviewSelectionChanged) return;
     var payload = { item_ids: review.items.map(function (it) { return it.id; }), action: review.action };
     if (review.action === 'go') {
       if (!review.result?.passed) return;
@@ -290,7 +323,9 @@ export default function ChangeScheduleTab() {
       .then(function (j) { if (!j || !j.ok) throw new Error((j && j.error) || 'Could not queue the release.'); setMessage(j.note); setPicked({}); setReview(null); load(); })
       .catch(function (e) { setMessage(e.message); }).finally(function () { setSending(false); });
   }
-  var reviewBlocked = review && (review.action === 'go' ? !review.result?.passed : review.items.some(function (it) { return !review.heads[it.id]?.canRollback; }));
+  var reviewSelectionChanged = review && (!statusReadable || review.items.some(function (it) { return !selectedIds.includes(it.id); }));
+  var reviewBlocked = review && (reviewSelectionChanged ||
+    (review.action === 'go' ? !review.result?.passed : review.items.some(function (it) { return !review.heads[it.id]?.canRollback; })));
 
   return (
     <div className="warehouse-release-manager" style={{ background: C.bg, color: C.ink, border: '1px solid ' + C.line, padding: '24px 22px 30px', fontFamily: 'system-ui, sans-serif', lineHeight: 1.5, overflowWrap: 'anywhere' }}>
@@ -324,18 +359,25 @@ export default function ChangeScheduleTab() {
           {!canSign && <div style={{ color: C.muted }}>View only. Managing releases requires the NT Warehouse release permission.</div>}
           {!data.executionReady && <div>Execution database setup is not available. No release can be queued.</div>}
         </div>}
-        {canSign && <div ref={toolbarRef} role="group" aria-label="Selected Warehouse changes" style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
+        {canSign && statusReadable && <div ref={toolbarRef} role="group" aria-label="Selected Warehouse changes" style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
           <div role="status" style={{ color: data?.workerOnline ? C.prod : C.max, marginBottom: 8 }}>
             {active.length} active request{active.length === 1 ? '' : 's'} · {workerLabel}
             {checkedAt && <div style={{ color: C.muted, fontSize: 11 }}>Status checked {fmtWhen(checkedAt)}</div>}
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <b>{selectedIds.length} selected</b>
-            <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Review selected deployments</button>
-            <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.max, false)} onClick={function () { openReview('rollback'); }}>Review selected code rollbacks</button>
+            {selectionAction === 'go' ? <>
+              <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Review selected deployments</button>
+              {rollbackItems.length > 0 && <button disabled={reviewOpen} style={btn(C.max, false)} onClick={function () { switchSelection('rollback'); }}>Select code rollbacks</button>}
+            </> : <>
+              <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.max, false)} onClick={function () { openReview('rollback'); }}>Review selected code rollbacks</button>
+              <button disabled={reviewOpen} style={btn(C.muted, false)} onClick={function () { switchSelection('go'); }}>Return to deployments</button>
+            </>}
             <button disabled={!selectedIds.length || reviewOpen} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
           </div>
-          {!selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>Check the changes you want to review, then use the button above.</div>}
+          {!selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>
+            {selectionAction === 'go' ? 'Select changes awaiting approval.' : 'Select deployed changes under Already on production.'}
+          </div>}
         </div>}
         {message && <div role="status" style={{ color: C.max }}>{message}</div>}
         {review && <section ref={reviewPanel} role="dialog" tabIndex={-1} aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
@@ -367,31 +409,30 @@ export default function ChangeScheduleTab() {
           {review.result?.passed && review.result.waitsForWorker && <p style={{ color: C.max }}>
             The worker that handles these database changes is offline. You can approve now, and the changes will wait in the queue.
           </p>}
+          {reviewSelectionChanged && <p role="alert" style={{ color: C.max }}>The release status changed during review. Close this review and check the current status.</p>}
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
             <button disabled={sending || reviewing || reviewBlocked || !review.items.length || !canSign} style={btn(C.prod, true)} onClick={confirmReview}>{sending ? 'Queuing...' : review.action === 'go' ? 'Approve and queue deployment' : 'Confirm and queue code rollback'}</button>
             <button disabled={sending || reviewing} style={btn(C.muted, false)} onClick={function () { setReview(null); }}>Close</button>
           </div>
         </section>}
 
-        {canSign && data && data.signoffsInstalled === false && (
-          <div style={{ background: 'rgba(248,163,59,.1)', border: '1px solid #8a5a1a', borderRadius: 10, padding: '10px 14px', color: C.max, fontSize: '.86rem' }}>
-            The sign-off buttons are switched off until the v55.83-YJ sign-off table is installed in the database.
+        {data && !statusReadable && (
+          <div role="alert" style={{ background: 'rgba(248,113,113,.1)', border: '1px solid #7f1d1d', borderRadius: 10, padding: '10px 14px', color: '#fca5a5', fontSize: '.86rem' }}>
+            Live release status is unavailable. {data.signoffsError || 'Refresh to check the current deployment status.'}
           </div>
-        )}
-        {canSign && data && data.signoffsError && (
-          <div style={{ background: 'rgba(248,113,113,.1)', border: '1px solid #7f1d1d', borderRadius: 10, padding: '10px 14px', color: '#fca5a5', fontSize: '.86rem' }}>{data.signoffsError} No buttons are shown until it can be read.</div>
         )}
 
         {err && (
           <div style={{ background: 'rgba(248,113,113,.1)', border: '1px solid #7f1d1d', borderRadius: 10, padding: '12px 14px', color: '#fca5a5', fontSize: '.88rem' }}>
-            {err} The screen falls back to the last readable register; check release-management/release-register.json for a bad edit.
+            {err} Refresh to check the current deployment status.
           </div>
         )}
 
+        {statusReadable && <>
         <section aria-label="Active release requests">
           <h2 style={{ fontSize: '1.1rem', margin: '0 0 10px' }}>Approved requests and execution status ({active.length})</h2>
           <div style={{ display: 'grid', gap: 10 }}>
-            {active.length ? active.map(function (it) { return <Row key={it.id} item={it} sign={signs[it.id]} data={data} canSign={canSign} onDone={load} />; }) :
+            {active.length ? active.map(function (it) { return <Row key={it.id} item={it} sign={signs[it.id]} data={data} onDone={load} />; }) :
               <div style={{ color: C.muted }}>No approved requests waiting or running.</div>}
           </div>
         </section>
@@ -403,22 +444,23 @@ export default function ChangeScheduleTab() {
           </h2>
           <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>Not approved for execution yet. Review the selected builds before approving them.</p>
           <div style={{ display: 'grid', gap: 10 }}>
-            {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} selected={picked[it.id]} selectLocked={reviewOpen} onSelect={select} />; })
+            {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} onDone={load} selection={canSign && selectionAction === 'go' ? 'go' : null} selected={picked[it.id]} selectLocked={reviewOpen} onSelect={select} />; })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'No changes awaiting approval.'}</div>}
           </div>
         </section>
 
-        <section>
+        <section aria-label="Already on production">
           <h2 style={{ fontSize: '1.1rem', margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 9 }}>
             Already on production
             <span style={{ font: '700 10px ' + C.mono, padding: '2px 8px', borderRadius: 999, letterSpacing: '.05em', textTransform: 'uppercase', background: 'rgba(52,211,153,.15)', color: C.prod }}>live</span>
           </h2>
           <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>Warehouse changes moved to the live site.</p>
           <div style={{ display: 'grid', gap: 10 }}>
-            {live.length ? live.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} selected={picked[it.id]} selectLocked={reviewOpen} onSelect={select} />; })
+            {live.length ? live.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} onDone={load} selection={canSign && selectionAction === 'rollback' && signs[it.id]?.canRollback ? 'rollback' : null} selected={picked[it.id]} selectLocked={reviewOpen} onSelect={select} />; })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'Nothing on production yet.'}</div>}
           </div>
         </section>
+        </>}
 
         {data && <History rows={data.history || []} note={data.signoffsInstalled === false ? 'The history starts once the v55.83-YJ table is installed in the database.' : (data.signoffsError ? 'The history could not be read right now.' : (data.historyComplete === false ? 'Only the most recent part of the history is shown.' : ''))} />}
 

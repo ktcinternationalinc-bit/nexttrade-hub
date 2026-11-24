@@ -26,8 +26,9 @@ export const dynamic = 'force-dynamic';
 
 var API_BUILD_MARKER = 'warehouse-release-controls-v1';
 var REGISTER_PATH = 'release-management/release-register.json';
+var LIVE_HEADERS = { 'Cache-Control': 'private, no-store, max-age=0', 'Vary': 'Authorization' };
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY); }
-function deny(msg, status) { return NextResponse.json({ ok: false, error: msg, api_build_marker: API_BUILD_MARKER }, { status: status || 403 }); }
+function deny(msg, status) { return NextResponse.json({ ok: false, error: msg, api_build_marker: API_BUILD_MARKER }, { status: status || 403, headers: LIVE_HEADERS }); }
 
 export async function GET(request) {
   // 1) Verify the sign-in. No body on a GET.
@@ -121,5 +122,5 @@ export async function GET(request) {
     protocol: register.protocol || [],
     protocolNote: register.protocolNote || '',
     deployAutomation: { status: workerOnline ? 'online' : 'offline' }
-  });
+  }, { headers: LIVE_HEADERS });
 }
