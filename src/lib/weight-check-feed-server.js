@@ -29,10 +29,11 @@ var LOOKUP_TABLES = ['product_types', 'cgt_grades', 'nt_grades', 'colors'];
 function pick(o, fields) { var out = {}; if (!o || typeof o !== 'object') { return out; } fields.forEach(function (f) { if (Object.prototype.hasOwnProperty.call(o, f)) { var v = o[f]; out[f] = (v !== null && typeof v === 'object') ? null : v; } }); return out; }
 function idStr(v) { return v === null || v === undefined ? '' : String(v).trim(); }
 
-// the receipts endpoint lives beside the existing feed: …/api/hub-feed → …/api/hub-feed/receipts
+// the receipts endpoint lives beside the existing feed. NEXTRADE_FEED_URL is really …/api/hub-feed/shipping (the Orders report and
+// the shipping sync read it as-is); …/api/hub-feed also works → …/api/hub-feed/receipts (24 Nov: it used to give …/shipping/receipts)
 export function receiptsUrl(feedUrl) {
   var u = new URL(feedUrl); u.search = ''; u.hash = '';
-  u.pathname = u.pathname.replace(/\/+$/, '') + '/receipts';
+  u.pathname = u.pathname.replace(/\/+$/, '').replace(/\/(shipping|grade-flow|receipts)$/, '') + '/receipts';
   return u.toString();
 }
 

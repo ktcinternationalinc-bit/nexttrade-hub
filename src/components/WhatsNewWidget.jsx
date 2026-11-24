@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YT',
+    date: '2026-11-24',
+    title: 'Warehouse check: the Hub now asks the warehouse at the right address',
+    items: [
+      { text: 'Bills → Warehouse check asked the warehouse at a wrong address, so it would have said “Warehouse unavailable / not checked” even after the warehouse offers its scan-in receipts. It now asks the right one.' },
+      { text: 'Nothing changes on screen yet: the warehouse side (its read-only receipts list) still has to be put on the test warehouse first.' },
+      { superAdminOnly: true, text: 'Technical: weight-check-feed-server receiptsUrl() strips a trailing /shipping (or /grade-flow, /receipts) from NEXTRADE_FEED_URL before adding /receipts — the configured address is …/api/hub-feed/shipping. Test fake now answers only on /api/hub-feed/receipts.' }
+    ]
+  },
+  {
     version: 'v55.83-YU',
     date: '2026-11-24',
     title: 'Invoices: editing an invoice that charges shipping below cost + 7% saves again',

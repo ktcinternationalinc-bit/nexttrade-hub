@@ -91,7 +91,10 @@ global.fetch = async function (url, init) {
   if (!init || !init.headers || init.headers['X-Hub-Feed-Token'] !== 'tok-0123456789abcdef0123456789abcdef') { return { ok: false, status: 401, json: async function () { return {}; } }; }
   if (world.feed === 'down') { throw new Error('ECONNREFUSED'); }
   if (world.feed === 'missing') { return { ok: false, status: 404, json: async function () { return {}; } }; }
-  var u = new URL(url); var ids = (u.searchParams.get('ids') || '').split(',').filter(Boolean); var refs = (u.searchParams.get('refs') || '').split(',').filter(Boolean);
+  var u = new URL(url);
+  // like the real warehouse: only this exact path answers (24 Nov: the Hub used to ask …/hub-feed/shipping/receipts → 404 for ever)
+  world.lastFeedPath = u.pathname;
+  if (u.pathname !== '/api/hub-feed/receipts') { return { ok: false, status: 404, json: async function () { return {}; } }; } var ids = (u.searchParams.get('ids') || '').split(',').filter(Boolean); var refs = (u.searchParams.get('refs') || '').split(',').filter(Boolean);
   var W = world.wh; var recs = W.receipts.filter(function (r) { return ids.length ? ids.indexOf(String(r.id)) >= 0 : refs.some(function (x) { return [r.reference_number, r.nexpac_bill, r.info && r.info.cgt_reference].map(function (v) { return String(v || '').toUpperCase().replace(/[\s#.\-\/_]+/g, ''); }).indexOf(x) >= 0; }); });
   var logs = []; recs.forEach(function (r) { (W.logs[r.id] || []).forEach(function (l) { logs.push(Object.assign({ scan_in_inventory_id: r.id }, l)); }); });
   if (world.dropLog) { logs = logs.slice(1); }
@@ -99,7 +102,8 @@ global.fetch = async function (url, init) {
     receipts: recs.map(function (r) { return Object.assign({ log_count: (W.logs[r.id] || []).length, item_count: 0, cgt_price: 9.99, value: 123 }, r); }), logs: logs.map(function (l) { return Object.assign({ cgt_price: 1.23, value: 99 }, l); }), items: [],
     not_found_ids: ids.filter(function (i) { return !recs.some(function (r) { return String(r.id) === i; }); }), lookups: { product_types: { 7: 'Vinyl' }, cgt_grades: { 2: 'Seconds' } } }; } };
 };
-process.env.NEXTRADE_FEED_URL = 'https://nextrade-staging.com/api/hub-feed'; process.env.NEXTRADE_FEED_TOKEN = 'tok-0123456789abcdef0123456789abcdef';
+// the address as it is really set in Vercel: the Orders report / shipping sync read it as-is, so it ends in /shipping
+process.env.NEXTRADE_FEED_URL = 'https://fix.nextrade-staging.com/api/hub-feed/shipping'; process.env.NEXTRADE_FEED_TOKEN = 'tok-0123456789abcdef0123456789abcdef';
 var ROUTE = require(path.join(root, 'src/app/api/accounting/weight-check/route.js'));
 function call(body) { return ROUTE.POST({ json: async function () { return body; }, headers: { get: function () { return null; } } }).then(function (r) { return r; }); }
 var W = require(path.join(root, 'src/lib/weight-check.js'));
@@ -142,6 +146,12 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('SCREEN: the bill\'s Warehouse check box shows that answer as a calm yellow note (not a red error) and the bill view carries on', boxSrc.indexOf('{data.sql_missing ? <div') >= 0 && boxSrc.indexOf('!data.ok && !data.sql_missing') >= 0);
   world.noSql = false;
 
+  // ---- the address (24 Nov): NEXTRADE_FEED_URL really ends in /shipping; receipts live beside it, never under it
+  var FS = require(path.join(root, 'src/lib/weight-check-feed-server.js'));
+  var forms = ['https://fix.nextrade-staging.com/api/hub-feed/shipping', 'https://fix.nextrade-staging.com/api/hub-feed/shipping/', 'https://fix.nextrade-staging.com/api/hub-feed', 'https://fix.nextrade-staging.com/api/hub-feed/?x=1#y', 'https://fix.nextrade-staging.com/api/hub-feed/grade-flow'];
+  check('receipts address = …/api/hub-feed/receipts whether the feed address ends in /shipping, /shipping/, /hub-feed, a query or /grade-flow', forms.every(function (f) { return FS.receiptsUrl(f) === 'https://fix.nextrade-staging.com/api/hub-feed/receipts'; }), forms.map(FS.receiptsUrl));
+  world.lastFeedPath = null;
+
   // ---- outage
   world.perms = STAFF; world.feed = 'down';
   var r1 = await call({ action: 'recheck', bill_id: B1 });
@@ -168,6 +178,7 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   world.feed = 'ok';
   var r2 = await call({ action: 'recheck', bill_id: B1 });
   var it2 = r2.body.items[0];
+  check('the real route, with the address as set in Vercel (…/api/hub-feed/shipping), asks exactly /api/hub-feed/receipts', world.lastFeedPath === '/api/hub-feed/receipts', world.lastFeedPath);
   check('recheck reads the receipt by the bill’s reference and PROPOSES it (a person confirms; never linked silently)', r2.body.recheck.ok === true && it2.needs_link && it2.candidates.length === 1 && it2.candidates[0].receipt_id === '11' && tbl('wc_links').length === 0, r2.body);
   var stored = tbl('wc_receipt_versions')[0];
   check('ALLOWLIST: prices, values, driver names and photo paths are NOT stored', stored && JSON.stringify(stored.data).indexOf('cgt_price') < 0 && JSON.stringify(stored.data).indexOf('Secret Person') < 0 && JSON.stringify(stored.data).indexOf('seal_photo') < 0 && JSON.stringify(stored.data).indexOf('"value"') < 0);
