@@ -38,6 +38,8 @@ async function fresh(opts = {}) {
     create table public.payment_matches (id uuid primary key default gen_random_uuid(), business_id uuid, wave_business_id text, bank_transaction_id uuid not null, invoice_id uuid not null, matched_amount numeric not null, match_type text, is_manual_override boolean, notes text, matched_by uuid, created_by uuid, accounting_customer_id uuid, voided boolean default false, voided_at timestamptz, voided_by uuid);
     create table public.bank_transaction_splits (id uuid primary key default gen_random_uuid(), bank_transaction_id uuid);
     create table public.party_money_entries (id uuid primary key default gen_random_uuid(), kind text, bank_transaction_id uuid);
+    create table public.unapplied_deposits (id uuid primary key default gen_random_uuid(), bank_transaction_id uuid, amount numeric, status text default 'open');
+    create table public.customer_credits (id uuid primary key default gen_random_uuid(), source_transaction_id uuid, amount numeric, status text default 'open');
     create table public.vendor_bills (id uuid primary key, wave_business_id text, vendor_name text, bill_number text, currency text default 'USD', total_amount numeric, record_status text default 'active', disputed boolean default false);
     create table public.vendor_bill_payments (id uuid primary key default gen_random_uuid(), bill_id uuid, amount numeric check (amount > 0), paid_date date, bank_transaction_id uuid, method text, voided boolean default false, created_by uuid, request_id text);
     create table public.wire_package_lines (id uuid primary key default gen_random_uuid(), package_id uuid, bill_id uuid, amount numeric, is_open boolean default true, payment_id uuid);
@@ -118,7 +120,7 @@ check('cash 500 deposited, paired with the bank\'s 500 money-in line as ONE tran
 r = await call(db, 'hub_cash_deposit', P({ amount: 1, entry_date: '2026-10-13' }));
 check('depositing more than the box holds is refused', !r.ok && /below zero/.test(r.e), r);
 await call(db, 'hub_cash_adjust', P({ direction: 'in', amount: 700, entry_date: '2026-10-13', note: 'opening float counted', request_id: 'adj1' }));
-for (const [label, line, amt, why] of [['the same bank line again', DEP, 500, /already matched or paired/], ['a different amount', DEP2, 600, /same amount/], ['a cash line', cashLine, 600, /BANK line/]]) {
+for (const [label, line, amt, why] of [['the same bank line again', DEP, 500, /paired as a transfer between own accounts/], ['a different amount', DEP2, 600, /same amount/], ['a cash line', cashLine, 600, /BANK line/]]) {
   r = await call(db, 'hub_cash_deposit', P({ amount: amt, entry_date: '2026-10-12', bank_transaction_id: line })); check('deposit refused: ' + label, !r.ok && why.test(r.e), r);
 }
 r = await call(db, 'hub_cash_deposit', P({ amount: 700, entry_date: '2026-10-13', request_id: 'dep2' }));
@@ -157,6 +159,33 @@ r = await call(db, 'hub_cash_undo', { entry_id: pay1.id, reason: 'paid by wire i
 check('undo the cash bill payment: the payment is voided (the bill owes again), the cash comes back (box 1,300)', r.ok && (await one(db, `select voided v from vendor_bill_payments where id='${pay1.bill_payment_id}'`)).v === true && (await bal(db)) === 1300, r);
 e = await tryExec(db, `delete from cash_entries where id='${pay1.id}'`);
 check('a cash entry is never deleted', !!e && /never deleted/.test(e), e);
+// ── (Codex 24 Nov P1) ONE BANK LINE, ONE USE: cash can only be paired with an otherwise unallocated bank line; a paired line takes nothing else ──
+db = await fresh();
+await call(db, 'hub_cash_adjust', P({ direction: 'in', amount: 2000, entry_date: '2026-10-11', note: 'opening float counted', request_id: 'f0' }));
+const Q1 = '44444444-0000-0000-0000-000000000001', Q2 = '44444444-0000-0000-0000-000000000002', Q3 = '44444444-0000-0000-0000-000000000003', Q4 = '44444444-0000-0000-0000-000000000004';
+await db.exec(`insert into bank_transactions (id, wave_business_id, plaid_transaction_id, account_id, date, posted_date, amount, amount_abs, direction, name) values ('${Q1}', '${US}', 'q1', 'CHASE6338', '2026-10-14', '2026-10-14', -500, 500, 'in', 'D'), ('${Q2}', '${US}', 'q2', 'CHASE6338', '2026-10-14', '2026-10-14', -500, 500, 'in', 'D'), ('${Q3}', '${US}', 'q3', 'CHASE6338', '2026-10-14', '2026-10-14', -500, 500, 'in', 'D'), ('${Q4}', '${US}', 'q4', 'CHASE6338', '2026-10-14', '2026-10-14', -500, 500, 'in', 'D')`);
+await db.exec(`insert into unapplied_deposits (bank_transaction_id, amount) values ('${Q1}', 500)`);
+const box0 = await bal(db);
+r = await call(db, 'hub_cash_deposit', P({ amount: 500, entry_date: '2026-10-13', bank_transaction_id: Q1, request_id: 'f1' }));
+check('park-then-deposit: a bank line parked as an unapplied customer deposit cannot take cash; nothing changes (box, parked deposit, line)', !r.ok && /parked as an unapplied customer deposit/.test(r.e) && /Undo that allocation first/.test(r.e) && (await bal(db)) === box0
+  && (await one(db, `select count(*)::int n from unapplied_deposits where bank_transaction_id='${Q1}' and status='open'`)).n === 1 && (await one(db, `select transfer_group_id g from bank_transactions where id='${Q1}'`)).g === null, r);
+r = await call(db, 'hub_cash_deposit', P({ amount: 500, entry_date: '2026-10-13', request_id: 'f2' }));
+const later = r.ok ? r.v.entry_id : null;
+r = await call(db, 'hub_cash_deposit_pair', { entry_id: later, bank_transaction_id: Q1, actor: ACTOR });
+check('park-then-PAIR-LATER: the same refusal when pairing a deposit recorded earlier', !!later && !r.ok && /parked as an unapplied customer deposit/.test(r.e), r);
+await db.exec(`insert into bank_transaction_splits (bank_transaction_id) values ('${Q2}'); insert into customer_credits (source_transaction_id, amount) values ('${Q3}', 50)`);
+const rS = await call(db, 'hub_cash_deposit_pair', { entry_id: later, bank_transaction_id: Q2, actor: ACTOR }); const rC = await call(db, 'hub_cash_deposit_pair', { entry_id: later, bank_transaction_id: Q3, actor: ACTOR });
+check('a SPLIT line and a line holding an open CUSTOMER CREDIT are refused too', !rS.ok && /split into lines/.test(rS.e) && !rC.ok && /open customer credit/.test(rC.e), [rS, rC]);
+r = await call(db, 'hub_cash_deposit_pair', { entry_id: later, bank_transaction_id: Q4, actor: ACTOR });
+check('an ordinary unused bank line pairs as usual', r.ok, r);
+let rev = []; for (const [label, sql] of [['park it', `insert into unapplied_deposits (bank_transaction_id, amount) values ('${Q4}', 500)`], ['split it', `insert into bank_transaction_splits (bank_transaction_id) values ('${Q4}')`],
+  ['give it a customer credit', `insert into customer_credits (source_transaction_id, amount) values ('${Q4}', 10)`], ['match it', `insert into payment_matches (bank_transaction_id, invoice_id, matched_amount) values ('${Q4}', '${INV}', 10)`],
+  ['make it a customer payment', `insert into accounting_invoice_payments (accounting_invoice_id, amount, bank_transaction_id) values ('${INV}', 10, '${Q4}')`], ['money back', `insert into party_money_entries (kind, bank_transaction_id) values ('refund', '${Q4}')`]]) {
+  const err = await tryExec(db, sql); if (!err || !/cash taken to the bank — undo that first/.test(err)) { rev.push([label, err]); } }
+check('REVERSE: while it holds a cash deposit, the bank line cannot be parked, split, credited, matched, paid or be money back', rev.length === 0, rev);
+r = await call(db, 'hub_cash_undo', { entry_id: later, reason: 'wrong envelope', actor: ACTOR });
+const parkOk = await tryExec(db, `insert into unapplied_deposits (bank_transaction_id, amount) values ('${Q4}', 500)`);
+check('explicit UNDO of the cash deposit frees the line: an ordinary allocation (parking it) then works', r.ok && parkOk === null && (await one(db, `select transfer_group_id g from bank_transactions where id='${Q4}'`)).g === null, [r, parkOk]);
 const priv = await one(db, `select has_function_privilege('authenticated', 'public.hub_cash_receive_invoice(jsonb)', 'EXECUTE') a, has_table_privilege('anon', 'public.cash_entries', 'SELECT') b`);
 check('browser roles can neither call the writers nor read the cash book', priv.a === false && priv.b === false, priv);
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

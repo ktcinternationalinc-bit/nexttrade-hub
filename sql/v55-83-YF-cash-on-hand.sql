@@ -237,7 +237,7 @@ END $$;
 
 -- 7. cash taken to the bank: OUT of the cash box, paired with the bank's money-in line (now, or later with hub_cash_deposit_pair)
 CREATE OR REPLACE FUNCTION public.hub_cash_pair_check(p_line uuid, p_amt numeric, p_date date) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-DECLARE t record;
+DECLARE t record; v_other text;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('hub-bank-line:' || p_line::text, 0));
   SELECT id, account_id, wave_business_id, direction, pending, review_status, amount_abs, coalesce(posted_date, date) AS d, matched_invoice_id, transfer_group_id, linked_id, upper(coalesce(iso_currency, 'USD')) AS cur
@@ -248,12 +248,9 @@ BEGIN
   IF t.direction IS DISTINCT FROM 'in' OR t.pending IS TRUE OR t.review_status = 'duplicate' OR t.cur <> 'USD' THEN RAISE EXCEPTION 'HUB_GUARD: a cash deposit is a settled USD money-in bank line.'; END IF;
   IF abs(round(t.amount_abs, 2) - p_amt) > 0.005 THEN RAISE EXCEPTION 'HUB_GUARD: the bank line is $% — the cash deposit is $%; they must be the same amount.', to_char(round(t.amount_abs, 2), 'FM999,999,990.00'), to_char(p_amt, 'FM999,999,990.00'); END IF;
   IF t.d < p_date THEN RAISE EXCEPTION 'HUB_GUARD: the bank line (%) is before the cash left the box (%).', t.d, p_date; END IF;
-  IF t.matched_invoice_id IS NOT NULL OR t.transfer_group_id IS NOT NULL OR t.linked_id IS NOT NULL THEN RAISE EXCEPTION 'HUB_GUARD: that bank line is already matched or paired.'; END IF;
-  IF EXISTS (SELECT 1 FROM public.accounting_invoice_payments x WHERE x.bank_transaction_id = p_line AND x.voided IS NOT TRUE) OR EXISTS (SELECT 1 FROM public.payment_matches x WHERE x.bank_transaction_id = p_line AND x.voided IS NOT TRUE)
-     OR (to_regclass('public.party_money_entries') IS NOT NULL AND EXISTS (SELECT 1 FROM public.party_money_entries x WHERE x.bank_transaction_id = p_line))
-     OR EXISTS (SELECT 1 FROM public.cash_entries x WHERE x.deposit_bank_transaction_id = p_line AND x.voided IS NOT TRUE) THEN
-    RAISE EXCEPTION 'HUB_GUARD: that bank line is already used (a customer payment, money back or another cash deposit).';
-  END IF;
+  -- (Codex 24 Nov) the bank line must be otherwise UNALLOCATED: the shared check (same semantics as Bank Review), under the bank-line lock
+  v_other := public.hub_bank_line_other_use(p_line);
+  IF v_other IS NOT NULL THEN RAISE EXCEPTION 'HUB_GUARD: this deposit already has another use — %. Undo that allocation first; nothing was changed.', v_other; END IF;
 END $$;
 
 CREATE OR REPLACE FUNCTION public.hub_cash_deposit(p jsonb) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
@@ -294,6 +291,116 @@ BEGIN
   INSERT INTO public.hub_audit_log (actor_id, action, entity, entity_id, details) VALUES (nullif(p->>'actor', '')::uuid, 'cash_deposit_pair', 'cash_entry', e.id::text, jsonb_build_object('bank_transaction_id', v_bank, 'amount', e.amount));
   RETURN jsonb_build_object('ok', true, 'action', 'deposit_pair', 'entry_id', e.id);
 END $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- SHARED by v55.83-YD and v55.83-YF (Codex 24 Nov: "only an otherwise unallocated bank line"; identical text in both scripts, whichever runs
+-- later re-creates the same functions). ONE BANK LINE, ONE USE: a money-in bank line taken WHOLE as a vendor credit refund (YD) or paired
+-- with cash taken to the bank (YF) may have no other allocation — no invoice payment / match, split, open parked deposit, open customer
+-- credit, RTM / NextTrade money back, other refund or cash deposit, invoice match, transfer pair or link — and, while it is that, none can
+-- be added. Nothing existing is ever removed to make room: the person undoes the other use first.
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- what else is using this bank line (NULL = nothing). Optional tables are looked up only when they exist.
+CREATE OR REPLACE FUNCTION public.hub_bank_line_other_use(p_line uuid) RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$
+DECLARE t record; v_n int;
+BEGIN
+  SELECT matched_invoice_id, transfer_group_id, linked_id INTO t FROM public.bank_transactions WHERE id = p_line;
+  IF NOT FOUND THEN RETURN 'the bank line was not found'; END IF;
+  IF t.matched_invoice_id IS NOT NULL THEN RETURN 'it is matched to an invoice'; END IF;
+  IF t.transfer_group_id IS NOT NULL THEN RETURN 'it is paired as a transfer between own accounts'; END IF;
+  IF t.linked_id IS NOT NULL THEN RETURN 'it is linked to another record'; END IF;
+  IF to_regclass('public.accounting_invoice_payments') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.accounting_invoice_payments where bank_transaction_id = $1 and voided is not true and coalesce(sync_status, '''') <> ''void''' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'it is a customer payment on an invoice'; END IF; END IF;
+  IF to_regclass('public.payment_matches') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.payment_matches where bank_transaction_id = $1 and voided is not true' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'it is matched to an invoice'; END IF; END IF;
+  IF to_regclass('public.bank_transaction_splits') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.bank_transaction_splits where bank_transaction_id = $1' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'it is split into lines'; END IF; END IF;
+  IF to_regclass('public.unapplied_deposits') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.unapplied_deposits where bank_transaction_id = $1 and (status is null or status = ''open'')' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'it is parked as an unapplied customer deposit'; END IF; END IF;
+  IF to_regclass('public.customer_credits') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.customer_credits where source_transaction_id = $1 and (status is null or status = ''open'')' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'it holds an open customer credit'; END IF; END IF;
+  IF to_regclass('public.party_money_entries') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.party_money_entries where bank_transaction_id = $1 and kind = ''refund''' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'it is money back from RTM / NextTrade'; END IF; END IF;
+  IF to_regclass('public.vendor_credit_applications') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.vendor_credit_applications where kind = ''refund'' and bank_transaction_id = $1 and voided is not true' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'it is a vendor credit refund'; END IF; END IF;
+  IF to_regclass('public.cash_entries') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.cash_entries where deposit_bank_transaction_id = $1 and voided is not true' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'it is cash taken to the bank'; END IF; END IF;
+  RETURN NULL;
+END $$;
+
+-- is this line taken WHOLE by a vendor credit refund or a cash deposit? (NULL = no)
+CREATE OR REPLACE FUNCTION public.hub_bank_line_exclusive_use(p_line uuid) RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_n int;
+BEGIN
+  IF p_line IS NULL THEN RETURN NULL; END IF;
+  IF to_regclass('public.vendor_credit_applications') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.vendor_credit_applications where kind = ''refund'' and bank_transaction_id = $1 and voided is not true' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'a vendor credit refund'; END IF; END IF;
+  IF to_regclass('public.cash_entries') IS NOT NULL THEN
+    EXECUTE 'select count(*) from public.cash_entries where deposit_bank_transaction_id = $1 and voided is not true' INTO v_n USING p_line;
+    IF v_n > 0 THEN RETURN 'cash taken to the bank'; END IF; END IF;
+  RETURN NULL;
+END $$;
+REVOKE ALL ON FUNCTION public.hub_bank_line_other_use(uuid), public.hub_bank_line_exclusive_use(uuid) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.hub_bank_line_other_use(uuid), public.hub_bank_line_exclusive_use(uuid) TO service_role;
+
+-- the reverse: while a line is a vendor refund or a cash deposit, no allocation can be added to it (any screen, any route)
+CREATE OR REPLACE FUNCTION public.hub_bank_line_exclusive_guard() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_line uuid; v_new jsonb := to_jsonb(NEW); v_old jsonb; v_use text; v_active boolean := false;
+BEGIN
+  IF coalesce(current_setting('hub.cash_write', true), '') = 'on' THEN RETURN NEW; END IF; -- the cash functions pair / unpair their own lines
+  IF TG_OP = 'UPDATE' THEN v_old := to_jsonb(OLD); END IF;
+  IF TG_TABLE_NAME = 'bank_transactions' THEN
+    v_line := NEW.id;
+    v_active := (v_new->>'matched_invoice_id' IS NOT NULL AND v_new->'matched_invoice_id' IS DISTINCT FROM v_old->'matched_invoice_id')
+             OR (v_new->>'transfer_group_id' IS NOT NULL AND v_new->'transfer_group_id' IS DISTINCT FROM v_old->'transfer_group_id')
+             OR (v_new->>'linked_id' IS NOT NULL AND v_new->'linked_id' IS DISTINCT FROM v_old->'linked_id');
+  ELSIF TG_TABLE_NAME = 'customer_credits' THEN
+    v_line := nullif(v_new->>'source_transaction_id', '')::uuid; v_active := (v_new->>'status' IS NULL OR v_new->>'status' = 'open');
+  ELSIF TG_TABLE_NAME IN ('unapplied_deposits') THEN
+    v_line := nullif(v_new->>'bank_transaction_id', '')::uuid; v_active := (v_new->>'status' IS NULL OR v_new->>'status' = 'open');
+  ELSIF TG_TABLE_NAME IN ('accounting_invoice_payments', 'payment_matches') THEN
+    v_line := nullif(v_new->>'bank_transaction_id', '')::uuid; v_active := coalesce((v_new->>'voided')::boolean, false) IS NOT TRUE;
+  ELSIF TG_TABLE_NAME = 'party_money_entries' THEN
+    v_line := nullif(v_new->>'bank_transaction_id', '')::uuid; v_active := (v_new->>'kind' = 'refund');
+  ELSE -- bank_transaction_splits
+    v_line := nullif(v_new->>'bank_transaction_id', '')::uuid; v_active := true;
+  END IF;
+  IF NOT v_active OR v_line IS NULL THEN RETURN NEW; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('hub-bank-line:' || v_line::text, 0));
+  v_use := public.hub_bank_line_exclusive_use(v_line);
+  IF v_use IS NOT NULL THEN RAISE EXCEPTION 'HUB_GUARD: this bank line is % — undo that first; then it can be allocated.', v_use; END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.hub_bank_line_exclusive_guard() FROM public, anon, authenticated;
+DO $x$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      ('bank_transactions', 'BEFORE UPDATE OF matched_invoice_id, transfer_group_id, linked_id'),
+      ('accounting_invoice_payments', 'BEFORE INSERT OR UPDATE OF bank_transaction_id, voided'),
+      ('payment_matches', 'BEFORE INSERT OR UPDATE OF bank_transaction_id, voided'),
+      ('bank_transaction_splits', 'BEFORE INSERT OR UPDATE OF bank_transaction_id'),
+      ('unapplied_deposits', 'BEFORE INSERT OR UPDATE OF bank_transaction_id, status'),
+      ('customer_credits', 'BEFORE INSERT OR UPDATE OF source_transaction_id, status'),
+      ('party_money_entries', 'BEFORE INSERT')) v(tbl, timing) LOOP
+    IF to_regclass('public.' || r.tbl) IS NOT NULL THEN
+      EXECUTE 'DROP TRIGGER IF EXISTS hub_bank_line_exclusive ON public.' || r.tbl;
+      EXECUTE 'CREATE TRIGGER hub_bank_line_exclusive ' || r.timing || ' ON public.' || r.tbl || ' FOR EACH ROW EXECUTE FUNCTION public.hub_bank_line_exclusive_guard()';
+    END IF;
+  END LOOP;
+END $x$;
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 -- 8. a cash count / opening float (in) or a shortfall written off (out): a reason is required (super admin only, in the Hub)
 CREATE OR REPLACE FUNCTION public.hub_cash_adjust(p jsonb) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$

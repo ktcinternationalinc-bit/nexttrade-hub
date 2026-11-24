@@ -12,6 +12,7 @@ import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { privateScope } from '../../../../lib/private-accounts-server';
 import { windowFloorFor } from '../../../../lib/visibility-window-server';
 import { todayET } from '../../../../lib/et-time';
+import { occupiedLines } from '../../../../lib/bank-line-exclusive'; // v55.83-YF — one bank line, one use
 
 var API_BUILD_MARKER = 'v55.83-YF-cash-on-hand';
 var CASH = 'manual-acct-cash-on-hand-us';
@@ -115,15 +116,11 @@ export async function POST(req) {
       var dr = await dq;
       if (dr.error) { return bad('The bank lines could not be read (' + dr.error.message + ').', 503); }
       var cand = (dr.data || []).filter(function (x) { return !x.linked_id && Math.abs(r2(x.amount_abs) - amt0) < 0.005; }).slice(0, 50); var taken = {}; // the exact amount (checked in code: cents)
-      var cIds = cand.map(function (x) { return x.id; });
-      if (cIds.length) {
-        var ap = await db.from('accounting_invoice_payments').select('bank_transaction_id, voided').in('bank_transaction_id', cIds);
-        if (ap.error) { return bad('The customer payments could not be read (' + ap.error.message + ').', 503); }
-        (ap.data || []).forEach(function (x) { if (x.voided !== true) { taken[x.bank_transaction_id] = true; } });
-        var ce = await db.from('cash_entries').select('deposit_bank_transaction_id, voided').in('deposit_bank_transaction_id', cIds);
-        if (ce.error) { return bad('The cash deposits could not be read (' + ce.error.message + ').', 503); }
-        (ce.data || []).forEach(function (x) { if (x.voided !== true) { taken[x.deposit_bank_transaction_id] = true; } });
-      }
+      // v55.83-YF (Codex 24 Nov) — only a line with NO other use is offered: parked deposit, split, customer credit, payment, match, money back,
+      // vendor refund or another cash deposit (the same list the database checks when pairing)
+      var occ = await occupiedLines(db, cand.map(function (x) { return x.id; }));
+      if (occ.error) { return bad(occ.error + ' Nothing shown.', 503); }
+      taken = occ.taken;
       return NextResponse.json({ ok: true, lines: cand.filter(function (x) { return !taken[x.id]; }).map(function (x) { return { id: x.id, date: String(x.posted_date || x.date || '').substring(0, 10), who: x.merchant_name || x.name || '', amount: r2(x.amount_abs) }; }), api_build_marker: API_BUILD_MARKER });
     }
 

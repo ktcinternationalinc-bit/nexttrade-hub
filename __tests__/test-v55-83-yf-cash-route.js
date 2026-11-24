@@ -71,6 +71,13 @@ function world(installed) {
   check('open bills: owed = 400 − paid 100 − on an open wire 50 = 250', ob.ok && ob.bills.length === 1 && ob.bills[0].owed === 250, ob);
   var dl = await call({ action: 'deposit_lines', amount: 100 });
   check('deposit lines: free money-in lines of exactly that amount (a matched one left out)', dl.ok && dl.lines.map(function (l) { return l.id; }).join() === 'D1', dl);
+  state.db.t.unapplied_deposits = [{ bank_transaction_id: 'D1', amount: 100, status: 'open' }];
+  var dlP = await call({ action: 'deposit_lines', amount: 100 });
+  check('(Codex 24 Nov) a $100 bank line PARKED as an open unapplied customer deposit is NOT offered for a cash deposit', dlP.ok && dlP.lines.length === 0, dlP);
+  state.db.t.unapplied_deposits = [{ bank_transaction_id: 'D1', amount: 100, status: 'void' }];
+  var dlV = await call({ action: 'deposit_lines', amount: 100 });
+  check('… offered again once that parked deposit is undone (voided)', dlV.ok && dlV.lines.map(function (l) { return l.id; }).join() === 'D1', dlV);
+  state.db.t.unapplied_deposits = [];
   state.floor = '2026-06-01';
   var s2 = await call({ action: 'summary' });
   check('history window: older cash entries are not listed (the balance is still the whole box)', s2.ok && !s2.entries.some(function (e) { return e.id === 'e0'; }) && s2.window_from === '2026-06-01' && s2.balance === 550, s2);
