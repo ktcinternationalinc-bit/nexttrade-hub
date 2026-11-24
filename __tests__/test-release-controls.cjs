@@ -157,7 +157,15 @@ async function send(b) { return post({ json: async () => b }); }
     ...orderQueue.manifest.dataPlan, migrations: orderQueue.manifest.dataPlan.migrations.slice(1) } } }).length > 0,
     'arbitrary or incomplete migrations are rejected');
   const movedOrder = { ...moved, item_id: orderQueue.id, sha: orderQueue.manifest.sha };
-  check(rules.itemSignState(orderQueue, rules.latestByItem([movedOrder])[orderQueue.id]).canRollback, 'Order Queue code rollback remains available after the additive migrations');
+  const deployedOrder = rules.itemSignState(orderQueue, rules.latestByItem([movedOrder])[orderQueue.id]);
+  check(deployedOrder.canRollback, 'Order Queue code rollback remains available after the additive migrations');
+  const repeatOrder = selection.selectionPlan([orderQueue], { [orderQueue.id]: deployedOrder }, [orderQueue.id], 'go');
+  check(!repeatOrder.ok && repeatOrder.problems.some(problem => problem.includes('Already on production.')),
+    're-reviewing a deployed build reports that it is already on production');
+  const pendingOrder = rules.itemSignState(orderQueue, { kind: 'go', sha: orderQueue.manifest.sha, where: 'staging' });
+  const repeatPending = selection.selectionPlan([orderQueue], { [orderQueue.id]: pendingOrder }, [orderQueue.id], 'go');
+  check(!repeatPending.ok && repeatPending.problems.some(problem => problem.includes('Already approved and queued.')),
+    're-reviewing a queued build points to its execution status');
   if (process.env.WAREHOUSE_ORDER_FIXTURE_REPO) {
     const crypto = require('node:crypto');
     const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'queue-migration-test-'));

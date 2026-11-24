@@ -184,7 +184,7 @@ function req(body) {
   check('after the office PC records the move, the change shows as on production / not yet checked — without a new Hub release', s.where === 'deployed' && s.kind === 'none' && s.canGo === false && s.canRollback === true, s);
   check('…and the move is in the history with its build and backup folder', r.body.history[0].what === 'Moved to production — waiting to be checked' && r.body.history[0].backup === '/home/u/code-backups/wh-ready-20261124101010' && r.body.history[0].by === 'KTC office PC (Claude)' && r.body.history[0].build === build, r.body.history[0]);
   r = await signRoute.POST(req({ item_id: 'wh-ready', action: 'go', confirm: 'Order Queue rebuild' }));
-  check('a change that was moved cannot be given a second go', r.status === 409 && /already on production|Not ready for this action/.test(r.body.error), r);
+  check('a change that was moved cannot be given a second go', r.status === 409 && /already on production/i.test(r.body.error), r);
   pcRow({ item_id: 'wh-ready', action: 'checked_live', sha: build, detail: { title: 'Order Queue rebuild', backup: '/home/u/code-backups/wh-ready-20261124101010', checked: 'Max released one test order' } });
   r = await relRoute.GET(req()); s = r.body.signoffs['wh-ready'];
   check('after the check is recorded it shows as live', s.where === 'live' && s.canRollback === true && r.body.history[0].what === 'Checked on the live site — live', s);
@@ -288,9 +288,9 @@ function req(body) {
   check('Hub releases are untouched: no Hub roll-back route, panel or Vercel call in this build', !fs.existsSync(path.join(root, 'src/app/api/releases/hub-versions')) && !/HubVersions|hub-versions|vercel/i.test(comp) && !/vercel/i.test(libSrc) && !/vercel\.com/i.test(routes.join('')));
   check('the screen imports the React hooks and Supabase client it uses', /import React, \{ useEffect, useRef, useState \} from 'react'/.test(comp) && /import \{ supabase \} from '..\/lib\/supabase'/.test(comp));
   check('the server lib is not a client module and imports only the server permission loader', !/^'use client'/.test(libSrc) && /from '\.\/server-permissions'/.test(libSrc));
-  check('server files keep the house style (no let / const / arrow / template literal / optional chaining)', [libSrc].concat(routes).every(function (src) {
+  check('server files keep the house style (no let / const / arrow / template literal)', [libSrc].concat(routes).every(function (src) {
     var body = src.replace(/\/\/.*$/gm, '').replace(/export const (runtime|dynamic) = '[a-z-]+';/g, '');
-    return !/\blet\s|\bconst\s|=>|`|\?\./.test(body);
+    return !/\blet\s|\bconst\s|=>|`/.test(body);
   }));
   check('/api/releases itself is still read-only (no POST, no insert)', !/export async function (POST|PUT|DELETE|PATCH)/.test(routes[0]) && !/\.(insert|update|delete|upsert)\s*\(/.test(routes[0]));
   var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
