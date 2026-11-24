@@ -122,6 +122,20 @@ async function send(b) { return post({ json: async () => b }); }
   const movedPalletData = { ...moved, item_id: palletData.id, sha: palletData.manifest.sha, detail: corrected.detail };
   check(!rules.itemSignState(palletData, rules.latestByItem([movedPalletData])[palletData.id]).canRollback, 'database correction cannot be passed to code rollback');
   const orderQueue = liveRegister.items.find(it => it.id === 'wh-order-queue');
+  function jsonbOrder(value) {
+    if (Array.isArray(value)) return value.map(jsonbOrder);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.keys(value).sort((a, b) => a.length - b.length || a.localeCompare(b))
+      .map(key => [key, jsonbOrder(value[key])]));
+  }
+  for (const item of liveRegister.items.filter(item => item.manifest)) {
+    const stored = jsonbOrder(item);
+    check(selection.digest(stored.manifest) === item.codexRef.manifestDigest &&
+      selection.candidateProblems(stored).length === 0, item.id + ' retains its reviewed digest after a JSONB round trip');
+  }
+  const altered = jsonbOrder(orderQueue);
+  altered.manifest.files[0].before = '0'.repeat(64);
+  check(selection.candidateProblems(altered).length > 0, 'JSONB compatibility still rejects changed file fingerprints');
   register.items.push(orderQueue, palletData, liveRegister.items.find(it => it.id === 'wh-bug-001-save-path'));
   const reviewData = () => review({ json: async () => ({ item_ids: ['wh-bug-001', 'wh-bug-001-save-path', 'wh-order-queue'] }) });
   const offlineData = await reviewData();

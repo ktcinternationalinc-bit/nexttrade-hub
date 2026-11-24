@@ -6,7 +6,23 @@ var ORDER_QUEUE_MIGRATIONS = [
   '2026_11_15_000001_add_release_columns_to_order_queues.php',
   '2026_11_15_000002_add_released_by_to_order_queues.php',
 ];
-function digest(manifest) { return crypto.createHash('sha256').update(JSON.stringify(manifest)).digest('hex'); }
+// JSONB can reorder object keys. Keep the original manifest field order for
+// existing approvals and preserve array order, including migration order.
+var manifestKeyOrder = new Map([
+  'sha', 'target', 'dataCompatible', 'files', 'dataPlan',
+  'path', 'before', 'after',
+  'kind', 'eligibleCount', 'snapshotHash', 'scriptHash', 'migrations', 'name', 'sha256',
+].map(function (key, index) { return [key, index]; }));
+function canonicalManifest(value) {
+  if (Array.isArray(value)) return value.map(canonicalManifest);
+  if (!value || typeof value !== 'object') return value;
+  var keys = Object.keys(value).sort(function (a, b) {
+    var order = (manifestKeyOrder.get(a) ?? Infinity) - (manifestKeyOrder.get(b) ?? Infinity);
+    return order || (a < b ? -1 : a > b ? 1 : 0);
+  });
+  return Object.fromEntries(keys.map(function (key) { return [key, canonicalManifest(value[key])]; }));
+}
+function digest(manifest) { return crypto.createHash('sha256').update(JSON.stringify(canonicalManifest(manifest))).digest('hex'); }
 function isPalletCorrection(item) {
   var plan = item && item.manifest && item.manifest.dataPlan;
   return !!(item?.id === 'wh-bug-001' && item.dataChange === true && plan?.kind === 'pallet-unit-correction-v1'
