@@ -5,6 +5,7 @@
 // splits + open parked deposits/credits must account for every dollar, or the
 // transaction is categorized as one whole (no piecewise rows at all).
 import { summarizeBankAllocation } from './payment-matching';
+import { exclusiveUseOf, withExclusiveUse } from './bank-line-exclusive'; // v55.83-YD / YF — a vendor refund / cash deposit line has nothing left
 
 export async function bankAllocationFor(db, txnId) {
   var tR = await db.from('bank_transactions').select('amount, amount_abs').eq('id', txnId).limit(1);
@@ -20,7 +21,8 @@ export async function bankAllocationFor(db, txnId) {
   if (uR && uR.error) { throw uR.error; }
   var cR = await db.from('customer_credits').select('amount, status').eq('source_transaction_id', txnId);
   if (cR && cR.error) { throw cR.error; }
-  return summarizeBankAllocation({ total: total, payments: (pR && pR.data) || [], splits: (sR && sR.data) || [], unapplied: (uR && uR.data) || [], credits: (cR && cR.data) || [] });
+  var exA = await exclusiveUseOf(db, txnId); if (exA.error) { throw new Error(exA.error); }
+  return withExclusiveUse(summarizeBankAllocation({ total: total, payments: (pR && pR.data) || [], splits: (sR && sR.data) || [], unapplied: (uR && uR.data) || [], credits: (cR && cR.data) || [] }), exA);
 }
 
 // A HUMAN categorization (one row picked by a person, or a transfer pair a

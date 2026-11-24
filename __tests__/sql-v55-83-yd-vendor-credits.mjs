@@ -25,9 +25,13 @@ async function fresh() {
     create role anon; create role authenticated; create role service_role;
     create schema clickbooks_us; create table clickbooks_us.books (code text, locked_through date); insert into clickbooks_us.books values ('KTC_US', '2026-09-30');
     create table public.hub_audit_log (id uuid default gen_random_uuid(), at timestamptz default now(), actor_id uuid, action text not null, entity text, entity_id text, details jsonb, created_at timestamptz default now());
-    create table public.bank_transactions (id uuid primary key, wave_business_id text default 'US', direction text default 'out', pending boolean default false, review_status text default 'unreviewed', amount_abs numeric, date date default '2026-10-20', posted_date date, iso_currency text default 'USD', matched_invoice_id uuid, transfer_group_id uuid);
-    create table public.accounting_invoice_payments (id uuid primary key default gen_random_uuid(), bank_transaction_id uuid, amount numeric, voided boolean default false);
+    create table public.bank_transactions (id uuid primary key, wave_business_id text default 'US', direction text default 'out', pending boolean default false, review_status text default 'unreviewed', amount_abs numeric, date date default '2026-10-20', posted_date date, iso_currency text default 'USD', matched_invoice_id uuid, transfer_group_id uuid, linked_id uuid);
+    create table public.accounting_invoice_payments (id uuid primary key default gen_random_uuid(), bank_transaction_id uuid, amount numeric, voided boolean default false, sync_status text);
     create table public.party_money_entries (id uuid primary key default gen_random_uuid(), party text, kind text, bucket text, amount numeric, bank_transaction_id uuid, source_bank_transaction_id uuid);
+    create table public.payment_matches (id uuid primary key default gen_random_uuid(), bank_transaction_id uuid, invoice_id uuid, matched_amount numeric, voided boolean default false);
+    create table public.bank_transaction_splits (id uuid primary key default gen_random_uuid(), bank_transaction_id uuid, split_amount numeric);
+    create table public.unapplied_deposits (id uuid primary key default gen_random_uuid(), bank_transaction_id uuid, amount numeric, status text default 'open');
+    create table public.customer_credits (id uuid primary key default gen_random_uuid(), source_transaction_id uuid, amount numeric, status text default 'open');
     create table public.vendor_bills (id uuid primary key, wave_business_id text, vendor_name text, bill_number text, currency text default 'USD', total_amount numeric, record_status text default 'active', disputed boolean default false);
     create table public.vendor_bill_payments (id uuid primary key default gen_random_uuid(), bill_id uuid, amount numeric, paid_date date, bank_transaction_id uuid, method text, voided boolean default false, created_by uuid);
     create table public.wire_package_lines (id uuid primary key default gen_random_uuid(), package_id uuid, bill_id uuid, amount numeric, is_open boolean default true, payment_id uuid);
@@ -165,7 +169,7 @@ r = await call(db, 'hub_vendor_credit_refund', { credit_id: K, bank_transaction_
 check('the vendor refunds 200 of the 300 credit: recorded on the money-in line (whole line), credit left 100', r.ok && Number(r.v.credit_left) === 100, r);
 r = await call(db, 'hub_vendor_credit_apply', { credit_id: K, bill_id: B2, amount: 100.01, applied_date: '2026-10-21', request_id: 'r-a1', actor: ACTOR });
 check('… so only 100 can still be applied to a bill (100.01 refused)', !r.ok && /only \$100\.00 of this credit memo is left/.test(r.e), r);
-for (const [label, line, why] of [['a line bigger than what is left (500 > 100)', L2, /only \$100\.00 of this credit memo is left/], ['money OUT', L3, /settled money-in/], ['a line dated before the credit memo', L4, /before the credit memo/], ['the same line again', L1, /already recorded as a vendor credit refund/]]) {
+for (const [label, line, why] of [['a line bigger than what is left (500 > 100)', L2, /only \$100\.00 of this credit memo is left/], ['money OUT', L3, /settled money-in/], ['a line dated before the credit memo', L4, /before the credit memo/], ['the same line again', L1, /it is a vendor credit refund/]]) {
   r = await call(db, 'hub_vendor_credit_refund', { credit_id: K, bank_transaction_id: line, request_id: 'rr' + Math.random(), actor: ACTOR }); check('refund refused: ' + label, !r.ok && why.test(r.e), r);
 }
 e = await tryExec(db, `update bank_transactions set matched_invoice_id = gen_random_uuid() where id='${L1}'`);
@@ -183,6 +187,32 @@ const rApp = (await one(db, `select id from vendor_credit_applications where kin
 r = await call(db, 'hub_vendor_credit_unapply', { application_id: rApp, reason: 'wrong deposit', actor: ACTOR });
 check('undo the refund (kept, voided, audited): the line is free again and the credit has 300 left', r.ok && (await tryExec(db, `update bank_transactions set matched_invoice_id = gen_random_uuid() where id='${L1}'`)) === null
   && Number((await one(db, `select public.hub_credit_used('${K}') v`)).v) === 0 && (await one(db, `select count(*)::int n from hub_audit_log where action='vendor_credit_unapply' and entity='bank_transaction'`)).n === 1, r);
+// ── (Codex 24 Nov P1) ONE BANK LINE, ONE USE: a refund only takes an otherwise unallocated line; while it is a refund nothing else can be put on it ──
+db = await fresh();
+const KX = (await call(db, 'hub_vendor_credit_create', Object.assign({}, C, { request_id: 'kx', amount: 1000 }))).v.credit_id;
+const P1 = 'cccccccc-0000-0000-0000-000000000001', P2 = 'cccccccc-0000-0000-0000-000000000002', P3 = 'cccccccc-0000-0000-0000-000000000003', P4 = 'cccccccc-0000-0000-0000-000000000004';
+await db.exec(`insert into bank_transactions (id, direction, amount_abs, date) values ('${P1}', 'in', 200, '2026-10-20'), ('${P2}', 'in', 200, '2026-10-21'), ('${P3}', 'in', 200, '2026-10-22'), ('${P4}', 'in', 200, '2026-10-23')`);
+await db.exec(`insert into unapplied_deposits (bank_transaction_id, amount) values ('${P1}', 200)`);
+r = await call(db, 'hub_vendor_credit_refund', { credit_id: KX, bank_transaction_id: P1, request_id: 'x1', actor: ACTOR });
+check('(1) a deposit PARKED as an unapplied customer deposit cannot be a vendor refund; the parked deposit and the credit stay as they were', !r.ok && /parked as an unapplied customer deposit/.test(r.e) && /Undo that allocation first/.test(r.e)
+  && (await one(db, `select count(*)::int n from unapplied_deposits where bank_transaction_id='${P1}' and status='open'`)).n === 1 && Number((await one(db, `select public.hub_credit_used('${KX}') v`)).v) === 0, r);
+await db.exec(`insert into bank_transaction_splits (bank_transaction_id, split_amount) values ('${P2}', 200); insert into customer_credits (source_transaction_id, amount) values ('${P3}', 50)`);
+r = await call(db, 'hub_vendor_credit_refund', { credit_id: KX, bank_transaction_id: P2, request_id: 'x2', actor: ACTOR }); const r3 = await call(db, 'hub_vendor_credit_refund', { credit_id: KX, bank_transaction_id: P3, request_id: 'x3', actor: ACTOR });
+check('(3) … nor a SPLIT deposit, nor one holding an open CUSTOMER CREDIT', !r.ok && /split into lines/.test(r.e) && !r3.ok && /open customer credit/.test(r3.e), [r, r3]);
+r = await call(db, 'hub_vendor_credit_refund', { credit_id: KX, bank_transaction_id: P4, request_id: 'x4', actor: ACTOR });
+const r4b = await call(db, 'hub_vendor_credit_refund', { credit_id: KX, bank_transaction_id: P4, request_id: 'x4', actor: ACTOR });
+check('(5) an ordinary unused deposit still works as a refund, and the same click again is the same answer (once)', r.ok && Number(r.v.amount) === 200 && r4b.ok && r4b.v.repeat === true && (await one(db, `select count(*)::int n from vendor_credit_applications where kind='refund' and bank_transaction_id='${P4}'`)).n === 1, [r, r4b]);
+let ex = []; for (const [label, sql] of [['park it (unapplied deposit)', `insert into unapplied_deposits (bank_transaction_id, amount) values ('${P4}', 200)`], ['split it', `insert into bank_transaction_splits (bank_transaction_id, split_amount) values ('${P4}', 50)`],
+  ['give it a customer credit', `insert into customer_credits (source_transaction_id, amount) values ('${P4}', 50)`], ['match it', `insert into payment_matches (bank_transaction_id, invoice_id, matched_amount) values ('${P4}', gen_random_uuid(), 10)`],
+  ['make it a customer payment', `insert into accounting_invoice_payments (bank_transaction_id, amount) values ('${P4}', 10)`], ['re-open a voided parked deposit on it', `insert into unapplied_deposits (bank_transaction_id, amount, status) values ('${P4}', 10, 'void'); update unapplied_deposits set status='open' where bank_transaction_id='${P4}'`]]) {
+  const err = await tryExec(db, sql); if (!err || !/a vendor credit refund — undo that first/.test(err)) { ex.push([label, err]); } }
+check('(2) while it is a refund, the line cannot be parked, split, credited, matched or paid — every way, at the database', ex.length === 0 && (await one(db, `select count(*)::int n from unapplied_deposits where bank_transaction_id='${P4}' and status='open'`)).n === 0, ex);
+const xApp = (await one(db, `select id from vendor_credit_applications where kind='refund' and bank_transaction_id='${P4}'`)).id;
+r = await call(db, 'hub_vendor_credit_unapply', { application_id: xApp, reason: 'deposit was a customer payment', actor: ACTOR });
+const parkAfter = await tryExec(db, `insert into unapplied_deposits (bank_transaction_id, amount) values ('${P4}', 200)`);
+check('(4) after undoing the refund (kept, voided, audited) the line can be parked again as usual', r.ok && parkAfter === null && Number((await one(db, `select public.hub_credit_used('${KX}') v`)).v) === 0, [r, parkAfter]);
+r = await call(db, 'hub_vendor_credit_refund', { credit_id: KX, bank_transaction_id: P4, request_id: 'x5', actor: ACTOR });
+check('… and then it cannot be a refund any more (parked) — nothing removed to make room', !r.ok && /parked as an unapplied customer deposit/.test(r.e), r);
 // browser roles
 const priv = await one(db, `select has_function_privilege('authenticated', 'public.hub_vendor_credit_apply(jsonb)', 'EXECUTE') a, has_table_privilege('anon', 'public.vendor_credit_applications', 'SELECT') b`);
 check('browser roles can neither call the writers nor read the tables', priv.a === false && priv.b === false, priv);

@@ -15,6 +15,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { refusePending } from '../../../../lib/pending-guard'; // v55.83-XT
 import { authorizeBankIdentity, bankSuperAdminIds, readBankJson, BankVisibilityError, bankVisibilityErrorResponse } from '../../../../lib/bank-visibility';
 import { classifyApplication, roundMoney, isPaymentVoid, bankAllocationStatus, summarizeBankAllocation } from '../../../../lib/payment-matching';
+import { exclusiveUseOf, withExclusiveUse } from '../../../../lib/bank-line-exclusive'; // v55.83-YD / YF — one bank line, one use
 
 var API_BUILD_MARKER = 'v55.83-IP-bank-write';
 var API_ROUTE = '/api/accounting/bank-write';
@@ -42,6 +43,8 @@ async function allocationForTxn(db, txnId) {
   // sets reversed credits to status='void', excluded by the open-status check in summarizeBankAllocation).
   var cR = await db.from('customer_credits').select('amount, status').eq('source_transaction_id', txnId);
   if (cR && cR.error) { throw cR.error; }
+  var exT = await exclusiveUseOf(db, txnId); if (exT.error) { throw new Error(exT.error); }
+  if (exT.use) { return withExclusiveUse(summarizeBankAllocation({ total: total, payments: (pR && pR.data) || [], splits: (sR && sR.data) || [], unapplied: (uR && uR.data) || [], credits: (cR && cR.data) || [] }), exT); } // v55.83-YD / YF — taken whole: nothing left
   return summarizeBankAllocation({ total: total, payments: (pR && pR.data) || [], splits: (sR && sR.data) || [], unapplied: (uR && uR.data) || [], credits: (cR && cR.data) || [] });
 }
 
@@ -248,6 +251,14 @@ export async function POST(req) {
     // ── create_unapplied: park part/all of a deposit as an open unapplied deposit (service-role) ──
     // v55.83-JJ — was a browser dbInsert (RLS-exposed). Only marks reviewed when the park completes
     // the deposit's allocation; never auto-reviews a still-partial deposit.
+    // v55.83-YD / YF (Codex 24 Nov) — a line taken WHOLE as a vendor credit refund or as cash taken to the bank cannot be parked, split, matched
+    // or re-matched: said before anything is written (the database refuses it too). A failed check stops here (never guessed free).
+    if (action === 'create_unapplied' || action === 'save_splits' || action === 'match_invoice' || action === 'update_match') {
+      var exLine = (body.txn && body.txn.id) || body.bank_transaction_id || null;
+      var exU = await exclusiveUseOf(db, exLine);
+      if (exU.error) { return NextResponse.json({ ok: false, error: exU.error + ' Nothing was changed.', api_build_marker: API_BUILD_MARKER }, { status: 503 }); }
+      if (exU.use) { return NextResponse.json({ ok: false, error: 'This deposit is already used whole: ' + exU.label + ' Nothing was changed.', exclusive: exU.use, available: 0, api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+    }
     if (action === 'create_unapplied') {
       var ut = body.txn || {};
       var uAmt = roundMoney(Number(body.amount));

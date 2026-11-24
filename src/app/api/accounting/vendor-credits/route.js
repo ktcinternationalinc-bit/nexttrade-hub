@@ -15,6 +15,7 @@ import { payrollScope, isPayrollVendorName } from '../../../../lib/payroll-visib
 import { creditLeft, vendorKeyOf } from '../../../../lib/vendor-credits';
 import { loadBillCredits, vendorCreditsInstalled } from '../../../../lib/vendor-credits-server';
 import { privateScope, isPrivateRow } from '../../../../lib/private-accounts-server';
+import { occupiedLines } from '../../../../lib/bank-line-exclusive'; // v55.83-YD — one bank line, one use
 
 var API_BUILD_MARKER = 'v55.83-YD-vendor-credits';
 var SQL_MISSING = 'Vendor credits are not switched on yet: the database step sql/v55-83-YD-vendor-credits.sql is needed (Max runs it). Nothing was changed.';
@@ -137,24 +138,16 @@ export async function POST(req) {
 
     if (action === 'refund_candidates') {
       var since = String(credit.credit_date || '').substring(0, 10);
-      var lq = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, account_id, transfer_group_id, matched_invoice_id, iso_currency')
+      var lq = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, account_id, transfer_group_id, matched_invoice_id, linked_id, iso_currency')
         .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'in').neq('pending', true).neq('review_status', 'duplicate').is('matched_invoice_id', null).gte('date', since).order('date', { ascending: false }).limit(300);
       if (lq.error) { return bad('The money-in lines could not be read (' + lq.error.message + ').', 503); }
       var scopeR = await privateScope(db, userId);
       var cand = (lq.data || []).filter(function (x) { return !x.transfer_group_id && String(x.iso_currency || 'USD').toUpperCase() === credit.currency && !isPrivateRow(x, scopeR) && (scopeR.all || !!x.account_id); });
-      var cand2 = []; var taken = {};
-      for (var c2 = 0; c2 < cand.length; c2 += 200) {
-        var part = cand.slice(c2, c2 + 200).map(function (x) { return x.id; });
-        var ap = await db.from('vendor_credit_applications').select('bank_transaction_id, voided').in('bank_transaction_id', part);
-        if (ap.error) { return bad('The refunds already recorded could not be read (' + ap.error.message + ').', 503); }
-        (ap.data || []).forEach(function (x) { if (x.voided !== true) { taken[x.bank_transaction_id] = true; } });
-        var ip = await db.from('accounting_invoice_payments').select('bank_transaction_id, voided').in('bank_transaction_id', part);
-        if (ip.error) { return bad('The customer payments could not be read (' + ip.error.message + ').', 503); }
-        (ip.data || []).forEach(function (x) { if (x.voided !== true) { taken[x.bank_transaction_id] = true; } });
-        var pm = await db.from('party_money_entries').select('bank_transaction_id, kind').eq('kind', 'refund').in('bank_transaction_id', part);
-        if (pm.error && !/does not exist|schema cache/i.test(String(pm.error.message || ''))) { return bad('The RTM / NextTrade money back could not be read (' + pm.error.message + ').', 503); }
-        ((pm && pm.data) || []).forEach(function (x) { taken[x.bank_transaction_id] = true; });
-      }
+      // v55.83-YD (Codex 24 Nov) — only a line with NO other use is offered (parked, split, customer credit, payment, match, money back, refund, cash deposit, link)
+      var cand2 = [];
+      var occ = await occupiedLines(db, cand.filter(function (x) { return !x.linked_id; }).map(function (x) { return x.id; }));
+      if (occ.error) { return bad(occ.error + ' Nothing shown.', 503); }
+      var taken = occ.taken; cand.forEach(function (x) { if (x.linked_id) { taken[x.id] = 'linked'; } });
       var used = await db.from('vendor_credit_applications').select('amount, kind, voided, credit_id').eq('credit_id', credit.id);
       if (used.error) { return bad('The credit could not be read (' + used.error.message + ').', 503); }
       var leftNow = creditLeft(credit, used.data || []).left;
