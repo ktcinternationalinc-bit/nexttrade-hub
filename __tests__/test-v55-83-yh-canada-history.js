@@ -22,6 +22,7 @@ check('kinds: an ordinary receipt', H.entryKindOf(80078879, 90089671) === 'recei
 var eff0 = H.effectiveGoodsMap([]);
 var un0 = H.unmatchedGoods(eff0);
 check('unmatched by default = the 8 names nobody decided', JSON.stringify(un0) === JSON.stringify(['Inspected', 'Decking', 'Foam', 'Mixed', 'Other', 'Morbern', 'Trim', 'Vintex']), un0);
+check('Max 24 Nov: PVC Black on Black/Grey + PVC Non Woven = Seconds Canada; PVC Film Rolls + PVC GAYLORDS = PVC', eff0.map['PVC Black on Black/Grey'] === 'Seconds Canada' && eff0.map['PVC Non Woven'] === 'Seconds Canada' && eff0.map['PVC Film Rolls'] === 'PVC' && eff0.map['PVC GAYLORDS'] === 'PVC');
 check('proposed links are marked proposed', eff0.source['Seconds Auto'] === 'proposed' && eff0.map['TPO Chips'] === 'TPO' && eff0.source.Decking === 'unmatched' && eff0.map.Decking === '');
 var eff1 = H.effectiveGoodsMap([
   { goods_name: 'Decking', cgt_type: 'Roofing', decided_at: '2026-11-25T10:00:00Z' },

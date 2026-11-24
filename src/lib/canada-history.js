@@ -34,8 +34,9 @@ export var DEFAULT_GOODS_MAP = {
   'TPO Rolls': 'TPO',
   'TPO Scrap': 'TPO',
   'TPO Chips': 'TPO',
-  'PVC Black on Black/Grey': 'PVC',
-  'PVC Non Woven': 'PVC',
+  // Max, 24 Nov 2026: these two PVC names count as Seconds Canada; PVC Film Rolls and PVC GAYLORDS stay PVC.
+  'PVC Black on Black/Grey': 'Seconds Canada',
+  'PVC Non Woven': 'Seconds Canada',
   'PVC Film Rolls': 'PVC',
   'PVC GAYLORDS': 'PVC',
   'Fabric': 'Fabrics Canada'
