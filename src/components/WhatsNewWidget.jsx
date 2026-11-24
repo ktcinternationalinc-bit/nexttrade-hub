@@ -33,6 +33,23 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YJ',
+    date: '2026-11-24',
+    title: 'Change Schedule: sign off a warehouse change, ask for a roll back, and a full change history',
+    items: [
+      { text: '**Sign off on the screen.** System → Change Schedule: a waiting warehouse change that Codex has passed now has a green **Sign off: go to production** button. You type the name of the change to confirm. It records your go for that exact build, with your name and the time. The move itself is then done from the KTC office PC, backups first.' },
+      { text: '**No pass, no button.** A change Codex has not passed for production shows why it cannot be signed off yet. If the build changes afterwards, the new build needs its own go.' },
+      { text: '**Ask for a roll back.** A change that is on production has **Ask to roll this back**. It is put back to the exact files saved just before the move. A go or a roll-back request can be taken back.' },
+      { text: '**Change history.** A new section lists every approval, roll-back request, move, check and roll back, newest first — who, when, which build, and where the backup is. An entry is never changed or removed.' },
+      { text: '**Always current.** Each change shows where it is right now: on staging, on production but not yet checked, or on production. This follows the history, so it is right without waiting for a new Hub version.' },
+      { text: '**What a roll back does not do:** it puts back screens and code only. The warehouse database is not rewound — every order, scan and bond record entered since stays.' },
+      { text: 'Only the super admin sees the buttons. People with the Change Schedule switch can read the schedule and the history.' },
+      { text: 'Hub versions are not affected: the Hub is released the way it always has been.' },
+      { text: 'The buttons and the history stay off until the new table is installed in the database.' },
+      { superAdminOnly: true, text: 'Technical: NEW sql/v55-83-YJ-release-signoffs.sql (release_signoffs, append-only: UPDATE / DELETE / TRUNCATE refused by trigger and revoked; RLS on, no policy; service role SELECT + INSERT only; actions go / rollback / withdraw written by the Hub, moved / checked_live / failed / rolled_back / rollback_failed written by the office PC). NEW src/lib/release-signoff.js and POST /api/releases/signoff (super admin only); GET /api/releases returns the state per change and the history. release-management: NEW lib/remote.js (allowlisted files, backup with sha256 manifest first, verified upload, one-release lock, automatic restore, undo folder, never restores over a file another release changed), deploy.js binds a warehouse change to the warehouse repo commit and ends in deployed until a person records the check, rollback.js needs a recorded roll-back go, history-row.js prints the history row. Both switches (sshAuthorized, liveExecutionEnabled) are false: no connection is made. No Hub release path change. No Nextrade change.' },
+    ]
+  },
+  {
     version: 'v55.83-XK',
     date: '2026-11-24',
     title: 'P&L: See sales & revenue — a researcher can fill in costs without seeing sales',

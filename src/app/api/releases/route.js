@@ -18,6 +18,8 @@ import path from 'path';
 import { verifiedCaller } from '../../../lib/verified-caller';
 import { assertPermission } from '../../../lib/server-permissions';
 import bundledRegister from '../../../../release-management/release-register.json';
+// v55.83-YJ — the latest sign-off / roll-back request per change (read only here; writes are /api/releases/signoff)
+import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, latestByItem, itemSignState, tableMissing, historyList } from '../../../lib/release-signoff';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,8 +57,35 @@ export async function GET(request) {
   var queued = items.filter(function (it) { return it && it.status !== 'live'; });
   var live = items.filter(function (it) { return it && it.status === 'live'; });
 
+  // v55.83-YJ — sign-off state per item. Only the super admin gets buttons; a missing table = no buttons, said plainly.
+  var canSign = !!(perm.ctx && perm.ctx.isSuperAdmin === true);
+  var signoffsInstalled = true; var signoffsError = ''; var signRows = [];
+  try {
+    var sr = await db.from(SIGNOFF_TABLE).select(SIGNOFF_COLUMNS).eq('scope', 'warehouse').order('id', { ascending: true }).limit(5000);
+    if (sr.error) { if (tableMissing(sr.error)) { signoffsInstalled = false; } else { signoffsError = 'The sign-offs could not be read right now.'; } }
+    else { signRows = sr.data || []; }
+  } catch (eS) { signoffsError = 'The sign-offs could not be read right now.'; }
+  var latest = latestByItem(signRows);
+  var signoffs = {};
+  var readable = signoffsInstalled && !signoffsError;
+  items.forEach(function (it) {
+    if (!it || !it.id) { return; }
+    var stt = itemSignState(it, latest[String(it.id)]);
+    if (!canSign || !readable) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; }
+    if (!readable) { stt.kind = 'unknown'; }
+    signoffs[String(it.id)] = stt;
+  });
+
   return NextResponse.json({
     ok: true,
+    canSign: canSign,
+    signoffsInstalled: signoffsInstalled,
+    signoffsError: signoffsError,
+    signoffs: signoffs,
+    // v55.83-YJ — the full change history, newest first: every approval, request, move, check and roll back
+    // (from the table, current at all times) plus the Codex / staging-test evidence from the register.
+    history: readable ? historyList(signRows, register) : [],
+    historyComplete: readable && signRows.length < 5000,
     api_build_marker: API_BUILD_MARKER,
     source: source,
     snapshot: true,

@@ -24,7 +24,7 @@ var evaluateGate = require('./gate').evaluateGate;
 // Default to the real register; tests point RELEASE_REGISTER_FILE at a throwaway copy.
 var REGISTER_FILE = process.env.RELEASE_REGISTER_FILE || path.resolve(__dirname, '..', 'release-register.json');
 var LOCK_DIR = REGISTER_FILE + '.lock';
-var STATES = ['planned', 'queued', 'deploying', 'verified', 'live', 'failed', 'rolled-back'];
+var STATES = ['planned', 'queued', 'deploying', 'deployed', 'verified', 'live', 'failed', 'needs-attention', 'recovered', 'rolled-back']; // v55.83-YJ: 'deployed' = files in place, not yet checked by a person
 
 function load() {
   var raw = fs.readFileSync(REGISTER_FILE, 'utf8');
@@ -125,6 +125,22 @@ function recordMaxApproval(id, text) {
   });
 }
 
+// v55.83-YJ — Max's roll-back go for a change that is live (from the Change Schedule screen or his words
+// in chat). Recorded like maxApproval; rollback.js only VERIFIES it. Refused for a change that is not live.
+// target = { sha, backup } copied from the request row: the exact build and backup folder Max asked to undo.
+function recordRollbackApproval(id, text, target) {
+  if (!text || String(text).trim().length < 8) { throw new Error('recordRollbackApproval needs Max\'s roll-back go text'); }
+  if (!target || String(target.sha || '').length < 7 || String(target.backup || '').length < 3) { throw new Error('recordRollbackApproval needs the target { sha, backup } from the request row. Nothing changed.'); }
+  return withLock(function () {
+    var reg = load(); var it = findItem(reg, id); if (!it) { throw new Error('no item ' + id); }
+    if (it.status !== 'live' && it.lifecycle !== 'deployed') { throw new Error('recordRollbackApproval: ' + id + ' is not on production. Nothing changed.'); }
+    it.rollbackApproval = { text: String(text).trim(), sha: String(target.sha), backup: String(target.backup), at: new Date().toISOString() };
+    if (!reg.events) { reg.events = []; }
+    reg.events.push(evRow({ action: 'rollback-approval', item: id, detail: 'recorded' }));
+    save(reg); return it;
+  });
+}
+
 // Mark an item live on production — ONLY after the SHARED gate passes against the RECORDED
 // evidence (Codex 13:11 #2). Loads the item inside the lock, runs evaluateGate against the
 // candidate, and compares confirm to the EXISTING recorded approval. It NEVER creates or
@@ -174,6 +190,28 @@ function markVerifiedLive(id, ev) {
   });
 }
 
+// v55.83-YJ rev 3 — a person checked the live site after a move or roll back that did not finish, and records
+// where the change now is. Only this clears 'needs-attention'. where = 'staging' | 'live'.
+function recordRecovery(id, where, by) {
+  if (where !== 'staging' && where !== 'live') { throw new Error('recordRecovery: where must be "staging" or "live"'); }
+  if (!by || String(by).trim().length < 10) { throw new Error('recordRecovery needs who checked what (a few words)'); }
+  return withLock(function () {
+    var reg = load(); var it = findItem(reg, id); if (!it) { throw new Error('no item ' + id); }
+    if (it.lifecycle !== 'needs-attention') { throw new Error('recordRecovery: ' + id + ' is not waiting for a recovery check. Nothing changed.'); }
+    it.lifecycle = 'recovered';
+    it.recovery = { where: where, by: String(by).trim(), at: new Date().toISOString() };
+    if (where === 'staging') { it.where = 'staging'; it.status = 'queued'; }
+    if (it.maxApproval || it.rollbackApproval) {
+      if (!it.usedApprovals) { it.usedApprovals = []; }
+      it.usedApprovals.push({ at: new Date().toISOString(), go: it.maxApproval || null, rollback: it.rollbackApproval || null, build: it.build || '', backupDir: it.backupDir || '' });
+      delete it.maxApproval; delete it.rollbackApproval;
+    }
+    if (!reg.events) { reg.events = []; }
+    reg.events.push(evRow({ action: 'recovery-confirmed', item: id, by: String(by).trim(), detail: 'now ' + where }));
+    save(reg); return it;
+  });
+}
+
 // Move an item back to staging after a rollback (history kept; nothing deleted).
 function markRolledBack(id, by) {
   return withLock(function () {
@@ -184,6 +222,13 @@ function markRolledBack(id, by) {
     it.status = 'queued';
     it.lifecycle = 'rolled-back';
     it.needsMax = true;
+    // v55.83-YJ: both go's are USED UP by a roll back. They are kept as history, never erased, but a new
+    // move (or a second roll back) needs a new go from Max.
+    if (it.maxApproval || it.rollbackApproval) {
+      if (!it.usedApprovals) { it.usedApprovals = []; }
+      it.usedApprovals.push({ at: new Date().toISOString(), go: it.maxApproval || null, rollback: it.rollbackApproval || null, build: it.build || '', backupDir: it.backupDir || '' });
+      delete it.maxApproval; delete it.rollbackApproval;
+    }
     if (!reg.events) { reg.events = []; }
     reg.events.push(evRow({ action: 'rolled-back', item: id, by: by || 'release-tooling' }));
     save(reg);
@@ -218,6 +263,6 @@ module.exports = {
   REGISTER_FILE: REGISTER_FILE, STATES: STATES,
   load: load, save: save, findItem: findItem,
   upsertItem: upsertItem, setState: setState,
-  recordCodexPass: recordCodexPass, recordBehavioralQA: recordBehavioralQA, recordMaxApproval: recordMaxApproval,
+  recordCodexPass: recordCodexPass, recordBehavioralQA: recordBehavioralQA, recordMaxApproval: recordMaxApproval, recordRollbackApproval: recordRollbackApproval, recordRecovery: recordRecovery,
   markVerifiedLive: markVerifiedLive, markRolledBack: markRolledBack, logEvent: logEvent
 };

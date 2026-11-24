@@ -76,4 +76,48 @@ function headProblem(sha, head) {
   return null;
 }
 
-module.exports = { evaluateGate: evaluateGate, headProblem: headProblem };
+// v55.83-YJ — the roll-back gate, as a pure function. A roll back needs: the change is live, the exact
+// backup folder the move recorded (never a folder typed at the time), and Max's RECORDED roll-back go,
+// which the operator's confirm must equal. Returns a list of problems (empty = clear). No I/O.
+function rollbackProblems(item, ctx) {
+  var problems = [];
+  item = item || {}; ctx = ctx || {};
+  if (str(item.status) !== 'live' && str(item.lifecycle) !== 'deployed') { problems.push('This change is not on production, so there is nothing to roll back.'); }
+  if (!str(item.backupDir)) { problems.push('No backup folder is recorded for this change (backupDir). Only a move made by deploy.js records one; a change moved by hand is restored by hand.'); }
+  if (str(ctx.backup) && str(ctx.backup) !== str(item.backupDir)) { problems.push('--backup (' + str(ctx.backup) + ') is not the backup folder recorded for this change (' + str(item.backupDir) + ').'); }
+  var ap = item.rollbackApproval;
+  if (!ap || typeof ap !== 'object' || !ap.text) {
+    problems.push('No recorded roll-back go from Max (rollbackApproval.text). Record his go first; a free-text confirm is not proof.');
+  } else {
+    if (str(ctx.confirm).trim() !== str(ap.text).trim()) { problems.push('confirm does not match the recorded roll-back go for this change.'); }
+    // v55.83-YJ rev 3 (Codex 24 Nov): the go names the exact build and backup folder Max asked to undo. It must be
+    // the build and backup this PC recorded for the move — an identical sentence is not enough.
+    var liveSha = str(item.deployedSha || item.build);
+    if (!str(ap.sha) || !str(ap.backup)) { problems.push('The recorded roll-back go does not name a build and a backup folder. Record it again from the request row (its build and backup).'); }
+    else {
+      if (str(ap.sha) !== liveSha) { problems.push('The roll-back go is for build ' + str(ap.sha) + ', but the build this PC moved is ' + (liveSha || 'not recorded') + '.'); }
+      if (str(ap.backup) !== str(item.backupDir)) { problems.push('The roll-back go names backup ' + str(ap.backup) + ', but the backup recorded for this move is ' + (str(item.backupDir) || 'not recorded') + '.'); }
+    }
+  }
+  return problems;
+}
+
+// v55.83-YJ rev 3 (Codex 24 Nov) — how a FAILED move ended, as a pure function of what lib/remote.deployLive
+// returned. Three different endings, never one word for all of them:
+//   not_replaced        nothing on the live app was replaced (no restore was needed)
+//   restored            files were replaced AND the automatic restore finished and was confirmed (restored.ok)
+//   recovery_incomplete files were replaced and the restore is NOT confirmed — also when the files are back
+//                       but a later step of the restore failed. Only a person's check clears this.
+function attemptRecord(res, sha) {
+  res = res || {};
+  var rs = res.restored || null;
+  var outcome = !rs ? 'not_replaced' : (rs.ok === true ? 'restored' : 'recovery_incomplete');
+  if (!rs && Array.isArray(res.replaced) && res.replaced.length) { outcome = 'recovery_incomplete'; }   // replaced, yet no restore ran: never 'not replaced'
+  return { kind: 'move', at: new Date().toISOString(), sha: str(sha), outcome: outcome, backupDir: str(res.backupDir), replaced: (res.replaced || []).slice(),
+    restoredFiles: rs ? (rs.restored || []).slice() : [], filesBack: !!(rs && rs.filesBack), undoDir: rs ? str(rs.undoDir) : '',
+    problems: (res.problems || []).concat(rs ? (rs.problems || []) : []), lockStuck: !!res.lockStuck };
+}
+// The register state that goes with it: only a confirmed ending is 'failed' (= production is as it was).
+function attemptState(rec) { return rec && (rec.outcome === 'not_replaced' || rec.outcome === 'restored') ? 'failed' : 'needs-attention'; }
+
+module.exports = { evaluateGate: evaluateGate, headProblem: headProblem, rollbackProblems: rollbackProblems, attemptRecord: attemptRecord, attemptState: attemptState };

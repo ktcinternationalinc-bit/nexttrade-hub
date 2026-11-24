@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-22",
+  "updated": "2026-11-24",
   "updatedBy": "release-governance session",
   "intro": "What's live on production, what's waiting on fix staging, and what each change still needs before it moves. Production currently holds the baseline plus the Hub-embed change only. This file is hand-editable — edit it directly, or the deploy/rollback scripts append to it. The Change Schedule screen in the Hub reads this file.",
   "legend": [
@@ -156,9 +156,9 @@
     "Deploy the build, clear caches, verify the change and that nothing breaks.",
     "Rollback if needed = restore those backups + clear caches. Data is never deleted, and rolling back code never touches the database — so no order, scan or bond row is ever lost."
   ],
-  "protocolNote": "Once the live SSH key is authorized, steps 2–4 become one automated command (deploy a build, or roll back to a build), with the backups taken for you. Until then every production move is done by Max in cPanel, backups first, with his named go.",
+  "protocolNote": "Your go can be given on this screen (Sign off) or in chat; it is recorded for the exact build Codex passed. The move itself is done from the KTC office PC: backups first, each file checked, and an automatic restore if the site does not answer. A roll back restores the files saved just before the move. Until the automatic steps are switched on, each move is still done by hand in cPanel with the same backups.",
   "deployAutomation": {
-    "status": "key-authorized-automation-safe-mode",
-    "detail": "The ktc-live-deploy key is now authorized on the live cPanel (22 Nov 2026; host premium224.web-hosting.com, user nextueoa, SSH port 21098). The deploy/rollback scripts stay in safe mode (manual cPanel steps only, nothing changed) until the private key path is confirmed on the deploy machine AND the live-execution block has had its Codex re-review and is enabled deliberately. Every production move still needs Codex PASS + Max's named go per change; data is never deleted."
+    "status": "built-switched-off",
+    "detail": "The automatic move and undo steps are built and tested (v55.83-YJ) but switched off by two separate switches. Switching them on needs Codex's pass on those steps and Max naming it. Every move still needs Codex PASS + Max's go per change; data is never deleted and a roll back never touches the database."
   }
 }

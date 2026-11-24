@@ -85,3 +85,67 @@ is set true. They contain **no delete/DROP** of any kind. Data is never deleted.
 - Nothing reaches production without: works on staging → Codex PASS → Max names the change.
 - Back up before every change; data is never deleted; every release is reversible.
 - The scripts never handle Max's password — SSH uses the authorized key only.
+
+## v55.83-YJ — sign-off, roll back, and the live steps
+
+**On the screen (super admin only).** A waiting change with a recorded Codex PASS for production
+(`codexRef {sha, target:"production", feedbackRef}`) gets **Sign off: go to production**; a live change gets
+**Ask to roll this back**; either can be taken back. Each click is one append-only row in
+`public.release_signoffs` (`sql/v55-83-YJ-release-signoffs.sql`: UPDATE / DELETE / TRUNCATE refused). The row
+is ONLY Max's go — it moves nothing. The stored sentence is made by the server:
+`Max: yes, put <id> on production @ <sha>` / `Max: roll <id> back`.
+
+**From the row to the move (office PC).**
+1. Read the row (Supabase, read-only): `select * from release_signoffs where item_id = '<id>' order by id desc limit 3`.
+2. Record it: `register.recordMaxApproval(id, approval_text)` (go) or `register.recordRollbackApproval(id, approval_text)` (roll back).
+3. `node release-management/deploy/deploy.js --item <id> --sha <sha> --confirm "<approval_text>" --files a,b,c [--live]`
+   or `node release-management/deploy/rollback.js --item <id> --confirm "<approval_text>" [--live]`.
+A go given in chat skips step 1: record Max's quoted words with the same helper.
+
+**The live steps (`lib/remote.js`), run only with `--live` AND `sshAuthorized` AND `liveExecutionEnabled`
+(both ship `false`) AND `key.privateKeyPath`, `live.appRoot`, `live.checkUrl` set:**
+- files: explicit `--files`, each on the item's `deployFiles` list, exactly as committed in the
+  warehouse repo at `--sha`; `.env`, `storage/`, `vendor/`, `..`, absolute paths and odd characters refused;
+- backup first to `~/code-backups/<topic>-<YYYYMMDDHHMMSS>/files/…` + `MANIFEST.json` (per file: existed,
+  sha256 before, sha256 after); every backup copy is proven identical before anything is replaced;
+- upload to `<file>.yj-new`, prove sha256, `mv` into place, prove again; then the cache clear(s) and the site check;
+- any failure after the first replace → automatic restore from that backup (the failed files are kept in
+  `<topic>-failed-<stamp>/`);
+- roll back: needs the recorded roll-back go and the `backupDir` the move recorded; saves the current live
+  files to `<topic>-undo-<stamp>/` first, restores and proves each file, and MOVES a file the change added
+  into that folder (never deletes). After a roll back both go's are used up (`usedApprovals`).
+Code only: no SQL, no migration, no delete is ever sent.
+
+**The Hub itself is not handled here** (Max, 24 Nov): Hub builds go out the way they always have — Codex
+pass, then push to main — and there is no Hub roll-back button. This layer is for WAREHOUSE changes.
+
+**Added after Codex's design feedback (24 Nov):**
+- one release at a time: `~/code-backups/.release-lock/` (made with `mkdir`, released by moving it into
+  `.release-locks-done/`). A run that died leaves the lock; the next run refuses until a person has looked.
+- an undo never restores over a file that is neither this release's file (`after` in the manifest) nor the
+  one before it (`before`): something else changed it, so the whole undo is refused and nothing is touched.
+- a move ends in state **deployed** ("files in place, site answers"), NOT live. A page that answers is not
+  proof the change works. After a person has checked the change itself:
+  `deploy.js --item <id> --sha <sha> --confirm "<go>" --mark-live --checked-by "<who checked what>"`.
+
+**Keeping the history current (Max, 24 Nov: "accurate change mgmt history at all times").** The screen's
+Change history and each change's place (staging / on production not yet checked / on production) come from
+`release_signoffs`, not only from this register file. After every real step the office PC adds ONE row:
+`node release-management/deploy/history-row.js --item <id> --action moved|checked_live|failed|rolled_back|rollback_failed --ref <row number of the go / roll-back request> [--note "..."]`
+prints the INSERT (build and backup folder are read from the register, never typed); it is run through the
+database connection as part of carrying out Max's go for that change. Then the register is committed so the
+Codex / test evidence in the history follows on the next Hub release.
+
+**Revision 3 (Codex 24 Nov findings):**
+- A roll-back request always names what it undoes: the build, the backup folder and the move row, taken from the
+  recorded history (it wins over this register) or, for an older item, from a build + `backupDir` that deploy.js
+  itself recorded. A change moved by hand has neither and cannot be requested for roll back on the screen.
+  The sentence carries the build (`Max: roll <id> back @ <sha>`). On the PC: `register.recordRollbackApproval(id,
+  text, { sha, backup })` copies the target from the request row, and `gate.rollbackProblems` refuses unless that
+  build and backup are the ones this PC moved.
+- A failed move ends one of three ways (`gate.attemptRecord`, saved as `lastAttempt` before the script exits):
+  `not_replaced` and `restored` -> state `failed` (production is as it was); `recovery_incomplete` -> state
+  `needs-attention` (the restore is NOT confirmed, even if the files are back). Nothing else can be done to that
+  change until a person checks the live site and `register.recordRecovery(id, "staging"|"live", "<who checked
+  what>")` is recorded. `history-row.js` derives the row from that recorded outcome: an unconfirmed restore can
+  only be written as `recovery_incomplete` / `rollback_failed`, never as "failed / put back".

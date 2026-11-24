@@ -4,7 +4,8 @@
 // fix staging, and what each change still needs before it moves (Codex pass · Max's go · data
 // flag), plus how a move happens and un-happens. Reads the hand-editable register via the
 // read-only /api/releases route (release-management/release-register.json). Shows nothing it
-// cannot read; never writes. Visual spec: dark + gold, matching the warehouse Change-Schedule
+// cannot read. v55.83-YJ: the super admin can also record a go / a roll-back request for a change
+// (/api/releases/signoff). Hub releases are not handled on this screen. Visual spec: dark + gold, matching the warehouse Change-Schedule
 // preview, using the Hub's JetBrains Mono for mono accents.
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
@@ -29,12 +30,129 @@ function Tag(props) {
   );
 }
 
+// v55.83-YJ — every call carries the sign-in; the server decides who may do what.
+function callApi(path, method, body) {
+  return supabase.auth.getSession().then(function (s) {
+    var token = s && s.data && s.data.session ? s.data.session.access_token : '';
+    var headers = { 'Content-Type': 'application/json' };
+    if (token) { headers['Authorization'] = 'Bearer ' + token; }
+    var opts = { method: method || 'GET', cache: 'no-store', headers: headers };
+    if (body) { opts.body = JSON.stringify(body); }
+    return fetch(path, opts);
+  }).then(function (r) { return r.json(); });
+}
+
+var btn = function (color, solid) {
+  return { font: '700 12px system-ui, sans-serif', padding: '6px 12px', borderRadius: 7, cursor: 'pointer', border: '1px solid ' + color, color: solid ? '#0a0e1a' : color, background: solid ? color : 'transparent' };
+};
+function fmtWhen(v) { if (!v) { return ''; } try { return new Date(v).toLocaleString(); } catch (e) { return String(v); } }
+
+// v55.83-YJ — the sign-off / roll-back box under one change. Typing the name of the change is the confirmation.
+function SignBox(props) {
+  var it = props.item; var sg = props.sign || {};
+  var os = useState(''); var open = os[0]; var setOpen = os[1];
+  var ts = useState(''); var typed = ts[0]; var setTyped = ts[1];
+  var bs = useState(false); var busy = bs[0]; var setBusy = bs[1];
+  var ms = useState(null); var msg = ms[0]; var setMsg = ms[1];
+
+  function send() {
+    setBusy(true); setMsg(null);
+    callApi('/api/releases/signoff', 'POST', { item_id: it.id, action: open, confirm: typed })
+      .then(function (j) {
+        if (j && j.ok) { setMsg({ ok: true, text: j.note || 'Recorded.' }); setOpen(''); setTyped(''); props.onDone(); }
+        else { setMsg({ ok: false, text: (j && j.error) || 'It could not be recorded. Nothing was changed.' }); }
+      })
+      .catch(function () { setMsg({ ok: false, text: 'The Hub could not be reached. Nothing was changed.' }); })
+      .then(function () { setBusy(false); });
+  }
+
+  var label = { go: 'Sign off: go to production', rollback: 'Ask to roll this back', withdraw: 'Take it back' };
+  var ask = { go: 'This records your go for this exact build. To confirm, type the name of the change:', rollback: 'This records your request to put this change back to what it was before. To confirm, type the name of the change:', withdraw: 'This takes your go / roll-back request back. To confirm, type the name of the change:' };
+  return (
+    <div style={{ gridColumn: '1 / -1', borderTop: '1px dashed ' + C.line, paddingTop: 9, marginTop: 2, fontSize: '.82rem' }}>
+      {sg.kind === 'go' && <div style={{ color: C.prod }}><b>Signed off</b>{sg.by ? ' by ' + sg.by : ''}{sg.at ? ' · ' + fmtWhen(sg.at) : ''}{sg.sha ? ' · build ' + String(sg.sha).substring(0, 7) : ''}. The move itself is done from the KTC office PC, backups first.</div>}
+      {sg.kind === 'rollback' && <div style={{ color: C.max }}><b>Roll back requested</b>{sg.by ? ' by ' + sg.by : ''}{sg.at ? ' · ' + fmtWhen(sg.at) : ''}{sg.sha ? ' · of build ' + String(sg.sha).substring(0, 7) : ''}. The restore itself is done from the KTC office PC.</div>}
+      {sg.kind === 'unknown' && <div style={{ color: C.muted }}>Sign-off status is not available right now.</div>}
+      {sg.problem && <div style={{ color: '#fca5a5' }}>{sg.problem}</div>}
+      {sg.why && <div style={{ color: C.muted }}>{sg.why}</div>}
+      {!open && (sg.canGo || sg.canRollback || sg.canWithdraw) && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+          {sg.canGo && <button style={btn(C.prod, true)} onClick={function () { setOpen('go'); setMsg(null); }}>{label.go}</button>}
+          {sg.canRollback && <button style={btn(C.max, false)} onClick={function () { setOpen('rollback'); setMsg(null); }}>{label.rollback}</button>}
+          {sg.canWithdraw && <button style={btn(C.muted, false)} onClick={function () { setOpen('withdraw'); setMsg(null); }}>{label.withdraw}</button>}
+        </div>
+      )}
+      {open && (
+        <div style={{ marginTop: 6, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ color: C.ink }}>{ask[open]}</div>
+          {open === 'rollback' && sg.liveBuild && <div style={{ color: C.muted, marginTop: 4 }}>What will be undone: build <b style={{ fontFamily: C.mono, color: C.ink }}>{String(sg.liveBuild).substring(0, 7)}</b>, restored from <span style={{ fontFamily: C.mono }}>{sg.liveBackup}</span>.</div>}
+          <div style={{ font: '700 12px ' + C.mono, color: C.gold2, margin: '4px 0 6px' }}>{it.title}</div>
+          <input value={typed} onChange={function (e) { setTyped(e.target.value); }} placeholder="Type the name here" style={{ width: '100%', maxWidth: 520, padding: '7px 9px', borderRadius: 6, border: '1px solid ' + C.line, background: '#0a0e1a', color: C.ink, font: '500 13px system-ui, sans-serif' }} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button disabled={busy} style={btn(open === 'go' ? C.prod : C.max, true)} onClick={send}>{busy ? 'Recording…' : label[open]}</button>
+            <button disabled={busy} style={btn(C.muted, false)} onClick={function () { setOpen(''); setTyped(''); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {msg && <div style={{ marginTop: 6, color: msg.ok ? C.prod : '#fca5a5' }}>{msg.text}</div>}
+    </div>
+  );
+}
+
+function whereOf(it, sign) {
+  if (sign && sign.where) { return sign.where; }
+  return it && it.status === 'live' ? 'live' : 'staging';
+}
+
+// v55.83-YJ — the change history: every approval, request, move, check and roll back, newest first.
+function History(props) {
+  var rows = props.rows || [];
+  var ss = useState(false); var all = ss[0]; var setAll = ss[1];
+  var shown = all ? rows : rows.slice(0, 15);
+  var tone = { go: C.prod, checked_live: C.prod, moved: C.max, rollback: C.max, rolled_back: C.max, failed: '#fca5a5', rollback_failed: '#fca5a5', recovery_incomplete: '#fca5a5', recovery_confirmed: C.prod, withdraw: C.muted, 'codex-pass': C.codex, 'behavioral-qa': C.codex };
+  return (
+    <section>
+      <h2 style={{ fontSize: '1.1rem', margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 9 }}>
+        Change history
+        <span style={{ font: '700 10px ' + C.mono, padding: '2px 8px', borderRadius: 999, letterSpacing: '.05em', textTransform: 'uppercase', background: 'rgba(56,189,248,.12)', color: C.codex }}>{rows.length} entries</span>
+      </h2>
+      <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 10px', maxWidth: '80ch' }}>
+        Every approval, roll-back request, move, check and roll back of a warehouse change, newest first. An entry is never changed or removed.
+      </p>
+      {props.note && <div style={{ color: C.max, fontSize: '.84rem', marginBottom: 8 }}>{props.note}</div>}
+      {!rows.length && !props.note && <div style={{ color: C.muted, fontSize: '.86rem' }}>Nothing recorded yet.</div>}
+      <div style={{ display: 'grid', gap: 6 }}>
+        {shown.map(function (h) {
+          return (
+            <div key={h.key} style={{ background: C.card, border: '1px solid ' + C.line, borderLeft: '3px solid ' + (tone[h.action] || C.line), borderRadius: 8, padding: '8px 12px', fontSize: '.84rem' }}>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                <span style={{ font: '600 11px ' + C.mono, color: C.muted, minWidth: 150 }}>{fmtWhen(h.at)}</span>
+                <b style={{ color: tone[h.action] || C.ink }}>{h.what}</b>
+                <span style={{ color: C.ink }}>{h.title}</span>
+              </div>
+              <div style={{ color: C.muted, fontSize: '.78rem', marginTop: 2 }}>
+                {h.row ? '#' + h.row + ' · ' : ''}{h.by ? 'By ' + h.by : ''}{h.build ? (h.by ? ' · ' : '') + 'build ' + String(h.build).substring(0, 7) : ''}{h.backup ? ' · backup ' + h.backup : ''}{h.ref ? ' · carries out #' + h.ref : ''}{h.note ? ' · ' + h.note : ''}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {rows.length > 15 && <button style={Object.assign({ marginTop: 8 }, btn(C.codex, false))} onClick={function () { setAll(!all); }}>{all ? 'Show the latest 15' : 'Show all ' + rows.length}</button>}
+    </section>
+  );
+}
+
 function Row(props) {
   var it = props.item;
-  var leftColor = it.dataChange ? C.data : (it.status === 'live' ? C.prod : C.stage);
+  // v55.83-YJ — where the change IS comes from the recorded history when there is one (current at all times)
+  var where = whereOf(it, props.sign);
+  var leftColor = it.dataChange ? C.data : (where === 'staging' ? C.stage : C.prod);
   var tags = [];
-  if (it.status === 'live') { tags.push({ color: 'prod', label: 'On production' }); }
+  if (where === 'live') { tags.push({ color: 'prod', label: 'On production' }); }
+  else if (where === 'deployed') { tags.push({ color: 'max', label: 'On production — not yet checked' }); }
+  else if (where === 'unknown') { tags.push({ color: 'max', label: 'Needs attention — production state unconfirmed' }); }
   else { tags.push({ color: 'stage', label: 'On staging' }); }
+  if (props.sign && props.sign.problem && where !== 'unknown') { tags.push({ color: 'max', label: 'Needs a look' }); }
   if (it.dataChange) { tags.push({ color: 'data', label: 'Data change' }); }
   if (it.needsCodex) { tags.push({ color: 'codex', label: 'Codex reviewing' }); }
   if (it.needsMax) { tags.push({ color: 'max', label: "Needs your go" }); }
@@ -54,6 +172,7 @@ function Row(props) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end', minWidth: 150 }}>
         {tags.map(function (t, i) { return <Tag key={i} color={t.color} label={t.label} />; })}
       </div>
+      {props.sign && (props.canSign || props.sign.kind === 'go' || props.sign.kind === 'rollback') && <SignBox item={it} sign={props.sign} onDone={props.onDone} />}
     </div>
   );
 }
@@ -84,8 +203,12 @@ export default function ChangeScheduleTab() {
   useEffect(function () { load(); }, []);
 
   var items = (data && data.items) || [];
-  var queued = items.filter(function (it) { return it && it.status !== 'live'; });
-  var live = items.filter(function (it) { return it && it.status === 'live'; });
+  // v55.83-YJ — sign-off state comes from the server; buttons only for the super admin.
+  // Which list a change is in follows the recorded history (current), not only the register file.
+  var signs = (data && data.signoffs) || {};
+  var queued = items.filter(function (it) { return it && whereOf(it, signs[it.id]) === 'staging'; });
+  var live = items.filter(function (it) { return it && whereOf(it, signs[it.id]) !== 'staging'; });
+  var canSign = !!(data && data.canSign);
 
   return (
     <div style={{ background: C.bg, color: C.ink, borderRadius: 14, border: '1px solid ' + C.line, padding: '24px 22px 30px', fontFamily: 'system-ui, sans-serif', lineHeight: 1.5 }}>
@@ -113,6 +236,15 @@ export default function ChangeScheduleTab() {
           </div>
         </header>
 
+        {canSign && data && data.signoffsInstalled === false && (
+          <div style={{ background: 'rgba(248,163,59,.1)', border: '1px solid #8a5a1a', borderRadius: 10, padding: '10px 14px', color: C.max, fontSize: '.86rem' }}>
+            The sign-off buttons are switched off until the v55.83-YJ sign-off table is installed in the database.
+          </div>
+        )}
+        {canSign && data && data.signoffsError && (
+          <div style={{ background: 'rgba(248,113,113,.1)', border: '1px solid #7f1d1d', borderRadius: 10, padding: '10px 14px', color: '#fca5a5', fontSize: '.86rem' }}>{data.signoffsError} No buttons are shown until it can be read.</div>
+        )}
+
         {err && (
           <div style={{ background: 'rgba(248,113,113,.1)', border: '1px solid #7f1d1d', borderRadius: 10, padding: '12px 14px', color: '#fca5a5', fontSize: '.88rem' }}>
             {err} The screen falls back to the last readable register; check release-management/release-register.json for a bad edit.
@@ -126,7 +258,7 @@ export default function ChangeScheduleTab() {
           </h2>
           <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>All on fix staging. Each moves only after Codex passes it and you name it — then a backed-up, reversible deploy.</p>
           <div style={{ display: 'grid', gap: 10 }}>
-            {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} />; })
+            {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} />; })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'Nothing queued.'}</div>}
           </div>
         </section>
@@ -138,10 +270,12 @@ export default function ChangeScheduleTab() {
           </h2>
           <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>Warehouse changes moved to the live site.</p>
           <div style={{ display: 'grid', gap: 10 }}>
-            {live.length ? live.map(function (it, i) { return <Row key={it.id || i} item={it} />; })
+            {live.length ? live.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} />; })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'Nothing on production yet.'}</div>}
           </div>
         </section>
+
+        {data && <History rows={data.history || []} note={data.signoffsInstalled === false ? 'The history starts once the v55.83-YJ table is installed in the database.' : (data.signoffsError ? 'The history could not be read right now.' : (data.historyComplete === false ? 'Only the most recent part of the history is shown.' : ''))} />}
 
         <section>
           <h2 style={{ fontSize: '1.1rem', margin: '0 0 8px' }}>How a move happens (and un-happens)</h2>

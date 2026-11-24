@@ -198,22 +198,22 @@
       "area": "hub",
       "release": "hub-ntwarehouse-xf",
       "repo": "hub",
-      "file": "src/app/page.jsx",
-      "type": "present",
-      "needle": "src=\"https://nextradeindustries.com/admin\" title=\"NT Warehouse\"",
-      "why": "The in-Hub warehouse panel is a plain iframe of the live warehouse with no Hub session/profile/token passed across origins (XF).",
+      "file": "src/components/NTWarehousePanel.jsx",
+      "type": "absent",
+      "needle": "/access_token|getSession|Authorization|supabase|postMessage/",
+      "why": "The in-Hub warehouse panel is a plain iframe of the warehouse with no Hub session/profile/token passed across origins (XF). Since YI (24 Nov) the iframe lives in NTWarehousePanel.jsx, so the check now reads that file and asserts nothing sign-in related is in it.",
       "kind": "governance"
     },
     {
       "id": "hub-badge-bumped",
-      "title": "Hub: version badge is current",
+      "title": "Hub: a version badge is shown",
       "area": "hub",
       "release": "hub-change-schedule",
       "repo": "hub",
       "file": "src/app/page.jsx",
       "type": "present",
-      "needle": ">v55.83-XH</span>",
-      "why": "House rule: the visible version badge is bumped every build so Max can tell which build is live.",
+      "needle": "/>v55\\.83-[A-Z]{2}<\\/span>/",
+      "why": "House rule: the visible version badge is bumped every build so Max can tell which build is live. (The exact letter is pinned against What's New by the per-build tests; this case had gone stale on the XH letter.)",
       "kind": "governance"
     },
     {
@@ -230,6 +230,66 @@
         "legend"
       ],
       "why": "The Change Schedule screen and the deploy scripts both read this file. A bad hand-edit must be caught here before it blanks the screen.",
+      "kind": "governance"
+    },
+    {
+      "id": "hub-signoff-super-admin-only",
+      "title": "Hub: only the super admin can sign off or ask for a roll back",
+      "area": "hub",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "src/app/api/releases/signoff/route.js",
+      "type": "present",
+      "needle": "superAdminOnly(db, who.userId)",
+      "why": "A go for production is Max's alone. The releases.access switch lets people read the schedule, never sign it (YJ).",
+      "kind": "governance"
+    },
+    {
+      "id": "hub-signoff-append-only",
+      "title": "Hub: the sign-off route never changes or deletes a row",
+      "area": "hub",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "src/app/api/releases/signoff/route.js",
+      "type": "absent",
+      "needle": "/\\.(update|delete|upsert)\\s*\\(/",
+      "why": "Sign-offs are a record. A withdrawal is a new row; nothing is ever erased (YJ).",
+      "kind": "governance"
+    },
+    {
+      "id": "deploy-second-switch-off",
+      "title": "Governance: the live move / undo steps ship switched off",
+      "area": "governance",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "release-management/deploy/config.json",
+      "type": "present",
+      "needle": "\"liveExecutionEnabled\": false",
+      "why": "The automatic warehouse steps run only when BOTH switches are on. Turning this on needs Codex's pass on that block and Max naming it (YJ).",
+      "kind": "governance"
+    },
+    {
+      "id": "deploy-first-switch-off",
+      "title": "Governance: sshAuthorized ships false",
+      "area": "governance",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "release-management/deploy/config.json",
+      "type": "present",
+      "needle": "\"sshAuthorized\": false",
+      "why": "No connection to the live warehouse is made by the scripts while this is false.",
+      "kind": "governance"
+    },
+    {
+      "id": "hub-releases-untouched",
+      "title": "Hub: the Change Schedule does not release or roll back the Hub itself",
+      "area": "hub",
+      "release": "hub-change-schedule",
+      "repo": "hub",
+      "file": "src/components/ChangeScheduleTab.jsx",
+      "type": "absent",
+      "needle": "/hub-versions|HubVersions|vercel/i",
+      "why": "Max, 24 Nov: Hub moves work the way they always have (Codex pass then push, unless he says to skip Codex). The sign-off / roll back on this screen is for warehouse changes only.",
       "kind": "governance"
     }
   ]

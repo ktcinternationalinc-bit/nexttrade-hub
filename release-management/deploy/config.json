@@ -1,7 +1,11 @@
 {
-  "_comment": "Editable deploy config for the live Nextrade warehouse. The ktc-live-deploy PUBLIC key is now AUTHORIZED on the server (22 Nov 2026). The scripts still stay in SAFE MODE until (a) key.privateKeyPath below points at the real private key on this machine, AND (b) the live-execution block in deploy.js/rollback.js has had its Codex re-review and is deliberately enabled. sshAuthorized=false keeps the scripts from attempting any live connection until those are done; they print the manual cPanel steps instead. Nothing reaches live without Codex PASS + Max's named go per change.",
+  "_comment": "Deploy config for the live Nextrade warehouse. The folder, check address and key path are filled in and confirmed (24 Nov 2026), but the scripts stay in SAFE MODE: sshAuthorized AND liveExecutionEnabled are both false, and no connection is made while either is false. Switching them on needs Codex's PASS on lib/remote.js + deploy.js + rollback.js and Max naming it. Every move still needs Codex PASS + Max's go for that change.",
   "sshAuthorized": false,
+  "_liveExecutionEnabled": "v55.83-YJ: the SECOND switch. The move / undo steps in lib/remote.js run only when sshAuthorized AND liveExecutionEnabled are both true, key.privateKeyPath is a real file, and live.appRoot + live.checkUrl are set. Turning this on needs Codex's PASS on that block and Max naming it. Until then: safe mode, no connection is made.",
+  "liveExecutionEnabled": false,
   "live": {
+    "appRoot": "~/public_html",
+    "checkUrl": "https://nextradeindustries.com/admin",
     "host": "premium224.web-hosting.com",
     "siteDomain": "nextradeindustries.com",
     "sshUser": "nextueoa",
@@ -9,7 +13,8 @@
     "publicHtml": "public_html",
     "backupRoot": "~/code-backups",
     "appName": "Nextrade warehouse (live)",
-    "hostingNote": "Namecheap Stellar Plus shared hosting. cPanel user only, no root. Port 21098 (Namecheap shared), NOT 22 — confirm before relying on it. Web root is the nextradeindustries.com docroot under the nextueoa home; confirm the exact app path before any deploy."
+    "hostingNote": "Namecheap Stellar Plus shared hosting. cPanel user only, no root. Port 21098 (Namecheap shared), NOT 22 — confirm before relying on it. Web root is the nextradeindustries.com docroot under the nextueoa home; confirm the exact app path before any deploy.",
+    "confirmedOn": "2026-11-24: read-only look over SSH — artisan is at /home/nextueoa/public_html/artisan (www is the same folder; public_html/staging is a separate copy and is never a target), php 8.2 at /usr/local/bin/php, sha256sum at /usr/bin/sha256sum, ~/code-backups exists (embed-20261122)."
   },
   "staging": {
     "host": "fix.nextrade-staging.com",
@@ -25,11 +30,17 @@
     "comment": "ktc-live-deploy",
     "authorizedOnServer": true,
     "authorizedOn": "2026-11-22",
-    "privateKeyPath": "CONFIRM-ON-THIS-PC — the ktc-live-deploy private key was generated on this machine in an earlier session; locate and confirm its exact path, keep it OFF any repo/commit, then set it here"
+    "privateKeyPath": "C:/Users/KTCIN/.ssh/nextrade_live_rsa"
   },
   "caches": {
-    "always": ["php artisan view:clear"],
-    "ifConfigChanged": ["php artisan config:clear"],
-    "ifRoutesChanged": ["php artisan route:clear"]
+    "always": [
+      "php artisan view:clear"
+    ],
+    "ifConfigChanged": [
+      "php artisan config:clear"
+    ],
+    "ifRoutesChanged": [
+      "php artisan route:clear"
+    ]
   }
 }

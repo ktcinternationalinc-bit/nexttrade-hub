@@ -34,17 +34,8 @@ function has(name) { return process.argv.indexOf(name) >= 0; }
 function say(s) { process.stdout.write(s + '\n'); }
 function die(s, code) { process.stderr.write('\n' + s + '\n'); process.exit(code || 1); }
 
-function sshReachable() {
-  if (!CONFIG.sshAuthorized) { return false; }
-  var key = CONFIG.key && CONFIG.key.privateKeyPath;
-  if (!key || /SET-BY-MAX|CONFIRM-ON-THIS-PC/.test(String(key)) || !fs.existsSync(key)) { return false; }
-  try {
-    cp.execFileSync('ssh', ['-i', key, '-p', String(CONFIG.live.sshPort || 22),
-      '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=accept-new',
-      CONFIG.live.sshUser + '@' + CONFIG.live.host, 'echo ok'], { stdio: 'pipe', timeout: 15000 });
-    return true;
-  } catch (e) { return false; }
-}
+var remote = require('../lib/remote');
+var rollbackProblems = require('../lib/gate').rollbackProblems;
 
 function printManual(item, backupDir) {
   say('\n================ SAFE MODE — nothing was changed ================');
@@ -68,8 +59,10 @@ function printManual(item, backupDir) {
 
 function main() {
   var itemId = arg('--item');
-  var dryRun = has('--dry-run');
-  if (!itemId || itemId === true) { die('Usage: rollback.js --item <registerId> [--backup <dir>] [--dry-run]'); }
+  var live = has('--live');
+  var dryRun = has('--dry-run') || !live;                       // v55.83-YJ: default is a dry run, like deploy.js
+  var confirm = arg('--confirm');
+  if (!itemId || itemId === true) { die('Usage: rollback.js --item <registerId> --confirm "<the recorded roll-back go>" [--backup <dir>] [--live]  (default is a dry run)'); }
 
   var register = reg.load();
   var item = reg.findItem(register, itemId);
@@ -78,19 +71,57 @@ function main() {
 
   say('\nRollback request: ' + item.title + '  (' + item.id + ')');
 
-  if (!sshReachable()) {
-    say('\nAutomated rollback is in SAFE MODE (no authorized/working SSH key). Nothing was changed; no event logged.');
+  // v55.83-YJ GATE: a roll back needs Max's RECORDED roll-back go (matched by --confirm), a change that is
+  // live, and the exact backup folder the move recorded. Before YJ this script had no approval check at all.
+  if (item.lifecycle === 'needs-attention') { die('The last move or roll back of this change did not finish and its restore is not confirmed. A person must check the live site and record it (register.recordRecovery) first. Nothing changed.', 2); }
+  var problems = rollbackProblems(item, { confirm: (confirm === true ? '' : confirm), backup: backupDir });
+  if (problems.length) {
+    say('\nGATE: not clear to roll back ' + item.id + ':');
+    problems.forEach(function (p) { say('  ✗ ' + p); });
+    say('\nNothing was changed. (The manual steps below are instructions, NOT approval.)');
+    printManual(item, backupDir || item.backupDir);
+    process.exit(2);
+  }
+  backupDir = item.backupDir;
+
+  var sw = remote.liveSwitch(CONFIG);
+  if (!sw.on) {
+    say('\nAutomated rollback is in SAFE MODE (' + sw.why.join('; ') + '). Nothing was changed; no connection was made; no event logged.');
     printManual(item, backupDir);
     process.exit(3);
   }
 
+  var stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  var topic = String(item.id).replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+  var undoDir = CONFIG.live.backupRoot + '/' + topic + '-undo-' + stamp;
   if (dryRun) {
-    say('[DRY RUN] would restore .bak files from ' + (backupDir || '<backup dir>') + ', then view:clear (+config/route if flagged),');
-    say('[DRY RUN] then restore any data FROM the zz_ table. No delete/DROP is ever issued. Nothing changed.');
+    say('[DRY RUN] would: 1) prove every file in ' + backupDir + ' still matches its backup list');
+    say('[DRY RUN]        2) save the CURRENT live files to ' + undoDir + ' (so this roll back can itself be undone)');
+    say('[DRY RUN]        3) put each backed-up file back and prove it is identical; a file the move ADDED is moved into the undo folder, not deleted');
+    say('[DRY RUN]        4) php artisan view:clear (+config/route if flagged), then check the site answers');
+    say('[DRY RUN] Code only. No data statement, no restore SQL, no delete/DROP is ever issued. Nothing changed.');
     process.exit(0);
   }
 
-  die('Live SSH rollback path is intentionally not auto-run in this build. Re-review with Codex when SSH is authorized, then enable deliberately. Nothing was changed.', 4);
+  var runner = remote.sshRunner({ host: CONFIG.live.host, sshUser: CONFIG.live.sshUser, port: CONFIG.live.sshPort || 22, keyPath: CONFIG.key.privateKeyPath });
+  var probe = runner.run('echo ok');
+  if (probe.code !== 0 || String(probe.out).trim() !== 'ok') { die('The server did not answer over SSH with the authorized key. Nothing was changed.', 3); }
+  var cacheCmds = (CONFIG.caches.always || []).slice();
+  if (item.configChanged === true) { cacheCmds = cacheCmds.concat(CONFIG.caches.ifConfigChanged || []); }
+  if (item.routesChanged === true) { cacheCmds = cacheCmds.concat(CONFIG.caches.ifRoutesChanged || []); }
+  var res = remote.restoreLive({ runner: runner, appRoot: CONFIG.live.appRoot, backupDir: backupDir, undoDir: undoDir, cacheCmds: cacheCmds, siteUrl: CONFIG.live.checkUrl,
+    tmpDir: process.env.RELEASE_TMP_DIR || path.resolve(DEPLOY_DIR, '..'), reason: 'roll back of ' + item.id, log: say });
+  if (!res.ok) {
+    // nothing touched at all (refused before the first file) is different from stopped part-way
+    var touched = res.restored.length > 0 || res.movedAside.length > 0;
+    reg.upsertItem({ id: item.id, lastAttempt: { kind: 'rollback', at: new Date().toISOString(), sha: String(item.deployedSha || item.build || ''), outcome: touched ? 'recovery_incomplete' : 'not_started', backupDir: backupDir,
+      restoredFiles: res.restored, movedAside: res.movedAside, filesBack: !!res.filesBack, undoDir: res.undoDir, problems: res.problems } });
+    if (touched) { reg.setState(item.id, 'needs-attention', 'roll back stopped part-way: ' + res.problems.join(' | ')); }
+    reg.logEvent({ action: 'rollback-failed', item: item.id, backup: backupDir, detail: res.problems.join(' | ') + ' · put back so far: ' + res.restored.join(', ') + ' · current files saved in ' + res.undoDir });
+    die('ROLL BACK DID NOT FINISH: ' + res.problems.join(' | ') + '\nPut back so far: ' + (res.restored.join(', ') || 'none') + '\nThe files as they were before this attempt are in ' + res.undoDir, 5);
+  }
+  reg.markRolledBack(item.id, 'rollback.js: ' + res.restored.length + ' file(s) put back and fingerprint-checked; ' + res.movedAside.length + ' added file(s) moved to ' + res.undoDir);
+  say('\nROLLED BACK: ' + item.id + ' is as it was before the move. The replaced files are kept in ' + res.undoDir + '. The database was not touched.');
 }
 
 main();

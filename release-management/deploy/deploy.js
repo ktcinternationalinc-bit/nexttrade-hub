@@ -5,15 +5,17 @@
  *   node release-management/deploy/deploy.js --item <registerId> --confirm "Max: yes, put <X> on production" [--dry-run] [--data-sql <file>]
  *
  * This implements the CHANGE-MANAGEMENT.md protocol (sections A–B):
- *   1. GATE: Codex PASS (register.needsCodex=false) AND QA PASS for this item's
- *      release (qa-result.json) AND Max's named go (--confirm). Missing any → refuse.
+ *   1. GATE: the item's RECORDED codexRef + behavioralQa + maxApproval, all bound to the exact
+ *      commit and target (lib/gate.js), and --confirm equal to the recorded go. Missing any → refuse.
  *   2. BACK UP FIRST — each live file to ~/code-backups/<topic>-<date>/ (structure kept),
  *      and any data to zz_<topic>_<table>_before_<date> (NEVER dropped).
  *   3. Upload the new file(s); clear caches (view: always, config:/route: if relevant).
  *   4. Verify the page is not 500; record it in the shared register (markLive + logEvent).
  *
- * SAFETY — this NEVER runs live until the SSH key is authorized:
- *   - config.sshAuthorized must be true AND an SSH reachability check must pass.
+ * SAFETY — v55.83-YJ: the live steps are in lib/remote.js and run ONLY with --live AND both
+ * config switches true (sshAuthorized, liveExecutionEnabled) AND the key, app folder and check
+ * address set. Both switches ship false:
+ *   - no connection of any kind is made before that.
  *   - Until then it prints the manual cPanel steps and the exact backup plan, and EXITS
  *     without touching anything (safe mode). See AUTHORIZE-SSH-KEY.md.
  *   - It contains NO delete/DROP of any kind. Data is never deleted. Ever.
@@ -65,18 +67,7 @@ function printManual(item, topic) {
   say('================================================================\n');
 }
 
-function sshReachable() {
-  // A real reachability probe, only attempted when the operator claims it's authorized.
-  if (!CONFIG.sshAuthorized) { return false; }
-  var key = CONFIG.key && CONFIG.key.privateKeyPath;
-  if (!key || /SET-BY-MAX|CONFIRM-ON-THIS-PC/.test(String(key)) || !fs.existsSync(key)) { return false; }
-  try {
-    cp.execFileSync('ssh', ['-i', key, '-p', String(CONFIG.live.sshPort || 22),
-      '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=accept-new',
-      CONFIG.live.sshUser + '@' + CONFIG.live.host, 'echo ok'], { stdio: 'pipe', timeout: 15000 });
-    return true;
-  } catch (e) { return false; }
-}
+var remote = require('../lib/remote');
 
 // Supplementary source-lint note only (NOT a gate input). The gate's QA requirement is the
 // item's recorded behavioralQa, checked by evaluateGate. This just surfaces a lint regression.
@@ -91,9 +82,24 @@ function sourceLintNote(releaseId) {
 
 // Resolve the ACTUAL checked-out commit, so the gate binds to the real artifact — not a
 // supplied --sha string (Codex 13:11 #1).
-function actualHeadSha() {
-  try { return cp.execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path.resolve(DEPLOY_DIR, '..', '..'), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
+// v55.83-YJ: a WAREHOUSE change is bound to the WAREHOUSE repo's commit (before YJ this read the Hub
+// repo's HEAD for every item, i.e. the wrong repo for a warehouse change).
+var HUB_ROOT = path.resolve(DEPLOY_DIR, '..', '..');
+function repoRootFor(item) {
+  if (item && item.repo === 'nextrade_WAREHOUSE') { return path.resolve(HUB_ROOT, (CONFIG.repo && CONFIG.repo.warehousePath) || '../nextrade_WAREHOUSE'); }
+  return HUB_ROOT;
+}
+function actualHeadSha(item) {
+  try { return cp.execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRootFor(item), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
   catch (e) { return ''; }
+}
+// The files being moved must be exactly as committed: no uncommitted edit may ride along.
+function uncommitted(item, files) {
+  try {
+    var sub = (CONFIG.repo && CONFIG.repo.appSubdir) || '';
+    var paths = files.map(function (f) { return sub ? sub + '/' + f : f; });
+    return cp.execFileSync('git', ['status', '--porcelain', '--'].concat(paths), { cwd: repoRootFor(item), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch (e) { return 'git status could not be read'; }
 }
 
 function main() {
@@ -117,7 +123,7 @@ function main() {
 
   // Bind to the ACTUAL checked-out artifact, not the supplied string (Codex 13:11 #1).
   sha = (sha === true || !sha) ? '' : String(sha);
-  var head = actualHeadSha();
+  var head = actualHeadSha(item);
   var problems0 = [];
   // Bind to the ACTUAL checked-out commit; an unavailable/empty HEAD is a gate FAILURE, never
   // permission to trust --sha (Codex 19:45 P2). Pure decision lives in lib/gate.headProblem,
@@ -141,18 +147,42 @@ function main() {
   say('GATE met: Codex ' + item.codexRef.sha + ' (' + item.codexRef.feedbackRef + ') · behavioralQa ' + item.behavioralQa.sha + ' PASS · Max approval recorded · target ' + target + ' · artifact ' + (head || sha) + '.');
 
   // ---- SSH SAFE MODE (an SSH refusal is never production approval; side-effect-free) ----
-  if (!sshReachable()) {
-    say('\nAutomated deploy is in SAFE MODE (no authorized/working SSH key). Nothing was changed; no event logged.');
+  // v55.83-YJ: record the PERSON'S functional check of a change that deploy.js already moved. No connection.
+  if (has('--mark-live')) {
+    var by = arg('--checked-by');
+    if (!by || by === true || String(by).trim().length < 10) { die('--mark-live needs --checked-by "<who checked what on the live site>" (at least a few words). Nothing changed.', 2); }
+    if (item.lifecycle !== 'deployed' || String(item.deployedSha || '') !== sha || !item.backupDir) { die('--mark-live is only for a change this script moved (state "deployed") at this exact --sha. Nothing changed.', 2); }
+    reg.setState(item.id, 'verified', 'checked on the live site by: ' + String(by).trim());
+    reg.markVerifiedLive(item.id, { sha: sha, target: target, confirm: confirm, build: sha, backup: item.backupDir, verifiedBy: String(by).trim() });
+    say('\nRECORDED: ' + item.id + ' is live on production, checked by: ' + String(by).trim());
+    process.exit(0);
+  }
+  if (item.lifecycle === 'needs-attention') { die('The last move or roll back of this change did not finish and its restore is not confirmed. A person must check the live site and record it (register.recordRecovery) before anything else. Nothing changed.', 2); }
+  if (item.lifecycle === 'deployed') { die('This change was already moved (state "deployed") and is waiting for its check: use --mark-live --checked-by, or roll it back. Nothing changed.', 2); }
+
+  // v55.83-YJ: BOTH switches (sshAuthorized + liveExecutionEnabled), the key file, the app folder and
+  // the check address must be set BEFORE any connection is even tried. Otherwise: safe mode, no connection.
+  var sw = remote.liveSwitch(CONFIG);
+  if (!sw.on) {
+    say('\nAutomated deploy is in SAFE MODE (' + sw.why.join('; ') + '). Nothing was changed; no connection was made; no event logged.');
     printManual(item, topic);
     process.exit(3);
   }
 
-  // ---- LIVE PATH (only when SSH is authorized AND reachable) ----
+  // ---- the exact files of this change: explicit, on the item's recorded list, exactly as committed ----
   // Unique per-release backup id so a second same-day change never overwrites the first.
   var stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14); // YYYYMMDDHHMMSS
-  var files = (arg('--files') && arg('--files') !== true) ? String(arg('--files')).split(',') : [];
+  var files = (arg('--files') && arg('--files') !== true) ? String(arg('--files')).split(',').map(function (x) { return x.trim(); }).filter(Boolean) : [];
+  var fileProblems = remote.checkFiles(files, item.deployFiles);
+  if (!fileProblems.length) { var dirty = uncommitted(item, files); if (dirty) { fileProblems.push('These files have uncommitted changes, so they are not the build Codex passed: ' + dirty.replace(/\s+/g, ' ')); } }
+  if (fileProblems.length) {
+    say('\nFILES: not clear to deploy ' + item.id + ':');
+    fileProblems.forEach(function (p) { say('  ✗ ' + p); });
+    say('\nNothing was changed; no connection was made.');
+    process.exit(2);
+  }
   var backupDir = CONFIG.live.backupRoot + '/' + topic + '-' + stamp;
-  if (!live) { say('\n(DRY RUN — pass --live to actually move, which still requires authorized SSH.)'); }
+  if (!live) { say('\n(DRY RUN — pass --live to actually move.)'); }
   say('\n' + (dryRun ? '[DRY RUN] ' : '') + 'Would back up live files to ' + backupDir + ' (unique id; structure kept) BEFORE any replace…');
 
   if (dryRun) {
@@ -163,11 +193,44 @@ function main() {
     process.exit(0);
   }
 
-  // NOTE: the live file list + any reviewed data SQL must be supplied explicitly
-  // (--files, --data-sql) and are executed here via ssh/scp with the authorized key.
-  // Backups run BEFORE any replace; no destructive command is ever sent. This block
-  // stays unreached until Max authorizes SSH, so it is covered by the safe-mode exit above.
-  die('Live SSH deploy path is intentionally not auto-run in this build. Re-review this block with Codex at the time SSH is authorized, then enable it deliberately. Nothing was changed.', 4);
+  // ---- LIVE MOVE (v55.83-YJ). Reached only with: gate met + both switches on + --live + clean listed files.
+  // Code files only. No data SQL, no migration, no delete: lib/remote.js sends none.
+  var runner = remote.sshRunner({ host: CONFIG.live.host, sshUser: CONFIG.live.sshUser, port: CONFIG.live.sshPort || 22, keyPath: CONFIG.key.privateKeyPath });
+  var probe = runner.run('echo ok');
+  if (probe.code !== 0 || String(probe.out).trim() !== 'ok') { die('The server did not answer over SSH with the authorized key. Nothing was changed.', 3); }
+  var cacheCmds = (CONFIG.caches.always || []).slice();
+  if (item.configChanged === true) { cacheCmds = cacheCmds.concat(CONFIG.caches.ifConfigChanged || []); }
+  if (item.routesChanged === true) { cacheCmds = cacheCmds.concat(CONFIG.caches.ifRoutesChanged || []); }
+  var tmpDir = process.env.RELEASE_TMP_DIR || path.resolve(DEPLOY_DIR, '..');
+  reg.setState(item.id, 'deploying', 'build ' + sha + ' · backup ' + backupDir);
+  var res = remote.deployLive({
+    runner: runner, appRoot: CONFIG.live.appRoot, backupRoot: CONFIG.live.backupRoot, topic: topic, stamp: stamp, sha: sha,
+    files: files, allow: item.deployFiles, localRoot: path.join(repoRootFor(item), (CONFIG.repo && CONFIG.repo.appSubdir) || ''),
+    cacheCmds: cacheCmds, siteUrl: CONFIG.live.checkUrl, tmpDir: tmpDir, log: say
+  });
+  if (!res.ok) {
+    // v55.83-YJ rev 3 (Codex 24 Nov): three different endings, never one word for all of them.
+    //   not_replaced        nothing on the live app was replaced
+    //   restored            files were replaced AND the automatic restore finished and was confirmed
+    //   recovery_incomplete files were replaced and the restore is NOT confirmed -> needs a person
+    var rec = gate.attemptRecord(res, sha);                   // pure + tested: lib/gate.js
+    var outcome = rec.outcome;
+    var back = outcome === 'not_replaced' ? 'Nothing on the live app was replaced.'
+      : outcome === 'restored' ? 'Everything was put back from ' + res.backupDir + ' (the failed files are kept in ' + rec.undoDir + ').'
+      : 'THE AUTOMATIC RESTORE IS NOT CONFIRMED: ' + rec.problems.join(' | ') + ' — files put back so far: ' + (rec.restoredFiles.join(', ') || 'none') + '. CHECK THE LIVE SITE NOW; the backup is ' + res.backupDir + '.';
+    reg.upsertItem({ id: item.id, lastAttempt: rec });
+    reg.setState(item.id, gate.attemptState(rec), res.problems.join(' | ') + ' — ' + back);
+    die('MOVE FAILED: ' + res.problems.join(' | ') + '\n' + back + '\nRecord it in the history: node release-management/deploy/history-row.js --item ' + item.id + ' --action ' + (outcome === 'recovery_incomplete' ? 'recovery_incomplete' : 'failed') + ' --ref <row number of the go>', 5);
+  }
+  // The files are in place and the site answers. That is NOT proof the change
+  // works (Codex 24 Nov #5): the item is 'deployed', not 'live', until a person has checked the change itself
+  // and that check is recorded with --mark-live --checked-by.
+  reg.upsertItem({ id: item.id, backupDir: res.backupDir, deployedFiles: res.replaced, deployedSha: sha });
+  reg.setState(item.id, 'deployed', 'files in place and fingerprint-checked; site answered ' + res.siteStatus + ' (not a functional check); backup ' + res.backupDir);
+  say('\nMOVED, NOT YET CHECKED: the files of ' + item.id + ' are on production and the site answers (' + res.siteStatus + '). Backup: ' + res.backupDir);
+  say('Now have a person check the change itself on the live site. Then record it:');
+  say('  node release-management/deploy/deploy.js --item ' + item.id + ' --sha ' + sha + ' --confirm "<the recorded go>" --mark-live --checked-by "<who checked what>"');
+  say('If it is wrong, put it back: node release-management/deploy/rollback.js --item ' + item.id + ' --confirm "<the recorded roll-back go>" --live');
 }
 
 main();
