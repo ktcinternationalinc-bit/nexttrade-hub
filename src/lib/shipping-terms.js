@@ -148,7 +148,7 @@ export function releaseKeysOfText(text) {
   return out.slice(0, 6);
 }
 // are the ACTUAL shipping costs typed? = for EVERY release on the invoice both trucking and freight are typed (0 counts as typed) —
-// the same test that fills the "Our shipping cost" box. rows = pl_release_part_estimates rows { release_key, part, amount }.
+// the same test that fills the "Our shipping cost" box. rows = the saved breakdown rows { release_key, part, amount }.
 export function breakdownIsComplete(rows, releaseText) {
   var keys = releaseKeysOfText(releaseText); if (!keys.length) { return false; }
   var have = {}; (rows || []).forEach(function (r) { if (r && r.amount !== null && r.amount !== undefined && r.amount !== '' && !isNaN(Number(r.amount))) { have[String(r.release_key) + '|' + String(r.part)] = true; } });
