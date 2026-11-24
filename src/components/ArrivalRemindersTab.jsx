@@ -183,7 +183,7 @@ export default function ArrivalRemindersTab(props) {
   function setAuto(on) {
     if (on && !window.confirm('Switch AUTOMATIC reminders ON?\n\nEvery morning the Hub will e-mail customers by itself — only the orders where nothing needs a person. You can switch it off here at any time.')) { return; }
     setBusy(true);
-    call({ action: 'auto_set', enabled: !!on, confirm: !!on }).then(function (j) { setBusy(false); if (!j.ok) { setErr(j.error || 'The switch was not changed.'); return; } toast('Automatic reminders are now ' + (on ? 'ON' : 'OFF') + '.', 'success'); load(); }, function () { setBusy(false); setErr('Could not reach the Hub — press Refresh to see whether the switch changed.'); });
+    call({ action: 'auto_set', enabled: !!on, confirm: !!on }).then(function (j) { setBusy(false); if (!j.ok) { setErr(j.error || 'The switch was not changed.'); return; } toast('Automatic reminders are now ' + (on ? 'ON' : 'OFF') + '.', 'success'); /* v55.83-YL: show the saved state at once — the list reload waits on the warehouse */ setData(function (d) { return d ? Object.assign({}, d, { auto: Object.assign({}, d.auto || {}, j.auto || {}, { on: !!on, unreadable: false }) }) : d; }); load(); }, function () { setBusy(false); setErr('Could not reach the Hub — press Refresh to see whether the switch changed.'); });
   }
   // the dialog's state is also kept in a ref, so an answer that arrives later always works on the CURRENT dialog (Codex 22 Nov 14:19)
   function setOpenNow(v) { var nv = typeof v === 'function' ? v(openRef.current) : v; openRef.current = nv; setOpen(nv); }

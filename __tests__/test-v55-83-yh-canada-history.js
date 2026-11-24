@@ -275,13 +275,13 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
   check('the tab opens only with the explicit switch', /if \(t\.id === 'canadahistory'\) \{ return modulePerms\['canada_history\.access'\] === true; \}/.test(page));
   check('the tab has its own ARCHIVE group right under REPORTS, and a breadcrumb', /\{ group: 'REPORTS', items: \['reports'\] \},\s*\{ group: 'ARCHIVE', items: \['canadahistory'\] \},/.test(page) && /canadahistory:'Archive'/.test(page));
   check('the History icon is imported and used', /CalendarClock, History\s/.test(page) && /canadahistory: History,/.test(page));
-  check('the badge says YK (YH + the sales list)', page.indexOf('>v55.83-YK</span>') >= 0);
+  check('the badge names the newest What\'s New entry (YK or a later build)', (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]{2})'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') >= 0; })());
   check('YK: the screen has the sales list, says dollars are KTC invoices only and unknown is not zero', comp.indexOf('Sales history — every Canadian release that shipped') >= 0 && comp.indexOf('not zero') >= 0 && comp.indexOf('sales.money_shown ?') >= 0 && comp.indexOf('none in the Hub') >= 0);
   check('money is written with cents', H.fmtUsd(1234567.5) === '$1,234,567.50' && H.fmtUsd(0) === '$0.00' && H.fmtUsd(60.049) === '$60.05');
   check('the screen shows where each side stops, N/A instead of zero, partial years, recorded totals', comp.indexOf('hist.notes.map') >= 0 && comp.indexOf("st === 'na'") >= 0 && comp.indexOf("y.in === null ? 'N/A'") >= 0 && comp.indexOf('y.in_partial') >= 0 && comp.indexOf('Received (recorded)') >= 0 && comp.indexOf('Total recorded') >= 0);
   check('the screen says: pounds only, not connected to the warehouse cards; a proposal is shown as a proposal', comp.indexOf('pounds only, no dollar amounts') >= 0 && comp.indexOf('not connected to the warehouse system') >= 0 && comp.indexOf('Proposed — not confirmed yet') >= 0);
   check('the switch is in Settings', /\{ key: 'canada_history\.access', label: 'Archive: Canada History'/.test(settings));
-  check("What's New has YK on top and YH right under it", /export const BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-YK',\s*date: '2026-11-24'/.test(wn) && wn.indexOf("version: 'v55.83-YH'") > wn.indexOf("version: 'v55.83-YK'"));
+  check("What's New has YK and, under it, YH", wn.indexOf("version: 'v55.83-YK'") > 0 && wn.indexOf("version: 'v55.83-YH'") > wn.indexOf("version: 'v55.83-YK'"));
   [['route', route], ['server lib', server], ['rules lib', lib]].forEach(function (x) {
     var code = x[1].replace(/\/\/[^\n]*/g, '');
     check(x[0] + ': var + string concatenation only', !/\b(const|let)\s+[A-Za-z_$]/.test(code.replace(/export const (runtime|dynamic|maxDuration)\b/g, '')) && code.indexOf('`') < 0 && code.indexOf('=>') < 0);

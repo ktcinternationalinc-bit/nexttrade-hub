@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YL',
+    date: '2026-11-24',
+    title: 'Customers overview opens on This year; the reminders switch shows ON straight away',
+    items: [
+      { text: '**Customers overview now opens on “This year”** instead of the last 3 months. The other periods are still one click away.' },
+      { text: 'The Customers overview heading, the “Period” label and the search line are now easy to read on the dark page.' },
+      { text: '**Arrival reminders → Automatic sending:** the box now shows ON (or OFF) the moment your change is saved. Before, it kept showing the old state until the slow warehouse list finished loading, which looked as if the click had done nothing.' },
+    ]
+  },
+  {
     version: 'v55.83-YK',
     date: '2026-11-24',
     title: 'Canada History: the sales history, release by release',

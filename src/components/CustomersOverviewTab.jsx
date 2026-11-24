@@ -79,7 +79,7 @@ export function CustomersOverviewView(p) {
 
 export default function CustomersOverviewTab(props) {
   var userProfile = props.userProfile; var toast = props.toast; var onGo = props.onGo;
-  var s1 = useState('quarter'); var preset = s1[0]; var setPreset = s1[1];
+  var s1 = useState('year'); /* v55.83-YL (Max, Nov 24: "default to this year") */ var preset = s1[0]; var setPreset = s1[1];
   var s2 = useState(''); var from = s2[0]; var setFrom = s2[1];
   var s3 = useState(''); var to = s3[0]; var setTo = s3[1];
   var s4 = useState('US'); var biz = s4[0]; var setBiz = s4[1];
@@ -109,7 +109,7 @@ export default function CustomersOverviewTab(props) {
   function pick(pr) { setPreset(pr); if (pr !== 'custom') { load(pr, from, to, biz); } }
   var hd = { background: '#f1f5f9', color: '#334155', border: '1px solid ' + LINE };
   var on = { background: '#0f172a', color: '#ffffff', border: '1px solid #0f172a' };
-  return <div className="p-3" style={{ color: INK }}>
+  return <div className="p-3 rounded-lg" style={{ color: INK, background: '#f8fafc' }}>
     <div className="flex items-center gap-2 flex-wrap mb-2">
       <h2 className="text-[15px] font-extrabold">👥 Customers overview</h2>
       <span className="text-[11px]" style={{ color: SUB }}>What each customer was invoiced, has paid and still owes. Click a customer to see the invoices.</span>
