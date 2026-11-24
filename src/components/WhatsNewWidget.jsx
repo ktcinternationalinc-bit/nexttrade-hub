@@ -44,7 +44,6 @@ export const BUILD_HISTORY = [
       { text: 'Also fixed: ten Wave screens (import, reconcile, push invoice / payment) now check who is really signed in — before, the browser could name any user.' },
       { superAdminOnly: true, text: 'Technical: lib/revenue-visibility.js (revenueScope: one permission read per answer, a failed read refuses; stripRevenue: profit first, then revenue by contract — warning flags by kind, missing-weight warnings by cost-or-customer context, a final key pass as safety net); server-permissions: failed reads grant nothing, a researcher holds only pnl.view / pnl.edit_costs (+ the screen-opening switches in Settings); revenue-researcher-gate.js used by /api/admin/permissions and the bank-visibility writer; refusals in ask / ask-v2 / ai-reports / nadia money alerts / reconcile-nexttrade / wave invoice-diagnostic, import-preview / wave-history; warehouse-shipping drops invoice totals; lib/wave-caller.js on 10 Wave routes. SQL sql/v55-83-XK-revenue-researcher.sql NOT installed: researcher rule on 19 tables incl. bank lines, splits, payment matches, unapplied deposits and the bank account list (Codex 24 Nov 08:28), column grant on plaid_accounts unchanged (real Postgres 25/25). Tests: test-v55-83-xk-revenue-researcher.js 44/44.' }
     ]
-    ]
   },
   {
     version: 'v55.83-YF',
