@@ -11,6 +11,7 @@ const remote = require('../lib/remote');
 const selection = require('../lib/selection');
 const gate = require('../lib/gate');
 const { authorized } = require('../lib/worker-authorization');
+const { prepareDataCommand, executeDataCommand } = require('./warehouse-data-plan');
 const VERSION = 'warehouse-worker-v1';
 function arg(key) { const i = process.argv.indexOf(key); return i < 0 ? '' : process.argv[i + 1]; }
 async function must(query) { const r = await query; if (r.error) throw new Error(r.error.message); return r.data; }
@@ -25,37 +26,45 @@ function activeMoves(history) {
 async function executeRequest(db, request, config, warehouseRepo, worker, runner) {
   let result; let event; let touched = false;
   try {
-    if (!(await authorized(db, request.signed_by))) throw new Error('The approver no longer has warehouse release permission.');
+    if (!(await authorized(db, request.signed_by, request.detail?.candidate?.dataChange === true))) {
+      throw new Error('The approver no longer has permission for this warehouse release.');
+    }
     const history = await must(db.from('release_signoffs').select('*').eq('scope', 'warehouse').order('id', { ascending: true }).limit(5000));
     if (history.length >= 5000) throw new Error('Full release history is required.');
     const moves = activeMoves(history);
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
     const topic = 'request-' + request.id;
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-release-' + request.id + '-'));
     if (request.action === 'go') {
       const item = request.detail?.candidate;
       const problems = selection.candidateProblems(item);
       if (!item || item.id !== request.item_id || item.manifest?.sha !== request.sha || problems.length) throw new Error('Candidate validation failed: ' + problems.join(' '));
       for (const dep of item.dependsOn || []) if (!moves[dep]) throw new Error('Dependency is not on production: ' + dep);
       if (moves[item.id]) throw new Error('This change is already deployed.');
-      const localRoot = path.join(tmp, 'artifact');
-      for (const file of item.manifest.files) {
-        const dest = path.join(localRoot, file.path);
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        // Read exact committed blobs, never a dirty checkout or whichever HEAD happens to be current.
-        const blob = cp.execFileSync('git', ['show', request.sha + ':nextrade-app/' + file.path], { cwd: warehouseRepo, maxBuffer: 20 * 1024 * 1024 });
-        fs.writeFileSync(dest, blob);
-        if (remote.sha256File(dest) !== file.after) throw new Error('Committed artifact fingerprint mismatch: ' + file.path);
-      }
-      touched = true;
-      result = remote.deployLive({ runner, appRoot: config.live.appRoot, backupRoot: config.live.backupRoot, topic, stamp, sha: request.sha,
-        files: item.manifest.files.map(f => f.path), allow: item.manifest.files.map(f => f.path), manifest: item.manifest,
-        localRoot, cacheCmds: ['php artisan view:clear', ...(item.configChanged ? ['php artisan config:clear'] : []), ...(item.routesChanged ? ['php artisan route:clear'] : [])],
-        siteUrl: config.live.checkUrl, tmpDir: tmp });
-      if (result.ok && !result.lockStuck) event = { action: 'moved', detail: { title: item.title, backup: result.backupDir, files: result.replaced, note: 'Code fingerprints verified; HTTP ' + result.siteStatus + '. Functional verification pending.', dependsOn: item.dependsOn || [] } };
-      else {
-        const attempt = gate.attemptRecord(result, request.sha);
-        event = { action: attempt.outcome === 'recovery_incomplete' || result.lockStuck ? 'recovery_incomplete' : 'failed', detail: { title: item.title, backup: result.backupDir, outcome: attempt.outcome, note: attempt.problems.join(' | '), attempt } };
+      if (selection.supportedDataPlan(item)) {
+        const command = prepareDataCommand(item, Number(request.id), config.live.appRoot);
+        touched = true;
+        event = executeDataCommand(item, command, runner);
+      } else {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-release-' + request.id + '-'));
+        const localRoot = path.join(tmp, 'artifact');
+        for (const file of item.manifest.files) {
+          const dest = path.join(localRoot, file.path);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          // Read exact committed blobs, never a dirty checkout or whichever HEAD happens to be current.
+          const blob = cp.execFileSync('git', ['show', request.sha + ':nextrade-app/' + file.path], { cwd: warehouseRepo, maxBuffer: 20 * 1024 * 1024 });
+          fs.writeFileSync(dest, blob);
+          if (remote.sha256File(dest) !== file.after) throw new Error('Committed artifact fingerprint mismatch: ' + file.path);
+        }
+        touched = true;
+        result = remote.deployLive({ runner, appRoot: config.live.appRoot, backupRoot: config.live.backupRoot, topic, stamp, sha: request.sha,
+          files: item.manifest.files.map(f => f.path), allow: item.manifest.files.map(f => f.path), manifest: item.manifest,
+          localRoot, cacheCmds: ['php artisan view:clear', ...(item.configChanged ? ['php artisan config:clear'] : []), ...(item.routesChanged ? ['php artisan route:clear'] : [])],
+          siteUrl: config.live.checkUrl, tmpDir: tmp });
+        if (result.ok && !result.lockStuck) event = { action: 'moved', detail: { title: item.title, backup: result.backupDir, files: result.replaced, note: 'Code fingerprints verified; HTTP ' + result.siteStatus + '. Functional verification pending.', dependsOn: item.dependsOn || [] } };
+        else {
+          const attempt = gate.attemptRecord(result, request.sha);
+          event = { action: attempt.outcome === 'recovery_incomplete' || result.lockStuck ? 'recovery_incomplete' : 'failed', detail: { title: item.title, backup: result.backupDir, outcome: attempt.outcome, note: attempt.problems.join(' | '), attempt } };
+        }
       }
     } else {
       const target = moves[request.item_id];
@@ -63,6 +72,7 @@ async function executeRequest(db, request, config, warehouseRepo, worker, runner
       for (const [id, move] of Object.entries(moves)) if (id !== request.item_id && (move.detail?.dependsOn || []).includes(request.item_id)) throw new Error('Roll back dependent change first: ' + id);
       // Backup paths are taken from recorded moves only, never from arbitrary operator input.
       if (!String(target.detail.backup).includes('/code-backups/')) throw new Error('Invalid backup location.');
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-release-' + request.id + '-'));
       touched = true;
       result = remote.restoreLive({ runner, appRoot: config.live.appRoot, backupDir: target.detail.backup,
         undoDir: config.live.backupRoot + '/undo-' + topic + '-' + stamp, sha: request.sha,

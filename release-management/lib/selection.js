@@ -1,7 +1,16 @@
 'use strict';
 // Shared by the Hub and the office worker. Candidate files are immutable, reviewed code artifacts.
 var crypto = require('crypto');
+var DATA_WORKER_VERSION = 'warehouse-worker-v1-pallet-units';
 function digest(manifest) { return crypto.createHash('sha256').update(JSON.stringify(manifest)).digest('hex'); }
+function supportedDataPlan(item) {
+  var plan = item && item.manifest && item.manifest.dataPlan;
+  return !!(item?.id === 'wh-bug-001' && item.dataChange === true && plan?.kind === 'pallet-unit-correction-v1'
+    && Number.isSafeInteger(plan.eligibleCount) && plan.eligibleCount > 0
+    && /^[a-f0-9]{64}$/.test(plan.snapshotHash || '')
+    && /^[a-f0-9]{64}$/.test(plan.scriptHash || '')
+    && Array.isArray(item.dependsOn) && item.dependsOn.length === 1 && item.dependsOn[0] === 'wh-bug-001-save-path');
+}
 function codePath(p) {
   return typeof p === 'string' && /^(app\/|resources\/views\/|public\/assets\/|routes\/|config\/)[A-Za-z0-9._\/-]+\.(php|js|css|json|svg|png|jpg|jpeg|webp|woff2?)$/.test(p)
     && !p.split('/').some(function (s) { return s === '..' || s === '.' || s === '' || s.indexOf('.env') === 0; });
@@ -9,8 +18,10 @@ function codePath(p) {
 function candidateProblems(item) {
   var out = []; var m = item && item.manifest;
   if (!item || item.repo !== 'nextrade_WAREHOUSE') { return ['Not an NT Warehouse code change.']; }
-  if (item.dataChange) { out.push('Data changes cannot use code deployment or code rollback.'); }
-  if (!m || !/^[0-9a-f]{40}$/.test(m.sha || '') || m.target !== 'production' || m.dataCompatible !== true || !Array.isArray(m.files) || !m.files.length) {
+  var dataOnly = supportedDataPlan(item);
+  if (item.dataChange && !dataOnly) { return ['This database change needs a reviewed execution plan.']; }
+  if (!m || !/^[0-9a-f]{40}$/.test(m.sha || '') || m.target !== 'production' || m.dataCompatible !== true ||
+      !Array.isArray(m.files) || (dataOnly ? m.files.length !== 0 : !m.files.length || m.dataPlan)) {
     out.push('Exact build, reviewed file fingerprints and data-compatible rollback confirmation are required.'); return out;
   }
   var seen = {};
@@ -35,7 +46,7 @@ function selectionPlan(items, states, ids, action) {
     if (!it) { problems.push('Unknown change: ' + id); return; }
     if (action === 'go') candidateProblems(it).forEach(function (p) { problems.push(it.title + ': ' + p); });
     if (!(action === 'go' ? st.canGo : st.canRollback)) problems.push(it.title + ': ' + (st.why || 'Not ready for this action.'));
-    if (it.dataChange) problems.push(it.title + ': data changes are excluded.');
+    if (it.dataChange && action === 'rollback') problems.push(it.title + ': data restoration requires a reviewed database operation.');
     if (action === 'go') {
       ((it.manifest && it.manifest.files) || []).forEach(function (f) {
         if (paths[f.path]) problems.push('Selected fixes share ' + f.path + '. Prepare and test one combined candidate first.');
@@ -63,4 +74,4 @@ function selectionPlan(items, states, ids, action) {
   chosen.forEach(visit);
   return { ok: problems.length === 0, problems: problems, items: ordered };
 }
-module.exports = { digest: digest, codePath: codePath, candidateProblems: candidateProblems, selectionPlan: selectionPlan };
+module.exports = { DATA_WORKER_VERSION: DATA_WORKER_VERSION, digest: digest, codePath: codePath, supportedDataPlan: supportedDataPlan, candidateProblems: candidateProblems, selectionPlan: selectionPlan };

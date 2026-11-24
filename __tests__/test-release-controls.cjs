@@ -14,7 +14,7 @@ function candidate(id) {
   return { id, title: 'Fixture ' + id, repo: 'nextrade_WAREHOUSE', status: 'queued', manifest, codexRef: { ...evidence, feedbackRef: 'test-reviewed' }, behavioralQa: { ...evidence, kind: 'behavioral', result: 'PASS' } };
 }
 const register = { items: ['fix-a', 'fix-b', 'fix-c', 'fix-d'].map(candidate), events: [] };
-let caller = 'super'; let role = 'super_admin'; let perms = []; let rows = []; let failRpc = false; let permissionError = false;
+let caller = 'super'; let role = 'super_admin'; let perms = []; let rows = []; let failRpc = false; let permissionError = false; let workerVersion = 'warehouse-worker-v1';
 let calls = []; let seq = 0;
 const db = {
   from(name) {
@@ -24,7 +24,7 @@ const db = {
       in(k, vs) { filters.push(r => vs.includes(r[k])); return q; }, order() { return q; }, limit() { return q; },
       maybeSingle() { single = true; return q; },
       then(resolve, reject) {
-        let data = name === 'users' ? [{ id: caller, role, name: 'Verified fixture user', active: true }] : name === 'module_permissions' ? perms : name === 'release_signoffs' ? rows : name === 'release_worker_status' ? [{ id: 1, enabled: true, last_seen: new Date().toISOString(), worker: 'fixture' }] : [];
+        let data = name === 'users' ? [{ id: caller, role, name: 'Verified fixture user', active: true }] : name === 'module_permissions' ? perms : name === 'release_signoffs' ? rows : name === 'release_worker_status' ? [{ id: 1, enabled: true, version: workerVersion, last_seen: new Date().toISOString(), worker: 'fixture' }] : [];
         data = data.filter(r => filters.every(f => f(r)));
         return Promise.resolve({ data: single ? data[0] || null : data, error: permissionError && name === 'module_permissions' ? { message: 'unavailable' } : null }).then(resolve, reject);
       }
@@ -51,6 +51,7 @@ const review = require('../src/app/api/releases/review/route').POST;
 const worker = require('../release-management/deploy/worker');
 const rules = require('../src/lib/release-signoff');
 const { issueReview, reviewState } = require('../src/lib/release-review');
+const { prepareDataCommand, executeDataCommand } = require('../release-management/deploy/warehouse-data-plan');
 process.chdir(require('node:os').tmpdir());
 function body(ids = ['fix-a', 'fix-c']) {
   return { item_ids: ids, action: 'go', confirm: 'DEPLOY', heads: Object.fromEntries(ids.map(id => [id, 0])), builds: Object.fromEntries(ids.map(id => [id, 'a'.repeat(40)])), digests: Object.fromEntries(ids.map(id => [id, selection.digest(register.items.find(it => it.id === id).manifest)])), review_receipt: issueReview(caller, ids, register, reviewState(register, rows).heads) };
@@ -105,5 +106,27 @@ async function send(b) { return post({ json: async () => b }); }
   const rb = rules.checkSignoff(a, 'rollback', a.title, st['fix-a']);
   check(rb.ok && rb.row.ref_id === 31 && rb.row.detail.backup === moved.detail.backup, 'rollback bound to actual deployment backup and reference');
   check(rules.approvalText('go', a, a.manifest.sha).startsWith('Approved:'), 'delegated approval does not impersonate Max');
+  const liveRegister = JSON.parse(fs.readFileSync(path.join(root, 'release-management/release-register.json'), 'utf8'));
+  const palletData = liveRegister.items.find(it => it.id === 'wh-bug-001');
+  check(selection.candidateProblems(palletData).length === 0, 'pallet correction binds its exact approved record snapshot and script');
+  check(!selection.supportedDataPlan({ ...palletData, id: 'arbitrary-sql' }), 'only the named pallet correction is supported');
+  const data = prepareDataCommand(palletData, 29, '~/public_html');
+  check(data.backup === 'zz_bug001_units_before_29', 'worker assigns a backup table to this request');
+  assert.throws(() => prepareDataCommand(palletData, 29, '~/staging'));
+  assert.throws(() => prepareDataCommand({ ...palletData, manifest: { ...palletData.manifest, dataPlan: { ...palletData.manifest.dataPlan, scriptHash: 'a'.repeat(64) } } }, 29, '~/public_html'));
+  const closed = executeDataCommand(palletData, data, { run: () => ({ code: 0, out: JSON.stringify({ state: 'blocked', reason: 'Snapshot changed' }) }) });
+  check(closed.action === 'failed' && closed.detail.outcome === 'not_replaced', 'a changed database snapshot cannot be treated as a deployment');
+  const corrected = executeDataCommand(palletData, data, { run: () => ({ code: 0, out: JSON.stringify({ state: 'moved', updated: data.eligibleCount }) }) });
+  check(corrected.action === 'moved' && corrected.detail.backup === data.backup, 'data completion records the checked count and exact backup table');
+  assert.throws(() => executeDataCommand(palletData, data, { run: () => ({ code: 0, out: '{}' }) }));
+  check(!rules.itemSignState(palletData, { where: 'live', dep: { ...moved, detail: corrected.detail } }).canRollback, 'database correction cannot be passed to code rollback');
+  register.items.push(palletData, liveRegister.items.find(it => it.id === 'wh-bug-001-save-path'));
+  const reviewData = () => review({ json: async () => ({ item_ids: ['wh-bug-001', 'wh-bug-001-save-path'] }) });
+  check(!(await reviewData()).body.passed, 'database review cannot clear with an older worker');
+  workerVersion = selection.DATA_WORKER_VERSION;
+  const reviewedData = await reviewData();
+  check(reviewedData.body.passed && reviewedData.body.results[0].dataChange, 'super admin can review both pallet changes together with the upgraded worker');
+  role = 'staff'; perms = [{ user_id: caller, module_name: 'releases.manage', has_access: true }];
+  check((await reviewData()).status === 403, 'code release delegation does not authorize database approvals');
   console.log(checks + ' release controls checks passed');
 })().catch(err => { console.error(err); process.exitCode = 1; });

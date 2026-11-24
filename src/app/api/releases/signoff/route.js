@@ -53,6 +53,9 @@ export async function POST(request) {
     if (!plan.ok) { return deny(plan.problems.join(' '), 409); }
     ordered = plan.items;
   }
+  if (action === 'go' && ordered.some(function (it) { return it.dataChange; }) && !sa.isSuperAdmin) {
+    return deny('Only a super admin can approve a Warehouse database change.', 403);
+  }
   var rows = [];
   for (var i = 0; i < ordered.length; i++) {
     var item = ordered[i];

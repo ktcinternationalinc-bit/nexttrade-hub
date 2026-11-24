@@ -90,20 +90,47 @@
       "id": "wh-bug-001",
       "title": "BUG-001 — correct existing pallet units",
       "repo": "nextrade_WAREHOUSE",
-      "build": "",
+      "build": "f8572e1bbd445f537e1959875e3f4964f03270fe",
       "date": "2026-11-15",
       "where": "staging",
       "status": "queued",
       "needsCodex": false,
-      "needsMax": false,
+      "needsMax": true,
       "dataChange": true,
       "meta": "15 Nov",
       "desc": "Restore pallets with a weight skew and a blank unit to the Inventory Summary. The last production check found 2,776 matching records.",
       "releaseSteps": [
-        "Approve and deploy BUG-001 — prevent blank pallet units first so new scans use the fix.",
-        "Review the database correction separately. Recount and back up only matching records, set their unit to W, then verify counts and totals."
+        "Select the prevention fix together with this correction, or deploy the prevention fix first.",
+        "Back up the exact matching records, set their unit to W, and verify the update. The worker stops if any of the reviewed records have changed."
       ],
-      "files": "scan_in_logs.unit for confirmed weight skews with blank units"
+      "files": "scan_in_logs.unit for 2,776 checked weight skews with blank units",
+      "dependsOn": ["wh-bug-001-save-path"],
+      "manifest": {
+        "sha": "f8572e1bbd445f537e1959875e3f4964f03270fe",
+        "target": "production",
+        "dataCompatible": true,
+        "files": [],
+        "dataPlan": {
+          "kind": "pallet-unit-correction-v1",
+          "eligibleCount": 2776,
+          "snapshotHash": "25bd251953acc7e46e08d00ca7e32208453a8936bf65e1a893647785bae3f9e6",
+          "scriptHash": "ba5116e858d7c5ed6cd65e58db2077d0679a6f5734995643d9b32db011d375c7"
+        }
+      },
+      "codexRef": {
+        "sha": "f8572e1bbd445f537e1959875e3f4964f03270fe",
+        "target": "production",
+        "manifestDigest": "b7d72f1db9845fa90e3d2f28e8d07767fb2d4197f5c2471713f9e4228c57f902",
+        "feedbackRef": "docs/2026-11-24-warehouse-release-review.md#existing-pallet-unit-correction"
+      },
+      "behavioralQa": {
+        "sha": "f8572e1bbd445f537e1959875e3f4964f03270fe",
+        "target": "production",
+        "manifestDigest": "b7d72f1db9845fa90e3d2f28e8d07767fb2d4197f5c2471713f9e4228c57f902",
+        "kind": "behavioral",
+        "result": "PASS",
+        "summary": "The exact correction passed a real staging MariaDB test with synthetic rows. It refused same-count record drift and preserved weights, timestamps and unrelated rows."
+      }
     },
     {
       "id": "wh-bug-001-save-path",

@@ -23,7 +23,7 @@ export async function requireReleaseManager(db, userId) {
     var r = await db.from('users').select('id, name').eq('id', userId).limit(1);
     name = (r && r.data && r.data[0] && r.data[0].name) || '';
   } catch (e) { name = ''; }
-  return { ok: true, name: name };
+  return { ok: true, name: name, isSuperAdmin: ctx.isSuperAdmin === true };
 }
 
 export function tableMissing(error) {
@@ -197,10 +197,11 @@ export function itemSignState(item, latest) {
   }
   if (out.kind === 'none') {
     if (live) {
-      if (target && target.row) { out.canRollback = true; }
+      if (item && item.dataChange) { out.why = 'Restoring this database change requires a separately reviewed operation.'; }
+      else if (target && target.row) { out.canRollback = true; }
       else { out.why = out.why || 'The worker needs a recorded production move with its build and backup before it can roll this change back.'; }
     }
-    else if (item && item.dataChange) { out.why = 'This release includes database work. A reviewed database release plan is required.'; }
+    else if (item && item.dataChange && !selection.supportedDataPlan(item)) { out.why = 'This release includes database work. A reviewed database release plan is required.'; }
     else if (!build) { out.why = out.why || 'This change needs a committed build, exact file list and a passing staging test before approval.'; }
     else {
       var problems = selection.candidateProblems(item);

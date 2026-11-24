@@ -16,7 +16,8 @@ function selectionDetails(ids, register, heads) {
   const items = new Map(register.items.map(item => [item.id, item]));
   return ids.map(id => {
     const item = items.get(id);
-    return [id, heads[id], item?.manifest?.sha || '', item?.manifest ? selection.digest(item.manifest) : ''];
+    return [id, heads[id], item?.manifest?.sha || '', item?.manifest ? selection.digest(item.manifest) : '',
+      item?.dependsOn || [], item?.dataChange === true];
   });
 }
 

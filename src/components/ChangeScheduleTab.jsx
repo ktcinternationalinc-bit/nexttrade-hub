@@ -334,6 +334,9 @@ export default function ChangeScheduleTab() {
             })() : <div><div>Build: {s.liveBuild || 'No recorded target'}</div><div>Backup: {s.liveBackup || 'Not recorded'}</div>{s.why && <div style={{ color: C.max }}>{s.why}</div>}</div>}
           </div>; })}
           {review.result?.problems?.length > 0 && <ul style={{ color: C.max }}>{review.result.problems.map(function (problem) { return <li key={problem}>{problem}</li>; })}</ul>}
+          {review.action === 'go' && review.result?.passed && review.result.results.some(function (r) { return r.dataChange; }) && <p style={{ color: C.data }}>
+            Approval includes the described production database correction. The worker checks that the records still match the approved snapshot.
+          </p>}
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
             <button disabled={sending || reviewing || reviewBlocked || !review.items.length || !canSign} style={btn(C.prod, true)} onClick={confirmReview}>{sending ? 'Queuing...' : review.action === 'go' ? 'Approve and queue deployment' : 'Confirm and queue code rollback'}</button>
             <button disabled={sending || reviewing} style={btn(C.muted, false)} onClick={function () { setReview(null); }}>Close</button>

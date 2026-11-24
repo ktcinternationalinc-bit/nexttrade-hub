@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import workerRules from '../../../../../release-management/lib/worker-authorization';
+import selection from '../../../../../release-management/lib/selection';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 function response(data, status = 200) { return NextResponse.json(data, { status, headers: { 'Cache-Control': 'no-store' } }); }
@@ -20,7 +21,8 @@ export async function POST(request) {
     let result;
     switch (body.op) {
       case 'heartbeat':
-        result = await db.from('release_worker_status').upsert({ id: 1, worker, enabled: body.enabled === true, version: 'warehouse-worker-v1', last_seen: new Date().toISOString() }); break;
+        result = await db.from('release_worker_status').upsert({ id: 1, worker, enabled: body.enabled === true,
+          version: body.version === selection.DATA_WORKER_VERSION ? selection.DATA_WORKER_VERSION : 'warehouse-worker-v1', last_seen: new Date().toISOString() }); break;
       case 'history':
       case 'requests': {
         let q = db.from('release_signoffs').select('*').eq('scope', 'warehouse').order('id', { ascending: true }).limit(5000);
@@ -29,9 +31,14 @@ export async function POST(request) {
       }
       case 'authorized':
         if (!/^[a-f0-9-]{36}$/i.test(body.userId || '')) return response({ error: { message: 'Invalid approver.' } }, 400);
-        result = { data: await workerRules.authorized(db, body.userId) }; break;
+        result = { data: await workerRules.authorized(db, body.userId, body.requireSuperAdmin === true) }; break;
       case 'claim':
         if (!Number.isSafeInteger(Number(body.request)) || Number(body.request) < 1) return response({ error: { message: 'Invalid request ID.' } }, 400);
+        if (body.version !== selection.DATA_WORKER_VERSION) {
+          const candidate = await db.from('release_signoffs').select('detail').eq('id', body.request).eq('scope', 'warehouse').maybeSingle();
+          if (candidate.error) return response({ error: { message: 'Request type could not be confirmed.' } }, 409);
+          if (candidate.data?.detail?.candidate?.dataChange === true) return response({ data: false });
+        }
         result = await db.rpc('release_claim', { p_request: body.request, p_worker: worker }); break;
       case 'finish':
         result = await db.rpc('release_finish', { p_request: body.request, p_worker: worker, p_event: body.event, p_attention: body.attention }); break;

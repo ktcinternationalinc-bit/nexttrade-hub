@@ -29,11 +29,26 @@ export async function POST(request) {
     .order('id', { ascending: true }).limit(5000);
   if (error || !data || data.length >= 5000) return reply({ error: 'Complete release history is required. Try the review again.' }, 503);
   const { heads, states } = reviewState(register, data);
-  const results = ids.map(id => {
-    const item = findItem(register, id);
+  const items = ids.map(id => findItem(register, id));
+  if (!access.isSuperAdmin && items.some(item => item.dataChange)) {
+    return reply({ error: 'A super admin must review and approve Warehouse database changes.' }, 403);
+  }
+  if (items.some(selection.supportedDataPlan)) {
+    const worker = await db.from('release_worker_status').select('enabled,last_seen,version').eq('id', 1).maybeSingle();
+    if (worker.error || !worker.data?.enabled || worker.data.version !== selection.DATA_WORKER_VERSION ||
+        !(Date.now() - Date.parse(worker.data.last_seen) < 120000)) {
+      for (const item of items.filter(selection.supportedDataPlan)) {
+        states[item.id].canGo = false;
+        states[item.id].why = 'The Warehouse worker that applies this reviewed data correction needs to be online.';
+      }
+    }
+  }
+  const results = items.map(item => {
+    const id = item.id;
     return { id, title: item.title, sha: item.manifest?.sha || item.proposedBuild || '', passed: states[id].canGo,
       files: item.manifest?.files?.map(file => file.path) || [], note: states[id].why,
-      evidence: item.manifest ? item.behavioralQa?.summary || '' : '', steps: item.releaseSteps || [] };
+      evidence: item.manifest ? item.behavioralQa?.summary || '' : '', steps: item.releaseSteps || [],
+      dataChange: item.dataChange === true };
   });
   const plan = selection.selectionPlan(register.items, states, ids, 'go');
   if (!plan.ok) return reply({ ok: true, passed: false, results, problems: [...new Set(plan.problems)] });
