@@ -20,7 +20,10 @@ function check(ok, label, extra) { if (ok) { pass++; console.log('PASS ' + label
   const paths = item.manifest.files.map(f => f.path);
   check(item.routesChanged === true && item.configChanged === true && paths.indexOf('routes/api.php') >= 0 && paths.indexOf('config/services.php') >= 0,
     'it changes routes/api.php and config/services.php AND says so (routesChanged + configChanged)', { routesChanged: item.routesChanged, configChanged: item.configChanged });
-  check(!item.codexRef && !item.behavioralQa && selection.candidateProblems(item).length === 2, 'in the register it is still blocked (no review / staging QA invented)');
+  // 24 Nov 15:09 UTC: Codex's review + the owner's exact-file staging QA records (Codex's text, verbatim) — bound to THIS build and digest
+  var dg = selection.digest(item.manifest);
+  check(item.codexRef && item.behavioralQa && item.codexRef.sha === item.manifest.sha && item.behavioralQa.sha === item.manifest.sha && item.codexRef.manifestDigest === dg && item.behavioralQa.manifestDigest === dg && dg === 'd4a8a02b208f8bf0cf5b73a84c6100364202beebe1f3f8d605d0663fa71790d9' && /^CODEX_QA_FEEDBACK\.md#xb-905ef4b8/.test(item.codexRef.feedbackRef) && item.behavioralQa.kind === 'behavioral' && item.behavioralQa.result === 'PASS' && selection.candidateProblems(item).length === 0,
+    'the register carries Codex\'s review + staging QA for exactly build 905ef4b8 / digest d4a8a02b, so the item is selectable (Max still has to give the go)', selection.candidateProblems(item));
   if (!fs.existsSync(WAREHOUSE_REPO)) { check(false, 'warehouse repo not found: ' + WAREHOUSE_REPO); return finish(); }
 
   // SYNTHETIC evidence, in memory only, so the real executeRequest gets past its gates

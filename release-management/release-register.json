@@ -330,6 +330,20 @@
             "after": "7a908353d2016ea22de1c116ec6fd2213b23a0895a2f4f985307e9d76435f14f"
           }
         ]
+      },
+      "codexRef": {
+        "sha": "905ef4b81f7c63fd487e4ed372f66c37da9e13ff",
+        "target": "production",
+        "manifestDigest": "d4a8a02b208f8bf0cf5b73a84c6100364202beebe1f3f8d605d0663fa71790d9",
+        "feedbackRef": "CODEX_QA_FEEDBACK.md#xb-905ef4b8-exact-package-review-with-owner-runtime-evidence---pass-24-nov-1509-utc-check"
+      },
+      "behavioralQa": {
+        "sha": "905ef4b81f7c63fd487e4ed372f66c37da9e13ff",
+        "target": "production",
+        "manifestDigest": "d4a8a02b208f8bf0cf5b73a84c6100364202beebe1f3f8d605d0663fa71790d9",
+        "kind": "behavioral",
+        "result": "PASS",
+        "summary": "Deployment owner executed exact candidate files in isolated staging-server Laravel fixture, uncached/cached/after clears: token refusal, receipt 2282 and reference 80221856 with 17 logs, missing id, 101-id rejection, field exclusions, shipping absent and missing-source refusal passed. Evidence: CLAUDE_HANDOFF.md section QA RECEIPT - XB LIVE candidate 905ef4b8, 24 Nov. Codex independently verified three artifact hashes, manifest digest and 23 source/fixture checks; Codex did not execute the PHP/server tests. No production or end-to-end live matching claim."
       }
     }
   ],
