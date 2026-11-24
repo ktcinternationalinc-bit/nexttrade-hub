@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YH',
+    date: '2026-11-24',
+    title: 'Canada History: the old Cambridge workbook kept for comparison and reports',
+    items: [
+      { text: '**New tab: Reports → 🍁 Canada History.** The Canadian side was never brought over the way the USA side was, because it had no item codes. Now its history is kept: goods **received** and goods **shipped**, in pounds, by type of goods and by month, from June 2021 to April 2024.' },
+      { text: '**Like for like with today.** Each old Canadian goods name is tied to a current CGT goods type (for example Seconds Auto → Seconds Canada, the three TPO names → TPO). You can look at it by current CGT type or by the old name.' },
+      { text: '**Click a card** to see that type month by month, year by year, and which customers it was shipped to.' },
+      { text: '**Names with no match are never guessed.** They stay under their own old name, marked in red, until the super admin picks what they count as. Earlier choices are kept.' },
+      { text: '**Starting stock, winding, stock-count corrections and disposals are shown apart** — they are not counted as goods received.' },
+      { text: '**Weights only.** The old workbook has no dollar amounts for Canada, so the archive has pounds, not money.' },
+      { text: '**It is an archive, for looking only.** It does not change any stock, bill, invoice, bank line or profit figure, and once stored it cannot be edited or loaded twice. Only the super admin sees it unless a person is switched on in Settings (Reports: Canada History).' },
+      { superAdminOnly: true, text: 'Technical: NEW sql/v55-83-YH-canada-history.sql (four new canada_history_* tables only; append-only triggers; service role only). The data is NOT in the code: after the SQL, the super admin loads canada-history-archive.json once from the tab (fingerprint-checked; only that exact file is accepted). New: src/lib/canada-history.js, src/lib/canada-history-server.js, src/app/api/canada-history/route.js, src/components/CanadaHistoryTab.jsx. The warehouse app CGT cards themselves are NOT changed in this build.' }
     version: 'v55.83-XX',
     date: '2026-11-23',
     title: 'Nextrade bills: grouped by type, no validation step, paid only through NextTrade',

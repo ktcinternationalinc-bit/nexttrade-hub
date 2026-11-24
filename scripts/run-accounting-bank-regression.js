@@ -12,6 +12,7 @@ var cp = require('child_process');
 var path = require('path');
 
 var MANIFEST = [
+  { f: 'test-v55-83-yh-canada-history.js', label: 'new', why: 'YH Canada historical archive: goods-name rules and like-for-like CGT grouping, received vs starting stock / winding / corrections / disposals, the real route (explicit switch only, super admin loads and decides, fingerprint, load once, part-way load never shown, incomplete read refused), wiring, SQL adds tables only' },
   { f: 'test-v55-83-xt-pending-final-copy.js', label: 'new', why: 'XT a pending line is retired when its bank-linked final line came in through a second connection: exactly one live copy, same account/money/day/description, work and links protected, fail closed' },
   { f: 'test-v55-83-xt-pending-never-counts.js', label: 'new', why: 'XT a pending bank line never counts, matches, teaches a rule or goes to Wave: server guard (fail closed), company totals, Bank tab totals, age flag, imports present' },
   { f: 'test-v55-83-xy-arrival-auto.js', label: 'new', why: 'XY reminders: Send-to = the warehouse customer e-mail(s); the automatic morning run (timer secret, OFF by default, super-admin switch, only orders needing nobody, never twice incl. two timers at once, refusal / no-answer handling, never from the staging copy)' },
