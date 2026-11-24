@@ -46,6 +46,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import twilio from 'twilio';
 import { requireUser, checkRateLimit, getRateLimitKey } from '../../../../lib/phone-auth';
+import { resolvePhoneIdentity } from '../../../../lib/phone-identity';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -74,18 +75,17 @@ export async function POST(req) {
       return NextResponse.json({ error: 'authentication required' }, { status: 401 });
     }
 
-    var body = await req.json();
-    var user_id = body.user_id;
-
-    // The user_id in the body must match the authenticated user.
-    // Otherwise a logged-in user could request a token AS another user
-    // and intercept their incoming calls.
-    if (user_id && user_id !== auth.user.id) {
-      console.warn('[phone/token] user_id mismatch — auth user', auth.user.id, 'requested', user_id);
-      return NextResponse.json({ error: 'user_id mismatch' }, { status: 403 });
+    var body;
+    try { body = await req.json(); }
+    catch (_) { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Expected a JSON object' }, { status: 400 });
     }
-    // Default to authenticated user's id if body didn't supply one
-    user_id = user_id || auth.user.id;
+    var resolved = await resolvePhoneIdentity(supabase, auth.user, body.user_id);
+    if (resolved.error) {
+      return NextResponse.json({ error: resolved.error }, { status: resolved.status });
+    }
+    var user_id = resolved.identity;
 
     var accountSid = process.env.TWILIO_ACCOUNT_SID;
     var apiKeySid = process.env.TWILIO_API_KEY_SID;
@@ -153,7 +153,7 @@ export async function POST(req) {
       phone_number: assignedNumber ? assignedNumber.phone_number : null,
       label: assignedNumber ? assignedNumber.label : null,
       expires_at: Math.floor(Date.now() / 1000) + ttl,
-    });
+    }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (e) {
     console.error('[phone/token] error:', e.message);
     return NextResponse.json({ error: e.message }, { status: 500 });
