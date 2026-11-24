@@ -8,7 +8,7 @@
 // inventory, bills, invoices, bank lines or P&L.
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { CANADA_GOODS, CURRENT_CGT_TYPES, KIND_LABELS, effectiveGoodsMap, unmatchedGoods, buildCanadaHistory, fmtLb, dayLabel } from '../lib/canada-history';
+import { CANADA_GOODS, CURRENT_CGT_TYPES, KIND_LABELS, effectiveGoodsMap, unmatchedGoods, buildCanadaHistory, buildCanadaSales, fmtLb, fmtUsd, dayLabel } from '../lib/canada-history';
 
 var C = {
   bg: '#f8fafc', card: '#ffffff', line: '#e2e8f0', ink: '#0f172a', muted: '#64748b',
@@ -75,6 +75,8 @@ export default function CanadaHistoryTab(props) {
   var ws = useState(''); var busy = ws[0]; var setBusy = ws[1];
   var ms = useState(''); var msg = ms[0]; var setMsg = ms[1];
   var ps = useState({}); var picks = ps[0]; var setPicks = ps[1];
+  var qs = useState(''); var saleQ = qs[0]; var setSaleQ = qs[1];
+  var ns = useState(60); var saleN = ns[0]; var setSaleN = ns[1];
 
   function say(text, bad) { setMsg(text); if (toast) { try { toast(text, bad ? 'error' : 'success'); } catch (e) { /* message is on the page */ } } }
 
@@ -119,6 +121,17 @@ export default function CanadaHistoryTab(props) {
   var eff = effectiveGoodsMap((data && data.decisions) || []);
   var hist = data && data.loaded ? buildCanadaHistory(data.receipts, data.shipments, eff, { by: by }) : null;
   var unmatched = unmatchedGoods(eff);
+  // v55.83-YK — sales history: one row per Canadian release that shipped. Dollars only when the server sent them (super admin).
+  var sales = data && data.loaded ? buildCanadaSales(data.shipments, data.ktc_invoices === undefined ? null : data.ktc_invoices, eff) : null;
+  var saleRows = [];
+  if (sales) {
+    var needle = String(saleQ || '').toLowerCase().trim();
+    saleRows = sales.rows.filter(function (r) {
+      if (openKey && !r.lines.some(function (l) { return (by === 'goods' ? l.goods_name : (l.cgt_type || l.goods_name)) === openKey; })) { return false; }
+      if (!needle) { return true; }
+      return (r.release_no + ' ' + r.customer + ' ' + (r.nextrade_invoice || '') + ' ' + r.ship_date).toLowerCase().indexOf(needle) >= 0;
+    });
+  }
   var open = null;
   if (hist && openKey) { hist.groups.forEach(function (g) { if (g.key === openKey) { open = g; } }); }
 
@@ -244,6 +257,41 @@ export default function CanadaHistoryTab(props) {
                     </div>
                   </div>
                 </div>
+              </div>
+            ) : null}
+
+            {sales ? (
+              <div style={box}>
+                <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 2 }}>Sales history — every Canadian release that shipped{openKey ? ' · ' + openKey : ''}</div>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
+                  {sales.releases} releases, {fmtLb(sales.total_lb)} lb recorded, dated by the confirmed loading date. The old workbook has pounds and customers but no prices.
+                  {sales.money_shown ? (' The dollar column is the KTC invoice the Hub already holds for that release number: ' + sales.with_ktc_invoice + ' releases have one (' + fmtUsd(sales.ktc_total) + ' on ' + fmtLb(sales.lb_with_ktc_invoice) + ' lb); ' + sales.without_ktc_invoice + ' have none here — they were invoiced by NexTrade or prepaid, so their dollars are unknown in the Hub, not zero. An invoice can cover more than the goods in this list, so $ per lb is a guide only.') : ' Dollar figures are shown to the super admin only.'}
+                </div>
+                {data && data.ktc_invoices_note ? <div style={{ background: C.warnBg, border: '1px solid #fecaca', color: C.warn, borderRadius: 8, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>{data.ktc_invoices_note} No dollars are shown.</div> : null}
+                <input value={saleQ} onChange={function (e) { setSaleQ(e.target.value); setSaleN(60); }} placeholder="Search release, customer, invoice number or date" style={{ width: '100%', maxWidth: 420, fontSize: 13, padding: '6px 10px', border: '1px solid ' + C.line, borderRadius: 8, background: '#fff', color: C.ink, marginBottom: 8 }} />
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr><th style={th}>Loaded</th><th style={th}>Release</th><th style={th}>Customer</th><th style={th}>Goods (old name → counts as)</th><th style={thR}>Pounds</th><th style={th}>NexTrade invoice (workbook)</th>{sales.money_shown ? <th style={thR}>KTC invoice $</th> : null}{sales.money_shown ? <th style={thR}>$ per lb</th> : null}</tr></thead>
+                    <tbody>
+                      {saleRows.slice(0, saleN).map(function (r) {
+                        return (
+                          <tr key={r.key}>
+                            <td style={Object.assign({}, td, { whiteSpace: 'nowrap' })}>{dayLabel(r.ship_date)}</td>
+                            <td style={Object.assign({}, td, { whiteSpace: 'nowrap', fontWeight: 700 })}>{r.release_no}</td>
+                            <td style={td}>{r.customer}</td>
+                            <td style={td}>{r.lines.map(function (l, i) { return <div key={i}>{l.goods_name}{l.cgt_type && l.cgt_type !== l.goods_name ? ' → ' + l.cgt_type : ''}: {fmtLb(l.weight_lb)} lb</div>; })}</td>
+                            <td style={tdR}>{fmtLb(r.total_lb)}</td>
+                            <td style={td}>{r.nextrade_invoice || '—'}</td>
+                            {sales.money_shown ? <td style={tdR}>{r.ktc_total === null ? <span style={{ color: C.muted }}>none in the Hub</span> : <span title={r.ktc_invoices.map(function (v) { return '#' + v.invoice_number + ' ' + (v.invoice_date || '') + ' ' + fmtUsd(v.total); }).join(' · ')}>{fmtUsd(r.ktc_total)}{r.ktc_invoices.length > 1 ? ' (' + r.ktc_invoices.length + ' invoices)' : ''}</span>}</td> : null}
+                            {sales.money_shown ? <td style={tdR}>{r.usd_per_lb === null ? '—' : '$' + r.usd_per_lb.toFixed(4)}</td> : null}
+                          </tr>
+                        );
+                      })}
+                      {!saleRows.length ? <tr><td style={td} colSpan={8}>No release matches.</td></tr> : null}
+                    </tbody>
+                  </table>
+                </div>
+                {saleRows.length > saleN ? <button style={Object.assign({}, btn, { marginTop: 8 })} onClick={function () { setSaleN(saleN + 200); }}>Show more ({saleRows.length - saleN} more)</button> : null}
               </div>
             ) : null}
 

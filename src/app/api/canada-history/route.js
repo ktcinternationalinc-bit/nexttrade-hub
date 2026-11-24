@@ -6,8 +6,10 @@
 // A PRIVATE, READ-ONLY archive of the old Cambridge (Ontario) workbook: goods received and goods shipped, in pounds, by
 // goods type and month. Rules: lib/canada-history.js. Storage: lib/canada-history-server.js + sql/v55-83-YH-canada-history.sql.
 //
-// What this route NEVER does: read or change inventory, bills, invoices, bank lines, P&L, Wave or the warehouse.
-// It reads and writes ONLY the canada_history_* tables, and an archive line is never updated or deleted.
+// What this route NEVER does: change inventory, bills, invoices, bank lines, P&L, Wave or the warehouse.
+// It WRITES only the canada_history_* tables, and an archive line is never updated or deleted.
+// v55.83-YK: for the SUPER ADMIN only it also READS (select only) the KTC invoices the Hub already holds for the
+// archive's 1001- releases, to show the sales dollars next to the pounds. Nobody else receives any dollar figure.
 //
 // Identity: the verified sign-in (bearer), never a user_id from the body.
 //   GET                see the archive   — super admin, or a person Max switched on ('canada_history.access').
@@ -19,13 +21,13 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../lib/verified-caller';
 import { loadUserPermissions } from '../../../lib/server-permissions';
-import { readArchive, storeArchive, saveGoodsDecision, SQL_HINT } from '../../../lib/canada-history-server';
+import { readArchive, storeArchive, saveGoodsDecision, readKtcInvoicesForReleases, SQL_HINT } from '../../../lib/canada-history-server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-var API_BUILD_MARKER = 'v55.83-YH-canada-history';
+var API_BUILD_MARKER = 'v55.83-YK-canada-history';
 var PERM = 'canada_history.access';
 var MAX_FILE_CHARS = 2000000;
 
@@ -62,8 +64,15 @@ export async function GET(request) {
     var a = await readArchive(db);
     if (!a.ok) { return bad(a.error, 500); }
     if (a.sql_missing) { return out({ ok: true, sql_missing: true, sql_hint: SQL_HINT, loaded: false, can_manage: isSuper, receipts: [], shipments: [], decisions: [] }); }
+    // v55.83-YK — sales dollars: the KTC invoices the Hub already holds for these releases. SUPER ADMIN ONLY, read-only.
+    // Anyone else gets ktc_invoices = null (no dollars at all). A failed read also gives null plus a plain reason.
+    var ktc = null; var ktcNote = '';
+    if (isSuper && a.loaded === true) {
+      var k = await readKtcInvoicesForReleases(db, a.shipments || []);
+      if (k.ok) { ktc = k.invoices; } else { ktcNote = k.error; }
+    }
     return out({ ok: true, sql_missing: false, loaded: a.loaded === true, can_manage: isSuper, batch: a.batch || null,
-      receipts: a.receipts || [], shipments: a.shipments || [], decisions: a.decisions || [] });
+      receipts: a.receipts || [], shipments: a.shipments || [], decisions: a.decisions || [], ktc_invoices: ktc, ktc_invoices_note: ktcNote });
   } catch (e) {
     return bad('The Canada history could not be read right now.', 500);
   }

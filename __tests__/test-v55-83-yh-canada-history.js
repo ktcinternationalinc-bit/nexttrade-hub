@@ -125,6 +125,7 @@ function Q(name) {
   var q = {
     select: function () { return q; },
     eq: function (k, v) { st.f.push(function (r) { return String(r[k]) === String(v); }); return q; },
+    ilike: function (k, pat) { var mid = String(pat).replace(/%/g, '').toLowerCase(); st.f.push(function (r) { return String(r[k] == null ? '' : r[k]).toLowerCase().indexOf(mid) >= 0; }); return q; },
     order: function (k, o) { st.ord.push([k, !(o && o.ascending === false)]); return q; },
     limit: function (n) { st.lim = n; return q; },
     range: function (a, b) { st.rng = [a, b]; return q; },
@@ -139,7 +140,8 @@ function Q(name) {
 function exec(st) {
   if (world.noSql && /^canada_history_/.test(st.name)) { return { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public." + st.name + "' in the schema cache" } }; }
   if (!/^canada_history_/.test(st.name) && st.op !== 'select') { throw new Error('YH wrote outside its own tables: ' + st.name); }
-  if (!/^canada_history_/.test(st.name) && st.name !== 'users' && st.name !== 'module_permissions') { throw new Error('YH read a table it must not touch: ' + st.name); }
+  if (st.name === 'accounting_invoices') { world.invoiceReads = (world.invoiceReads || 0) + 1; if (world.failInvoices) { return { data: null, error: { message: 'made-up failure' } }; } }
+  if (!/^canada_history_/.test(st.name) && st.name !== 'users' && st.name !== 'module_permissions' && st.name !== 'accounting_invoices') { throw new Error('YH read a table it must not touch: ' + st.name); }
   var rows = tbl(st.name);
   if (st.op === 'insert') {
     if (world.failInsert === st.name) { return { data: null, error: { message: 'made-up failure' } }; }
@@ -169,6 +171,14 @@ stub(path.join(root, 'src/lib/verified-caller.js'), { verifiedCaller: async func
 tbl('users').push({ id: 'u-max', role: 'super_admin', email: 'max@example.test' }, { id: 'u-admin', role: 'admin', email: 'admin@example.test' },
   { id: 'u-on', role: 'viewer', email: 'on@example.test' }, { id: 'u-off', role: 'viewer', email: 'off@example.test' });
 tbl('module_permissions').push({ user_id: 'u-on', module_name: 'canada_history.access', has_access: true });
+// the Hub's own KTC invoices (made up): two for release 1001-677, one voided, one for a Houston release, one for a release not in the archive
+tbl('accounting_invoices').push(
+  { id: 'i1', release_number: '1001-677', invoice_number: '7261', invoice_date: '2021-06-30', total_amount: '1000.50', record_status: 'active' },
+  { id: 'i2', release_number: ' 1001-677 ', invoice_number: '7261A', invoice_date: '2021-07-02', total_amount: 99.5, record_status: null },
+  { id: 'i3', release_number: '1001-743', invoice_number: '4547', invoice_date: '2021-09-30', total_amount: 500, record_status: 'void' },
+  { id: 'i4', release_number: '1002-401', invoice_number: '9', invoice_date: '2021-06-30', total_amount: 7777, record_status: 'active' },
+  { id: 'i5', release_number: '1001-999', invoice_number: '10', invoice_date: '2022-01-01', total_amount: 8888, record_status: 'active' },
+  { id: 'i6', release_number: '1001-800', invoice_number: '11', invoice_date: '2022-03-02', total_amount: 60, record_status: 'active' });
 
 var S = require(path.join(root, 'src/lib/canada-history-server.js'));
 var ROUTE = require(path.join(root, 'src/app/api/canada-history/route.js'));
@@ -221,6 +231,20 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
   check('super admin reads the archive and can manage', r.status === 200 && r.body.loaded === true && r.body.can_manage === true && r.body.receipts.length === 8 && r.body.shipments.length === 4);
   var hh = H.buildCanadaHistory(r.body.receipts, r.body.shipments, H.effectiveGoodsMap(r.body.decisions), { by: 'cgt' });
   check('what comes back gives the same totals as the file', hh.total_in === 1050.5 && hh.total_out === 700);
+  // ---- YK: sales history with the KTC invoice dollars (super admin only, read-only)
+  check('YK: the super admin gets the KTC invoices for the archive releases only (no voided, no Houston, no release outside the archive)', Array.isArray(r.body.ktc_invoices) && r.body.ktc_invoices.map(function (x) { return x.invoice_number; }).sort().join() === '11,7261,7261A' && r.body.ktc_invoices_note === '');
+  check('YK: only the four fields the list shows leave the server', r.body.ktc_invoices.every(function (x) { return Object.keys(x).sort().join() === 'invoice_date,invoice_number,release_number,total_amount'; }));
+  var sl = H.buildCanadaSales(r.body.shipments, r.body.ktc_invoices, H.effectiveGoodsMap([]));
+  var s677 = sl.rows.filter(function (x) { return x.release_no === '1001-677'; })[0]; var s743 = sl.rows.filter(function (x) { return x.release_no === '1001-743'; })[0];
+  check('YK: one row per release, newest first, pounds from the archive', sl.releases === 4 && sl.total_lb === 700 && sl.rows[0].release_no === '1001-801' && s677.total_lb === 400 && s677.customer === 'Customer A' && s677.lines[0].cgt_type === 'Seconds Canada');
+  check('YK: two invoices on one release are added up; $ per lb is worked out', s677.ktc_total === 1100 && s677.ktc_invoices.length === 2 && s677.usd_per_lb === 2.75);
+  check('YK: a release with no KTC invoice in the Hub is unknown (null), never $0', s743.ktc_total === null && s743.usd_per_lb === null && s743.ktc_invoices === null);
+  check('YK: summary counts', sl.money_shown === true && sl.with_ktc_invoice === 2 && sl.without_ktc_invoice === 2 && sl.ktc_total === 1160 && sl.lb_with_ktc_invoice === 430);
+  var slNo = H.buildCanadaSales(r.body.shipments, null, H.effectiveGoodsMap([]));
+  check('YK: without dollars the list still has every release and no money figure at all', slNo.money_shown === false && slNo.releases === 4 && slNo.ktc_total === null && slNo.with_ktc_invoice === null && slNo.rows.every(function (x) { return x.ktc_total === null && x.ktc_invoices === null; }));
+  world.failInvoices = true; r = await ROUTE.GET(req()); world.failInvoices = false;
+  check('YK: when the invoices cannot be read the archive still shows, with no dollars and a plain reason', r.status === 200 && r.body.loaded === true && r.body.ktc_invoices === null && /could not be read/.test(r.body.ktc_invoices_note));
+  r = await ROUTE.GET(req());
   check('only lines of the complete load are returned', r.body.receipts.every(function (x) { return true; }) && tbl('canada_history_receipts').length === 16);
   world.shortRead = true; r = await ROUTE.GET(req());
   check('an incomplete read shows nothing rather than a wrong total', r.status === 500 && r.body.ok === false && /did not read completely/.test(r.body.error));
@@ -232,8 +256,10 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
   check('super admin decides Decking = Roofing', r.status === 200 && r.body.ok === true);
   r = await ROUTE.POST(req({ action: 'map', goods_name: 'Decking', cgt_type: '' }));
   check('...and can put it back to "keep separate"; both decisions are kept', r.status === 200 && tbl('canada_history_goods_decisions').length === 2 && tbl('canada_history_goods_decisions')[0].decided_by === 'max@example.test');
+  var readsBefore = world.invoiceReads;
   world.user = 'u-on'; r = await ROUTE.GET(req());
   check('the viewer sees the archive and the decisions', r.status === 200 && r.body.loaded === true && r.body.decisions.length === 2 && r.body.can_manage === false);
+  check('YK: a viewer gets NO dollar figure and the invoices are not even read for them', r.body.ktc_invoices === null && world.invoiceReads === readsBefore && JSON.stringify(r.body).indexOf('1000.5') < 0);
   tbl('module_permissions').push({ user_id: 'u-on', module_name: 'canada_history.access', has_access: false });
   tbl('module_permissions').shift();
   r = await ROUTE.GET(req());
@@ -249,21 +275,23 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
   check('the tab opens only with the explicit switch', /if \(t\.id === 'canadahistory'\) \{ return modulePerms\['canada_history\.access'\] === true; \}/.test(page));
   check('the tab has its own ARCHIVE group right under REPORTS, and a breadcrumb', /\{ group: 'REPORTS', items: \['reports'\] \},\s*\{ group: 'ARCHIVE', items: \['canadahistory'\] \},/.test(page) && /canadahistory:'Archive'/.test(page));
   check('the History icon is imported and used', /CalendarClock, History\s/.test(page) && /canadahistory: History,/.test(page));
-  check('the badge says YH', page.indexOf('>v55.83-YH</span>') >= 0);
+  check('the badge says YK (YH + the sales list)', page.indexOf('>v55.83-YK</span>') >= 0);
+  check('YK: the screen has the sales list, says dollars are KTC invoices only and unknown is not zero', comp.indexOf('Sales history — every Canadian release that shipped') >= 0 && comp.indexOf('not zero') >= 0 && comp.indexOf('sales.money_shown ?') >= 0 && comp.indexOf('none in the Hub') >= 0);
+  check('money is written with cents', H.fmtUsd(1234567.5) === '$1,234,567.50' && H.fmtUsd(0) === '$0.00' && H.fmtUsd(60.049) === '$60.05');
   check('the screen shows where each side stops, N/A instead of zero, partial years, recorded totals', comp.indexOf('hist.notes.map') >= 0 && comp.indexOf("st === 'na'") >= 0 && comp.indexOf("y.in === null ? 'N/A'") >= 0 && comp.indexOf('y.in_partial') >= 0 && comp.indexOf('Received (recorded)') >= 0 && comp.indexOf('Total recorded') >= 0);
   check('the screen says: pounds only, not connected to the warehouse cards; a proposal is shown as a proposal', comp.indexOf('pounds only, no dollar amounts') >= 0 && comp.indexOf('not connected to the warehouse system') >= 0 && comp.indexOf('Proposed — not confirmed yet') >= 0);
   check('the switch is in Settings', /\{ key: 'canada_history\.access', label: 'Archive: Canada History'/.test(settings));
-  check("What's New has YH on top", /export const BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-YH',\s*date: '2026-11-24'/.test(wn));
+  check("What's New has YK on top and YH right under it", /export const BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-YK',\s*date: '2026-11-24'/.test(wn) && wn.indexOf("version: 'v55.83-YH'") > wn.indexOf("version: 'v55.83-YK'"));
   [['route', route], ['server lib', server], ['rules lib', lib]].forEach(function (x) {
     var code = x[1].replace(/\/\/[^\n]*/g, '');
     check(x[0] + ': var + string concatenation only', !/\b(const|let)\s+[A-Za-z_$]/.test(code.replace(/export const (runtime|dynamic|maxDuration)\b/g, '')) && code.indexOf('`') < 0 && code.indexOf('=>') < 0);
   });
   check('the route never imports a component or a "use client" module', !/components\//.test(route) && !/lib\/supabase'/.test(route) && lib.indexOf("'use client'") < 0 && server.indexOf("'use client'") < 0);
   check('the route only stores through the fixed fingerprint', /storeArchive\(db, text, label\)/.test(route) && route.indexOf('storeArchiveExpecting') < 0);
-  check('the route and storage touch only the canada_history tables (+ users for the name)', (route + server).match(/\.from\('([a-z_]+)'\)/g).every(function (m) { return /canada_history_|'users'/.test(m); }) && !/\.from\(table\)/.test(route));
+  check('the route and storage touch only the canada_history tables (+ users for the name, + a read of accounting_invoices)', (route + server).match(/\.from\('([a-z_]+)'\)/g).every(function (m) { return /canada_history_|'users'|'accounting_invoices'/.test(m); }) && (server.match(/from\('accounting_invoices'\)/g) || []).length === 1 && /from\('accounting_invoices'\)\.select\(/.test(server) && /if \(isSuper && a\.loaded === true\) \{\s*var k = await readKtcInvoicesForReleases/.test(route) && !/\.from\(table\)/.test(route));
   check('storage never updates a line and never deletes', server.indexOf('.delete(') < 0 && route.indexOf('.delete(') < 0 && (server.match(/\.update\(\{/g) || []).length === 1 && /from\('canada_history_batches'\)\.update\(\{ status: 'complete' \}\)/.test(server));
   check('the screen uses the route, not the tables', comp.indexOf("fetch('/api/canada-history'") >= 0 && comp.indexOf('.from(') < 0 && comp.indexOf("'use client'") === 0);
-  check('the screen imports the helpers it calls', ['CANADA_GOODS', 'CURRENT_CGT_TYPES', 'KIND_LABELS', 'effectiveGoodsMap', 'unmatchedGoods', 'buildCanadaHistory', 'fmtLb'].every(function (n) { return new RegExp('import \\{[^}]*\\b' + n + '\\b[^}]*\\} from \'\\.\\./lib/canada-history\'').test(comp) && comp.split(n).length > 2; }));
+  check('the screen imports the helpers it calls', ['CANADA_GOODS', 'CURRENT_CGT_TYPES', 'KIND_LABELS', 'effectiveGoodsMap', 'unmatchedGoods', 'buildCanadaHistory', 'buildCanadaSales', 'fmtLb', 'fmtUsd', 'dayLabel'].every(function (n) { return new RegExp('import \\{[^}]*\\b' + n + '\\b[^}]*\\} from \'\\.\\./lib/canada-history\'').test(comp) && comp.split(n).length > 2; }));
   check('no customer name or figure from the workbook is in the code', !/Vinyl Trends|Freiman|FZG/.test(lib + server + route + comp + wn));
   check('SQL: adds tables only', (sql.match(/create table if not exists public\.canada_history_/g) || []).length === 4 && !/\bdrop table\b|\bdelete from\b|\btruncate\b|\balter table public\.(?!canada_history)/i.test(sql.replace(/--[^\n]*/g, '').replace(/format\('alter table public\.%I/g, '')));
   check('SQL: browser locked out, service role may only read + add', /enable row level security/.test(sql) && /revoke all on public\.%I from public, anon, authenticated/.test(sql) && /grant select, insert on public\.%I to service_role/.test(sql) && !/grant[^;]*delete/i.test(sql));

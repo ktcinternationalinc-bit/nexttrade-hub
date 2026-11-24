@@ -4,7 +4,7 @@
 // invoices, bank lines or P&L. It never updates or deletes an archive line.
 // SWC-safe: var + string concatenation only.
 import crypto from 'crypto';
-import { ARCHIVE_FORMAT, CANADA_GOODS, validateArchiveFile } from './canada-history';
+import { ARCHIVE_FORMAT, CANADA_GOODS, validateArchiveFile, releaseKey } from './canada-history';
 
 // The ONE archive file this build accepts: the rows read from Max's workbook 11.23.xlsm
 // (sheets "Cambridge Scan In" and "Cambridge Scan Out") on 24 Nov 2026. Any other content is refused.
@@ -56,6 +56,32 @@ export async function readArchive(db) {
   for (i = 0; i < r.rows.length; i++) { r.rows[i].weight_lb = num(r.rows[i].weight_lb); }
   for (i = 0; i < s.rows.length; i++) { s.rows[i].weight_lb = num(s.rows[i].weight_lb); }
   return { ok: true, sql_missing: false, loaded: true, batch: batch, receipts: r.rows, shipments: s.rows, decisions: d.data || [] };
+}
+
+// v55.83-YK — the KTC invoices the Hub's own books already hold for the archive's Canadian releases.
+// READ-ONLY (a select, nothing else) and only ever called for the super admin. Returns just the four fields the
+// sales list shows, and only for releases that are in the archive. Voided / archived invoices are left out.
+// A read that fails or stops part way returns an error: the screen then shows no dollars rather than part of them.
+export async function readKtcInvoicesForReleases(db, shipments) {
+  var want = {}; var i;
+  var shp = Array.isArray(shipments) ? shipments : [];
+  for (i = 0; i < shp.length; i++) { if (shp[i] && shp[i].release_no) { want[releaseKey(shp[i].release_no)] = 1; } }
+  var out = []; var from = 0; var guard = 0;
+  while (guard < 50) {
+    var res = await db.from('accounting_invoices').select('id, release_number, invoice_number, invoice_date, total_amount, record_status')
+      .ilike('release_number', '%1001-%').order('id', { ascending: true }).range(from, from + PAGE - 1);
+    if (res.error) { return { ok: false, error: 'The KTC invoices could not be read (' + res.error.message + ').' }; }
+    var rows = res.data || [];
+    for (i = 0; i < rows.length; i++) {
+      var st = String(rows[i].record_status == null ? 'active' : rows[i].record_status).toLowerCase();
+      if (st !== 'active') { continue; }
+      if (!want[releaseKey(rows[i].release_number)]) { continue; }
+      out.push({ release_number: rows[i].release_number, invoice_number: rows[i].invoice_number, invoice_date: rows[i].invoice_date, total_amount: num(rows[i].total_amount) });
+    }
+    if (rows.length < PAGE) { return { ok: true, invoices: out }; }
+    from += PAGE; guard++;
+  }
+  return { ok: false, error: 'The KTC invoices did not read completely.' };
 }
 
 export function sha256Text(text) { return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex'); }

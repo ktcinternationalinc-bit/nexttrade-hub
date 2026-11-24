@@ -294,6 +294,64 @@ export function buildCanadaHistory(receipts, shipments, eff, opts) {
   return { by: by, months: months, first_month: first, last_month: last, coverage: cov, notes: coverageNotes(cov), groups: out, total_in: r3(tin), total_out: r3(tout) };
 }
 
+// v55.83-YK — SALES HISTORY (Max, 24 Nov 2026: "make sure you are pulling the sales history as well for canada").
+// One row per Canadian release that shipped: date, customer, goods and pounds from the archive, plus — when the
+// Hub's own books hold a KTC invoice with that release number — the invoice number(s) and dollars.
+// invoices: rows { release_number, invoice_number, invoice_date, total_amount } or null (dollars not allowed / not read).
+// The dollars are READ from the invoices as they stand; nothing is written, and a release with no KTC invoice in the
+// Hub has ktc_total = null (unknown here — it was invoiced elsewhere or prepaid), never 0.
+export function releaseKey(v) { return String(v == null ? '' : v).toUpperCase().replace(/\s+/g, ''); }
+export function buildCanadaSales(shipments, invoices, eff) {
+  var shp = Array.isArray(shipments) ? shipments : [];
+  var map = (eff && eff.map) || {};
+  var hasMoney = Array.isArray(invoices);
+  var inv = {}; var i; var k;
+  if (hasMoney) {
+    for (i = 0; i < invoices.length; i++) {
+      var iv = invoices[i]; if (!iv) { continue; }
+      k = releaseKey(iv.release_number); if (!k) { continue; }
+      if (!inv[k]) { inv[k] = []; }
+      inv[k].push({ invoice_number: String(iv.invoice_number == null ? '' : iv.invoice_number), invoice_date: iv.invoice_date || null, total: Number(iv.total_amount) || 0 });
+    }
+  }
+  var rows = {}; var order = [];
+  for (i = 0; i < shp.length; i++) {
+    var r = shp[i]; if (!r || !r.ship_date || CANADA_GOODS.indexOf(r.goods_name) < 0) { continue; }
+    k = releaseKey(r.release_no);
+    if (!rows[k]) {
+      rows[k] = { key: k, release_no: String(r.release_no || ''), ship_date: r.ship_date, customer: String(r.customer == null ? '' : r.customer).trim() || '(no customer written)',
+        nextrade_invoice: r.nextrade_invoice || null, lines: [], total_lb: 0, ktc_invoices: null, ktc_total: null, usd_per_lb: null };
+      order.push(k);
+    }
+    var w = Number(r.weight_lb) || 0;
+    rows[k].lines.push({ goods_name: r.goods_name, cgt_type: map[r.goods_name] || '', weight_lb: w });
+    rows[k].total_lb += w;
+    if (r.ship_date > rows[k].ship_date) { rows[k].ship_date = r.ship_date; }
+  }
+  var out = []; var withInv = 0; var money = 0; var lbWithInv = 0; var lbAll = 0;
+  for (i = 0; i < order.length; i++) {
+    var row = rows[order[i]];
+    row.total_lb = r3(row.total_lb); lbAll += row.total_lb;
+    if (hasMoney && inv[row.key]) {
+      var t = 0; var j;
+      for (j = 0; j < inv[row.key].length; j++) { t += inv[row.key][j].total; }
+      row.ktc_invoices = inv[row.key];
+      row.ktc_total = Math.round(t * 100) / 100;
+      row.usd_per_lb = row.total_lb > 0 ? Math.round(row.ktc_total / row.total_lb * 10000) / 10000 : null;
+      withInv++; money += row.ktc_total; lbWithInv += row.total_lb;
+    }
+    out.push(row);
+  }
+  out.sort(function (a, b) { return a.ship_date < b.ship_date ? 1 : (a.ship_date > b.ship_date ? -1 : (a.key < b.key ? -1 : 1)); });
+  return { money_shown: hasMoney, rows: out, releases: out.length, total_lb: r3(lbAll),
+    with_ktc_invoice: hasMoney ? withInv : null, without_ktc_invoice: hasMoney ? out.length - withInv : null,
+    ktc_total: hasMoney ? Math.round(money * 100) / 100 : null, lb_with_ktc_invoice: hasMoney ? r3(lbWithInv) : null };
+}
+export function fmtUsd(n) {
+  var v = Math.round((Number(n) || 0) * 100); var neg = v < 0; v = Math.abs(v);
+  var cents = v % 100; return (neg ? '-' : '') + '$' + fmtLb(Math.floor(v / 100)) + '.' + (cents < 10 ? '0' + cents : '' + cents);
+}
+
 export function fmtLb(n) {
   var v = Math.round(Number(n) || 0);
   var s = String(Math.abs(v)); var o = '';

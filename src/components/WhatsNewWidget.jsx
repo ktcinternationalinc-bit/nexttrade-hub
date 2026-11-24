@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YK',
+    date: '2026-11-24',
+    title: 'Canada History: the sales history, release by release',
+    items: [
+      { text: '**Sales history added** (Archive → 🍁 Canada History, lower on the page). Every Canadian release that shipped from June 2021 to April 2024: the loading date, the release number, the customer, which goods and how many pounds, and the NexTrade invoice number written in the old workbook.' },
+      { text: '**Click a goods card first** and the list shows only the releases that had that type. There is a search box for a release, a customer, an invoice number or a date.' },
+      { text: '**Dollars, where the Hub has them.** The old workbook has no prices. For a release that KTC itself invoiced, the list shows that KTC invoice total from the Hub’s books, and a rough dollars-per-pound. A release with no KTC invoice in the Hub says “none in the Hub” — it was invoiced by NexTrade or prepaid, so the amount is unknown here, not zero.' },
+      { text: '**Only the super admin sees the dollar columns.** Anyone else switched on for this tab sees pounds and customers only.' },
+      { superAdminOnly: true, text: 'Technical: no SQL. GET /api/canada-history adds ktc_invoices (super admin only; a read-only select on accounting_invoices where release_number starts 1001-, active records, only releases in the archive; null for everyone else or when the read fails). lib/canada-history.js buildCanadaSales / releaseKey / fmtUsd. NexTrade’s own invoices live in NexTrade’s Wave, which the Hub is not connected to.' }
+    ]
+  },
+  {
     version: 'v55.83-YH',
     date: '2026-11-24',
     title: 'Canada History: the old Cambridge workbook kept for comparison and reports',
