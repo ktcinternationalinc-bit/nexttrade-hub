@@ -14,7 +14,7 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
         const page = await browser.newPage({ viewport: { width, height: 1000 } });
         const errors = []; page.on('pageerror', e => errors.push(e.message));
         await page.route('**/*', r => r.abort());
-        await page.setContent('<div id="root"></div>');
+        await page.setContent('<div role="banner" aria-label="App header" style="height:66px;position:sticky;top:0"></div><div id="root"></div>');
         await page.addScriptTag({ path: path.join(deps, 'react/umd/react.development.js') });
         await page.addScriptTag({ path: path.join(deps, 'react-dom/umd/react-dom.development.js') });
         await page.evaluate(({ code, manager }) => {
@@ -44,11 +44,22 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
         }, { code, manager });
         await page.getByRole('heading', { name: 'One', exact: true }).waitFor();
         if (manager) {
+          const toolbar = page.getByRole('group', { name: 'Selected Warehouse changes' });
+          const reviewButton = toolbar.getByRole('button', { name: 'Review selected deployments', exact: true });
+          assert.equal(await page.getByRole('button', { name: 'Review deployment', exact: true }).count(), 0);
+          assert.ok(await reviewButton.isDisabled());
           await page.getByRole('checkbox', { name: 'Select One', exact: true }).check();
           await page.getByRole('checkbox', { name: 'Select Three', exact: true }).check();
-          await page.getByRole('button', { name: 'Run review for selected changes', exact: true }).click();
+          await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+          await page.waitForFunction(() => {
+            const bar = document.querySelector('[aria-label="Selected Warehouse changes"]');
+            const top = bar.getBoundingClientRect().top;
+            return top >= 65 && top <= 67 && scrollY > 100;
+          });
+          await reviewButton.click();
           const dialog = page.getByRole('dialog');
           assert.ok((await dialog.innerText()).includes('One') && !(await dialog.innerText()).includes('Two'));
+          assert.ok(await page.getByRole('checkbox', { name: 'Select One', exact: true }).isDisabled());
           await dialog.getByText('Review passed.', { exact: false }).waitFor();
           assert.equal(await page.evaluate(() => window.posts.length), 1);
           await dialog.getByRole('button', { name: 'Approve and queue deployment', exact: true }).click();
@@ -59,7 +70,7 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           assert.equal(posts[1].digests['fix-0'], 'b'.repeat(64));
           assert.equal(posts[1].review_receipt, 'review-fixture');
           await page.getByRole('checkbox', { name: 'Select Blocked', exact: true }).check();
-          await page.getByRole('button', { name: 'Run review for selected changes', exact: true }).click();
+          await reviewButton.click();
           await page.getByText('Staging QA missing', { exact: true }).last().waitFor();
           assert.ok(await page.getByRole('button', { name: 'Approve and queue deployment', exact: true }).isDisabled());
           if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: process.env.TEST_SCREENSHOT.replace('.png', '-' + width + '.png'), fullPage: true });

@@ -7,7 +7,7 @@
 // cannot read. v55.83-YJ: the super admin can also record a go / a roll-back request for a change
 // (/api/releases/signoff). Hub releases are not handled on this screen. Visual spec: dark + gold, matching the warehouse Change-Schedule
 // preview, using the Hub's JetBrains Mono for mono accents.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
 var C = {
@@ -75,10 +75,8 @@ function SignBox(props) {
       {sg.kind === 'unknown' && <div style={{ color: C.muted }}>Sign-off status is not available right now.</div>}
       {sg.problem && <div style={{ color: '#fca5a5' }}>{sg.problem}</div>}
       {sg.why && <div style={{ color: C.muted }}>{sg.why}</div>}
-      {!open && (sg.canGo || sg.canRollback || sg.canWithdraw || sg.canCheck) && (
+      {!open && (sg.canWithdraw || sg.canCheck) && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-          {sg.canGo && <button style={btn(C.prod, true)} onClick={function () { props.onReview('go', it.id); }}>Review deployment</button>}
-          {sg.canRollback && <button style={btn(C.max, false)} onClick={function () { props.onReview('rollback', it.id); }}>Review code rollback</button>}
           {sg.canWithdraw && <button style={btn(C.muted, false)} onClick={function () { setOpen('withdraw'); setMsg(null); }}>{label.withdraw}</button>}
           {sg.canCheck && <button style={btn(C.prod, false)} onClick={function () { setOpen('check'); setMsg(null); }}>Record production verification</button>}
         </div>
@@ -160,7 +158,7 @@ function Row(props) {
   return (
     <div className="warehouse-change-row" style={{ background: C.card, border: '1px solid ' + C.line, borderLeft: '3px solid ' + leftColor, borderRadius: 8, padding: '12px 14px', display: 'grid', gap: 10, alignItems: 'start' }}>
       <div style={{ minWidth: 0 }}>
-        {props.canSign && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}><input type="checkbox" aria-label={'Select ' + it.title} checked={!!props.selected} onChange={function () { props.onSelect(it.id); }} />Select change</label>}
+        {props.canSign && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}><input type="checkbox" aria-label={'Select ' + it.title} checked={!!props.selected} disabled={props.selectLocked} onChange={function () { props.onSelect(it.id); }} />Select change</label>}
         <h3 style={{ margin: '0 0 3px', fontSize: '.98rem', color: C.ink }}>{it.title}</h3>
         <div style={{ font: '600 11px ' + C.mono, color: C.muted }}>{it.meta || it.date || ''}</div>
         {it.desc && <div style={{ color: C.muted, fontSize: '.86rem', marginTop: 4, maxWidth: '70ch' }}>{it.desc}</div>}
@@ -174,7 +172,7 @@ function Row(props) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end', minWidth: 150 }}>
         {tags.map(function (t, i) { return <Tag key={i} color={t.color} label={t.label} />; })}
       </div>
-      {props.sign && <SignBox item={it} sign={props.sign} onDone={props.onDone} onReview={props.onReview} />}
+      {props.sign && <SignBox item={it} sign={props.sign} onDone={props.onDone} />}
     </div>
   );
 }
@@ -188,6 +186,10 @@ export default function ChangeScheduleTab() {
   var bs = useState(false); var sending = bs[0]; var setSending = bs[1];
   var rq = useState(false); var reviewing = rq[0]; var setReviewing = rq[1];
   var ms = useState(''); var message = ms[0]; var setMessage = ms[1];
+  var [headerHeight, setHeaderHeight] = useState(0);
+  var toolbarRef = useRef(null);
+  var reviewPanel = useRef(null);
+  var reviewOpen = !!review;
 
   function load() {
     setLoading(true); setErr('');
@@ -208,6 +210,22 @@ export default function ChangeScheduleTab() {
       .then(function () { setLoading(false); });
   }
   useEffect(function () { load(); var timer = setInterval(load, 15000); return function () { clearInterval(timer); }; }, []);
+  useEffect(function () {
+    var header = document.querySelector('[role="banner"][aria-label="App header"]');
+    if (!header) return undefined;
+    function measure() { setHeaderHeight(Math.ceil(header.getBoundingClientRect().height)); }
+    measure();
+    var observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return function () { observer.disconnect(); };
+  }, []);
+  useEffect(function () {
+    if (!reviewOpen || !reviewPanel.current) return;
+    var panel = reviewPanel.current;
+    panel.style.scrollMarginTop = headerHeight + (toolbarRef.current?.offsetHeight || 0) + 12 + 'px';
+    panel.scrollIntoView({ block: 'start' });
+    panel.focus({ preventScroll: true });
+  }, [reviewOpen, headerHeight]);
 
   var items = (data && data.items) || [];
   // Sign-off state and permission to take action come from the server.
@@ -218,8 +236,8 @@ export default function ChangeScheduleTab() {
   var canSign = !!(data && data.canSign);
   var selectedIds = Object.keys(picked).filter(function (id) { return picked[id]; });
   function select(id) { setPicked(function (p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); }
-  function openReview(action, id) {
-    var ids = id ? [id] : selectedIds;
+  function openReview(action) {
+    var ids = selectedIds;
     var chosen = { action: action, items: ids.map(function (key) { return items.find(function (it) { return it.id === key; }); }).filter(Boolean), heads: Object.assign({}, signs) };
     setReview(chosen);
     setMessage('');
@@ -284,14 +302,17 @@ export default function ChangeScheduleTab() {
           {!data.executionReady && <div>Execution database setup is not available. No release can be queued.</div>}
         </div>}
         {data && (data.executions || []).map(function (job) { return <div key={job.request_id} role="status" style={{ color: C.max }}>Request #{job.request_id}: {job.phase === 'running' ? 'Executing' : 'Recovery check required'} · Started {fmtWhen(job.started_at)}</div>; })}
-        {canSign && <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <b>{selectedIds.length} selected</b>
-          <button disabled={!selectedIds.length || sending || reviewing} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Run review for selected changes</button>
-          <button disabled={!selectedIds.length || sending || reviewing} style={btn(C.max, false)} onClick={function () { openReview('rollback'); }}>Review selected code rollbacks</button>
-          <button disabled={!selectedIds.length} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
+        {canSign && <div ref={toolbarRef} role="group" aria-label="Selected Warehouse changes" style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <b>{selectedIds.length} selected</b>
+            <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Review selected deployments</button>
+            <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.max, false)} onClick={function () { openReview('rollback'); }}>Review selected code rollbacks</button>
+            <button disabled={!selectedIds.length || reviewOpen} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
+          </div>
+          {!selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>Check the changes you want to review, then use the button above.</div>}
         </div>}
         {message && <div role="status" style={{ color: C.max }}>{message}</div>}
-        {review && <section role="dialog" aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
+        {review && <section ref={reviewPanel} role="dialog" tabIndex={-1} aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
           <h2>{review.action === 'go' ? 'Production release review' : 'Confirm selected code rollbacks'}</h2>
           {review.action === 'rollback' && <p>This restores the selected Warehouse code files. Business records and uploads stay as they are.</p>}
           {review.action === 'go' && <p role="status" style={{ color: review.result?.passed ? C.prod : C.max }}>
@@ -341,7 +362,7 @@ export default function ChangeScheduleTab() {
           </h2>
           <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>All on fix staging. Each moves only after Codex passes it and you name it — then a backed-up, reversible deploy.</p>
           <div style={{ display: 'grid', gap: 10 }}>
-            {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} selected={picked[it.id]} onSelect={select} onReview={openReview} />; })
+            {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} selected={picked[it.id]} selectLocked={reviewOpen} onSelect={select} />; })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'Nothing queued.'}</div>}
           </div>
         </section>
@@ -353,7 +374,7 @@ export default function ChangeScheduleTab() {
           </h2>
           <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>Warehouse changes moved to the live site.</p>
           <div style={{ display: 'grid', gap: 10 }}>
-            {live.length ? live.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} selected={picked[it.id]} onSelect={select} onReview={openReview} />; })
+            {live.length ? live.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} canSign={canSign} onDone={load} selected={picked[it.id]} selectLocked={reviewOpen} onSelect={select} />; })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'Nothing on production yet.'}</div>}
           </div>
         </section>

@@ -286,7 +286,7 @@ function req(body) {
   var routes = ['src/app/api/releases/route.js', 'src/app/api/releases/signoff/route.js'].map(function (f) { return fs.readFileSync(path.join(root, f), 'utf8'); });
   check('the screen calls the sign-off route with the sign-in', /\/api\/releases\/signoff/.test(comp) && /Authorization.*Bearer/.test(comp));
   check('Hub releases are untouched: no Hub roll-back route, panel or Vercel call in this build', !fs.existsSync(path.join(root, 'src/app/api/releases/hub-versions')) && !/HubVersions|hub-versions|vercel/i.test(comp) && !/vercel/i.test(libSrc) && !/vercel\.com/i.test(routes.join('')));
-  check('the screen imports what it uses (useState, useEffect, supabase)', /import React, \{ useEffect, useState \} from 'react'/.test(comp) && /import \{ supabase \} from '..\/lib\/supabase'/.test(comp));
+  check('the screen imports the React hooks and Supabase client it uses', /import React, \{ useEffect, useRef, useState \} from 'react'/.test(comp) && /import \{ supabase \} from '..\/lib\/supabase'/.test(comp));
   check('the server lib is not a client module and imports only the server permission loader', !/^'use client'/.test(libSrc) && /from '\.\/server-permissions'/.test(libSrc));
   check('server files keep the house style (no let / const / arrow / template literal / optional chaining)', [libSrc].concat(routes).every(function (src) {
     var body = src.replace(/\/\/.*$/gm, '').replace(/export const (runtime|dynamic) = '[a-z-]+';/g, '');
