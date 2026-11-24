@@ -79,7 +79,7 @@ ok(errors.every(NO_CLAIM), 'no failure message states a size, compression or a m
 console.log('wiring');
 for (const f of ['src/app/api/accounting/order-monitor/route.js', 'src/app/api/accounting/arrival-reminders/route.js', 'src/app/api/accounting/warehouse-shipping/route.js']) {
   const s = fs.readFileSync(path.join(root, f), 'utf8');
-  ok(/import \{ readFeedBody \} from '..\/..\/..\/..\/lib\/warehouse-feed-read'/.test(s) && /readFeedBody\(res, ctl, 40\)/.test(s), f + ' imports and uses readFeedBody');
+  ok(/import \{ readFeedBody \} from '..\/..\/..\/..\/lib\/warehouse-feed-read'/.test(s) && /readFeedBody\(res, ctl, FEED_WAIT_SECONDS\)/.test(s), f + ' imports and uses readFeedBody');
   ok(/redirect: 'error'/.test(s) && /'X-Hub-Feed-Token': cfg\.token/.test(s), f + ' still sends the token only with redirect:error');
   // rev2 — the 40-second timer is set before the try and cleared ONLY in finally, after the body has been read
   const a = s.indexOf('var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, FEED_WAIT_MS);'); // v55.83-YR (Max, Nov 24): the limit is 150 s, named once per route
