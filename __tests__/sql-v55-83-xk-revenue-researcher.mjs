@@ -21,7 +21,11 @@ var SQL = fs.readFileSync(path.join(root, 'sql/v55-83-XK-revenue-researcher.sql'
 var ROLLBACK = fs.readFileSync(path.join(root, 'sql/v55-83-XK-revenue-researcher-EMERGENCY-ROLLBACK.sql'), 'utf8');
 check('the SQL Max runs has no comment lines and is one transaction', !/^\s*--/m.test(SQL) && /^BEGIN;/.test(SQL.trim()) && /COMMIT;$/.test(SQL.trim()));
 check('the SQL removes no data, no table, no column (no DELETE / TRUNCATE / DROP TABLE / ALTER TABLE)', !/DELETE\s+FROM|\bTRUNCATE\b|DROP\s+TABLE|ALTER\s+TABLE/i.test(SQL));
-var TABLES = ['accounting_invoices', 'accounting_invoice_items', 'accounting_invoice_payments', 'accounting_proformas', 'accounting_proforma_items', 'invoice_items', 'invoices', 'checks', 'customer_credits', 'open_account_invoices', 'open_account_invoice_items', 'open_account_entries', 'inventory_movements', 'inventory_layers'];
+var TABLES = ['accounting_invoices', 'accounting_invoice_items', 'accounting_invoice_payments', 'accounting_proformas', 'accounting_proforma_items', 'invoice_items', 'invoices', 'checks', 'customer_credits', 'open_account_invoices', 'open_account_invoice_items', 'open_account_entries', 'inventory_movements', 'inventory_layers',
+  // Codex 24 Nov 08:28 P1 — bank lines, their splits, payment matches, unapplied deposits; and the bank account list (column grants only)
+  'plaid_accounts', 'bank_transactions', 'bank_transaction_splits', 'payment_matches', 'unapplied_deposits']; // plaid_accounts first: the bank-line private rule reads it
+// what an ordinary signed-in person sees (2 rows each), except bank lines: the live PRIVATE-account rule hides the private one (1)
+function expectOrdinary(n) { return Object.keys(n).every(function (k) { return n[k] === (k === 'bank_transactions' ? 1 : 2); }); }
 check('rollback lists the same tables', TABLES.every(function (t) { return ROLLBACK.indexOf("'" + t + "'") >= 0 && SQL.indexOf("'" + t + "'") >= 0; }));
 
 var RES = '11111111-1111-4111-8111-111111111111', HOLD = '22222222-2222-4222-8222-222222222222', SUP = '33333333-3333-4333-8333-333333333333';
@@ -50,12 +54,31 @@ async function setup() {
   await db.query("CREATE OR REPLACE FUNCTION public.hub_caller_profile() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO '' AS $f$ SELECT CASE WHEN count(*) = 1 THEN min(m.profile_id::text)::uuid END FROM public.bank_visibility_identity_map() m WHERE m.auth_user_id = auth.uid(); $f$");
   await db.query("CREATE OR REPLACE FUNCTION public.hub_caller_is_super_admin() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO '' AS $f$ SELECT EXISTS (SELECT 1 FROM public.users u WHERE u.id = public.hub_caller_profile() AND u.role = 'super_admin'); $f$");
   await db.query('GRANT EXECUTE ON FUNCTION public.hub_caller_profile(), public.hub_caller_is_super_admin() TO authenticated, service_role');
+  // the live private-account function (TP) — super admin or 'bank.view_private'
+  await db.query("CREATE OR REPLACE FUNCTION public.hub_caller_can_view_private() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO '' AS $f$ SELECT public.hub_caller_is_super_admin() OR EXISTS (SELECT 1 FROM public.module_permissions mp WHERE mp.user_id = public.hub_caller_profile() AND mp.module_name = 'bank.view_private' AND mp.has_access IS TRUE); $f$");
+  await db.query('GRANT EXECUTE ON FUNCTION public.hub_caller_can_view_private() TO authenticated, service_role');
   for (var i = 0; i < TABLES.length; i++) {
     var t = TABLES[i];
-    await db.query('CREATE TABLE public.' + t + ' (id serial primary key, amount numeric)');
+    if (t === 'plaid_accounts') {
+      // live shape: row security ON, one open SELECT rule, NO table-wide grant — only these columns (never the balances)
+      await db.query('CREATE TABLE public.plaid_accounts (id serial primary key, plaid_account_id text, name text, mask text, is_private boolean, current_balance numeric, available_balance numeric)');
+      await db.query('ALTER TABLE public.plaid_accounts ENABLE ROW LEVEL SECURITY');
+      await db.query('CREATE POLICY bank_metadata_select ON public.plaid_accounts FOR SELECT TO authenticated USING (true)');
+      await db.query('GRANT SELECT (id, plaid_account_id, name, mask, is_private) ON public.plaid_accounts TO authenticated');
+      await db.query('GRANT ALL ON TABLE public.plaid_accounts TO service_role');
+      await db.query("INSERT INTO public.plaid_accounts (plaid_account_id, name, mask, is_private, current_balance, available_balance) VALUES ('A1', 'Chase', '1234', false, 77777.77, 77000), ('A2', 'Owner', '9999', true, 88888.88, 88000)");
+      continue;
+    }
+    await db.query('CREATE TABLE public.' + t + ' (id serial primary key, amount numeric' + (t === 'bank_transactions' ? ', account_id text' : '') + ')');
     await db.query('ALTER TABLE public.' + t + ' ENABLE ROW LEVEL SECURITY');
     await db.query('CREATE POLICY open_signed_in ON public.' + t + ' FOR ALL TO authenticated USING (true) WITH CHECK (true)');
     await db.query('GRANT ALL ON TABLE public.' + t + ' TO authenticated, service_role');
+    if (t === 'bank_transactions') {
+      // the live private-account rule (restrictive, SELECT): a private account's lines only for super admin / bank.view_private
+      await db.query("CREATE POLICY bt_private_accounts ON public.bank_transactions AS RESTRICTIVE FOR SELECT TO authenticated USING (account_id IS NULL OR NOT EXISTS (SELECT 1 FROM public.plaid_accounts pa WHERE pa.plaid_account_id = bank_transactions.account_id AND pa.is_private IS TRUE) OR public.hub_caller_can_view_private())");
+      await db.query("INSERT INTO public.bank_transactions (amount, account_id) VALUES (4321.17, 'A1'), (999.5, 'A2')");
+      continue;
+    }
     await db.query('INSERT INTO public.' + t + ' (amount) VALUES (4321.17), (999.5)');
   }
   await db.query('GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role');
@@ -63,7 +86,7 @@ async function setup() {
   await db.query("INSERT INTO public.users (id, email, name, role, active) VALUES ('" + RES + "', 'res@x', 'Researcher', 'team', true), ('" + HOLD + "', 'hold@x', 'Holder', 'team', true), ('" + SUP + "', 'sup@x', 'Owner', 'super_admin', true), ('" + TWIN_A + "', 'twin@x', 'Twin A', 'team', true), ('" + TWIN_B + "', 'TWIN@x ', 'Twin B', 'team', true)");
   await db.query("INSERT INTO public.module_permissions (user_id, module_name, has_access) VALUES ('" + RES + "', 'pnl.view', true), ('" + RES + "', 'pnl.view_revenue', false), ('" + HOLD + "', 'pnl.view', true), ('" + SUP + "', 'pnl.view_revenue', false), ('" + TWIN_B + "', 'pnl.view_revenue', false)");
 }
-async function rowsEverywhere(role, sub) { var n = {}; for (var i = 0; i < TABLES.length; i++) { var r = await as(role, sub, 'SELECT count(*)::int AS n FROM public.' + TABLES[i]); n[TABLES[i]] = r.ok ? r.rows[0].n : 'ERR ' + r.msg; } return n; }
+async function rowsEverywhere(role, sub) { var n = {}; for (var i = 0; i < TABLES.length; i++) { var r = await as(role, sub, 'SELECT count(id)::int AS n FROM public.' + TABLES[i]); /* count(id): plaid_accounts has column grants only */ n[TABLES[i]] = r.ok ? r.rows[0].n : 'ERR ' + r.msg; } return n; }
 function all(n, v) { return Object.keys(n).every(function (k) { return n[k] === v; }); }
 
 try {
@@ -71,7 +94,7 @@ try {
   db = new pg.Client({ host: 'localhost', port: port, user: 'postgres', password: 'test-only', database: 'postgres' }); await db.connect();
   await setup();
   var before = await rowsEverywhere('authenticated', RES);
-  check('before: the researcher reads every sales table (that is the gap)', all(before, 2), before);
+  check('before: the researcher reads every sales, bank and payment table (that is the gap)', expectOrdinary(before), before);
 
   // a missing table stops everything
   await db.query('ALTER TABLE public.checks RENAME TO checks_x');
@@ -94,8 +117,19 @@ try {
   check('researcher: cannot add an invoice either', !w1.ok, w1);
   var u1 = await as('authenticated', RES, 'UPDATE public.invoice_items SET amount = 0');
   check('researcher: an update touches nothing', u1.ok && u1.count === 0, u1);
+  var bl = await as('authenticated', RES, 'SELECT amount FROM public.bank_transactions'); var sp = await as('authenticated', RES, 'SELECT amount FROM public.bank_transaction_splits');
+  var pm = await as('authenticated', RES, 'SELECT amount FROM public.payment_matches'); var ud = await as('authenticated', RES, 'SELECT amount FROM public.unapplied_deposits');
+  check('researcher: no bank-line amounts (normal AND private account), no split amounts, no allocated payments, no unapplied balances', bl.ok && bl.count === 0 && sp.ok && sp.count === 0 && pm.ok && pm.count === 0 && ud.ok && ud.count === 0, [bl, sp, pm, ud]);
+  var pa = await as('authenticated', RES, 'SELECT name, mask FROM public.plaid_accounts');
+  check('researcher: not even the bank account names / masks (the permitted columns)', pa.ok && pa.count === 0, pa);
+  var hb = await as('authenticated', HOLD, 'SELECT current_balance FROM public.plaid_accounts'); var hn = await as('authenticated', HOLD, 'SELECT name, mask FROM public.plaid_accounts');
+  check('ordinary person: bank account names still readable, balances still NOT (the column grant is unchanged — no broad grant added)', hn.ok && hn.count === 2 && !hb.ok && /permission denied/i.test(hb.msg || ''), [hn, hb]);
+  var hbt = await as('authenticated', HOLD, 'SELECT amount FROM public.bank_transactions'); var sbt = await as('authenticated', SUP, 'SELECT amount FROM public.bank_transactions');
+  check('bank lines: an ordinary person sees the normal account line only (private rule intact); the super admin sees both', hbt.ok && hbt.count === 1 && Number(hbt.rows[0].amount) === 4321.17 && sbt.ok && sbt.count === 2, [hbt, sbt]);
+  var grantsAfter = await db.query("SELECT has_table_privilege('authenticated', 'public.plaid_accounts', 'SELECT') AS t");
+  check('plaid_accounts: still NO table-wide SELECT for signed-in users after the SQL', grantsAfter.rows[0].t === false, grantsAfter.rows[0]);
   var h1 = await rowsEverywhere('authenticated', HOLD);
-  check('ordinary person (revenue ON by default): every row, unchanged', all(h1, 2), h1);
+  check('ordinary person (revenue ON by default): every row as before — and the private bank line is STILL hidden by the private-account rule', expectOrdinary(h1), h1);
   var hw = await as('authenticated', HOLD, 'INSERT INTO public.accounting_invoices (amount) VALUES (1)');
   check('ordinary person: still adds an invoice', hw.ok && hw.count === 1, hw);
   var s1 = await rowsEverywhere('authenticated', SUP);
@@ -110,7 +144,7 @@ try {
   // switching revenue back ON gives the rows back at once
   await db.query("UPDATE public.module_permissions SET has_access = true WHERE user_id = '" + RES + "' AND module_name = 'pnl.view_revenue'");
   var r2 = await rowsEverywhere('authenticated', RES);
-  check('revenue switched back ON: the researcher reads again', all(r2, 2), r2);
+  check('revenue switched back ON: the researcher reads again (private bank line still private)', expectOrdinary(r2), r2);
   await db.query("UPDATE public.module_permissions SET has_access = false WHERE user_id = '" + RES + "' AND module_name = 'pnl.view_revenue'");
 
   var again = await db.query(SQL).then(function () { return true; }, function () { return false; });
@@ -118,10 +152,11 @@ try {
   check('running the SQL twice is safe (still one rule per table)', again && pol2.rows[0].n === TABLES.length);
 
   await db.query(ROLLBACK);
+  var priv = await db.query("SELECT count(*)::int AS n FROM pg_policies WHERE policyname IN ('bt_private_accounts', 'bank_metadata_select')");
   var pol3 = await db.query("SELECT count(*)::int AS n FROM pg_policies WHERE policyname = 'hub_revenue_researcher'");
   var r3 = await rowsEverywhere('authenticated', RES);
   var other = await db.query("SELECT count(*)::int AS n FROM pg_policies WHERE policyname = 'open_signed_in'");
-  check('EMERGENCY ROLLBACK: rules and functions gone, the researcher reads as before, the other rules untouched', pol3.rows[0].n === 0 && all(r3, 2) && other.rows[0].n === TABLES.length, { pol: pol3.rows[0], r3: r3 });
+  check('EMERGENCY ROLLBACK: rules and functions gone, the researcher reads as before, the other rules untouched', pol3.rows[0].n === 0 && expectOrdinary(r3) && other.rows[0].n === TABLES.length - 1 && priv.rows[0].n === 2 /* bt_private_accounts + bank_metadata_select kept */, { pol: pol3.rows[0], r3: r3 });
   var gi2 = await as('service_role', null, 'SELECT public.hub_revenue_guard_installed() AS ok');
   check('after rollback the server sees the step is NOT installed (researchers cannot be made)', !gi2.ok, gi2);
 } catch (e) { failN++; console.log('  ✗ FAIL: test error ' + (e && e.stack)); }

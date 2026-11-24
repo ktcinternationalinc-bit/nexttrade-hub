@@ -16,7 +16,7 @@ GRANT EXECUTE ON FUNCTION public.hub_revenue_guard_installed() TO authenticated,
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['accounting_invoices','accounting_invoice_items','accounting_invoice_payments','accounting_proformas','accounting_proforma_items','invoice_items','invoices','checks','customer_credits','open_account_invoices','open_account_invoice_items','open_account_entries','inventory_movements','inventory_layers'] LOOP
+  FOREACH t IN ARRAY ARRAY['accounting_invoices','accounting_invoice_items','accounting_invoice_payments','accounting_proformas','accounting_proforma_items','invoice_items','invoices','checks','customer_credits','open_account_invoices','open_account_invoice_items','open_account_entries','inventory_movements','inventory_layers','bank_transactions','bank_transaction_splits','payment_matches','unapplied_deposits','plaid_accounts'] LOOP
     IF to_regclass('public.' || t) IS NULL THEN RAISE EXCEPTION 'HUB_GUARD: table public.% is missing - nothing was changed', t; END IF;
     IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = ('public.' || t)::regclass) THEN RAISE EXCEPTION 'HUB_GUARD: row security is off on public.% - nothing was changed', t; END IF;
     EXECUTE format('DROP POLICY IF EXISTS hub_revenue_researcher ON public.%I', t);
