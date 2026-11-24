@@ -9,6 +9,8 @@
 // Rules (the same as every other warehouse read): the approved-address rule and token of warehouseFeedConfig; a redirect
 // never carries the token; the token never reaches the browser; the answer must say which warehouse copy it is; only the
 // allow-listed fields are kept (grade name, warehouse name, month, pounds) — nothing else the warehouse might send.
+// Every Canadian row is kept, including a grade the Hub cannot tie to a goods type (type ''), so the totals always
+// reconcile: linked + not linked = the Canadian total the warehouse sent.
 import { warehouseFeedConfig, feedIdentityProblem } from './warehouse-feed-config';
 import { archiveTypeForGrade } from './canada-history';
 
@@ -35,18 +37,38 @@ export function normaliseGradeFlow(ans, cfg) {
   var whs = Array.isArray(ans.warehouses) ? ans.warehouses : [];
   var canadaIds = {}; var anyCanada = false;
   for (i = 0; i < whs.length; i++) { var w = whs[i]; if (w && w.id != null) { wName[String(w.id)] = String(w.name == null ? '' : w.name).substring(0, 120); if (CANADA_WAREHOUSE.test(wName[String(w.id)])) { canadaIds[String(w.id)] = 1; anyCanada = true; } } }
-  // Canadian side: a grade that IS a Canadian type by name (… Canada) always counts; a grade with no country in its
-  // name (Roofing, PVC, TPO …) counts only from a Canadian warehouse when the warehouse list names one.
-  function rows(list) {
+  // WHICH rows are the Canadian side is decided FIRST, by name and warehouse only — never by whether the Hub knows the grade:
+  //   • a grade named "… USA" is the USA side: left out on purpose (counted in excluded, never listed as unmapped);
+  //   • a grade named "… Canada" is Canadian from any warehouse;
+  //   • any other grade (Roofing, PVC, a new name …) is Canadian when it comes from a Canadian warehouse;
+  //   • when the warehouse list names no Canadian warehouse, such a grade is kept only if the Hub knows it as a
+  //     Canadian goods type; an unknown one cannot be placed and is reported under scope_unknown (not in any total).
+  // A Canadian row whose grade the Hub cannot tie to a goods type is KEPT with type '' (Codex 24 Nov, YO P2): its
+  // pounds are shown as "not linked", never dropped and never guessed into a type.
+  var excluded = { usa_rows: 0, usa_lb: 0, other_warehouse_rows: 0, other_warehouse_lb: 0, unreadable_rows: 0 };
+  var scopeUnknown = {};
+  function rows(list, side) {
     var out = []; var j;
     for (j = 0; j < list.length; j++) {
-      var r = list[j]; if (!r || !isYm(r.ym)) { continue; }
-      var name = gName[String(r.cgt_id)]; if (!name) { continue; }
-      var type = archiveTypeForGrade(name); if (!type) { continue; }
-      var lb = Number(r.lb); if (!isFinite(lb)) { continue; }
+      var r = list[j];
+      var name = r ? gName[String(r.cgt_id)] : '';
+      var lb = r ? Number(r.lb) : NaN;
+      if (!r || !isYm(r.ym) || !name || !isFinite(lb)) { excluded.unreadable_rows++; continue; }
+      lb = Math.round(lb * 100) / 100;
+      if (/\busa\b/i.test(name)) { excluded.usa_rows++; excluded.usa_lb += lb; continue; }
+      var type = archiveTypeForGrade(name);
       var named = /canada/i.test(name);
-      if (!named && anyCanada && !canadaIds[String(r.warehouse_id)]) { continue; }
-      out.push({ grade: name, ym: r.ym, lb: Math.round(lb * 100) / 100 });
+      var whName = wName[String(r.warehouse_id)] || '';
+      if (!named) {
+        if (anyCanada) {
+          if (!canadaIds[String(r.warehouse_id)]) { excluded.other_warehouse_rows++; excluded.other_warehouse_lb += lb; continue; }
+        } else if (!type) {
+          if (!scopeUnknown[name]) { scopeUnknown[name] = { grade: name, in_lb: 0, out_lb: 0 }; }
+          scopeUnknown[name][side === 'in' ? 'in_lb' : 'out_lb'] += lb;
+          continue;
+        }
+      }
+      out.push({ grade: name, type: type, warehouse: whName, ym: r.ym, lb: lb });
     }
     return out;
   }
@@ -55,9 +77,12 @@ export function normaliseGradeFlow(ans, cfg) {
   if (!isDay(b.first_in) || !isDay(b.last_in) || !isDay(b.first_out) || !isDay(b.last_out) || !/^\d{4}-\d{2}/.test(gen)) {
     return { state: 'unavailable', reason: 'The warehouse answered without its first / last record dates, so real zeros cannot be told from missing months.' };
   }
+  var rowsIn = rows(ans.inbound, 'in'); var rowsOut = rows(ans.outbound, 'out');
+  excluded.usa_lb = Math.round(excluded.usa_lb * 100) / 100; excluded.other_warehouse_lb = Math.round(excluded.other_warehouse_lb * 100) / 100;
   return { state: 'ok', site: String(ans.site || cfg.host), source: cfg.source, generated_at: gen, through: gen.slice(0, 7),
     first_in: b.first_in.slice(0, 10), last_in: b.last_in.slice(0, 10), first_out: b.first_out.slice(0, 10), last_out: b.last_out.slice(0, 10),
-    rows_in: rows(ans.inbound), rows_out: rows(ans.outbound),
+    rows_in: rowsIn, rows_out: rowsOut, excluded: excluded,
+    scope_unknown: Object.keys(scopeUnknown).sort().map(function (k) { return { grade: k, in_lb: Math.round(scopeUnknown[k].in_lb * 100) / 100, out_lb: Math.round(scopeUnknown[k].out_lb * 100) / 100 }; }),
     scope: anyCanada ? 'New-system figures are the Canadian side only: grades named “… Canada”, plus the unnamed grades (Roofing, PVC, TPO …) from the Canadian warehouse.'
       : 'New-system figures: the warehouse list names no Canadian warehouse, so unnamed grades (Roofing, PVC, TPO …) include every warehouse.' };
 }

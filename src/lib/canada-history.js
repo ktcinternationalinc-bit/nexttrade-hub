@@ -317,7 +317,7 @@ export function archiveTypeForGrade(gradeName) {
 }
 
 // flow = what the server read from the warehouse ("grade flow"), already reduced to the Canadian side:
-//   { state: 'ok', rows_in: [{ grade, ym, lb }], rows_out: [...], first_in, last_in, first_out, last_out ('YYYY-MM-DD'),
+//   { state: 'ok', rows_in: [{ grade, type, warehouse, ym, lb }], rows_out: [...], first_in, last_in, first_out, last_out ('YYYY-MM-DD'),
 //     through: 'YYYY-MM' (the month the warehouse answered in), site, generated_at, scope }
 //   or { state: 'unavailable' | 'not_configured', reason }.
 // Adds to a by-CGT-type history (buildCanadaHistory(..., {by:'cgt'})) the new system's own months, kept APART from the
@@ -338,18 +338,42 @@ export function mergeWarehouseFlow(hist, flow) {
   var firstIn = ok && flow.first_in ? String(flow.first_in).slice(0, 7) : null;
   var firstOut = ok && flow.first_out ? String(flow.first_out).slice(0, 7) : null;
   var inBy = {}; var outBy = {}; var unmatched = {}; var matched = {};
-  function add(target, rows) {
+  // Codex 24 Nov (YO P2): a Canadian warehouse grade that is not linked to a goods type keeps its pounds here, under
+  // its own name — never dropped, never guessed into a type. The cards are then a PARTIAL total and say so.
+  var unmapped = {}; var feedIn = 0; var feedOut = 0; var outsideIn = 0; var outsideOut = 0;
+  var monthSet = {}; var mi;
+  for (mi = 0; mi < months.length; mi++) { monthSet[months[mi]] = 1; }
+  function add(target, rows, side) {
     var i;
     for (i = 0; i < (rows || []).length; i++) {
       var r = rows[i]; if (!r || !r.ym) { continue; }
+      var lb = Number(r.lb) || 0;
+      if (side === 'in') { feedIn += lb; } else { feedOut += lb; }
       var t = archiveTypeForGrade(r.grade);
-      if (!t) { unmatched[String(r.grade)] = 1; continue; }
+      if (!t) {
+        var gname = String(r.grade);
+        unmatched[gname] = 1;
+        if (!unmapped[gname]) { unmapped[gname] = { grade: gname, warehouses: [], in_lb: 0, out_lb: 0, months: {} }; }
+        var u = unmapped[gname];
+        var wn = String(r.warehouse == null ? '' : r.warehouse); if (wn && u.warehouses.indexOf(wn) < 0) { u.warehouses.push(wn); }
+        if (!u.months[r.ym]) { u.months[r.ym] = { ym: r.ym, in_lb: 0, out_lb: 0 }; }
+        if (side === 'in') { u.in_lb += lb; u.months[r.ym].in_lb += lb; } else { u.out_lb += lb; u.months[r.ym].out_lb += lb; }
+        continue;
+      }
       matched[String(r.grade)] = t;
+      // a linked row in a month the page does not draw (before the archive's first month) is counted, not lost
+      if (!monthSet[r.ym]) { if (side === 'in') { outsideIn += lb; } else { outsideOut += lb; } continue; }
       if (!target[t]) { target[t] = {}; }
-      target[t][r.ym] = (target[t][r.ym] || 0) + (Number(r.lb) || 0);
+      target[t][r.ym] = (target[t][r.ym] || 0) + lb;
     }
   }
-  if (ok) { add(inBy, flow.rows_in); add(outBy, flow.rows_out); }
+  if (ok) { add(inBy, flow.rows_in, 'in'); add(outBy, flow.rows_out, 'out'); }
+  var unmappedList = Object.keys(unmapped).sort().map(function (k) {
+    var u = unmapped[k]; var ms = Object.keys(u.months).sort();
+    return { grade: u.grade, warehouses: u.warehouses.sort(), in_lb: r3(u.in_lb), out_lb: r3(u.out_lb), first_month: ms[0], last_month: ms[ms.length - 1],
+      months: ms.map(function (m) { return { ym: m, in_lb: r3(u.months[m].in_lb), out_lb: r3(u.months[m].out_lb) }; }) };
+  });
+  var unIn = 0; var unOut = 0; unmappedList.forEach(function (u) { unIn += u.in_lb; unOut += u.out_lb; });
   function statusList(first) {
     var st = []; var j;
     for (j = 0; j < n; j++) { st.push(!ok ? 'unchecked' : (!first || months[j] < first ? 'na' : 'ok')); }
@@ -400,12 +424,22 @@ export function mergeWarehouseFlow(hist, flow) {
   if (ok) {
     notes.push('New system (NT Warehouse, read ' + String(flow.generated_at || '').slice(0, 10) + ' from ' + (flow.site || 'the warehouse') + '): scanned in from ' + dayLabel(flow.first_in) + ' to ' + dayLabel(flow.last_in) + ', shipped from ' + dayLabel(flow.first_out) + ' to ' + dayLabel(flow.last_out) + '. Inside those dates a blank month is a real zero.');
     if (flow.scope) { notes.push(flow.scope); }
+    if (unmappedList.length) { notes.unshift('PARTIAL TOTAL: ' + unmappedList.length + ' Canadian warehouse grade' + (unmappedList.length === 1 ? ' is' : 's are') + ' not linked to a goods type (' + unmappedList.map(function (u) { return u.grade; }).join(', ') + '). Their ' + fmtLb(unIn) + ' lb received and ' + fmtLb(unOut) + ' lb shipped are NOT in the cards — they are listed under “Warehouse grades not linked to a goods type”.'); }
+    if (Array.isArray(flow.scope_unknown) && flow.scope_unknown.length) { notes.push('Could not tell whether these warehouse grades are Canadian (the warehouse list names no Canadian warehouse), so they are in no total: ' + flow.scope_unknown.map(function (x) { return x.grade; }).join(', ') + '.'); }
     if (overlap.length) { notes.push('Both sources have figures for ' + monthLabel(overlap[0]) + ' to ' + monthLabel(overlap[overlap.length - 1]) + ': the old workbook has no weight for the goods it marks as moved to the new system, so the two are shown side by side and added, not repeated.'); }
   } else {
     notes.push('New system (NT Warehouse) after the archive: NOT CHECKED — ' + ((flow && flow.reason) || 'the warehouse was not read') + ' Those months are unknown, not zero.');
   }
   return { by: 'cgt', months: months, first_month: hist.first_month, last_month: months[n - 1], coverage: hist.coverage, notes: notes, groups: groups,
     total_in: hist.total_in, total_out: hist.total_out, sys_state: ok ? 'ok' : ((flow && flow.state) || 'unavailable'), sys_total_in: ok ? r3(sIn) : null, sys_total_out: ok ? r3(sOut) : null,
+    // sys_total_* = what the cards add up to (linked grades only). The Canadian total the warehouse sent is
+    // sys_feed_total_* = cards + not linked + linked rows outside the drawn months; sys_reconciles says it adds up.
+    sys_unmapped: ok ? unmappedList : [], sys_unmapped_total_in: ok ? r3(unIn) : null, sys_unmapped_total_out: ok ? r3(unOut) : null,
+    sys_outside_months_in: ok ? r3(outsideIn) : null, sys_outside_months_out: ok ? r3(outsideOut) : null,
+    sys_feed_total_in: ok ? r3(feedIn) : null, sys_feed_total_out: ok ? r3(feedOut) : null,
+    sys_partial_mapping: ok && unmappedList.length > 0,
+    sys_reconciles: ok ? (Math.abs(sIn + unIn + outsideIn - feedIn) < 0.01 && Math.abs(sOut + unOut + outsideOut - feedOut) < 0.01) : null,
+    sys_excluded: ok ? (flow.excluded || null) : null, sys_scope_unknown: ok ? (flow.scope_unknown || []) : [],
     sys_first_in: ok ? flow.first_in : null, sys_last_in: ok ? flow.last_in : null, sys_first_out: ok ? flow.first_out : null, sys_last_out: ok ? flow.last_out : null,
     overlap_months: overlap, sys_grades_matched: matched, sys_grades_unmatched: Object.keys(unmatched).sort() };
 }

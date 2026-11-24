@@ -192,7 +192,7 @@ export default function CanadaHistoryTab(props) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
               <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Received (recorded)</div><div style={{ fontSize: 22, fontWeight: 800, color: C.inn }}>{fmtLb(hist.total_in)} lb</div><div style={{ fontSize: 11, color: C.muted }}>{dayLabel(hist.coverage.received.first)} → {dayLabel(hist.coverage.received.last)}</div></div>
               <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Shipped (recorded)</div><div style={{ fontSize: 22, fontWeight: 800, color: C.out }}>{fmtLb(hist.total_out)} lb</div><div style={{ fontSize: 11, color: C.muted }}>{dayLabel(hist.coverage.shipped.first)} → {dayLabel(hist.coverage.shipped.last)}</div></div>
-              {by === 'cgt' ? <div style={Object.assign({}, box, sysOk ? {} : { background: C.goldBg, borderColor: '#fde68a' })}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>New system (NT Warehouse), Canada</div>{sysOk ? <div><div style={{ fontSize: 15, fontWeight: 800, color: C.sysIn }}>in {fmtLb(hist.sys_total_in)} lb</div><div style={{ fontSize: 15, fontWeight: 800, color: C.sysOut }}>out {fmtLb(hist.sys_total_out)} lb</div><div style={{ fontSize: 11, color: C.muted }}>{dayLabel(hist.sys_first_in)} → {dayLabel(hist.sys_last_in)}</div></div> : <div style={{ fontSize: 15, fontWeight: 800, color: C.gold }}>NOT CHECKED</div>}</div> : null}
+              {by === 'cgt' ? <div style={Object.assign({}, box, sysOk ? {} : { background: C.goldBg, borderColor: '#fde68a' })}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>New system (NT Warehouse), Canada</div>{sysOk ? <div><div style={{ fontSize: 15, fontWeight: 800, color: C.sysIn }}>in {fmtLb(hist.sys_total_in)} lb</div><div style={{ fontSize: 15, fontWeight: 800, color: C.sysOut }}>out {fmtLb(hist.sys_total_out)} lb</div><div style={{ fontSize: 11, color: C.muted }}>{dayLabel(hist.sys_first_in)} → {dayLabel(hist.sys_last_in)}</div>{hist.sys_partial_mapping ? <div style={{ fontSize: 11, fontWeight: 800, color: C.warn }}>PARTIAL — linked grades only; + {fmtLb(hist.sys_unmapped_total_in)} in / {fmtLb(hist.sys_unmapped_total_out)} out not linked</div> : null}</div> : <div style={{ fontSize: 15, fontWeight: 800, color: C.gold }}>NOT CHECKED</div>}</div> : null}
               <div style={box}><div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase' }}>Old names with no match</div><div style={{ fontSize: 22, fontWeight: 800, color: unmatched.length ? C.warn : C.ok }}>{unmatched.length}</div></div>
             </div>
 
@@ -228,6 +228,30 @@ export default function CanadaHistoryTab(props) {
                 );
               })}
             </div>
+
+            {sysOk && (hist.sys_unmapped.length || hist.sys_scope_unknown.length) ? (
+              <div style={Object.assign({}, box, { background: C.warnBg, borderColor: '#fca5a5' })}>
+                <div style={{ fontWeight: 800, fontSize: 14, color: C.warn }}>Warehouse grades not linked to a goods type</div>
+                <div style={{ fontSize: 12, color: C.ink, margin: '4px 0 8px' }}>
+                  The warehouse has these Canadian grades, but the Hub does not know which goods type they belong to. Their pounds are <b>not in the cards above</b>, so the new-system figures on the cards are a partial total. Nothing is guessed: tell Claude what each one counts as and it will be linked.
+                </div>
+                {hist.sys_unmapped.length ? (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
+                      <thead><tr><th style={th}>Warehouse grade (as named there)</th><th style={th}>Warehouse</th><th style={th}>Months</th><th style={thR}>Received lb</th><th style={thR}>Shipped lb</th></tr></thead>
+                      <tbody>
+                        {hist.sys_unmapped.map(function (u) { return <tr key={u.grade}><td style={Object.assign({}, td, { fontWeight: 700 })}>{u.grade}</td><td style={td}>{u.warehouses.join(', ') || '—'}</td><td style={td}>{u.first_month}{u.last_month !== u.first_month ? ' → ' + u.last_month : ''}</td><td style={tdR}>{fmtLb(u.in_lb)}</td><td style={tdR}>{fmtLb(u.out_lb)}</td></tr>; })}
+                        <tr><td style={Object.assign({}, td, { fontWeight: 800 })} colSpan={3}>Not linked, total</td><td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(hist.sys_unmapped_total_in)}</td><td style={Object.assign({}, tdR, { fontWeight: 800 })}>{fmtLb(hist.sys_unmapped_total_out)}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+                <div style={{ fontSize: 12, color: C.ink, marginTop: 8 }}>
+                  Check: cards {fmtLb(hist.sys_total_in)} + not linked {fmtLb(hist.sys_unmapped_total_in)}{hist.sys_outside_months_in ? ' + before the first month shown ' + fmtLb(hist.sys_outside_months_in) : ''} = warehouse Canadian total received {fmtLb(hist.sys_feed_total_in)} lb · cards {fmtLb(hist.sys_total_out)} + not linked {fmtLb(hist.sys_unmapped_total_out)}{hist.sys_outside_months_out ? ' + before the first month shown ' + fmtLb(hist.sys_outside_months_out) : ''} = shipped {fmtLb(hist.sys_feed_total_out)} lb. {hist.sys_reconciles ? <b style={{ color: C.ok }}>Adds up.</b> : <b style={{ color: C.warn }}>DOES NOT ADD UP — tell Claude.</b>}
+                </div>
+                {hist.sys_scope_unknown.length ? <div style={{ fontSize: 12, color: C.ink, marginTop: 6 }}>Cannot tell whether these are Canadian, so they are in no total: {hist.sys_scope_unknown.map(function (x) { return x.grade + ' (' + fmtLb(x.in_lb) + ' in / ' + fmtLb(x.out_lb) + ' out)'; }).join(', ')}.</div> : null}
+              </div>
+            ) : null}
 
             {open ? (
               <div style={Object.assign({}, box, { display: 'grid', gap: 14 })}>
