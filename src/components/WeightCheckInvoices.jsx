@@ -209,7 +209,7 @@ export default function WeightCheckInvoices(props) {
     if (em) {
       if (String(e.note || '').trim().length < 5) { say(props.toast, 'Say why this mapping is changed (at least a few words) — it is kept with the new version.', 'error'); return; }
       setBusy(r.item_key);
-      wcApi({ action: 'map_save', family: em.family, expected_version: em.version, bill_description: em.bill_description || bl.description, bill_unit: em.bill_unit, wh_product_type: e.wh_product_type || '', wh_cgt: e.wh_cgt || '', wh_nt: e.wh_nt || '', wh_color: e.wh_color || '', wh_label: [L.product_types && L.product_types[e.wh_product_type], L.cgt_grades && L.cgt_grades[e.wh_cgt]].filter(Boolean).join(' · '), lb_per_yd: em.lb_per_yd != null ? String(em.lb_per_yd) : '', note: String(e.note).trim() })
+      wcApi({ action: 'map_save', family: em.family, expected_version: em.version, wh_product_type: e.wh_product_type || '', wh_cgt: e.wh_cgt || '', wh_nt: e.wh_nt || '', wh_color: e.wh_color || '', wh_label: [L.product_types && L.product_types[e.wh_product_type], L.cgt_grades && L.cgt_grades[e.wh_cgt]].filter(Boolean).join(' · '), lb_per_yd: em.lb_per_yd != null ? String(em.lb_per_yd) : '', note: String(e.note).trim() })
         .then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); return; } say(props.toast, 'Mapping changed: version ' + j.map.version + ' saved, version ' + j.changed_from + ' kept. Decisions that used it are asked again.', 'success'); var o = Object.assign({}, mapEdit); delete o[r.item_key]; setMapEdit(o); var c = Object.assign({}, changing); delete c[r.item_key]; setChanging(c); loadCfg().then(function () { load(false); }); });
       return;
     }

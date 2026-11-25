@@ -187,7 +187,8 @@ function WcSettings(props) {
   function saveMap() {
     setMsg('');
     if (editing && String(m.note || '').trim().length < 5) { setMsg('Say why this mapping is changed (at least a few words) — it is kept with the new version.'); return; }
-    var body = Object.assign({ action: 'map_save' }, m); if (editing) { body.family = editing.family; body.expected_version = editing.version; if (!String(body.vendor_name || '').trim()) { delete body.vendor_name; } }
+    var body = Object.assign({ action: 'map_save' }, m); if (!p.super_admin) { delete body.lb_factor_approved; } // Codex 25 Nov (ZF): the approval tick is hidden for non-super editors, so it is never sent; an unchanged approved factor is kept by the server, a changed one is saved unapproved
+    if (editing) { body.family = editing.family; body.expected_version = editing.version; if (!String(body.vendor_name || '').trim()) { delete body.vendor_name; } }
     wcApi(body).then(function (j) { if (!j.ok) { setMsg(j.error); return; } setMsg(editing ? 'Mapping changed: version ' + j.map.version + ' saved, version ' + j.changed_from + ' kept in the history. Decisions that used it are asked again.' : 'Mapping saved.'); setEditing(null); setM(BLANK_MAP); load(); });
   }
   // v55.83-ZF (Max 25 Nov "need to be able to update the product mappings"): Edit = prefill the form with this mapping; saving makes a new version

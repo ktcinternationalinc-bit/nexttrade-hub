@@ -376,8 +376,14 @@ export async function POST(req) {
       var vName = clean(body.vendor_name, 160);
       var descIn = clean(body.bill_description, 300); var unitIn = clean(body.bill_unit, 20).toUpperCase();
       var vk = vName ? vendorKey(vName) : (prev ? prev.vendor_key : '');
-      var ik = (descIn || body.item_key) ? billItemKey({ item_key: body.item_key, description: descIn }) : (prev ? prev.item_key : '');
-      var unitV = unitIn || (prev ? String(prev.bill_unit || '').toUpperCase() : '');
+      // Codex 25 Nov (ZF): an ordinary edit keeps the mapping's STORED item key — a mapping keyed by a stable item key must not be
+      // re-keyed from its display description. Only a deliberately CHANGED bill product (Settings) or an explicit item_key re-keys it.
+      var descChanged = !!(prev && descIn && descIn !== String(prev.bill_description || ''));
+      var ik = prev ? (body.item_key ? billItemKey({ item_key: body.item_key, description: descIn }) : (descChanged ? billItemKey({ description: descIn }) : prev.item_key))
+        : ((descIn || body.item_key) ? billItemKey({ item_key: body.item_key, description: descIn }) : '');
+      // a unit that is not sent keeps the previous one; a unit sent blank on purpose (Settings) means "no unit"
+      var unitSent = body.bill_unit !== undefined && body.bill_unit !== null;
+      var unitV = prev ? (unitSent ? unitIn : String(prev.bill_unit || '').toUpperCase()) : unitIn;
       var descV = descIn || (prev ? prev.bill_description : null) || null;
       if (!vk || !ik) { return bad('The mapping needs the vendor and the bill product.'); }
       var wh = { wh_product_type: clean(body.wh_product_type, 40) || null, wh_cgt: clean(body.wh_cgt, 40) || null, wh_nt: clean(body.wh_nt, 40) || null, wh_color: clean(body.wh_color, 40) || null };
