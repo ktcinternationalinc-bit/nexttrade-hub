@@ -79,8 +79,21 @@ export function checkWords(label, c) {
   if (c.result === 'provisional') { return { text: label + ': ' + figs + ' — Provisional (the receipt is still a draft)', tone: 'provisional' }; }
   if (c.result === 'not_checked') { return { text: label + ': ' + figs + ' — Not checked (see why on the card)', tone: 'muted' }; }
   var ok = c.result === 'matched' || c.result === 'equal';
-  var t = label + ': billed ' + num(c.billed) + ' ' + c.unit + ' · warehouse ' + num(c.received) + ' ' + c.unit + ' · ' + (c.diff > 0 ? '+' : '') + num(c.diff) + (c.pct != null ? ' (' + (c.pct > 0 ? '+' : '') + c.pct + '%)' : '') + ' — ' + (ok ? 'PASS' : 'REVIEW') + (c.over ? ' (billed MORE than the warehouse — never allowed)' : '');
+  var t = label + ': billed ' + num(c.billed) + ' ' + c.unit + ' · warehouse ' + num(c.received) + ' ' + c.unit + ' · ' + (c.diff > 0 ? '+' : '') + num(c.diff) + (c.pct != null ? ' (' + (c.pct > 0 ? '+' : '') + c.pct + '%)' : '') + ' — ' + (ok ? passWords(c.diff, c.tol, c.unit === 'yd' ? 'yd' : 'lb') : 'REVIEW') + (c.over ? ' (billed MORE than the warehouse — never allowed)' : '');
   return { text: t, tone: ok ? 'pass' : 'review' };
+}
+// Max 25 Nov: "if within tolerance it should say Pass within tolerance for each item that is within the tolerance". An exact match is
+// "PASS"; a difference inside the approved tolerance is "PASS — within tolerance (10%)" (the lb allowance is named for weight only).
+export function tolWords(tol, basis) {
+  if (!tol) { return ''; }
+  var parts = []; if (tol.pct != null && tol.pct !== '') { parts.push(Number(tol.pct) + '%'); }
+  if (basis !== 'yd' && tol.lb != null && tol.lb !== '') { parts.push(Number(tol.lb) + ' lb'); }
+  return parts.join(' or ');
+}
+export function passWords(diff, tol, basis) {
+  if (diff == null || Math.abs(Number(diff)) < 1e-9) { return 'PASS'; }
+  var w = tolWords(tol, basis);
+  return 'PASS — within tolerance' + (w ? ' (' + w + ')' : '');
 }
 function checksBlock(ch) {
   var rows = [checkWords('Weight', ch.weight), checkWords('Yards', ch.yards)];
@@ -285,7 +298,7 @@ export default function WeightCheckInvoices(props) {
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{f.billed != null ? num(f.billed) + ' ' + (f.unit || '') : (bl.qty != null ? num(bl.qty) + ' ' + (bl.unit || '') : '—')}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{f.received != null ? num(f.received) + ' ' + (f.unit || '') : '—'}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: f.diff < 0 ? RED : INK, fontWeight: 700 }}>{f.diff != null ? (f.diff > 0 ? '+' : '') + num(f.diff) + (f.pct != null ? '  (' + (f.pct > 0 ? '+' : '') + f.pct + '%)' : '') : '—'}</td>
-              <td style={{ padding: '7px 8px' }}><span style={pill(ok ? GREEN : RED, ok ? '#f0fdf4' : '#fef2f2')}>{ok ? 'PASS' : 'REVIEW'}</span><span style={{ fontSize: 12, color: MUTED, marginLeft: 6 }}>{r.outcome_words || r.outcome}{r.state && DONE_STATES.indexOf(r.state) >= 0 ? ' · ' + (r.state_words || r.state) : r.state === 'issue_open' ? ' · disputed' : ''}</span></td>
+              <td style={{ padding: '7px 8px' }}><span style={pill(ok ? GREEN : RED, ok ? '#f0fdf4' : '#fef2f2')}>{ok ? passWords(f.diff, ((f.checks || {})[f.basis === 'yd' ? 'yards' : 'weight'] || {}).tol || tol, f.basis) : 'REVIEW'}</span><span style={{ fontSize: 12, color: MUTED, marginLeft: 6 }}>{r.outcome_words || r.outcome}{r.state && DONE_STATES.indexOf(r.state) >= 0 ? ' · ' + (r.state_words || r.state) : r.state === 'issue_open' ? ' · disputed' : ''}</span></td>
             </tr>
             {f.checks ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{checksBlock(f.checks)}</td></tr> : null}
             {r.needs_mapping ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{MapForm({ row: r, inv: inv })}</td></tr> : null}

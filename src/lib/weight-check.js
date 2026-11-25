@@ -374,7 +374,7 @@ function oneCheck(unit, billed, received, tol, isWeight) {
   var t = tol ? (isWeight ? tol : { pct: tol.pct, lb: null }) : null;
   var res = d === null ? 'not_recorded' : (t && withinTolerance(d, billed, t) ? 'matched' : (!t && d === 0 ? 'equal' : 'discrepancy'));
   return { unit: unit, billed: billed, received: received, diff: d, pct: (d != null && billed) ? Math.round(d / billed * 10000) / 100 : null, result: res, note: null,
-    over: d != null && d < -1e-9 };
+    over: d != null && d < -1e-9, tol: t ? { pct: t.pct != null ? Number(t.pct) : null, lb: t.lb != null ? Number(t.lb) : null } : null };
 }
 function lineOut(ln) { return { bill_id: ln.bill_id, bill_number: ln.bill_number, line_no: ln.line_no, line_id: ln.line_id, description: ln.description, qty: ln.qty, unit: ln.unit, conversion: ln.u.label || ln.u.reason || null }; }
 function uniqF(x, i, a) { return a.indexOf(x) === i; }

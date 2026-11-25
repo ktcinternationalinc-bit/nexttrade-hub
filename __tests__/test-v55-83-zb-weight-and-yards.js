@@ -68,6 +68,15 @@ check('yards billed 18% BELOW the warehouse (10,000 vs 12,231.64, tolerance 10%)
 var b5 = run({ lines: [line(11500, 'YDS')], tolerance: { id: 't2', version: 1, pct: 10, lb: 5000 } });
 check('the POUND allowance never widens the yards check: 11,500 yd vs 12,231.64 (6%) passes on the %, and 9,000 yd (26%) fails even with a 5,000 lb allowance', b5.figures.checks.yards.result === 'matched' && run({ lines: [line(9000, 'YDS')], tolerance: { id: 't2', version: 1, pct: 10, lb: 5000 } }).figures.checks.yards.result === 'discrepancy', [b5.figures.checks.yards]);
 
+// 3b. v55.83-ZC (Max 25 Nov: "if within tolerance it should say Pass within tolerance for each item that is within the tolerance")
+check('WITHIN TOLERANCE wording: a pounds line 30,000 vs 31,333 (−4.3%, 10%) says "PASS — within tolerance (10%)"', /— PASS — within tolerance \(10%\)$/.test(INV.checkWords('Weight', c2.weight).text), INV.checkWords('Weight', c2.weight).text);
+check('…a yards line inside the % says the same, and never names the pound allowance (yards use the % only)', /— PASS — within tolerance \(10%\)$/.test(INV.checkWords('Yards', b5.figures.checks.yards).text), INV.checkWords('Yards', b5.figures.checks.yards).text);
+var b5w = run({ lines: [line(30000, 'LBS')], tolerance: { id: 't2', version: 1, pct: 10, lb: 5000 } });
+check('…a weight line names both parts of the tolerance it was judged by: "(10% or 5000 lb)"', /— PASS — within tolerance \(10% or 5000 lb\)$/.test(INV.checkWords('Weight', b5w.figures.checks.weight).text), INV.checkWords('Weight', b5w.figures.checks.weight).text);
+check('…an EXACT match stays plain "PASS" (bill 14755: 12,231.64 = 12,231.64), and a REVIEW line never says within tolerance', /— PASS$/.test(INV.checkWords('Yards', c.yards).text) && INV.passWords(0, TOL, 'yd') === 'PASS' && !/within tolerance/.test(INV.checkWords('Yards', b4.figures.checks.yards).text));
+var srcW = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
+check('…and the product\'s Result pill uses the same wording with the tolerance the comparison used', /\{ok \? passWords\(f\.diff, \(\(f\.checks \|\| \{\}\)\[f\.basis === 'yd' \? 'yards' : 'weight'\] \|\| \{\}\)\.tol \|\| tol, f\.basis\) : 'REVIEW'\}/.test(srcW));
+
 // 4. a side not recorded on the receipt
 var b6 = run({ lines: [line(12231.64, 'YDS')], receipt: receipt({ noYards: true }) });
 check('yards bill, the receipt has no yards → Yards "not recorded on the receipt", weight "not on the bill" → Cannot compare (nothing to compare), never PASS', b6.outcome === 'cannot_compare' && b6.figures.checks.yards.result === 'not_recorded' && /not recorded on the receipt/.test(b6.figures.checks.yards.note) && b6.figures.checks.weight.result === 'not_recorded', [b6.outcome, b6.figures.checks]);
