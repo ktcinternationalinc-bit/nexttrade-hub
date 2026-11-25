@@ -96,6 +96,41 @@ check('invoiceSignature changes when only the weight check changes (Approved on 
 var b11 = run({ lines: [line(12231.64, 'YDS'), Object.assign(line(500, 'LBS'), { id: 'L2', line_no: 2 })] });
 check('a product billed partly by weight and partly by yards → Cannot compare (the two cannot be added); both checks "not on the bill"', b11.outcome === 'cannot_compare' && b11.figures.checks.weight.result === 'not_recorded' && b11.figures.checks.yards.result === 'not_recorded' && /cannot be added/.test(b11.reasons.join(' ')), [b11.outcome, b11.reasons]);
 
+// 11. Codex 25 Nov (ZB P1): an OLD saved decision. The rules exactly as on main before ZB (2e2c6c2d) make the old fingerprint;
+// where ZB's yards rule flips the result the decision must need revalidation, where it does not the approval stays valid.
+var cp = require('child_process'); var os = require('os');
+var oldSrc = cp.execFileSync('git', ['-C', root, 'show', '2e2c6c2d8d14a57a7bcbaf847212381b70ce62fc:src/lib/weight-check.js'], { encoding: 'utf8' });
+var oldDir = fs.mkdtempSync(path.join(process.env.TMP || os.tmpdir(), 'zb-old-')); var oldFile = path.join(oldDir, 'weight-check-pre-zb.js'); fs.writeFileSync(oldFile, oldSrc);
+var OLD = require(oldFile); try { fs.rmSync(oldDir, { recursive: true, force: true }); } catch (e) { /* temp copy only */ }
+function runWith(lib, o) { var save = W; W = lib; try { return run(o); } finally { W = save; } }
+var TOL_LB = { id: 't2', version: 1, pct: 10, lb: 5000 };
+var oldA = runWith(OLD, { lines: [line(9000, 'YDS')], tolerance: TOL_LB }); var newA = run({ lines: [line(9000, 'YDS')], tolerance: TOL_LB });
+check('(fixture) before ZB, 9,000 yd vs 12,231.64 yd with 10% + a 5,000 lb allowance was Matched; with ZB it is REVIEW (the lb allowance is weight only)', oldA.outcome === 'matched' && newA.outcome === 'discrepancy' && newA.figures.checks.yards.result === 'discrepancy', [oldA.outcome, newA.outcome]);
+var savedA = [{ id: 'd1', kind: 'validate_match', comparison_fp: fp(oldA.inputs), at: '2026-11-25T10:00:00Z' }];
+var stA = W.decisionState(savedA, fp(newA.inputs));
+check('…so a validation saved before ZB now NEEDS REVALIDATION (fingerprint changed by the yards rule) and is outstanding again', fp(oldA.inputs) !== fp(newA.inputs) && stA.state === 'needs_revalidation' && W.isOutstanding(stA.state) && newA.inputs.yd_rule === 'percent only (v55.83-ZB)', [stA.state, newA.inputs.yd_rule]);
+var oldB = runWith(OLD, { lines: [line(12231.64, 'YDS')], tolerance: TOL_LB }); var newB = run({ lines: [line(12231.64, 'YDS')], tolerance: TOL_LB });
+var stB = W.decisionState([{ id: 'd2', kind: 'validate_match', comparison_fp: fp(oldB.inputs), at: '2026-11-25T10:00:00Z' }], fp(newB.inputs));
+check('…an approval whose comparison still passes is KEPT (12,231.64 = 12,231.64: same fingerprint, still validated)', fp(oldB.inputs) === fp(newB.inputs) && stB.state === 'validated' && newB.inputs.yd_rule === undefined, [stB.state]);
+var oldC = runWith(OLD, { lines: [line(30000, 'LBS')], tolerance: TOL_LB }); var newC = run({ lines: [line(30000, 'LBS')], tolerance: TOL_LB });
+var oldD = runWith(OLD, { lines: [line(12231.64, 'YDS')], tolerance: TOL }); var newD = run({ lines: [line(12231.64, 'YDS')], tolerance: TOL });
+check('…and nothing else moves: a pounds bill and a yards bill without a lb allowance keep their pre-ZB fingerprints', fp(oldC.inputs) === fp(newC.inputs) && fp(oldD.inputs) === fp(newD.inputs));
+var oldE = runWith(OLD, { lines: [line(11500, 'YDS')], tolerance: TOL_LB }); var newE = run({ lines: [line(11500, 'YDS')], tolerance: TOL_LB });
+check('…a yards bill that passes on the % alone keeps its fingerprint even with a lb allowance (11,500 vs 12,231.64: Matched before and after)', oldE.outcome === 'matched' && newE.outcome === 'matched' && fp(oldE.inputs) === fp(newE.inputs));
+
+// 12. Codex 25 Nov (ZB P2): no green PASS on a draft or an incomplete read
+var dr = receipt(); dr.is_draf = 1;
+var b12 = run({ lines: [line(12231.64, 'YDS')], receipt: dr });
+check('DRAFT receipt: the product is incomplete and the yards check says PROVISIONAL (amber), never a green PASS', b12.outcome === 'incomplete' && b12.figures.checks.yards.result === 'provisional' && b12.figures.checks.yards.raw_result === 'matched' && INV.checkWords('Yards', b12.figures.checks.yards).tone === 'provisional' && /Provisional/.test(INV.checkWords('Yards', b12.figures.checks.yards).text), [b12.outcome, b12.figures.checks.yards]);
+var ir = receipt(); ir.read_complete = false;
+var b13 = run({ lines: [line(12231.64, 'YDS')], receipt: ir });
+check('INCOMPLETE read: cannot compare, the yards check says NOT CHECKED (grey), never PASS', b13.outcome === 'cannot_compare' && b13.figures.checks.yards.result === 'not_checked' && INV.checkWords('Yards', b13.figures.checks.yards).tone === 'muted' && !/PASS/.test(INV.checkWords('Yards', b13.figures.checks.yards).text), [b13.outcome, b13.figures.checks.yards]);
+var b14 = run({ lines: [line(30000, 'LBS')], receipt: dr });
+check('…the same for weight on a draft (provisional), and a side "not on the bill" stays as it is', b14.figures.checks.weight.result === 'provisional' && b14.figures.checks.yards.result === 'not_recorded');
+
+// 13. the automatic approval reason names what was compared
+check('AUTO REASON: a yards-only invoice is approved as "billed yards vs receipt yards", a pounds one as "billed weight vs scanned weight", both when both', INV.autoReason({ products: [a] }) === 'Approved: billed yards vs receipt yards within the approved tolerance' && INV.autoReason({ products: [b2] }) === 'Approved: billed weight vs scanned weight within the approved tolerance' && /weight vs scanned weight and billed yards vs receipt yards/.test(INV.autoReason({ products: [a, b2] })), [INV.autoReason({ products: [a] })]);
+
 // 10. screen + version
 var src = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
 check('SCREEN: each product row renders the two checks (checksBlock(f.checks)) and the tolerance tile says the % applies to weight and to yards', /\{f\.checks \? <tr><td colSpan=\{5\}[^]*?checksBlock\(f\.checks\)/.test(src) && /The % applies to weight and to yards/.test(src));

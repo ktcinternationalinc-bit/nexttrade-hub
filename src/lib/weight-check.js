@@ -287,6 +287,11 @@ export function compareGroup(inp) {
     var diff = (billed != null && received != null) ? r3(received - billed) : null;
     var pct = (diff != null && billed) ? Math.round(diff / billed * 10000) / 100 : null;
     var tol = inp.tolerance || null;
+    // v55.83-ZB: the pound allowance is a WEIGHT allowance — a yards comparison uses only the %. Before ZB it widened yards too.
+    var tolFor = (basis === 'yd' && tol) ? { id: tol.id, version: tol.version, pct: tol.pct, lb: null } : tol;
+    // Codex 25 Nov (ZB P1): where that change flips this item's result, its fingerprint must change so an earlier decision needs
+    // revalidation; where the result is the same, the fingerprint is unchanged and earlier decisions stay valid
+    var ydRuleChanged = !!(basis === 'yd' && tol && tol.lb != null && diff != null && withinTolerance(diff, billed, tol) !== withinTolerance(diff, billed, tolFor));
     var outcome; var words;
     if (removed.length) { outcome = 'cannot_compare'; reasons.unshift('receipt ' + removed.map(function (r) { return r.key; }).join(', ') + ' was not found in the warehouse any more (confirmed by an id lookup)'); }
     else if (incompleteRead.length) { outcome = 'cannot_compare'; reasons.unshift('the warehouse answer for ' + incompleteRead.map(function (r) { return r.key; }).join(', ') + ' was incomplete — recheck'); }
@@ -294,7 +299,7 @@ export function compareGroup(inp) {
     else if (!mine.length) { outcome = 'product_missing'; }
     else if (reasons.length || basis === null || diff === null) { outcome = 'cannot_compare'; }
     else if (drafts.length) { outcome = 'incomplete'; }
-    else if (tol && withinTolerance(diff, billed, tol)) { outcome = 'matched'; }
+    else if (tol && withinTolerance(diff, billed, tolFor)) { outcome = 'matched'; }
     else if (!tol && diff === 0) { outcome = 'equal'; }
     else { outcome = 'discrepancy'; }
     // Max 25 Nov: a bill above what was scanned is never allowed — say so plainly
@@ -323,6 +328,11 @@ export function compareGroup(inp) {
       outcome = 'discrepancy';
       ['weight', 'yards'].forEach(function (k) { var c = checks[k]; if (c.result === 'discrepancy') { reasons.push(k + ': billed ' + c.billed + ' ' + c.unit + ' vs ' + c.received + ' ' + c.unit + ' in the warehouse'); } });
     }
+    // Codex 25 Nov (ZB P2): a check is only PASS / REVIEW when the product itself was compared. On a draft receipt it is
+    // provisional; on an incomplete / removed read, a mapping conflict or anything else not compared, it is not checked.
+    if (['matched', 'equal', 'discrepancy'].indexOf(outcome) < 0) {
+      ['weight', 'yards'].forEach(function (k) { var c = checks[k]; if (c.result !== 'not_recorded') { c.raw_result = c.result; c.result = outcome === 'incomplete' ? 'provisional' : 'not_checked'; } });
+    }
     if (flags.length) { reasons = reasons.concat(flags); }
     var inputs = {
       item_key: g.key + '|p:' + pk,
@@ -333,6 +343,7 @@ export function compareGroup(inp) {
       tolerance: tol ? { id: tol.id, version: tol.version } : null,
       conflict: conflict ? conflict.map(function (c) { return [c.product, c.scans.slice().sort()]; }) : null
     };
+    if (ydRuleChanged) { inputs.yd_rule = 'percent only (v55.83-ZB)'; }
     items.push(Object.assign({}, base, {
       item_key: inputs.item_key, kind: 'product', product_key: pk, product_label: P.map.wh_label || pk, outcome: outcome, reasons: reasons,
       provisional: drafts.length > 0,

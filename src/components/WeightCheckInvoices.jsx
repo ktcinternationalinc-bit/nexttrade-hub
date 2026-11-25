@@ -74,6 +74,10 @@ export function checkWords(label, c) {
     if (c.packing_list_lb != null && c.billed == null) { extra += ' · packing list ' + num(Math.round(c.packing_list_lb)) + ' lb'; }
     return { text: label + ': ' + (c.note || 'not recorded') + extra, tone: 'muted' };
   }
+  var figs = 'billed ' + num(c.billed) + ' ' + c.unit + ' · warehouse ' + num(c.received) + ' ' + c.unit;
+  // Codex 25 Nov (ZB P2): never a green PASS while the receipt is a draft or was not read completely
+  if (c.result === 'provisional') { return { text: label + ': ' + figs + ' — Provisional (the receipt is still a draft)', tone: 'provisional' }; }
+  if (c.result === 'not_checked') { return { text: label + ': ' + figs + ' — Not checked (see why on the card)', tone: 'muted' }; }
   var ok = c.result === 'matched' || c.result === 'equal';
   var t = label + ': billed ' + num(c.billed) + ' ' + c.unit + ' · warehouse ' + num(c.received) + ' ' + c.unit + ' · ' + (c.diff > 0 ? '+' : '') + num(c.diff) + (c.pct != null ? ' (' + (c.pct > 0 ? '+' : '') + c.pct + '%)' : '') + ' — ' + (ok ? 'PASS' : 'REVIEW') + (c.over ? ' (billed MORE than the warehouse — never allowed)' : '');
   return { text: t, tone: ok ? 'pass' : 'review' };
@@ -82,11 +86,16 @@ function checksBlock(ch) {
   var rows = [checkWords('Weight', ch.weight), checkWords('Yards', ch.yards)];
   var notes = []; if (ch.yards && ch.yards.copied_note) { notes.push(ch.yards.copied_note); }
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12, padding: '4px 8px', background: SOFT, borderRadius: 6 }}>
-    {rows.map(function (w, i) { return <div key={i} style={{ color: w.tone === 'pass' ? GREEN : (w.tone === 'review' ? RED : SUB), fontWeight: w.tone === 'muted' ? 400 : 600 }}>{w.text}</div>; })}
+    {rows.map(function (w, i) { return <div key={i} style={{ color: w.tone === 'pass' ? GREEN : (w.tone === 'review' ? RED : (w.tone === 'provisional' ? AMBER : SUB)), fontWeight: w.tone === 'muted' ? 400 : 600 }}>{w.text}</div>; })}
     {notes.map(function (n, i) { return <div key={'n' + i} style={{ color: AMBER }}>{'Note: ' + n}</div>; })}
   </div>;
 }
-var AUTO_REASON = 'Approved: billed vs scanned within the approved tolerance';
+// the automatic approval reason names the evidence actually compared (Codex 25 Nov, ZB): pounds on the scale, receipt yards, or both
+export function autoReason(inv) {
+  var bases = {}; (inv.products || []).forEach(function (r) { var f = r.figures || {}; if (f.basis) { bases[f.basis] = true; } });
+  var what = bases.lb && bases.yd ? 'billed weight vs scanned weight and billed yards vs receipt yards' : (bases.yd ? 'billed yards vs receipt yards' : 'billed weight vs scanned weight');
+  return 'Approved: ' + what + ' within the approved tolerance';
+}
 function reasonProblem(inv, mode, reason) {
   if (mode === 'approve' && !inv.pass && reason.length < 5) { return 'This invoice is REVIEW — write why you approve it anyway (at least a few words).'; }
   if (mode === 'dispute' && reason.length < 5) { return 'Write what is wrong (at least a few words) before disputing.'; }
@@ -115,7 +124,7 @@ export async function runInvoiceDecision(o) {
     inv = again;
     problem = reasonProblem(inv, mode, reason); if (problem) { return { ok: false, stopped: true, linked: true, error: problem, wrote: 0, inv: inv }; }
   }
-  if (mode === 'approve' && inv.pass && reason.length < 5) { reason = AUTO_REASON; }
+  if (mode === 'approve' && inv.pass && reason.length < 5) { reason = autoReason(inv); }
   var todo = inv.rows.filter(function (r) { return r.needs_decision; });
   if (!todo.length) { return { ok: false, error: 'Nothing left to decide on this invoice.', wrote: 0, linked: !!o.inv.previewed }; }
   var blocked = todo.filter(function (r) { var a = r.allowed || []; return mode === 'dispute' ? a.indexOf('report_issue') < 0 : (a.indexOf('validate_match') < 0 && a.indexOf('accept_discrepancy') < 0); });
