@@ -42,6 +42,20 @@ function getPublicBaseUrl(req) {
   return 'https://nexttrade-hub.vercel.app';
 }
 
+// v55.83-ZI — XML escape for TwiML attribute values. The voicemail URL carries
+// "?call_id=…&assigned_to=…&customer_id=…"; a raw "&" makes the whole reply
+// invalid XML, Twilio rejects it, jumps to the number's fallback URL
+// (/api/phone/incoming), loops once more and the caller hears
+// "an application error has occurred" (Max, 25 Nov, Aman's line).
+function xmlEscape(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 export async function POST(req) {
   try {
     var url = new URL(req.url);
@@ -142,14 +156,14 @@ export async function POST(req) {
       // "couldn't hear" prompt is Twilio's fallback when trim-silence
       // returns a zero-duration recording.
       vmTwiml += '<Pause length="1" />';
-      vmTwiml += '<Record action="' + voicemailRecordUrl + '"'
+      vmTwiml += '<Record action="' + xmlEscape(voicemailRecordUrl) + '"'
         + ' method="POST"'
         + ' maxLength="180"'
         + ' timeout="10"'
         + ' playBeep="true"'
         + ' trim="do-not-trim"'
         + ' finishOnKey="#"'
-        + ' recordingStatusCallback="' + voicemailRecordUrl + '"'
+        + ' recordingStatusCallback="' + xmlEscape(voicemailRecordUrl) + '"'
         + ' recordingStatusCallbackEvent="completed"'
         + ' recordingStatusCallbackMethod="POST" />';
       vmTwiml += '<Say voice="Polly.Joanna">Thank you. Goodbye.</Say>';

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZI',
+    date: '2026-11-25',
+    title: 'Phone: a missed call goes to voicemail instead of "an application error has occurred"',
+    items: [
+      { text: 'When nobody picks up, callers now hear "The team is unavailable right now" and can leave a voicemail. Before, Twilio said "an application error has occurred" and hung up (reported 25 Nov on the Bound Brook line).' },
+      { text: 'Technical: /api/phone/voicemail-record no-answer/failed/busy/canceled TwiML put the voicemail URL (…?call_id=…&assigned_to=…&customer_id=…) into <Record action> and recordingStatusCallback with a raw "&" — invalid XML, so Twilio jumped to the number fallback URL (/api/phone/incoming), looped once and failed (live log 25 Nov 18:14 UTC). Both attributes now go through xmlEscape. Test test-v55-83-zi-phone-twiml-valid.js runs the real voicemail-record and incoming handlers and checks every reply is well-formed XML (4 failures on the old code, 12/12 now).', superAdminOnly: true }
+    ]
+  },
+  {
     version: 'v55.83-ZG',
     date: '2026-11-25',
     title: 'Reminders: the "Last run" line no longer says the Hub is on the test warehouse',
