@@ -26,8 +26,11 @@ function check(ok, label, extra) { if (ok) { pass++; console.log('PASS ' + label
   const before = item.manifest.files.map(f => f.before);
   check(before[0] === 'f5eb24f9b6d40ac1e00e8d885c6163b58fdf27a385312d1be0352fcf8a3c644d' && before[1] === '39edb117dbbe93dd3d6919d9e70e361e7b7aca05942af04145f5df673d9969e3',
     '"before" fingerprints are the two files as the receipts move (905ef4b8) put them on live', before);
-  check(!item.codexRef && !item.behavioralQa && selection.candidateProblems(item).length === 2,
-    'no review records are invented: until Codex and staging QA pass this exact build, it cannot be selected', selection.candidateProblems(item));
+  // 25 Nov: Codex's package review + the owner's Laravel fixtures (incl. the live-schema run) — bound to THIS build and digest
+  check(item.codexRef && item.behavioralQa && item.codexRef.sha === item.manifest.sha && item.behavioralQa.sha === item.manifest.sha && item.codexRef.manifestDigest === dg && item.behavioralQa.manifestDigest === dg && /^CODEX_QA_FEEDBACK\.md#codex-qa--25-nov--live-shipping-feed-09d21b12/.test(item.codexRef.feedbackRef) && item.behavioralQa.kind === 'behavioral' && item.behavioralQa.result === 'PASS' && /requirement_columns 51/.test(item.behavioralQa.summary) && selection.candidateProblems(item).length === 0,
+    'the register carries Codex\'s review + staging QA for exactly build 09d21b12 / digest 130b64e6, so the item is selectable (Max still has to give the go)', selection.candidateProblems(item));
+  const moved = Object.assign({}, item, { manifest: Object.assign({}, item.manifest, { sha: '0000000000000000000000000000000000000000' }) });
+  check(selection.candidateProblems(moved).length > 0, '(contrast) the same records do not cover any other build', selection.candidateProblems(moved));
   if (!fs.existsSync(WAREHOUSE_REPO)) { check(false, 'warehouse repo not found: ' + WAREHOUSE_REPO); return finish(); }
 
   // "before" really is the receipts build's bytes (what the worker put on live), "after" really is this build's bytes

@@ -373,6 +373,20 @@
         "Max's go here; the worker checks the live fingerprints under its lock, moves the two files, clears route + view caches.",
         "Then (Max): Vercel NEXTRADE_FEED_URL = https://nextradeindustries.com/api/hub-feed/shipping, NEXTRADE_FEED_TOKEN = the live secret, NEXTRADE_FEED_ALLOW_LIVE = yes; the Hub's active warehouse source → nextrade-live."
       ],
+      "codexRef": {
+        "sha": "09d21b12370a694bfd45eb04f8b6285e41cbcb14",
+        "target": "production",
+        "manifestDigest": "130b64e6453b5d08d2ac1b1df78f05be113f9a388d9729b9e5ae23c01cb99a22",
+        "feedbackRef": "CODEX_QA_FEEDBACK.md#codex-qa--25-nov--live-shipping-feed-09d21b12--bfcfb509-source-and-package-pass"
+      },
+      "behavioralQa": {
+        "sha": "09d21b12370a694bfd45eb04f8b6285e41cbcb14",
+        "target": "production",
+        "manifestDigest": "130b64e6453b5d08d2ac1b1df78f05be113f9a388d9729b9e5ae23c01cb99a22",
+        "kind": "behavioral",
+        "result": "PASS",
+        "summary": "Deployment owner executed the exact candidate files (controller 50aec9dc, api.php ee032994, unchanged services.php 7a908353; php -l clean) in isolated Laravel fixtures, uncached / with config:cache + route:cache / after clears: no or wrong token 401, right token 200 with a real read-only order list, receipts still 200, close-order absent (404), missing source 503; and on a throwaway SQLite database built from LIVE's real column lists (order_status_requirements 51 columns without shipping_doc_type / order_payment_type / load_time_known; order_statuses without note): HTTP 200, private no-store, requirement_columns 51, history-note capability false, no forbidden keys. Evidence: CLAUDE_HANDOFF.md sections QA RECEIPT - LIVE shipping feed candidate 09d21b12 and the live-schema fixture receipt, 25 Nov. Codex 25 Nov: scoped behavioral QA PASS for this exact package (Shipping 09d21b12 live-schema fixture PASS); Codex independently matched the hashes and reran the 10 source checks, and did not execute the PHP/server tests. No production or end-to-end live read claimed."
+      },
       "manifest": {
         "sha": "09d21b12370a694bfd45eb04f8b6285e41cbcb14",
         "target": "production",
