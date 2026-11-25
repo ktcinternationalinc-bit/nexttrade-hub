@@ -33,7 +33,14 @@ export function groupInvoices(rows) {
     var disputed = g.rows.some(function (r) { return r.state === 'issue_open'; });
     var why = [];
     g.rows.forEach(function (r) { if (r.kind !== 'product' || PASS_OUTCOMES.indexOf(r.outcome) < 0) { (r.reasons && r.reasons.length ? r.reasons : [r.outcome_words || r.outcome]).forEach(function (w) { if (w && why.indexOf(w) < 0) { why.push(w); } }); } });
-    return { key: k, bills: g.bills, rows: g.rows, products: products, others: others, pass: pass, approved: approved, disputed: disputed, why: why };
+    // Codex 25 Nov: bills sharing one receipt are compared TOGETHER — the result is the group's, never each invoice's on its own.
+    // What each invoice billed is still shown, product by product (from the lines the comparison used).
+    var shared = (g.bills || []).length > 1;
+    var perBill = (g.bills || []).map(function (b) {
+      var lines = []; products.forEach(function (r) { (r.bill_lines || []).forEach(function (ln) { if (ln.bill_id === b.id) { lines.push({ product: r.product_label || ln.description, qty: ln.qty, unit: ln.unit }); } }); });
+      return { id: b.id, bill_number: b.bill_number, vendor: b.vendor, bill_date: b.bill_date, reference: b.reference, lines: lines };
+    });
+    return { key: k, bills: g.bills, rows: g.rows, products: products, others: others, pass: pass, approved: approved, disputed: disputed, why: why, shared: shared, perBill: perBill };
   });
 }
 
@@ -99,15 +106,18 @@ export default function WeightCheckInvoices(props) {
     {shown.map(function (inv) {
       var head = inv.bills.map(function (b) { return (b.vendor || '') + ' · Bill ' + (b.bill_number || '') + ' · ' + (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ');
       var badge = inv.approved ? ['APPROVED', GREEN, '#dcfce7'] : inv.disputed ? ['DISPUTED', RED, '#fee2e2'] : inv.pass ? ['PASS', GREEN, '#dcfce7'] : ['REVIEW', RED, '#fee2e2'];
+      var badgeText = badge[0] + (inv.shared ? ' · group of ' + inv.bills.length + ' invoices' : '');
       var receipts = []; inv.rows.forEach(function (r) { (r.receipts || []).forEach(function (x) { var t = 'Receipt ' + (x.reference_number || x.id) + (x.warehouse ? ' · ' + x.warehouse : '') + (x.receipt_date ? ' · ' + String(x.receipt_date).substring(0, 10) : ''); if (receipts.indexOf(t) < 0) { receipts.push(t); } }); });
       var linkRow = inv.rows.filter(function (r) { return r.needs_link || r.outcome === 'no_receipt'; })[0];
       var canDecide = inv.rows.some(function (r) { return r.needs_decision; });
       return <div key={inv.key} className="rounded-xl mt-2 p-2" style={{ border: '2px solid ' + badge[1], background: '#ffffff' }}>
         <div className="flex flex-wrap gap-2 items-center">
-          <span className="px-3 py-1 rounded-lg text-[14px] font-black" style={{ background: badge[2], color: badge[1], border: '1px solid ' + badge[1] }}>{badge[0]}</span>
+          <span className="px-3 py-1 rounded-lg text-[14px] font-black" style={{ background: badge[2], color: badge[1], border: '1px solid ' + badge[1] }}>{badgeText}</span>
           <b className="text-[13px]">{head}</b>
         </div>
         <div className="text-[11px] mt-0.5" style={{ color: SUB }}>{receipts.length ? receipts.join('  ·  ') : 'No warehouse receipt linked yet'}</div>
+        {inv.shared ? <div className="text-[11px] mt-1 font-bold rounded px-2 py-1" style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d' }}>{'These ' + inv.bills.length + ' invoices share the same warehouse receipt, so they are compared TOGETHER: ' + badge[0] + ' is the result for the group, not for each invoice on its own. What each invoice billed is listed below.'}</div> : null}
+        {inv.shared ? <table className="w-full mt-1 text-[11px]"><thead><tr style={{ color: SUB }} className="text-left"><th className="px-1">Invoice</th><th className="px-1">Billed on this invoice</th><th className="px-1">Status</th></tr></thead><tbody>{inv.perBill.map(function (b) { return <tr key={b.id} style={{ borderTop: '1px solid ' + LINE }}><td className="px-1">{(b.vendor || '') + ' · ' + (b.bill_number || '') + ' · ' + (b.bill_date || '')}</td><td className="px-1">{b.lines.length ? b.lines.map(function (l) { return l.product + ': ' + num(l.qty) + ' ' + (l.unit || ''); }).join(' · ') : '—'}</td><td className="px-1" style={{ color: SUB }}>part of the group result — not verified on its own</td></tr>; })}</tbody></table> : null}
         {inv.products.length ? <table className="w-full mt-1 text-[12px]"><thead><tr style={{ background: '#f1f5f9', color: SUB }} className="text-left text-[11px]"><th className="px-1">Product</th><th className="px-1 text-right">Billed</th><th className="px-1 text-right">Scanned in</th><th className="px-1 text-right">Difference</th><th className="px-1">Result</th></tr></thead>
           <tbody>{inv.products.map(function (r) {
             var f = r.figures || {}; var ok = PASS_OUTCOMES.indexOf(r.outcome) >= 0;

@@ -190,9 +190,9 @@ function WcSettings(props) {
   var sc = s.scope || {}; var scKeys = sc.vendor_keys || [];
   return <div className="text-[12px]">
     {msg ? <div className="rounded px-2 py-1 mb-2 font-bold" style={{ background: '#f1f5f9' }}>{msg}</div> : null}
-    <div className="font-extrabold">Vendors in the warehouse check</div>
+    <div className="font-extrabold">Vendors in the warehouse check (NexPac always, plus the ones you tick)</div>
     <div style={{ color: SUB }}>{'Checked now: ' + (sc.vendor_names || []).join(', ') + (sc.is_default ? ' — the default (NexPac only) until Max saves a selection' : ' — version ' + sc.version + ', ' + when(sc.at)) + '. Bills from other vendors show no warehouse check and are left out of every list.'}{sc.table_missing ? ' (The vendor list cannot be saved until Max runs sql/v55-83-YX-wc-vendor-scope.sql.)' : ''}</div>
-    {p.super_admin && vsel ? <div className="mt-1"><div className="flex flex-wrap gap-x-3 gap-y-1" style={{ maxHeight: 160, overflowY: 'auto' }}>{(s.vendor_choices || []).map(function (v) { var on = !!vsel[v.key]; return <label key={v.key} className="flex items-center gap-1"><input type="checkbox" checked={on} onChange={function (e) { var o = Object.assign({}, vsel); o[v.key] = e.target.checked ? v.name : false; setVsel(o); }} />{v.name + ' (' + v.bills + ')'}</label>; })}</div>
+    {p.super_admin && vsel ? <div className="mt-1"><div className="flex flex-wrap gap-x-3 gap-y-1" style={{ maxHeight: 160, overflowY: 'auto' }}>{(s.vendor_choices || []).map(function (v) { var always = v.key === 'nexpac'; var on = always || !!vsel[v.key]; return <label key={v.key} className="flex items-center gap-1"><input type="checkbox" checked={on} disabled={always} onChange={function (e) { var o = Object.assign({}, vsel); o[v.key] = e.target.checked ? v.name : false; setVsel(o); }} />{v.name + ' (' + v.bills + ')' + (always ? ' — always' : '')}</label>; })}</div>
       <button onClick={saveScope} className="mt-1 px-3 py-1 rounded-lg font-extrabold" style={{ background: '#0f172a', color: '#ffffff' }}>Save vendors</button></div> : <div className="text-[11px]" style={{ color: SUB }}>Only the super admin chooses the vendors.</div>}
     <div className="mt-3" />
     <div className="font-extrabold">Tolerance</div>

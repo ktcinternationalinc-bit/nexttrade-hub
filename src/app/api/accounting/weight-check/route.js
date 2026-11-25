@@ -399,10 +399,9 @@ export async function POST(req) {
     if (action === 'scope_save') {
       if (!isSuper) { return bad('Only the super admin chooses the vendors in the warehouse check (Max decides).', 403); }
       var names = Array.isArray(body.vendor_names) ? body.vendor_names.map(function (v) { return clean(v, 160); }).filter(Boolean) : [];
-      var seenK = {}; var keysS = []; var namesS = [];
+      var seenK = { nexpac: true }; var keysS = ['nexpac']; var namesS = ['NexPac Corporation']; // NexPac is always in (Max's rule: NexPac + the vendors he selects)
       names.forEach(function (n) { var k = vendorKey(n); if (k && !seenK[k]) { seenK[k] = true; keysS.push(k); namesS.push(n); } });
-      if (!keysS.length) { return bad('Choose at least one vendor.'); }
-      if (keysS.length > 50) { return bad('At most 50 vendors.'); }
+      if (keysS.length > 50) { return bad('At most 50 vendors in all (NexPac + 49 others).'); }
       var sv0 = await db.from('wc_vendor_scope').select('version').order('version', { ascending: false }).limit(1);
       if (sv0.error) { throw new Error(sv0.error.message); }
       var sver = ((sv0.data || [])[0] || { version: 0 }).version + 1;

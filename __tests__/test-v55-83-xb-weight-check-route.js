@@ -455,6 +455,24 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   var invSrc = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
   check('SCREEN (Invoices): PASS green / REVIEW red badge, Approved + Disputed buttons, a REVIEW needs a written reason to approve, Disputed always needs one', /'PASS', GREEN/.test(invSrc) && /'REVIEW', RED/.test(invSrc) && />Approved</.test(invSrc) && />Disputed</.test(invSrc) && /mode === 'approve' && !inv.pass && reason.length < 5/.test(invSrc) && /mode === 'dispute' && reason.length < 5/.test(invSrc) && /kind: kind, reason: reason, expected_fp: r.comparison_fp/.test(invSrc));
 
+  // Codex 25 Nov follow-ups: (1) two invoices on one receipt = ONE group result, labelled as such, each invoice's own billing shown;
+  // (2) NexPac is always in, whatever is saved
+  var vG = invs.filter(function (v) { return v.bills.length === 2 && v.key.indexOf(B1) >= 0 && v.key.indexOf(B2) >= 0; })[0];
+  var gB1 = vG && vG.perBill.filter(function (b) { return b.id === B1; })[0]; var gB2 = vG && vG.perBill.filter(function (b) { return b.id === B2; })[0];
+  check('SHARED RECEIPT: B1 + B2 (one receipt) give ONE card marked shared, with each invoice\'s own billed lines (2,000 and 1,000), never two separate PASS stamps', !!vG && vG.shared === true && invs.filter(function (v) { return v.key.indexOf(B1) >= 0; }).length === 1 && gB1 && gB2 && gB1.lines.length === 1 && Number(gB1.lines[0].qty) === 2000 && Number(gB2.lines[0].qty) === 1000, vG && vG.perBill);
+  check('SCREEN (Invoices): a shared card says "group of N invoices" and that the result is for the group, not for each invoice on its own', /group of ' \+ inv\.bills\.length \+ ' invoices'/.test(invSrc) && /is the result for the group, not for each invoice on its own/.test(invSrc) && /part of the group result — not verified on its own/.test(invSrc));
+  var BO = 'b0000000-0000-4000-8000-0000000000o1';
+  addBill(BO, '2026-10-07', '90000077', [{ description: 'Office paper', qty: 5, unit: 'EA' }], { vendor_name: 'Other Supplies Co', bill_number: 'O-1' });
+  world.superAdmin = true;
+  var svOnlyK = await call({ action: 'scope_save', vendor_names: ['Kronos Logistics'] });
+  world.superAdmin = false;
+  var okN4 = await call({ action: 'bill', bill_id: B1 }); var okK4 = await call({ action: 'bill', bill_id: BK }); var okO4 = await call({ action: 'bill', bill_id: BO });
+  check('NEXPAC ALWAYS: saving only Kronos keeps NexPac in (saved as nexpac + kronos logistics); NexPac and Kronos bills are checked, an unrelated vendor is not', svOnlyK.status === 200 && svOnlyK.body.scope.vendor_keys.join() === 'nexpac,kronos logistics' && !okN4.body.out_of_scope && !okK4.body.out_of_scope && okO4.body.out_of_scope === true, [svOnlyK.body, okN4.body.out_of_scope, okK4.body.out_of_scope, okO4.body.out_of_scope]);
+  tbl('wc_vendor_scope').push({ id: 'legacy', version: 9, vendor_keys: ['kronos logistics'], vendor_names: ['Kronos Logistics'], actor: 'u-max', at: '2026-11-25T00:00:00Z' });
+  var okN5 = await call({ action: 'bill', bill_id: B1 });
+  check('…even a stored selection without NexPac (version 9: Kronos only) still checks NexPac', !okN5.body.out_of_scope && okN5.status === 200, okN5.body.out_of_scope);
+  var panelSrc = fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8');
+  check('SCREEN (vendors): NexPac shown ticked and locked ("always")', /var always = v\.key === 'nexpac'/.test(panelSrc) && /disabled=\{always\}/.test(panelSrc) && /NexPac always, plus the ones you tick/.test(panelSrc));
   // ---- the real route with its OWN receipts address + token (another staging sub-site here, so the fake's identity still fits)
   var keep = { u: process.env.NEXTRADE_RECEIPTS_URL, t: process.env.NEXTRADE_RECEIPTS_TOKEN };
   process.env.NEXTRADE_RECEIPTS_URL = 'https://receipts.nextrade-staging.com/api/hub-feed'; process.env.NEXTRADE_RECEIPTS_TOKEN = 'rtok-0123456789abcdef0123456789abcdef';

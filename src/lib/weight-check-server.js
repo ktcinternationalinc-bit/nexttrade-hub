@@ -33,7 +33,10 @@ export async function loadVendorScope(db) {
   }
   var row = (r.data || [])[0];
   if (!row) { return defaultVendorScope(); }
-  return { version: row.version, vendor_keys: (row.vendor_keys || []).slice(), vendor_names: (row.vendor_names || []).slice(), is_default: false, at: row.at || null, actor: row.actor || null, note: row.note || null };
+  var keys = (row.vendor_keys || []).slice(); var names = (row.vendor_names || []).slice();
+  // Max's rule is "NexPac AND the vendors we select": NexPac is always in, whatever a saved selection holds (Codex 25 Nov)
+  if (keys.indexOf('nexpac') < 0) { keys.unshift('nexpac'); names.unshift('NexPac Corporation'); }
+  return { version: row.version, vendor_keys: keys, vendor_names: names, is_default: false, at: row.at || null, actor: row.actor || null, note: row.note || null };
 }
 export function inVendorScope(scope, vendorName) {
   var k = vendorKey(vendorName);
