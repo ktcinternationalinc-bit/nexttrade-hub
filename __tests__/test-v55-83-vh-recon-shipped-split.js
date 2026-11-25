@@ -36,9 +36,9 @@ console.log('VH — the screen');
 var T = fs.readFileSync(path.join(root, 'src/components/OrderMonitorTab.jsx'), 'utf8');
 check('a "Warehouse status" chip row: Shipped / Not shipped yet / Other statuses / All statuses, with counts', /Warehouse status:/.test(T) && /\['shipped', 'Shipped', 'blocked'\], \['not_shipped', 'Not shipped yet', 'wait'\], \['other', 'Other statuses', 'na'\], \['all', 'All statuses', 'na'\]/.test(T) && /x\[1\] \+ ' · ' \+ n/.test(T));
 check('it opens on Shipped', /useState\('shipped'\); var ph = s6\[0\]/.test(T));
-check('the problem groups and their counts follow the chosen status', /var rows = ph === 'all' \? allRows : allRows\.filter\(function \(r\) \{ return \(r\.phase \|\| 'other'\) === ph; \}\);\n?\s*var cnt = \{\}; rows\.forEach/.test(T.split('\r\n').join('\n')));
-check('the CSV says Shipped? for each row', /'Warehouse status', 'Shipped\?', 'Problem'/.test(T) && /\{ shipped: 'Shipped', not_shipped: 'Not shipped yet', other: 'Other status' \}\)\[r\.phase\]/.test(T));
-check('badge v55.83-VH and What\'s New starts with VH', />v55\.83-VH<\/span>/.test(fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8')) && /BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-VH'/.test(fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8')));
+check('the problem groups and their counts follow the chosen status', /return ph === 'all' \|\| \(r.phase \|\| 'other'\) === ph/.test(T) && /var rows = tabRows\.filter\(inPhase\)/.test(T) && /var cnt = \{\}; rows\.forEach/.test(T));
+check('the CSV says Shipped? for each row and includes its invoice review', /'Warehouse status', 'Shipped\?', 'Invoice review'/.test(T) && /\{ shipped: 'Shipped', not_shipped: 'Not shipped yet', other: 'Other status' \}\)\[r\.phase\]/.test(T));
+check('the VH release remains in What\'s New', /version: 'v55\.83-VH'/.test(fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8')));
 
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

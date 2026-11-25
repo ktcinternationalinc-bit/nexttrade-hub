@@ -317,7 +317,7 @@ export function warehousePhase(o) {
   if (r >= 0) { return 'not_shipped'; }
   return 'other';
 }
-export function reconcileReleases(orders, invoices, since) {
+export function reconcileReleases(orders, invoices, since, options) {
   var from = String(since || '2026-06-01').substring(0, 10);
   var byRel = {}; var byPo = {}; var noRel = [];
   (invoices || []).forEach(function (i) {
@@ -341,7 +341,16 @@ export function reconcileReleases(orders, invoices, since) {
     if (!ks.length) { row.state = 'no_release'; row.words = 'The warehouse order has no release number — fill it in Nextrade'; out.push(row); return; }
     var on = []; var seen = {};
     ks.forEach(function (k) { (byRel[k] || []).forEach(function (i) { if (!seen[i.id]) { seen[i.id] = true; on.push(i); } }); });
-    if (on.some(isLive)) { return; } // linked: an active invoice carries the release
+    var active = on.filter(isLive);
+    if (active.length) {
+      if (options && options.includeLinked) {
+        row.state = 'linked';
+        row.words = 'An active KTC invoice carries this Release Number';
+        row.linked = active.map(brief);
+        out.push(row);
+      }
+      return;
+    }
     var po = []; var seenP = {};
     ks.forEach(function (k) { (byPo[k] || []).forEach(function (i) { if (isLive(i) && !seenP[i.id]) { seenP[i.id] = true; po.push(i); } }); });
     row.po_so = po.map(brief); row.cancelled = on.map(brief);
@@ -356,6 +365,6 @@ export function reconcileReleases(orders, invoices, since) {
     else { row.state = 'none'; row.words = row.suggestions.length ? 'No invoice carries this release — maybe one of the invoices below (same customer, no release number)' : 'No KTC invoice carries this release'; }
     out.push(row);
   });
-  var rank = { none: 0, in_notes: 1, cancelled_only: 2, no_release: 3, po_so_only: 4 };
+  var rank = { none: 0, in_notes: 1, cancelled_only: 2, no_release: 3, po_so_only: 4, linked: 5 };
   return out.sort(function (a, b) { return rank[a.state] - rank[b.state] || String(b.date).localeCompare(String(a.date)); });
 }
