@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZB',
+    date: '2026-11-25',
+    title: 'Warehouse check: weight against weight AND yards against yards',
+    items: [
+      { text: 'Each product on an invoice card now shows **two checks side by side**: **Weight** (billed pounds vs pounds on the warehouse scale) and **Yards** (billed yards vs the yards on the warehouse receipt). There is no conversion between yards and pounds.' },
+      { text: 'Each check has its own PASS or REVIEW under the same rule: a bill may be below the warehouse by up to the tolerance %, never above. If either check fails, the invoice is REVIEW.' },
+      { text: 'When a side has no figure — for example a Texas Thirds bill in yards has no weight on it — the card says **“not on the bill”** or **“not recorded”** and shows the warehouse figure, never a false mismatch. A yards bill also shows the packing-list weight next to the scale weight.' },
+      { text: 'When the warehouse yards add up exactly to the packing-list quantity, the card notes they may have been copied from it rather than measured.' },
+      { superAdminOnly: true, text: 'Technical: compareGroup adds figures.checks { weight, yards } (oneCheck: billed / received / diff / pct / result matched|equal|discrepancy|not_recorded, one-way tolerance; % for both, lb allowance weight only); a failing check with both figures turns matched/equal into discrepancy; copied_note when Σ row yards = Σ declared_quantity; packing_list_lb. Decision inputs / fingerprints unchanged. invoiceSignature includes both checks. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-ZA',
     date: '2026-11-25',
     title: 'Warehouse check: the comparison is shown straight away, and everything is handled on one screen',

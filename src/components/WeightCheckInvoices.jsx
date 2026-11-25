@@ -61,8 +61,30 @@ export function groupInvoices(rows) {
 export function invoiceSignature(inv) {
   if (!inv) { return ''; }
   var bills = (inv.bills || []).map(function (b) { return String(b.id); }).sort();
-  var prods = (inv.products || []).map(function (r) { var f = r.figures || {}; return [r.product_label || '', f.billed, f.received, f.diff, f.unit || '', r.outcome || ''].join('|'); }).sort();
+  var prods = (inv.products || []).map(function (r) { var f = r.figures || {}; var c = f.checks || {}; return [r.product_label || '', f.billed, f.received, f.diff, f.unit || '', r.outcome || '', checkSig(c.weight), checkSig(c.yards)].join('|'); }).sort();
   return JSON.stringify({ bills: bills, pass: !!inv.pass, products: prods });
+}
+function checkSig(c) { return c ? [c.billed, c.received, c.diff, c.result].join(':') : '-'; }
+// v55.83-ZB (Max 25 Nov "yards and yards and weight and weight"): the two side-by-side checks of one product, in plain words.
+// A side without a figure says "not on the bill" / "not recorded" — never a mismatch. No conversion between yards and pounds.
+export function checkWords(label, c) {
+  if (!c) { return { text: label + ': —', tone: 'muted' }; }
+  if (c.result === 'not_recorded') {
+    var extra = c.received != null && c.billed == null ? ' — warehouse ' + num(c.received) + ' ' + c.unit : '';
+    if (c.packing_list_lb != null && c.billed == null) { extra += ' · packing list ' + num(Math.round(c.packing_list_lb)) + ' lb'; }
+    return { text: label + ': ' + (c.note || 'not recorded') + extra, tone: 'muted' };
+  }
+  var ok = c.result === 'matched' || c.result === 'equal';
+  var t = label + ': billed ' + num(c.billed) + ' ' + c.unit + ' · warehouse ' + num(c.received) + ' ' + c.unit + ' · ' + (c.diff > 0 ? '+' : '') + num(c.diff) + (c.pct != null ? ' (' + (c.pct > 0 ? '+' : '') + c.pct + '%)' : '') + ' — ' + (ok ? 'PASS' : 'REVIEW') + (c.over ? ' (billed MORE than the warehouse — never allowed)' : '');
+  return { text: t, tone: ok ? 'pass' : 'review' };
+}
+function checksBlock(ch) {
+  var rows = [checkWords('Weight', ch.weight), checkWords('Yards', ch.yards)];
+  var notes = []; if (ch.yards && ch.yards.copied_note) { notes.push(ch.yards.copied_note); }
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12, padding: '4px 8px', background: SOFT, borderRadius: 6 }}>
+    {rows.map(function (w, i) { return <div key={i} style={{ color: w.tone === 'pass' ? GREEN : (w.tone === 'review' ? RED : SUB), fontWeight: w.tone === 'muted' ? 400 : 600 }}>{w.text}</div>; })}
+    {notes.map(function (n, i) { return <div key={'n' + i} style={{ color: AMBER }}>{'Note: ' + n}</div>; })}
+  </div>;
 }
 var AUTO_REASON = 'Approved: billed vs scanned within the approved tolerance';
 function reasonProblem(inv, mode, reason) {
@@ -190,7 +212,7 @@ export default function WeightCheckInvoices(props) {
       <div style={tile}>
         <span style={LABEL}>Tolerance</span>
         {tol ? <div style={{ fontSize: 16, fontWeight: 800 }}>{(tol.pct != null ? tol.pct + '%' : '') + (tol.lb != null ? (tol.pct != null ? ' or ' : '') + tol.lb + ' lb' : '')}</div> : <div style={{ fontSize: 15, fontWeight: 800, color: AMBER }}>Not set</div>}
-        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>A bill may be BELOW what was scanned by up to this much. A bill ABOVE what was scanned is never allowed.</div>
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>A bill may be BELOW what was scanned by up to this much. A bill ABOVE what was scanned is never allowed. The % applies to weight and to yards (each checked on its own); a pound allowance only to weight.</div>
         {perms.super_admin ? <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}><input value={tolPct} onChange={function (e) { setTolPct(e.target.value.replace(/[^0-9.]/g, '')); }} placeholder={tol && tol.pct != null ? String(tol.pct) : '10'} className="nt-light" style={Object.assign({}, FIELD, { width: 70 })} /><span style={{ color: SUB }}>%</span><button disabled={busy === 'tol' || !tolPct} onClick={saveTolerance} style={Object.assign(btn(INK, '#ffffff'), { opacity: tolPct ? 1 : 0.5 })}>{tol ? 'Change' : 'Set tolerance'}</button></div> : null}
       </div>
       <div style={tile}>
@@ -256,6 +278,7 @@ export default function WeightCheckInvoices(props) {
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: f.diff < 0 ? RED : INK, fontWeight: 700 }}>{f.diff != null ? (f.diff > 0 ? '+' : '') + num(f.diff) + (f.pct != null ? '  (' + (f.pct > 0 ? '+' : '') + f.pct + '%)' : '') : '—'}</td>
               <td style={{ padding: '7px 8px' }}><span style={pill(ok ? GREEN : RED, ok ? '#f0fdf4' : '#fef2f2')}>{ok ? 'PASS' : 'REVIEW'}</span><span style={{ fontSize: 12, color: MUTED, marginLeft: 6 }}>{r.outcome_words || r.outcome}{r.state && DONE_STATES.indexOf(r.state) >= 0 ? ' · ' + (r.state_words || r.state) : r.state === 'issue_open' ? ' · disputed' : ''}</span></td>
             </tr>
+            {f.checks ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{checksBlock(f.checks)}</td></tr> : null}
             {r.needs_mapping ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{MapForm({ row: r, inv: inv })}</td></tr> : null}
             </React.Fragment>;
           })}</tbody></table> : null}

@@ -299,6 +299,30 @@ export function compareGroup(inp) {
     else { outcome = 'discrepancy'; }
     // Max 25 Nov: a bill above what was scanned is never allowed — say so plainly
     if (outcome === 'discrepancy' && diff != null && diff < 0) { reasons.unshift('billed MORE than was scanned into the warehouse (' + Math.abs(diff) + ' ' + (unitWord || '') + ') — never allowed, no tolerance'); }
+    // v55.83-ZB (Max 25 Nov: "yards and yards and weight and weight comparison"): two checks side by side, NO conversion between
+    // them. Weight = billed lb vs scanned lb; Yards = billed yd vs the receipt's yards. A side with no figure says so ("not on the
+    // bill" / "not recorded") — never a mismatch. Each check has its own result under the same one-way rule; the % tolerance
+    // applies to both, the lb allowance only to weight.
+    var lengthOnly = kinds.length && !kinds.weight && !unknownLines.length; var weightOnly = kinds.weight && !kinds.length && !unknownLines.length;
+    var declaredYd = null; var declaredAll = recs.length > 0 && recs.every(function (r) { return r.data.state !== 'removed' && r.data.info && parseNum(r.data.info.declared_quantity, false).value != null && receiptLengthUnit(r.data).toYd != null; });
+    if (declaredAll) { declaredYd = r3(recs.reduce(function (s, r) { return s + parseNum(r.data.info.declared_quantity, false).value * receiptLengthUnit(r.data).toYd; }, 0)); }
+    var checks = {
+      weight: oneCheck('lb', weightOnly ? billedLb : null, mine.length ? recLb : null, tol, true),
+      yards: oneCheck('yd', lengthOnly ? billedYd : null, mine.length ? recYd : null, tol, false)
+    };
+    if (checks.weight.billed == null) { checks.weight.note = kinds.length ? 'not on the bill (billed in yards)' : 'not on the bill'; }
+    else if (checks.weight.received == null) { checks.weight.note = mine.length ? 'the scale weight is not readable for every scan row' : 'not scanned'; }
+    if (checks.yards.billed == null) { checks.yards.note = kinds.weight ? 'not on the bill (billed by weight)' : 'not on the bill'; }
+    else if (checks.yards.received == null) { checks.yards.note = mine.length ? 'not recorded on the receipt' : 'not scanned'; }
+    // Codex 25 Nov: the receipt's row yards are typed at scan-in; when they add up exactly to the packing-list quantity they may be
+    // copied, not measured — said plainly (information; Max decided the yards are compared)
+    if (checks.yards.received != null && declaredYd != null && Math.abs(checks.yards.received - declaredYd) < 0.005) { checks.yards.copied_note = 'the warehouse yards equal the packing-list quantity (' + declaredYd + ' yd) — they may have been copied from it, not measured'; }
+    if (recPlKg != null) { checks.weight.packing_list_lb = r3(recPlKg * LB_PER_KG); checks.weight.scale_vs_packing_list_lb = recLb != null ? r3(recLb - recPlKg * LB_PER_KG) : null; }
+    // a check that has both figures and fails makes the product REVIEW even when the other one passes
+    if ((outcome === 'matched' || outcome === 'equal') && (checks.weight.result === 'discrepancy' || checks.yards.result === 'discrepancy')) {
+      outcome = 'discrepancy';
+      ['weight', 'yards'].forEach(function (k) { var c = checks[k]; if (c.result === 'discrepancy') { reasons.push(k + ': billed ' + c.billed + ' ' + c.unit + ' vs ' + c.received + ' ' + c.unit + ' in the warehouse'); } });
+    }
     if (flags.length) { reasons = reasons.concat(flags); }
     var inputs = {
       item_key: g.key + '|p:' + pk,
@@ -315,7 +339,7 @@ export function compareGroup(inp) {
       figures: { basis: basis, unit: unitWord, billed: billed, received: received, diff: diff, pct: pct, billed_lb: kinds.weight ? billedLb : null, billed_yd: kinds.length ? billedYd : null,
         received_lb: recLb, received_yd: recYd, received_rolls: recRolls, declared_pl_kg: recPlKg, conversion: conversion,
         lb_factor: lbFactor, billed_lb_by_factor: lbFactor && billedYd ? r3(billedYd * lbFactor) : null, received_lb_vs_factor: lbFactor && recLb != null && billedYd ? r3(recLb - billedYd * lbFactor) : null,
-        scans: mine.length, scanned_out: mine.filter(function (l) { return l.scanned_out; }).length },
+        scans: mine.length, scanned_out: mine.filter(function (l) { return l.scanned_out; }).length, checks: checks },
       bill_lines: P.lines.map(lineOut), scan_rows: mine, inputs: inputs
     }));
   });
@@ -332,6 +356,14 @@ export function compareGroup(inp) {
     });
   }
   return items;
+}
+// one side-by-side check (v55.83-ZB): billed vs warehouse in ONE unit; result matched / equal / discrepancy, or not_recorded
+function oneCheck(unit, billed, received, tol, isWeight) {
+  var d = (billed != null && received != null) ? r3(received - billed) : null;
+  var t = tol ? (isWeight ? tol : { pct: tol.pct, lb: null }) : null;
+  var res = d === null ? 'not_recorded' : (t && withinTolerance(d, billed, t) ? 'matched' : (!t && d === 0 ? 'equal' : 'discrepancy'));
+  return { unit: unit, billed: billed, received: received, diff: d, pct: (d != null && billed) ? Math.round(d / billed * 10000) / 100 : null, result: res, note: null,
+    over: d != null && d < -1e-9 };
 }
 function lineOut(ln) { return { bill_id: ln.bill_id, bill_number: ln.bill_number, line_no: ln.line_no, line_id: ln.line_id, description: ln.description, qty: ln.qty, unit: ln.unit, conversion: ln.u.label || ln.u.reason || null }; }
 function uniqF(x, i, a) { return a.indexOf(x) === i; }
