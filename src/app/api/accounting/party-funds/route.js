@@ -12,7 +12,7 @@
 // 🔒 "Advances: Manage" switch (only the super admin grants it — Max: "ONLY ME or permissioned"). A date inside a closed month
 // is accepted only from the super admin. Every action is for the verified signed-in person. Private bank accounts are respected.
 // Fails closed on any read error. SWC-safe: var + string concatenation only.
-import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -96,7 +96,7 @@ async function fetchAllRows(build) {
   return out;
 }
 
-async function postZD(req) {
+export async function POST(req) {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) { return fail('Server key missing.', 500); }
   var db = admin();
   try {
@@ -110,7 +110,7 @@ async function postZD(req) {
     // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
     var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
     if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
-    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
+    db = payrollFilteredDb(db, payZD);
     var gA = await assertPermission(db, userId, 'accounting.view', req);
     if (!gA || gA.ok !== true) { return fail('This needs "Accounting Access" (P1).', 403); }
     var isSuper = !!(gA.ctx && gA.ctx.isSuperAdmin);
@@ -398,5 +398,3 @@ async function postZD(req) {
   }
 }
 
-// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
-export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

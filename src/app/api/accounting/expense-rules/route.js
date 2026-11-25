@@ -12,7 +12,7 @@
 // • Categories/rules are deactivated, never deleted (accountability).
 // • Permission: bank.classify (same permission that categorizes in Bank
 //   Review); super admin always.
-import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { visibleSyncWarning } from '../../../../lib/bank-sync-health';
@@ -54,7 +54,7 @@ function slugify(label) {
 // v55.83-RC — a big rule apply / all-transactions load must finish, not time out
 export const maxDuration = 60;
 
-async function postZD(req) {
+export async function POST(req) {
   try {
     var body = await req.json();
     var action = body.action;
@@ -66,7 +66,7 @@ async function postZD(req) {
     // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
     var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
     if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
-    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
+    db = payrollFilteredDb(db, payZD);
 
     // v55.83-RE — Accounting Access (P1) first: no other accounting permission takes effect without it
     var gateP1 = await assertPermission(db, userId, 'accounting.view', req);
@@ -741,5 +741,3 @@ async function postZD(req) {
   }
 }
 
-// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
-export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

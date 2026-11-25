@@ -4,7 +4,7 @@
 // bills / wires / books switch). Every non-super answer is searched (values AND text) for the payroll bills' ids, vendors and amounts.
 var path = require('path'); var Module = require('module');
 var root = path.join(__dirname, '..');
-var SUPER = '11111111-1111-4111-8111-111111111111', ADMIN = '22222222-2222-4222-8222-222222222222', STAFF = '33333333-3333-4333-8333-333333333333';
+var SUPER = '11111111-1111-4111-8111-111111111111', ADMIN = '22222222-2222-4222-8222-222222222222', STAFF = '33333333-3333-4333-8333-333333333333', PNLU = '44444444-4444-4444-8444-444444444444';
 var ENV = { NEXT_PUBLIC_SUPABASE_URL: 'https://placeholder.supabase.co', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon-key', SUPABASE_SERVICE_ROLE_KEY: 'service-key', HUB_SUPER_ADMIN_AUTH_USER_IDS: SUPER };
 Object.keys(ENV).forEach(function (k) { process.env[k] = ENV[k]; });
 require(path.join(root, 'node_modules/sucrase/register'));
@@ -16,15 +16,15 @@ console.log('ZD — payroll bills: one group, super admin only (real routes)');
 var B1 = 'b1000000-0000-4000-8000-000000000001', B2 = 'b2000000-0000-4000-8000-000000000002', B3 = 'b3000000-0000-4000-8000-000000000003', B4 = 'b4000000-0000-4000-8000-000000000004', B5 = 'b5000000-0000-4000-8000-000000000005';
 var P1 = 'f1000000-0000-4000-8000-000000000001', P2 = 'f2000000-0000-4000-8000-000000000002';
 var PAY_IDS = [B1, B3, B4, B5, P1]; var PAY_VENDORS = ['ADP Payroll', 'Acme Staffing', 'Warehouse staff (Nextrade payroll)', 'County']; var PAY_AMOUNTS = [4321.17, 777.77, 555.55, 333.33, 5320.67];
-var TOK = { 'tok-super': SUPER, 'tok-admin': ADMIN, 'tok-staff': STAFF };
+var TOK = { 'tok-super': SUPER, 'tok-admin': ADMIN, 'tok-staff': STAFF, 'tok-pnl': PNLU };
 var world = { db: null, failLines: false };
 function g(uid, names) { return names.map(function (n, i) { return { id: uid + '-' + i, user_id: uid, module_name: n, has_access: true }; }); }
 function bill(id, vendor, amount, extra) { return Object.assign({ id: id, vendor_name: vendor, bill_number: 'N-' + id.substring(0, 2), bill_date: '2026-11-02', due_date: '2026-11-30', currency: 'USD', total_amount: amount, category: 'rent', notes: null, record_status: 'active', created_at: '2026-11-02', attachment_path: null }, extra || {}); }
 function fresh() {
   var db = new FakeDb({});
-  db.t.users = [{ id: SUPER, role: 'super_admin', active: true, email: 's@x' }, { id: ADMIN, role: 'admin', active: true, email: 'a@x' }, { id: STAFF, role: 'team', active: true, email: 't@x' }];
+  db.t.users = [{ id: SUPER, role: 'super_admin', active: true, email: 's@x' }, { id: ADMIN, role: 'admin', active: true, email: 'a@x' }, { id: STAFF, role: 'team', active: true, email: 't@x' }, { id: PNLU, role: 'team', active: true, email: 'p@x' }];
   var ALLSW = ['accounting.view', 'accounting.clickbooks.access', 'bills.view', 'bills.manage', 'wires.view', 'wires.prepare', 'accounting.view_totals', 'company.nextrade.view'];
-  db.t.module_permissions = [].concat(g(ADMIN, ALLSW), g(STAFF, ALLSW));
+  db.t.module_permissions = [].concat(g(ADMIN, ALLSW), g(STAFF, ALLSW), g(PNLU, ALLSW.concat(['pnl.view'])));
   db.t.hub_audit_log = []; db.t.financial_visibility_permissions = [];
   db.t.expense_categories = [{ key: 'rent', label: 'Rent' }, { key: 'wages_k', label: 'Payroll taxes' }];
   db.t.company_categories = [{ id: 'c1', company_id: 'NEXTRADE_BOOKS', key: 'warehouse_staff', label: 'Warehouse staff', kind: 'expense', is_payroll: true, active: true, sort: 1 }];
@@ -84,7 +84,7 @@ function leaks(o) {
   fresh();
   var sup = await bills('tok-super', { action: 'list' });
   var supIds = ((sup.j.bills || sup.j.rows || []).map(function (b) { return b.id; }));
-  check('super admin: every bill, the payroll ones with their reasons', sup.status === 200 && [B1, B2, B3, B4, B5].every(function (x) { return supIds.indexOf(x) >= 0; }) && (sup.j.bills || sup.j.rows).filter(function (b) { return b.payroll_reasons; }).length === 4 && !sup.j.payroll_excluded, { status: sup.status, err: sup.j.error, ids: supIds });
+  check('super admin: every bill, the payroll ones with their reasons', sup.status === 200 && [B1, B2, B3, B4, B5].every(function (x) { return supIds.indexOf(x) >= 0; }) && (sup.j.bills || sup.j.rows).filter(function (b) { return b.payroll_reasons; }).length === 4 && !(sup.j.totals || {}).payroll_note, { status: sup.status, err: sup.j.error, ids: supIds });
   var groups = BG.groupByVendor(sup.j.bills || sup.j.rows || [], '2026-11-25');
   check('super admin: ONE "Payroll" group first, holding all four payroll bills whatever their vendor; the rest by vendor', groups[0].vendor === 'Payroll' && groups[0].payroll === true && groups[0].count === 4 && groups.slice(1).every(function (x) { return !x.payroll; }), groups.map(function (x) { return x.vendor + ':' + x.count; }));
   var PEOPLE = [['ADMIN', 'tok-admin'], ['STAFF', 'tok-staff']];
@@ -93,7 +93,7 @@ function leaks(o) {
     var ids = (r.j.bills || r.j.rows || []).map(function (b) { return b.id; });
     check(PEOPLE[i][0] + ': the list has the normal bill only', r.status === 200 && ids.length === 1 && ids[0] === B2, { status: r.status, err: r.j.error, ids: ids });
     check(PEOPLE[i][0] + ': NO payroll id, vendor or amount anywhere in the answer (totals, payments, wires included)', leaks(r.j).length === 0, leaks(r.j).slice(0, 10));
-    check(PEOPLE[i][0] + ': totals are the normal bill only, and say "excluding payroll"', r.j.totals && r.j.totals.open === 499.5 && /excluding payroll/.test(r.j.payroll_excluded || ''), { totals: r.j.totals, note: r.j.payroll_excluded });
+    check(PEOPLE[i][0] + ': totals are the normal bill only, and the TOTAL carries the fixed "excluding any payroll bills" words', r.j.totals && r.j.totals.open === 499.5 && /excluding any payroll bills/.test(r.j.totals.payroll_note || ''), { totals: r.j.totals });
     var bl = await bills(PEOPLE[i][1], { action: 'bill_lines', id: B1 });
     check(PEOPLE[i][0] + ': asking for a payroll bill by its id → 404 "not found", nothing of it returned', bl.status === 404 && leaks(bl.j).length === 0, bl);
   }
@@ -116,6 +116,38 @@ function leaks(o) {
   var nSup = await cb('tok-super', { action: 'nextrade_bills' });
   var ng = NG.groupNextradeBills(nSup.j.rows || [], {});
   check('super admin: the Nextrade payroll bill with its reason, in a "Payroll" group first', nSup.status === 200 && (nSup.j.rows || []).length === 1 && (nSup.j.rows[0].payroll_reasons || []).length > 0 && ng[0].label === 'Payroll', { status: nSup.status, rows: nSup.j.rows });
+
+  // ── P&L by period (period_stats — also Stats & Income Statement, Books Home, accountant pack) — Max 25 Nov ──
+  fresh();
+  var psBody = { action: 'period_stats', from: '2026-11-01', to: '2026-11-30' };
+  var pSup = await bills('tok-super', psBody); var pPnl = await bills('tok-pnl', psBody); var pNo = await bills('tok-staff', psBody);
+  var TOTAL_BILLED = Math.round((4321.17 + 999.5 + 777.77 + 555.55 + 333.33) * 100) / 100;
+  check('P&L by period — super admin: every bill counted (payroll included), payroll detail rows listed', pSup.status === 200 && pSup.j.bills && pSup.j.bills.billed === TOTAL_BILLED && (pSup.j.drills.billed || []).length === 5 && !pSup.j.bills.payroll_note, { status: pSup.status, err: pSup.j.error, bills: pSup.j.bills });
+  check('P&L by period — a P&L user (not super admin): payroll COUNTED in the figures (Max: used in the P&L and tax)', pPnl.status === 200 && pPnl.j.bills && pPnl.j.bills.billed === TOTAL_BILLED && !pPnl.j.spending_restricted, { status: pPnl.status, err: pPnl.j.error, bills: pPnl.j.bills, sr: pPnl.j.spending_restricted });
+  check('P&L by period — a P&L user: the payroll BILL detail rows are super admin only, and the answer says the totals include them', (pPnl.j.drills.billed || []).length === 1 && /include payroll bills/.test(pPnl.j.bill_detail_note || '') && JSON.stringify(pPnl.j.drills).indexOf('ADP Payroll') < 0, { drills: pPnl.j.drills.billed, note: pPnl.j.bill_detail_note });
+  check('P&L by period — NO P&L access: payroll bills left out of the bill figures, with the fixed words on them', pNo.status === 200 && pNo.j.bills && pNo.j.bills.billed === 999.5 && /excluding any payroll bills/.test(pNo.j.bills.payroll_note || ''), { status: pNo.status, err: pNo.j.error, bills: pNo.j.bills });
+  check('P&L by period — NO P&L access: the whole spending section (every expense column, tax, accountant pack) WITHHELD — null with a restricted reason, never 0', pNo.j.spending === null && pNo.j.spending_restricted && pNo.j.spending_restricted.reason === 'payroll' && /withheld, not zero/.test(pNo.j.spending_restricted.words || ''), { sp: pNo.j.spending, sr: pNo.j.spending_restricted });
+  check('P&L by period — NO P&L access: every month’s net withheld (it would mix full and partial figures)', (pNo.j.months || []).length > 0 && pNo.j.months.every(function (m) { return m.net === null && m.net_restricted === true; }), pNo.j.months);
+  check('P&L by period — NO P&L access: whole-JSON scan finds no payroll id, vendor or amount', leaks(pNo.j).length === 0, leaks(pNo.j).slice(0, 10));
+  // the note never depends on whether payroll exists (Codex 25 Nov)
+  fresh(); world.db.t.vendor_bills = world.db.t.vendor_bills.filter(function (b) { return b.id === B2; }); world.db.t.vendor_bill_lines = world.db.t.vendor_bill_lines.filter(function (l) { return l.bill_id === B2; }); world.db.t.company_bill_links = []; world.db.t.recurring_bills = [];
+  var noPay = await bills('tok-staff', { action: 'list' });
+  check('with NO payroll anywhere, a non-super-admin gets the SAME fixed words (the label never tells that payroll exists)', /excluding any payroll bills/.test((noPay.j.totals || {}).payroll_note || ''), noPay.j.totals);
+  // writes that would CREATE payroll are refused by the server for a non-super-admin (Codex 25 Nov)
+  fresh();
+  var scS = await PB.payrollBillScope(world.db, STAFF); var dbS = PB.payrollFilteredDb(world.db, scS);
+  var w1 = await dbS.from('vendor_bills').insert({ id: 'new-1', vendor_name: 'Gusto Payroll', total_amount: 1 });
+  var w2 = await dbS.from('vendor_bills').update({ vendor_name: 'Acme Payroll' }).eq('id', B2);
+  var w3 = await dbS.from('vendor_bills').update({ category: 'wages_k' }).eq('id', B2);
+  var w4 = await dbS.from('vendor_bill_lines').insert({ bill_id: B2, description: 'payroll Nov', amount: 1 });
+  var w5 = await dbS.from('company_bill_links').insert({ bill_id: B2, company_id: 'NEXTRADE_BOOKS', category_key: 'warehouse_staff', status: 'active' });
+  var w6 = await dbS.rpc('hub_company_categorize', { p: { line_id: 'L9', company_id: 'NEXTRADE_BOOKS', category_key: 'warehouse_staff' } });
+  check('server: a non-super-admin cannot add a payroll bill, rename / recategorize a bill into payroll, add a payroll line, link to a payroll category or categorize a Nextrade line as payroll — nothing written', [w1, w2, w3, w4, w5, w6].every(function (w) { return w && w.error && /super admin only/.test(w.error.message); }) && world.db.t.vendor_bills.length === 5 && world.db.t.vendor_bills.filter(function (b) { return b.id === B2; })[0].vendor_name === 'Acme Supplies' && world.db.t.vendor_bill_lines.length === 3, [w1, w2, w3, w4, w5, w6].map(function (w) { return w && w.error ? w.error.message.substring(0, 30) : 'ALLOWED'; }));
+  var w7 = await dbS.from('vendor_bills').update({ total_amount: 1000 }).eq('id', B2);
+  check('server: ordinary changes to an ordinary bill still go through', !w7.error && world.db.t.vendor_bills.filter(function (b) { return b.id === B2; })[0].total_amount === 1000, w7);
+  var scU = await PB.payrollBillScope(world.db, SUPER); var dbU = PB.payrollFilteredDb(world.db, scU);
+  var w8 = await dbU.from('vendor_bills').insert({ id: 'new-2', vendor_name: 'Gusto Payroll', total_amount: 1 });
+  check('server: the super admin may add a payroll bill', !w8.error && world.db.t.vendor_bills.length === 6, w8);
 
   // ── fails closed ──
   world.failLines = true;

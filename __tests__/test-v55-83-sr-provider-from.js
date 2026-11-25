@@ -79,7 +79,7 @@ function bt(i, date, amt, dir, name, x) { return Object.assign({ id: i, date: da
 function nb(n, vendor, no, amt, cat) { return { id: id(n), vendor_name: vendor, bill_number: no, bill_date: '2026-11-10', due_date: '2026-11-20', total_amount: amt, currency: 'USD', category: cat, record_status: 'active', validation_status: 'validated', bill_type: 'supplier', shipment_direction: 'inbound', other_reference: 'REF-' + no, paid_via: 'NextTrade Industries' }; }
 var db = new MemDB({
   users: [{ id: 'u1', name: 'Preparer', role: 'staff', active: true }, { id: 'u2', name: 'Checker', role: 'staff', active: true }],
-  module_permissions: [].concat(['accounting.clickbooks.access', 'accounting.view_totals', 'accounting.change_dates', 'wires.prepare', 'wires.signoff', 'wires.send', 'bills.manage', 'bills.view'].map(function (k) { return { user_id: 'u1', module_name: k, has_access: true }; }),
+  module_permissions: [].concat(['accounting.clickbooks.access', 'accounting.view_totals', 'accounting.change_dates', 'pnl.view' /* v55.83-ZD: spending figures need P&L access */, 'wires.prepare', 'wires.signoff', 'wires.send', 'bills.manage', 'bills.view'].map(function (k) { return { user_id: 'u1', module_name: k, has_access: true }; }),
     ['accounting.clickbooks.access', 'wires.signoff'].map(function (k) { return { user_id: 'u2', module_name: k, has_access: true }; })),
   vendor_bills: [nb(1, 'Vendor N', 'N-1', 3000, 'cogs_goods'), nb(2, 'Vendor M', 'M-1', 1000, 'freight')],
   vendor_bill_lines: [], vendor_bill_payments: [], vendor_bill_events: [], hub_audit_log: [],

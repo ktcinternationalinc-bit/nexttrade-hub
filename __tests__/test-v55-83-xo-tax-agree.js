@@ -87,7 +87,7 @@ function pfOf(sp, party) { return (sp.party_funds || []).filter(function (p) { r
   var PE = require(path.join(root, 'src/lib/pnl-expenses.js'));
   function hiddenWorld() { var d = world(); d.t.party_opening_balances[0].visible_to_staff = false; d.t.party_opening_balances[0].reason = 'SECRET-REASON NextTrade May statement'; return d; }
   var LEAK = /SECRET-REASON|"starting_balances"|from_starting_balance|tax_from_starting|party_opening|"O1"|\b5000\b|\b4000\b|10400/;
-  var STAFF = { 'accounting.view': true, 'bills.view': true, 'accounting.view_totals': true, 'accounting.change_dates': true, 'accounting.view_invoicing': true };
+  var STAFF = { 'accounting.view': true, 'bills.view': true, 'accounting.view_totals': true, 'accounting.change_dates': true, 'accounting.view_invoicing': true, 'pnl.view': true }; // v55.83-ZD: spending / tax figures need P&L access (they include payroll) — this staff member has it, so the starting-balance rules are what is tested
   hiddenWorld(); state.super = true; state.perms = null;
   var hs = await call({ action: 'period_stats', from: '2026-06-01', to: '2026-06-30' });
   check('SUPER ADMIN, hidden balance: the full report — Professional fees 10,400, the balance with its reason in party_funds, no restriction', hs.ok === true && !hs.spending_restricted && cat(hs.spending, 'professional_fees').total === 10400 && pfOf(hs.spending, NT).starting_balances[0].reason === 'SECRET-REASON NextTrade May statement', hs.spending_restricted || hs.error);
@@ -114,7 +114,7 @@ function pfOf(sp, party) { return (sp.party_funds || []).filter(function (p) { r
   // Fixture (fabricated): NextTrade has a VISIBLE balance O2 (2,000 as of 15 March, a 250 bill paid from it on 20 April) and the
   // HIDDEN balance O1 (5,000 as of 10 May, corrected by −100 → 4,900; bills of 600 on 20 May and 400 on 15 June paid from it:
   // used 1,000, held 3,900). An April transfer of 3,000 to NextTrade. April is BEFORE the hidden balance, June is AFTER it.
-  var DED = { 'accounting.view': true, 'bills.view': true, 'accounting.view_totals': true, 'accounting.change_dates': true, 'accounting.view_invoicing': true };
+  var DED = { 'accounting.view': true, 'bills.view': true, 'accounting.view_totals': true, 'accounting.change_dates': true, 'accounting.view_invoicing': true, 'pnl.view': true }; // v55.83-ZD: P&L access (see STAFF)
   function mixedWorld(extraUse) {
     var d = hiddenWorld();
     d.t.party_opening_balances.push({ id: 'O1c', party: NT, amount: -100, as_of: '2026-05-10', reason: 'SECRET-CORRECTION typo', visible_to_staff: false, corrects_id: 'O1', created_at: '2026-11-21T00:00:00Z' });

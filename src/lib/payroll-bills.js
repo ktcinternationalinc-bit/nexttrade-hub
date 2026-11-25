@@ -14,10 +14,11 @@
 // and a write aimed at one of those rows finds nothing. Answers say so ("excluding payroll"). Fails CLOSED: if the payroll
 // list or the caller's role cannot be read, nothing is shown.
 // Server-only; SWC-safe: var + string concatenation.
+import { assertPermission } from './server-permissions';
 
 export var PAYROLL_GROUP = 'Payroll';
 export var EXCLUDING_PAYROLL = 'excluding payroll';
-export var EXCLUDING_PAYROLL_NOTE = 'Totals here are excluding payroll — payroll bills are shown to the super admin only.';
+export var EXCLUDING_PAYROLL_NOTE = 'excluding any payroll bills (shown to the super admin only)';
 
 function has(s) { return /payroll/i.test(String(s || '')); }
 
@@ -95,7 +96,9 @@ export async function loadPayrollBills(db) {
     var rec = await db.from('recurring_bills').select('id, vendor_name, category');
     if (rec.error) { return { error: 'repeating bills: ' + rec.error.message }; }
     var recurring = {}; (rec.data || []).forEach(function (r) { if (payrollReasons(r, ctx).length) { recurring[r.id] = true; } });
-    return { ids: ids, packages: packages, recurring: recurring };
+    // what a WRITE is checked against (Codex 25 Nov: the proposed values, not only the rows already stored)
+    var payLinkKeys = {}; (pcats.data || []).forEach(function (c) { payLinkKeys[c.company_id + '|' + c.key] = true; payLinkKeys['*|' + c.key] = true; });
+    return { ids: ids, packages: packages, recurring: recurring, catLabels: catLabels, payLinkKeys: payLinkKeys };
   } catch (e) { return { error: (e && e.message) || 'error' }; }
 }
 
@@ -133,14 +136,29 @@ export function payrollFilteredDb(db, scope) {
   function namesPayroll(table, rows) {
     return [].concat(rows || []).some(function (r) { return r && ['id', 'bill_id', 'package_id', 'entity_id'].some(function (k) { return r[k] !== undefined && r[k] !== null && hit[String(r[k])] === true; }); });
   }
-  // a stand-in query that answers "not found" to whatever is chained on it
-  function refused() {
-    var ans = { data: null, error: { code: 'PGRST116', message: 'not found' }, count: 0 };
+  // the values a write PROPOSES make the row payroll (Codex 25 Nov): a non-super-admin can never add or create payroll
+  function proposesPayroll(table, rows) {
+    var pay = scope.pay; var ctx = { catLabels: pay.catLabels || {} };
+    return [].concat(rows || []).some(function (r) {
+      if (!r || typeof r !== 'object') { return false; }
+      if (table === 'vendor_bills' || table === 'recurring_bills') { return payrollReasons({ vendor_name: r.vendor_name, category: r.category }, ctx).length > 0; }
+      if (table === 'vendor_bill_lines') { return has(r.description); }
+      if (table === 'company_bill_links') { var k = r.category_key; if (k === undefined || k === null) { return false; } var active = r.status === undefined || r.status === 'active'; return active && !!((pay.payLinkKeys || {})[(r.company_id || '*') + '|' + k] || (pay.payLinkKeys || {})['*|' + k]); }
+      return false;
+    });
+  }
+  // a stand-in query that answers with an error to whatever is chained on it (never written, never confirmed)
+  function refused(msg) {
+    var ans = { data: null, error: { code: msg ? 'P0001' : 'PGRST116', message: msg || 'not found' }, count: 0 };
     var p = new Proxy(function () {}, { get: function (t, k) { if (k === 'then') { return function (res, rej) { return Promise.resolve(ans).then(res, rej); }; } return function () { return p; }; } });
     return p;
   }
+  var ONLY_SUPER = 'Payroll bills are added and changed by the super admin only (vendor, category or a line saying “payroll”, or a Nextrade payroll link). Nothing was saved.';
   function narrow(table, fb) {
-    var rules = ex[table]; if (!rules || !fb || typeof fb.not !== 'function') { return fb; }
+    var rules = ex[table]; if (!rules || !fb) { return fb; }
+    var needed = rules.some(function (r) { return r[1].length > 0; });
+    if (!needed) { return fb; }
+    if (typeof fb.not !== 'function') { return refused('This connection cannot leave payroll out — nothing was shown or changed.'); } // fail closed
     rules.forEach(function (r) { if (r[1].length) { fb = fb.not(r[0], 'in', inList(r[1])); } });
     return fb;
   }
@@ -152,16 +170,24 @@ export function payrollFilteredDb(db, scope) {
         return new Proxy(qb, { get: function (t2, p2) {
           var v = t2[p2];
           if (typeof v !== 'function') { return v; }
-          if (p2 === 'select' || p2 === 'update' || p2 === 'delete') { return function () { return narrow(table, v.apply(t2, arguments)); }; }
-          // an insert / upsert that names a payroll row (its id, bill or package) is refused: never written, never confirmed
-          if (p2 === 'upsert' || p2 === 'insert') { return function (rows) { if (namesPayroll(table, rows)) { return refused(); } return v.apply(t2, arguments); }; }
+          if (p2 === 'select' || p2 === 'delete') { return function () { return narrow(table, v.apply(t2, arguments)); }; }
+          // an update whose NEW values make the row payroll is refused; otherwise it never reaches a payroll row
+          if (p2 === 'update') { return function (patch) { if (proposesPayroll(table, patch)) { return refused(ONLY_SUPER); } return narrow(table, v.apply(t2, arguments)); }; }
+          // an insert / upsert that names a payroll row (its id, bill or package), or whose values ARE payroll, is refused
+          if (p2 === 'upsert' || p2 === 'insert') { return function (rows) { if (namesPayroll(table, rows)) { return refused(); } if (proposesPayroll(table, rows)) { return refused(ONLY_SUPER); } return v.apply(t2, arguments); }; }
           return v.bind(t2);
         } });
       };
     }
     // a database function called with a payroll bill / package anywhere in its arguments (pay, allocate, sign, link…) is refused
     if (prop === 'rpc') {
-      return function (name, args) { if (mentionsPayroll(args)) { return refused(); } return target.rpc.apply(target, arguments); };
+      return function (name, args) {
+        if (mentionsPayroll(args)) { return refused(); }
+        // categorizing a Nextrade line INTO a payroll category makes / links a payroll bill: the super admin's own action (ZD, Codex 25 Nov)
+        // (only Nextrade lines make / link KTC bills; RTM lines never do, so categorizing them changes no bill)
+        if (/^hub_company_categorize/.test(String(name)) && args && args.p && args.p.category_key && String(args.p.company_id || '') === 'NEXTRADE_BOOKS' && proposesPayroll('company_bill_links', [{ company_id: args.p.company_id, category_key: args.p.category_key }])) { return refused(ONLY_SUPER); }
+        return target.rpc.apply(target, arguments);
+      };
     }
     var val = target[prop]; return typeof val === 'function' ? val.bind(target) : val;
   } });
@@ -188,19 +214,14 @@ export function requestNamesPayroll(scope, body) {
   })(body);
 }
 
-// The route's answer, labelled for a non-super-admin when payroll bills exist: { ..., payroll_excluded: EXCLUDING_PAYROLL_NOTE }.
-// Only a JSON object answer is touched; status and headers are kept.
-export async function withPayrollLabel(req, res) {
-  var sc = null; try { sc = req && req.__payZD; } catch (e) { sc = null; }
-  if (!res || !sc || sc.isSuper === true || !(sc.count > 0)) { return res; }
-  var ct = ''; try { ct = String(res.headers.get('content-type') || ''); } catch (e2) { ct = ''; }
-  if (ct.indexOf('application/json') < 0) { return res; }
-  var body = null; try { body = await res.clone().json(); } catch (e3) { return res; }
-  if (!body || typeof body !== 'object' || Array.isArray(body)) { return res; }
-  body.payroll_excluded = EXCLUDING_PAYROLL_NOTE;
-  var h = new Headers(res.headers); h.delete('content-length');
-  return new Response(JSON.stringify(body), { status: res.status, headers: h });
-}
+// Codex 25 Nov — a label goes on the TOTAL it describes, with the SAME words for every non-super-admin whether or not any payroll
+// exists (so the label itself never tells anyone that payroll exists). The super admin gets no label (nothing is left out).
+export function payrollBillsNote(scope) { return scope && scope.isSuper !== true ? EXCLUDING_PAYROLL_NOTE : undefined; }
 
-// for an answer to a non-super-admin: say that totals exclude payroll (only when payroll exists, so nothing changes otherwise)
-export function excludingNote(scope) { return scope && scope.isSuper !== true && scope.count > 0 ? EXCLUDING_PAYROLL_NOTE : undefined; }
+// Max 25 Nov: "it must be used in the PNL of the reports and tax and in the PNL profitability ... seen ... to those who do [have P&L
+// access] and superadmin" — in the P&L / tax / Profitability figures payroll is ALWAYS counted and shown to the super admin and anyone
+// with P&L: View. → true / false; a failed read is false (fails closed).
+export async function pnlAccess(db, userId, req) {
+  try { var g = await assertPermission(db, userId, 'pnl.view', req); return !!(g && g.ok === true); } catch (e) { return false; }
+}
+export var SPENDING_WITHHELD = 'Spending, tax and P&L figures need P&L access (they include payroll) — they are withheld, not zero.';

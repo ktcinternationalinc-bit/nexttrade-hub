@@ -2,7 +2,7 @@
 // that share a vendor and a bill number in the same company's books (pairs already on file before the database rule
 // sql/v55-83-WZ-same-number-bills.sql). Voiding the extra copies is done with the Bills route's own void_bill action, which
 // refuses a bill with money on it or on a wire. Same permission as managing bills; the caller comes from the verified sign-in.
-import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../../lib/verified-caller';
@@ -24,7 +24,7 @@ async function fetchAll(buildQ) {
   return out;
 }
 
-async function postZD(req) {
+export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
@@ -34,7 +34,7 @@ async function postZD(req) {
     // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
     var payZD = await payrollBillScope(db, who.userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
     if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
-    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
+    db = payrollFilteredDb(db, payZD);
     if (who.error) { return bad(who.error, who.status); }
     var gate = await assertPermission(db, who.userId, 'bills.manage', req);
     if (!gate || gate.ok !== true) { return bad('This needs the "Bills: manage" permission.', 403); }
@@ -61,5 +61,3 @@ async function postZD(req) {
   }
 }
 
-// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
-export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

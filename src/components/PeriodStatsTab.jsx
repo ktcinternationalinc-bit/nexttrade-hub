@@ -10,6 +10,8 @@ import { keepUndoBar, undoChangedSomething } from '../lib/undo-bar-state'; // v5
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
+// v55.83-ZD — a CSV money cell: a withheld figure (null / missing) is "restricted", never 0 and never a crash
+export function csvMoney(x) { return x === null || x === undefined || isNaN(Number(x)) ? 'restricted' : Number(x).toFixed(2); }
 
 var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expense', other_income: 'Other income', other_expense: 'Other expense', transfer: 'Transfer', not_pnl: 'Not P&L (loan/owner)' }; // v55.83-PW
 
@@ -197,8 +199,9 @@ export default function PeriodStatsTab(props) {
     if (!data || !data.months) { return; }
     var L = ['month,invoiced,invoices,collected,payments,bills_entered,bills,bills_paid,bill_payments,net_cash'];
     data.months.forEach(function (m) {
-      L.push([m.month, m.invoiced.toFixed(2), m.invoiced_count, m.collected.toFixed(2), m.collected_count,
-        m.billed.toFixed(2), m.billed_count, m.bills_paid.toFixed(2), m.bills_paid_count, m.net.toFixed(2)].join(','));
+      // v55.83-ZD — a withheld figure (null) is written as "restricted", never 0 and never a crash
+      L.push([m.month, csvMoney(m.invoiced), m.invoiced_count, csvMoney(m.collected), m.collected_count,
+        csvMoney(m.billed), m.billed_count, csvMoney(m.bills_paid), m.bills_paid_count, csvMoney(m.net)].join(','));
     });
     var blob = new Blob([L.join('\n')], { type: 'text/csv' });
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
@@ -285,7 +288,7 @@ export default function PeriodStatsTab(props) {
       dl('tax-pack-12-income-statement-cash-basis-' + tag + '.csv', incomeStatementCsv(data.spending)); // v55.83-WF step C
     }
     var mo = ['month,invoiced,collected,bills_entered,bills_paid,net_cash'];
-    (data.months || []).forEach(function (m) { mo.push(m.month + ',' + m.invoiced.toFixed(2) + ',' + m.collected.toFixed(2) + ',' + m.billed.toFixed(2) + ',' + m.bills_paid.toFixed(2) + ',' + m.net.toFixed(2)); });
+    (data.months || []).forEach(function (m) { mo.push(m.month + ',' + csvMoney(m.invoiced) + ',' + csvMoney(m.collected) + ',' + csvMoney(m.billed) + ',' + csvMoney(m.bills_paid) + ',' + csvMoney(m.net)); }); // ZD: null → "restricted"
     dl('tax-pack-9-monthly-summary-' + tag + '.csv', mo);
     toast.success('Accountant pack downloaded — 12 CSVs for ' + from + ' → ' + to + ' (incl. the cash-basis income statement).');
   }

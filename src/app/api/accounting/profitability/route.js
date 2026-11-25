@@ -11,7 +11,7 @@
 //     pl_* table and to the audit trail with who and when.
 // It NEVER writes to an invoice, a bill, inventory or the ledger.
 // Permissions: pnl.view to see it, pnl.edit_costs to change the set-up (super admin passes both).
-import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { NextResponse } from 'next/server';
 import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server';
 import { creditsPendingInWindow } from '../../../../lib/vendor-credits-server'; // v55.83-YD
@@ -63,7 +63,7 @@ function stripCustomerInvoiceAmounts(row) {
   delete row.expected_cents;
 }
 
-async function postZD(req) {
+export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
@@ -75,8 +75,11 @@ async function postZD(req) {
     // v55.83-ZD — payroll bills: SUPER ADMIN ONLY. Who is calling + the payroll list, read once (fails closed); for anyone else a request
     // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
     var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
-    if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
-    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
+    // Max 25 Nov — P&L / Profitability count and show payroll for the super admin AND anyone with P&L access; only a caller without
+    // P&L access (e.g. an invoice editor on the shipping-parts actions) works without payroll
+    var pnlZD = payZD.isSuper === true || await pnlAccess(db, userId, req);
+    if (!pnlZD && requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    if (!pnlZD) { db = payrollFilteredDb(db, payZD); }
     var pv = await assertPermission(db, userId, 'pnl.view', req);
     // v55.83-XV (Max, Nov 23: "only invoicing permissioning needed to enter inside the shipping data. should not block the user")
     // The two shipping-breakdown actions of the invoice form (read the parts of a release, type one part) also work with the
@@ -468,5 +471,3 @@ async function postZD(req) {
   }
 }
 
-// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
-export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

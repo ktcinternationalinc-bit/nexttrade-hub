@@ -84,15 +84,15 @@ async function setup() {
   await db.query("INSERT INTO public.vendor_bill_payments (bill_id, amount) VALUES ('" + B1 + "', 1000), ('" + B2 + "', 500)");
   await db.query("INSERT INTO public.vendor_bill_events (bill_id, kind) VALUES ('" + B1 + "', 'created'), ('" + B2 + "', 'created')");
   await db.query("INSERT INTO public.company_bill_links (bill_id, company_id, category_key, status) VALUES ('" + B4 + "', 'NEXTRADE_BOOKS', 'warehouse_staff', 'active'), ('" + B2 + "', 'NEXTRADE_BOOKS', 'electricity', 'active')");
-  await db.query("INSERT INTO public.recurring_bills (vendor_name, category, amount) VALUES ('Gusto payroll', null, 9000), ('Landlord', 'rent', 3000)");
+  await db.query("INSERT INTO public.recurring_bills (vendor_name, category, amount) VALUES ('Gusto payroll', null, 9000), ('Landlord', 'rent', 3000), ('City Utilities', null, 120)");
   await db.query("INSERT INTO public.wire_packages VALUES ('" + P1 + "', 'Mixed wire', 5320.67), ('" + P2 + "', 'Acme only', 999.5)");
   await db.query("INSERT INTO public.wire_package_lines (package_id, bill_id, amount) VALUES ('" + P1 + "', '" + B1 + "', 4321.17), ('" + P1 + "', '" + B2 + "', 999.5), ('" + P2 + "', '" + B2 + "', 999.5)");
   await db.query("INSERT INTO public.wire_package_files (package_id, path) VALUES ('" + P1 + "', 'pv/w1.pdf'), ('" + P2 + "', 'pv/w2.pdf')");
   await db.query("INSERT INTO storage.objects (bucket_id, name) VALUES ('bills-private', 'pv/b1.pdf'), ('bills-private', 'pv/b2.pdf'), ('bills-private', 'pv/b3v.pdf'), ('bills-private', 'pv/w1.pdf'), ('bills-private', 'pv/w2.pdf'), ('logos', 'pv/b1.pdf')");
 }
 async function counts(role, sub) { var o = {}; for (var i = 0; i < T.length; i++) { var r = await as(role, sub, 'SELECT count(*)::int AS n FROM public.' + T[i]); o[T[i]] = r.ok ? r.rows[0].n : 'ERR ' + r.msg; } var s = await as(role, sub, "SELECT count(*)::int AS n FROM storage.objects WHERE bucket_id = 'bills-private'"); o.private_files = s.ok ? s.rows[0].n : 'ERR ' + s.msg; return o; }
-var ALL = { vendor_bills: 5, vendor_bill_lines: 3, vendor_bill_payments: 2, vendor_bill_events: 2, company_bill_links: 2, recurring_bills: 2, wire_packages: 2, wire_package_lines: 3, wire_package_files: 2, private_files: 5 };
-var STAFF_AFTER = { vendor_bills: 1, vendor_bill_lines: 1, vendor_bill_payments: 1, vendor_bill_events: 1, company_bill_links: 1, recurring_bills: 1, wire_packages: 1, wire_package_lines: 1, wire_package_files: 1, private_files: 2 };
+var ALL = { vendor_bills: 5, vendor_bill_lines: 3, vendor_bill_payments: 2, vendor_bill_events: 2, company_bill_links: 2, recurring_bills: 3, wire_packages: 2, wire_package_lines: 3, wire_package_files: 2, private_files: 5 };
+var STAFF_AFTER = { vendor_bills: 1, vendor_bill_lines: 1, vendor_bill_payments: 1, vendor_bill_events: 1, company_bill_links: 1, recurring_bills: 2, wire_packages: 1, wire_package_lines: 1, wire_package_files: 1, private_files: 2 };
 function same(a, b) { return Object.keys(b).every(function (k) { return a[k] === b[k]; }); }
 
 try {
@@ -134,6 +134,24 @@ try {
   check('non-super-admin: cannot unlink a bill from its Nextrade payroll category', ul.ok && ul.count === 0, ul);
   var ins = await as('authenticated', STAFF, "INSERT INTO public.wire_package_lines (package_id, bill_id, amount) VALUES ('" + P2 + "', '" + B1 + "', 1)");
   check('non-super-admin: cannot put a payroll bill on a wire', !ins.ok, ins);
+  // Codex 25 Nov — an ordinary repeating bill with NO category stays visible (the rule answers false, never null)
+  var rb = await as('authenticated', STAFF, "SELECT vendor_name FROM public.recurring_bills ORDER BY vendor_name");
+  check('a normal repeating bill with no category (City Utilities) is still shown to a non-super-admin', rb.ok && rb.rows.map(function (r) { return r.vendor_name; }).join(',') === 'City Utilities,Landlord', rb);
+  // Codex 25 Nov — WRITES are checked on the values being written: a non-super-admin cannot turn a bill INTO payroll either
+  var t1 = await as('authenticated', STAFF, "INSERT INTO public.vendor_bills (id, vendor_name, category, total_amount) VALUES ('b6000000-0000-4000-8000-000000000006', 'Gusto Payroll', 'rent', 1)");
+  var t2 = await as('authenticated', STAFF, "UPDATE public.vendor_bills SET vendor_name = 'Acme Payroll' WHERE id = '" + B2 + "'");
+  var t3 = await as('authenticated', STAFF, "UPDATE public.vendor_bills SET category = 'wages_k' WHERE id = '" + B2 + "'");
+  var t4 = await as('authenticated', STAFF, "INSERT INTO public.vendor_bill_lines (bill_id, description, amount) VALUES ('" + B2 + "', 'payroll Nov', 1)");
+  var t5 = await as('authenticated', STAFF, "INSERT INTO public.company_bill_links (bill_id, company_id, category_key, status) VALUES ('" + B2 + "', 'NEXTRADE_BOOKS', 'warehouse_staff', 'active')");
+  var t6 = await as('authenticated', STAFF, "UPDATE public.company_bill_links SET category_key = 'warehouse_staff' WHERE bill_id = '" + B2 + "'");
+  var t7 = await as('authenticated', STAFF, "INSERT INTO public.recurring_bills (vendor_name, category, amount) VALUES ('ADP payroll', null, 1)");
+  check('non-super-admin: cannot ADD a payroll bill, rename a bill to payroll, give it a payroll category (by its label), add a payroll line, link it to a Nextrade payroll category (new or changed link), or add a payroll repeating bill', [t1, t2, t3, t4, t5, t6, t7].every(function (t) { return !t.ok; }), [t1, t2, t3, t4, t5, t6, t7].map(function (t) { return t.ok ? 'ALLOWED' : 'refused'; }));
+  var t8 = await as('authenticated', STAFF, "UPDATE public.vendor_bills SET total_amount = 1000 WHERE id = '" + B2 + "'");
+  var t9 = await as('authenticated', STAFF, "INSERT INTO public.vendor_bill_lines (bill_id, description, amount) VALUES ('" + B2 + "', 'Toner', 1)");
+  check('non-super-admin: ordinary changes to an ordinary bill still work (amount, a normal line)', t8.ok && t8.count === 1 && t9.ok && t9.count === 1, [t8, t9]);
+  var s1 = await as('authenticated', SUP, "INSERT INTO public.vendor_bills (id, vendor_name, category, total_amount) VALUES ('b6000000-0000-4000-8000-000000000006', 'Gusto Payroll', 'rent', 1)");
+  var s2 = await as('authenticated', SUP, "UPDATE public.vendor_bills SET vendor_name = 'ADP' WHERE id = '" + B1 + "'");
+  check('super admin: may add a payroll bill and may take a bill out of payroll', s1.ok && s2.ok && s2.count === 1, [s1, s2]);
   var sp = await counts('authenticated', SUP);
   check('super admin: everything, unchanged', same(sp, ALL), sp);
   var sv = await counts('service_role', null);

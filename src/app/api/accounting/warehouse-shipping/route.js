@@ -18,7 +18,7 @@
 //   • the feed must say who it is (nextrade-staging / nextrade-live) and it must be the source this Hub expects;
 //   • the P&L and the lists read only the ACTIVE source (one setting), and only orders still in the latest feed.
 // SWC-safe: var + string concatenation only.
-import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -180,7 +180,7 @@ export async function GET(req) {
   catch (e) { return NextResponse.json({ ok: false, error: missingTable(e && e.message) ? SQL_HINT : ((e && e.message) || 'daily sync failed'), api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
 }
 
-async function postZD(req) {
+export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
@@ -192,7 +192,7 @@ async function postZD(req) {
     // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
     var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
     if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
-    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
+    db = payrollFilteredDb(db, payZD);
     var pv = await assertPermission(db, userId, 'pnl.view', req);
     if (!pv || pv.ok !== true) { return bad('This needs the "P&L: View" permission — grant it in Settings → Module Access.', 403); }
     // v55.83-XK — the stored rows (and their history) name each matched invoice WITH its total: removed for a researcher
@@ -258,5 +258,3 @@ async function postZD(req) {
   }
 }
 
-// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
-export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

@@ -107,7 +107,7 @@ function hasFullOut(j) { var s = JSON.stringify(j); var full = Math.round((SAL1 
     // v55.83-ZD (Max 25 Nov) — a payroll bill is no longer listed as a 🔒 "Warehouse staff" row: it is not shown at all
     check(NOPE[k] + ' nextrade bills (ZD): the payroll bill is not listed at all', !rowP, rowP);
     check(NOPE[k] + ' nextrade bills: the electricity bill unchanged', (nb.j.rows || []).some(function (r) { return r.link.bill_id === 'B2' && r.bill.total_amount === ELEC; }));
-    check(NOPE[k] + ' nextrade bills (ZD): the "still owed" sum covers the bills shown and the answer says it is excluding payroll', /excluding payroll/.test(nb.j.payroll_excluded || ''), nb.j);
+    check(NOPE[k] + ' nextrade bills (ZD): the "still owed" sum covers the bills shown and the answer says it is excluding payroll', /excluding any payroll bills/.test(nb.j.payroll_note || ''), nb.j);
     check(NOPE[k] + ' nextrade bills: no salary amount anywhere', leaks(nb.j).length === 0, leaks(nb.j));
   }
   var nbh = await call('tok-holder', { action: 'nextrade_bills' });
@@ -155,7 +155,8 @@ function hasFullOut(j) { var s = JSON.stringify(j); var full = Math.round((SAL1 
   var mv2 = await call('tok-staff', { action: 'set_category', ids: ['P1'], category_key: null });
   check('staff cannot un-categorize a salary line either', mv2.status === 403, mv2);
   var mv3 = await call('tok-staff', { action: 'set_category', ids: ['E1'], category_key: 'warehouse_staff', learn: false });
-  check('staff MAY move a line INTO payroll (hiding is never blocked); KTC answer carries no amount', mv3.status === 200 && mv3.j.ok === true && leaks(mv3.j).length === 0, mv3);
+  // v55.83-ZD (Codex 25 Nov: a non-super-admin cannot create payroll) — putting a line INTO payroll makes a payroll bill: super admin only
+  check('ZD: staff can NOT move a line into payroll (it would make a payroll bill); nothing saved, the answer says why and carries no amount', mv3.j.ok === false && /super admin only/.test(JSON.stringify(mv3.j)) && world.db.t.bank_transactions.filter(function (l) { return l.id === 'E1'; })[0].company_category === 'electricity' && leaks(mv3.j).length === 0, mv3);
   var mv4 = await call('tok-super', { action: 'set_category', ids: ['P1'], category_key: 'electricity', learn: false });
   check('super admin passes the payroll check', mv4.status === 200, mv4);
 

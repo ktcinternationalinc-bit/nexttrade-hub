@@ -546,7 +546,7 @@ export default function BillsTab(props) {
     </div>}
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900 mr-1">💸 Bills — what we owe</div>
-      <span className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>Open: ${fmt(totals.open)} ({totals.open_count}){data && data.payroll_excluded ? ' — excluding payroll' : ''}</span>{data && data.payroll_excluded && <span className="text-[10px] font-bold" title={data.payroll_excluded} style={{ color: '#7f1d1d' }}>🔒 Payroll bills are shown to the super admin only; every total here is excluding payroll.</span>}
+      <span className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>Open: ${fmt(totals.open)} ({totals.open_count}){totals.payroll_note ? ' — ' + totals.payroll_note : ''}</span>
       {totals.overdue > 0 && <span className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#ffedd5', color: '#431407' }}>Overdue: ${fmt(totals.overdue)}</span>}
       <div className="flex-1" />
       {['open', 'paid', 'duplicates', 'disputed', 'void', 'all'].map(function (f) {

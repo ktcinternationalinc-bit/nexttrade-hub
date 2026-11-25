@@ -9,7 +9,7 @@
 // • Cash flow = settled bank reality (money that actually moved) alongside
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
-import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess, payrollBillsNote, SPENDING_WITHHELD } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
 import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
 import { loadPartyFunds, isMissingOpeningsTable, openingsUnavailable } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
@@ -253,7 +253,7 @@ async function loadOpenUsInvoices(db) {
   return out;
 }
 
-async function postZD(req) {
+export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
@@ -266,7 +266,8 @@ async function postZD(req) {
     // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
     var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
     if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
-    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
+    var dbFullZD = db; // the unfiltered connection — used ONLY by period_stats for the super admin and P&L users (Max 25 Nov)
+    db = payrollFilteredDb(db, payZD);
     // v55.83-TO (Codex QA 16 Nov, P1) — the actions that MOVE MONEY act only for the verified signed-in person (bearer token);
     // a user_id in the request that is not that person is refused.
     var MONEY_ACTIONS = { record_payment: 1, void_payment: 1, pay_bills_from_bank: 1, bank_lines_for_bills: 1 };
@@ -376,7 +377,7 @@ async function postZD(req) {
       var rows = decorate(L.bills, L.pays, L.credits);
       // v55.83-ZD — the super admin sees WHY each payroll bill is payroll; the screen puts them all in one "Payroll" group
       if (payZD.isSuper === true) { rows.forEach(function (b) { var why = payZD.pay.ids[b.id]; if (why && why.length) { b.payroll_reasons = why; } }); }
-      var totals = { open: 0, overdue: 0, open_count: 0 };
+      var totals = { open: 0, overdue: 0, open_count: 0, payroll_note: payrollBillsNote(payZD) }; // ZD — fixed words for every non-super-admin
       var today = new Date().toISOString().substring(0, 10);
       rows.forEach(function (b) {
         if (!isPayable(b)) { return; }
@@ -987,6 +988,7 @@ async function postZD(req) {
         due_out: r2(sumBillL), due_out_count: billRowsL.length,
         projected_net: r2(sumExpL - sumBillL) };
       var cfPayload = { transfers_between: trfBetween, transfers_unlinked: trfUnlinked, summary: summary, ahead: aheadL, sales_in: r2(sumSalesL), sales_in_count: salesRowsL.length, bills_due: dueBills, expected_in: expIn, drills: drillsL };
+      cfPayload.payroll_note = payrollBillsNote(payZD); // ZD — bills due here leave payroll bills out for a non-super-admin
       cfPayload = maskCashflow(cfPayload, vis); // v55.83-RE — P2 values masked, P1 cards (expected / bills due) stay
       if (!canTotals) { cfPayload.transfers_between = { count: trfBetween.count, total: null }; cfPayload.transfers_unlinked = { count: trfUnlinked.count, total: null }; } // v55.83-SO — money totals stay behind "See Money Totals"
       cfPayload.ok = true; cfPayload.marker = API_BUILD_MARKER; cfPayload.from = fromD; cfPayload.to = toD;
@@ -1807,6 +1809,7 @@ async function postZD(req) {
       var fcPayload = { buckets: buckets, rows: rows,
         excluded_old: { count: exCount, sum: exSum, before: FORECAST_CREATED_FROM },
         unflagged: { expenses: unrevOut.count || 0, deposits: unmatchedIn.count || 0 } };
+      fcPayload.payroll_note = payrollBillsNote(payZD); // ZD
       fcPayload = maskForecast(fcPayload, vis); // v55.83-RE — expected / late / bills due stay (P1); net + balance need P2
       fcPayload.ok = true; fcPayload.marker = API_BUILD_MARKER; fcPayload.today = todayF; fcPayload.bucket_order = BUCKETS;
       fcPayload.bank_balance = vis.fin ? balF : null; // v55.83-RE/RF — P2 + the Bank Balances switch (decided above)
@@ -1817,6 +1820,9 @@ async function postZD(req) {
     // ── period_stats (PH): "a tab from june 1st on for both invoices and
     // bills to see stats" — one period, both sides, monthly breakdown.
     if (action === 'period_stats') {
+      // v55.83-ZD (Max 25 Nov) — P&L / tax figures COUNT payroll: the super admin and P&L users work from the full connection
+      var pnlPS = payZD.isSuper === true || await pnlAccess(dbFullZD, userId, req);
+      if (pnlPS) { db = dbFullZD; }
       var pFrom = /^\d{4}-\d{2}-\d{2}$/.test(String(body.from || '')) ? body.from : '2026-06-01';
       var pTo = /^\d{4}-\d{2}-\d{2}$/.test(String(body.to || '')) ? body.to : new Date().toISOString().substring(0, 10);
       // v55.83-QI (Max 12:35): date filters beyond the default are their own permission.
@@ -1907,11 +1913,11 @@ async function postZD(req) {
         if (b.bill_date && b.bill_date >= pFrom && b.bill_date <= pTo) {
           billed = r2(billed + (Number(b.total_amount) || 0)); billCount++;
           addM(months, monthOf(b.bill_date), 'billed', r2(b.total_amount));
-          rowsBilled.push({ ref: b.bill_number || '—', who: b.vendor_name, date: b.bill_date, due: b.due_date || null, total: r2(b.total_amount), paid: r2(b.paid), open: r2(b.open), amount: r2(b.total_amount), source: b.disputed === true ? 'Bill (DISPUTED)' : 'Bill entered in period' });
+          rowsBilled.push({ bill_id: b.id, ref: b.bill_number || '—', who: b.vendor_name, date: b.bill_date, due: b.due_date || null, total: r2(b.total_amount), paid: r2(b.paid), open: r2(b.open), amount: r2(b.total_amount), source: b.disputed === true ? 'Bill (DISPUTED)' : 'Bill entered in period' });
           if (b.disputed === true) { billsDisputed = r2(billsDisputed + b.open); }
           else if (b.open > 0.005) {
             billsOpen = r2(billsOpen + b.open);
-            rowsOpenBills.push({ ref: b.bill_number || '—', who: b.vendor_name, date: b.bill_date, due: b.due_date || null, total: r2(b.total_amount), paid: r2(b.paid), open: r2(b.open), amount: b.open, source: 'Unpaid balance of a period bill' });
+            rowsOpenBills.push({ bill_id: b.id, ref: b.bill_number || '—', who: b.vendor_name, date: b.bill_date, due: b.due_date || null, total: r2(b.total_amount), paid: r2(b.paid), open: r2(b.open), amount: b.open, source: 'Unpaid balance of a period bill' });
           }
         }
       });
@@ -1922,7 +1928,7 @@ async function postZD(req) {
         billsPaid = r2(billsPaid + (Number(bp.amount) || 0)); billsPaidCount++;
         addM(months, monthOf(bp.paid_date), 'bills_paid', r2(bp.amount));
         var pb = billNameById[bp.bill_id] || {};
-        rowsBillsPaid.push({ ref: pb.bill_number || '—', who: pb.vendor_name || '?', date: bp.paid_date, due: pb.due_date || null, total: r2(pb.total_amount), amount: r2(bp.amount), source: bp.bank_transaction_id ? 'Bill payment (bank-linked)' : 'Bill payment' });
+        rowsBillsPaid.push({ bill_id: pb.id, ref: pb.bill_number || '—', who: pb.vendor_name || '?', date: bp.paid_date, due: pb.due_date || null, total: r2(pb.total_amount), amount: r2(bp.amount), source: bp.bank_transaction_id ? 'Bill payment (bank-linked)' : 'Bill payment' });
       });
       var monthRows = Object.values(months).sort(function (a, b2) { return a.month.localeCompare(b2.month); });
       monthRows.forEach(function (m) { m.net = r2(m.collected - m.bills_paid); });
@@ -2271,6 +2277,18 @@ async function postZD(req) {
       // view switches say (they are refused for that person anyway); a failed permission read refuses the whole answer
       var rsPs = await revenueScope(db, userId); if (rsPs.error) { return NextResponse.json({ ok: false, error: rsPs.error }, { status: rsPs.status }); }
       if (!rsPs.canSee) { vis = Object.assign({}, vis, { inv: false, fin: false }); }
+      // v55.83-ZD — who sees what of payroll in these figures (see the top of this action)
+      if (payZD.isSuper !== true) {
+        if (pnlPS) {
+          var payIdsPS = payZD.pay.ids; var dr = psPayload.drills || {};
+          ['billed', 'bills_paid', 'open_bills'].forEach(function (k) { if (Array.isArray(dr[k])) { dr[k] = dr[k].filter(function (x) { return !(x && payIdsPS[x.bill_id]); }); } });
+          psPayload.bill_detail_note = 'The totals include payroll bills; their detail rows are shown to the super admin only.';
+        } else {
+          psPayload.bills = Object.assign({}, psPayload.bills, { payroll_note: payrollBillsNote(payZD) });
+          psPayload.spending = null; psPayload.spending_restricted = { reason: 'payroll', words: SPENDING_WITHHELD, needs: 'pnl.view' };
+          psPayload.months = (psPayload.months || []).map(function (m) { var c = Object.assign({}, m); ['net', 'net_cash'].forEach(function (k) { if (k in c) { c[k] = null; } }); c.net_restricted = true; return c; });
+        }
+      }
       psPayload = maskPeriodStats(psPayload, vis); // v55.83-RE — invoice figures P3, bank/financial P2, bills owed P1
       if (body.view === 'books' && !userHasPermission(rsPs.ctx, MARGIN_PERMISSION)) { psPayload = booksOpenInvoices(psPayload); }
       if (!rsPs.canSee) { psPayload.revenue_restricted = true; }
@@ -2290,5 +2308,3 @@ async function postZD(req) {
   }
 }
 
-// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
-export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

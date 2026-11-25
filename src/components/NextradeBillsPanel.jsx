@@ -25,10 +25,11 @@ export default function NextradeBillsPanel(props) {
   var s6 = useState(false); var canGroupTotals = s6[0]; var setCanGroupTotals = s6[1]; // v55.83-XX
   var s7 = useState({}); var openG = s7[0]; var setOpenG = s7[1]; // v55.83-XX — which category groups are open
   var s8 = useState(null); var chooser = s8[0]; var setChooser = s8[1]; // v55.83-XX — the bill whose Pay ▸ chooser is open (link id)
+  var s9 = useState(''); var billsNote = s9[0]; var setBillsNote = s9[1]; // v55.83-ZD — the fixed "excluding any payroll bills" words
   function load() {
     hubFetch('/api/accounting/company-books', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'nextrade_bills', user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
-      .then(function (j) { if (j && j.ok) { setRows(j.rows || []); setCanTotals(j.can_totals === true); setCanGroupTotals(j.can_group_totals === true); setPayNote(j.payroll_restricted || ''); setErr(j.sql_missing || ''); } else { setErr((j && j.error) || 'Could not load.'); } })
+      .then(function (j) { if (j && j.ok) { setRows(j.rows || []); setCanTotals(j.can_totals === true); setCanGroupTotals(j.can_group_totals === true); setPayNote(j.payroll_restricted || ''); setBillsNote(j.payroll_note || ''); setErr(j.sql_missing || ''); } else { setErr((j && j.error) || 'Could not load.'); } })
       .catch(function (e) { setErr('Could not reach the server (' + ((e && e.message) || 'network') + ').'); });
   }
   useEffect(function () { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -77,7 +78,7 @@ export default function NextradeBillsPanel(props) {
       <div className="text-[13px] font-extrabold" style={{ color: '#1e3a8a' }}>🟦 Nextrade bills</div>
       <div className="text-[10px]" style={{ color: '#64748b' }}>Made at once when a Nextrade expense is categorized — owed to Nextrade, due at the end of the month. No validation needed; paid only through NextTrade.</div>
       <div className="flex-1" />
-      {canTotals && <span className="text-[11px] font-bold">Still owed: ${fmt(open)}</span>}
+      {canTotals && <span className="text-[11px] font-bold">Still owed: ${fmt(open)}{billsNote ? ' — ' + billsNote : ''}</span>}
       {groups.length > 1 && <span><button onClick={function () { var o = {}; groups.forEach(function (g) { o[g.key] = true; }); setOpenG(o); }} className="text-[10px] underline font-bold mr-2" style={{ color: '#1d4ed8' }}>open all</button><button onClick={function () { setOpenG({}); }} className="text-[10px] underline font-bold" style={{ color: '#1d4ed8' }}>close all</button></span>}
       <label className="text-[10px]"><input type="checkbox" checked={showVoid} onChange={function (e) { setShowVoid(e.target.checked); }} /> show voided</label>
       <button onClick={load} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>↻</button>
