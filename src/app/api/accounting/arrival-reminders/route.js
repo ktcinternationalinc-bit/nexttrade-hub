@@ -90,10 +90,10 @@ export async function POST(req) {
     var who = await verifiedCaller(req, body, createClient);
     if (who.error) { return bad(who.error, who.status || 401); }
     var userId = who.userId; if (!userId) { return bad('Sign in again.', 401); }
-    var permKey = action === 'send' || action === 'auto_set' || action === 'cc_set' ? 'ar.send_reminders' : 'ar.view_invoice_balances';
+    var permKey = action === 'send' || action === 'auto_set' || action === 'cc_set' || action === 'batch_list' || action === 'batch_send' ? 'ar.send_reminders' : 'ar.view_invoice_balances';
     var gate = await assertPermission(db, userId, permKey, req);
     if (!gate || gate.ok !== true) { return bad('This needs the "' + (permKey === 'ar.send_reminders' ? 'AR: Send reminders' : 'AR: View invoice balances') + '" permission — Settings → Module Access.', gate && gate.status ? gate.status : 403); }
-    if (['list', 'preview', 'send', 'history', 'auto_set', 'cc_set'].indexOf(action) < 0) { return bad('Unknown action.'); }
+    if (['list', 'preview', 'send', 'history', 'auto_set', 'cc_set', 'batch_list', 'batch_send'].indexOf(action) < 0) { return bad('Unknown action.'); }
     // v55.83-XG (Codex 22 Nov, P1) — the history window applies to EVERY action here (list, preview, send, history), for everyone but
     // the super admin, and fails closed: if the setting cannot be read, nothing is shown and nothing is sent.
     var vwin = await windowFloorFor(db, gate.ctx); if (vwin.error) { return bad(vwin.error, 503); }
@@ -153,6 +153,41 @@ export async function POST(req) {
         languages: LANGS, phase_words: PHASE_WORDS, api_build_marker: API_BUILD_MARKER });
     }
 
+    // ── v55.83-ZH — "Send all ready reminders" (Max, 25 Nov 2026: "i should have a button to send the emails by batch with a manual
+    //    button instead of automated"). The SAME set and the SAME rules as the morning run (autoCheck: nothing about the order needs a
+    //    person), through the SAME routine. A person with a history window is only ever offered the orders they may see in full.
+    //    batch_list = the confirm list.  batch_send = sends exactly the confirmed orders that are STILL due at this moment. ──
+    if (action === 'batch_list' || action === 'batch_send') {
+      var liveNow = all.cfg.source === 'nextrade-live';
+      var due = all.rows.filter(function (r) { return r.auto && r.auto.eligible; });
+      function keyOf(r) { return r.order_id + '|' + r.slot; }
+      if (action === 'batch_list') {
+        return NextResponse.json({ ok: true, live: liveNow, source: all.cfg.source, can_send: liveNow && all.logReady && mailbox.configured, cc: ccNow, mailbox: mailbox, log_ready: all.logReady,
+          why_not: !liveNow ? 'The Hub is reading the ' + all.cfg.source + ' copy of the warehouse, not the live one — reminders are never sent in a batch from a test copy.' : (!all.logReady ? SQL_HINT : (mailbox.wrong_from ? 'The mailbox connected on the server is ' + mailbox.from + ', not ' + REQUIRED_FROM + '.' : (!mailbox.configured ? 'The mailbox is not connected on the server.' : null))),
+          count: due.length, list: due.map(function (r) { return { key: keyOf(r), order_id: r.order_id, release: r.release_number, customer: r.hub_customer || r.customer, stage: r.phase, slot: r.slot, days: r.days, language: r.language, language_chosen: r.language_chosen, to: r.recipients.join(', '), remaining: r.balance.remaining, seal: sealOf(r, ccNow) }; }), api_build_marker: API_BUILD_MARKER });
+      }
+      if (body.confirm !== true) { return bad('Sending needs the person’s confirmation.'); }
+      if (!liveNow) { return bad('The Hub is reading the ' + all.cfg.source + ' copy of the warehouse, not the live one — nothing was sent.', 409); }
+      if (!all.logReady) { return bad(SQL_HINT, 503); }
+      if (mailbox.wrong_from) { return bad('The mailbox connected on the server is ' + mailbox.from + ', not ' + REQUIRED_FROM + ' — nothing was sent.', 503, { wrong_from: true }); }
+      if (!mailbox.configured) { return bad('The info@ktcus.com mailbox is not connected on the server — nothing was sent.', 503); }
+      // each confirmed line = { key, seal } exactly as the list gave it
+      var items = Array.isArray(body.items) ? body.items.filter(function (x) { return x && typeof x === 'object'; }).map(function (x) { return { key: String(x.key || ''), seal: String(x.seal || '') }; }).slice(0, 500) : [];
+      var keys = items.map(function (x) { return x.key; }); var sealBy = {}; items.forEach(function (x) { if (!sealBy[x.key]) { sealBy[x.key] = x.seal; } });
+      if (!keys.length) { return bad('Nothing was confirmed — nothing was sent.'); }
+      var meB = await db.from('users').select('id, name, email').eq('id', userId).maybeSingle(); var meBR = (meB && meB.data) || {};
+      var dueBy = {}; due.forEach(function (r) { dueBy[keyOf(r)] = r; });
+      var outB = { sent: [], failed: [], unconfirmed: [], skipped: [] }; var seenK = {};
+      var todoB = []; keys.forEach(function (k) { if (seenK[k]) { return; } seenK[k] = true; var dk = dueBy[k];
+        if (dk && (!sealBy[k] || sealBy[k] !== sealOf(dk, ccNow))) { outB.skipped.push({ order_id: dk.order_id, release: dk.release_number, slot: dk.slot, customer: dk.hub_customer || dk.customer, changed: true, why: 'not sent — something about this reminder changed since the list was shown (the address, who is copied, the amounts, the language or the stage). Open the list again to see it and confirm.' }); return; }
+        if (dk) { todoB.push(dk); } else { var oid = Number(k.split('|')[0]); var rr = null; all.rows.forEach(function (x) { if (x.order_id === oid) { rr = x; } }); outB.skipped.push({ order_id: oid, release: rr ? rr.release_number : null, slot: k.split('|')[1] || null, customer: rr ? (rr.hub_customer || rr.customer) : null, already: !!(rr && rr.slot_sent), why: rr && rr.slot_sent ? 'not sent — this stage was already sent' : 'not sent — no longer due (it changed since the list was shown)' }); } });
+      await sendDue(db, all, mailCfg, ccNow, todoB, outB, { started: Date.now(), actorId: userId, actorName: (meBR.name || meBR.email || 'A person') + ' — send all ready', batch: true });
+      try { await audit(db, userId, 'arrival_reminders_batch_sent', 'setting', 'arrival_reminders_batch', { confirmed: keys.length, sent: outB.sent.length, not_sent: outB.failed.length, delivery_unconfirmed: outB.unconfirmed.length, skipped: outB.skipped.length }); } catch (eAb) { /* every send has its own row */ }
+      function res(list, outcome) { return list.map(function (x) { return { order_id: x.order_id, release: x.release, customer: x.customer || null, to: x.to || null, outcome: outcome, why: x.why || null, attachment_note: x.attachment_note || null }; }); }
+      return NextResponse.json({ ok: true, confirmed: keys.length, sent: outB.sent.length, not_sent: outB.failed.length, delivery_unconfirmed: outB.unconfirmed.length, skipped: outB.skipped.length, left_over: outB.skipped.filter(function (x) { return x.left_over; }).length, changed: outB.skipped.filter(function (x) { return x.changed; }).length,
+        results: res(outB.sent, 'sent').concat(res(outB.failed, 'not_sent'), res(outB.unconfirmed, 'unconfirmed'), res(outB.skipped, 'skipped')), api_build_marker: API_BUILD_MARKER });
+    }
+
     var row = null; all.rows.forEach(function (r) { if (r.order_id === Number(body.order_id)) { row = r; } });
     if (!row) { return bad('That order is not in the reminder window any more (closed, no arrival date, or more than 21 days away).', 404); }
     var lang = langOf(body.lang || row.language);
@@ -191,14 +226,22 @@ export async function POST(req) {
     if (!isTest && row.slot_unconfirmed && body.resend_after_unconfirmed !== true) { return bad('An earlier reminder for this stage may already have reached the customer (delivery unconfirmed). Open the history, check, and tick "I checked — send another" if it is still right to send.', 409, { delivery_unconfirmed: true }); }
     if (!isTest && row.slot_sent && body.again !== true) { return bad('A reminder for this stage (' + row.slot + ') was already sent for this order. Tick "send again" if you really mean to send another.', 409, { already_sent: true }); }
     var subject = (isTest ? '[TEST — not sent to the customer] ' : '') + dS.subject;
+    // v55.83-ZH rev 2 (Codex 25 Nov, finding 2) — the FIRST real send of a stage takes the SAME atomic claim whoever makes it: this
+    // one-order send, the "Send all ready" button and the morning run all write the row as mode 'auto', and the database's unique
+    // index (source, order, channel, slot while sending / sent / unknown) lets exactly one of them through. Two people, or a person
+    // and the batch, or a person and the timer, in the same second = one e-mail. A DELIBERATE second reminder (the person ticked
+    // "send another one" after a confirmed send, or "I checked" after an unconfirmed one) is written as mode 'manual' and is not
+    // claimed: that is the person's explicit decision, kept separate as before. Who sent it is always on the row (sent_by_name).
+    var firstOfStage = !isTest && !row.slot_sent && !row.slot_unconfirmed;
     // v55.83-XY — the office is copied on every customer reminder, never on a test; the invoice PDF(s) go with both. A PDF that cannot be
     // made never stops the reminder (Max: "SEND IT ANYWAY"): the log row says it went without the invoice, and why.
     var ccSend = isTest ? [] : ccNow;
     var att = await buildInvoiceAttachments(db, row.invoices.map(function (x) { return x.id; }));
     var extraLog = { cc: ccSend.join(', ') || null, invoices_attached: att.attachments.length, attachment_note: att.note };
     var ins = await insertLog(db, extraLog, { source: all.cfg.source, order_id: row.order_id, release_number: row.release_number, release_key: row.release_key, customer_name: row.hub_customer || row.customer,
-      invoice_ids: row.invoices.map(function (i) { return i.id; }), channel: 'email', mode: isTest ? 'test' : 'manual', phase: row.phase, slot: row.slot, language: dS.lang, sent_to: to, subject: subject, body: dS.body,
+      invoice_ids: row.invoices.map(function (i) { return i.id; }), channel: 'email', mode: isTest ? 'test' : (firstOfStage ? 'auto' : 'manual'), phase: row.phase, slot: row.slot, language: dS.lang, sent_to: to, subject: subject, body: dS.body,
       arrival_date: row.arrival_date, days_to_arrival: row.days, total: row.balance.total, received: row.balance.received, remaining: row.balance.remaining, status: 'sending', sent_by: userId, sent_by_name: meRow.name || meRow.email || null });
+    if (ins.error && firstOfStage && /uq_arrival_reminders_auto_slot|duplicate key/i.test(String(ins.error.message || ''))) { return bad('This stage is being sent, or was just sent, by someone else or by the morning run — nothing was sent from here. Read this order again.', 409, { already_sent: true, claimed_elsewhere: true }); }
     if (ins.error || !ins.data) { return bad('The reminder could not be logged, so it was NOT sent' + (ins.error ? ': ' + (missingLog(ins.error.message) ? SQL_HINT : ins.error.message) : '.'), 503); }
     var logId = ins.data.id;
     var sent = await sendReminderMail({ to: to, cc: ccSend, attachments: att.attachments, subject: subject, text: dS.body, html: htmlOf(dS.body, dS.rtl), id: logId }, { config: mailCfg });
@@ -209,7 +252,7 @@ export async function POST(req) {
       return bad((sent.outcome_unknown ? 'Delivery unconfirmed: ' : 'Not sent: ') + sent.error, 502, { outcome_unknown: !!sent.outcome_unknown, delivery_unconfirmed: !!sent.outcome_unknown, log_id: logId });
     }
     var upd = await db.from('arrival_reminders').update({ status: 'sent', sent_at: new Date().toISOString(), message_id: sent.message_id, smtp_response: sent.smtp_response }).eq('id', logId).eq('status', 'sending').select('id');
-    try { await audit(db, userId, isTest ? 'arrival_reminder_test_sent' : 'arrival_reminder_sent', 'warehouse_order', String(row.order_id), { log: logId, release: row.release_number, to: to, phase: row.phase, slot: row.slot, language: dS.lang, remaining: row.balance.remaining, message_id: sent.message_id, cc: ccSend, invoices_attached: att.names, attachment_note: att.note, sent_again_after_a_confirmed_send: !isTest && row.slot_sent ? true : null, sent_after_checking_an_unconfirmed_delivery: !isTest && row.slot_unconfirmed ? true : null, port_of_loading_confirmed_by_person: row.pol_needs_confirm ? polTyped(body.pol) : null }); } catch (eA2) { /* ok */ }
+    try { await audit(db, userId, isTest ? 'arrival_reminder_test_sent' : 'arrival_reminder_sent', 'warehouse_order', String(row.order_id), { log: logId, release: row.release_number, to: to, phase: row.phase, slot: row.slot, language: dS.lang, remaining: row.balance.remaining, message_id: sent.message_id, by_a_person: true, first_send_of_the_stage: firstOfStage, cc: ccSend, invoices_attached: att.names, attachment_note: att.note, sent_again_after_a_confirmed_send: !isTest && row.slot_sent ? true : null, sent_after_checking_an_unconfirmed_delivery: !isTest && row.slot_unconfirmed ? true : null, port_of_loading_confirmed_by_person: row.pol_needs_confirm ? polTyped(body.pol) : null }); } catch (eA2) { /* ok */ }
     return NextResponse.json({ ok: true, sent: true, test: isTest, to: to, from: sent.from, log_id: logId, logged: !!(upd && upd.data && upd.data.length), copied_to_sent: sent.copied_to_sent, rejected: sent.rejected || [], cc: ccSend, attachments: att.names, attachment_note: att.note, api_build_marker: API_BUILD_MARKER });
   } catch (e) {
     return bad((e && e.message) || 'The reminder request failed.', 500);
@@ -225,6 +268,46 @@ export async function POST(req) {
 // database's own unique index (source, order, channel, slot) refuses a second one — two timers at once, or a second pass, send once.
 // A definite refusal by the mail server is 'failed' (tried again next morning, at most twice per stage); no answer is 'unknown'
 // (delivery unconfirmed): it holds the stage and waits for a person — the schedule never retries it.
+// v55.83-ZH — ONE routine sends a set of due reminders, for the morning timer AND for the "Send all ready reminders" button, so the
+// two can never differ: the approved text in the customer's language, the office copied, the invoice PDF attached, the log row
+// written FIRST as mode 'auto' / 'sending' so the database's unique index (source, order, channel, slot) refuses a second send of
+// the same stage — whoever asks, however many times, at the same moment or later. A refusal = 'failed'; no answer = 'unknown'.
+// out = { sent: [], failed: [], unconfirmed: [], skipped: [] }; who = { started, actorId, actorName, batch }
+// v55.83-ZH rev 2 (Codex 25 Nov, finding 1) — what a person CONFIRMS in the batch list is sealed: the order, its stage, who it goes to,
+// who is copied, the language, the exact subject and text, and the invoices with their totals and what was paid. batch_send sends a
+// confirmed order only when the server's own current draft still has the SAME seal; anything that changed since the list was shown
+// (a new address on the customer, another copy list, a payment, another language, another stage) is skipped and must be confirmed
+// again. Nothing the browser sends is ever used as an address or as text — only as the seal to compare with.
+function sealOf(row, cc) {
+  var d = draftOf(row, row.language, null); if (!d.ok) { return null; }
+  return createHash('sha256').update(JSON.stringify([row.order_id, row.slot, row.phase, row.recipients, cc, d.lang, d.subject, d.body, row.invoices]), 'utf8').digest('hex');
+}
+async function sendDue(db, all, mailCfg, cc, todo, out, who) {
+  for (var i = 0; i < todo.length; i++) {
+    var row = todo[i]; var tag = { order_id: row.order_id, release: row.release_number, slot: row.slot, customer: row.hub_customer || row.customer || null };
+    if (out.sent.length + out.failed.length + out.unconfirmed.length >= AUTO_MAX_PER_RUN || Date.now() - who.started > 42000) { out.skipped.push(Object.assign({ why: who.batch ? 'not attempted this time (limit of one press) — press the button again' : 'left for the next pass (time / number limit of one run)', left_over: true }, tag)); continue; }
+    var d = draftOf(row, row.language, null);
+    if (!d.ok) { out.skipped.push(Object.assign({ why: d.error }, tag)); continue; }
+    var to = row.recipients.join(', ');
+    var att = await buildInvoiceAttachments(db, row.invoices.map(function (x) { return x.id; }));
+    var ins = await insertLog(db, { cc: cc.join(', ') || null, invoices_attached: att.attachments.length, attachment_note: att.note }, { source: all.cfg.source, order_id: row.order_id, release_number: row.release_number, release_key: row.release_key, customer_name: row.hub_customer || row.customer,
+      invoice_ids: row.invoices.map(function (x) { return x.id; }), channel: 'email', mode: 'auto', phase: row.phase, slot: row.slot, language: d.lang, sent_to: to, subject: d.subject, body: d.body,
+      arrival_date: row.arrival_date, days_to_arrival: row.days, total: row.balance.total, received: row.balance.received, remaining: row.balance.remaining, status: 'sending', sent_by: who.actorId || null, sent_by_name: who.actorName });
+    if (ins.error || !ins.data) { out.skipped.push(Object.assign({ to: to, why: 'not sent — this stage was already sent or is being sent (' + ((ins.error && ins.error.message) || 'no row') + ')', already: true }, tag)); continue; }
+    var logId = ins.data.id;
+    var sent = await sendReminderMail({ to: to, cc: cc, attachments: att.attachments, subject: d.subject, text: d.body, html: htmlOf(d.body, d.rtl), id: logId }, { config: mailCfg });
+    if (!sent.ok) {
+      await db.from('arrival_reminders').update({ status: sent.outcome_unknown ? 'unknown' : 'failed', error: String(sent.error || '').substring(0, 500) }).eq('id', logId).eq('status', 'sending');
+      try { await audit(db, who.actorId || null, sent.outcome_unknown ? 'arrival_reminder_delivery_unconfirmed' : 'arrival_reminder_send_failed', 'warehouse_order', String(row.order_id), { log: logId, release: row.release_number, to: to, automatic: !who.batch, batch: !!who.batch, error: sent.error, outcome_unknown: !!sent.outcome_unknown }); } catch (eA) { /* the log row holds it */ }
+      (sent.outcome_unknown ? out.unconfirmed : out.failed).push(Object.assign({ to: to, why: String(sent.error || '').substring(0, 200) }, tag));
+      continue;
+    }
+    await db.from('arrival_reminders').update({ status: 'sent', sent_at: new Date().toISOString(), message_id: sent.message_id, smtp_response: sent.smtp_response }).eq('id', logId).eq('status', 'sending');
+    try { await audit(db, who.actorId || null, 'arrival_reminder_sent', 'warehouse_order', String(row.order_id), { log: logId, release: row.release_number, to: to, phase: row.phase, slot: row.slot, language: d.lang, remaining: row.balance.remaining, message_id: sent.message_id, automatic: !who.batch, batch: !!who.batch, cc: cc, invoices_attached: att.names, attachment_note: att.note, rejected: sent.rejected || [] }); } catch (eA2) { /* ok */ }
+    out.sent.push(Object.assign({ to: to, language: d.lang, remaining: row.balance.remaining, invoices_attached: att.attachments.length, attachment_note: att.note }, tag));
+  }
+  return out;
+}
 function isTimer(req) { var s = process.env.CRON_SECRET || ''; var h = ''; try { h = (req && req.headers && req.headers.get && req.headers.get('authorization')) || ''; } catch (eH) { h = ''; } return s.length >= 16 && h === 'Bearer ' + s; }
 export async function GET(req) {
   if (!isTimer(req)) { return bad('Timer only.', 401); }
@@ -252,29 +335,7 @@ export async function GET(req) {
     if (!all.logReady) { return finish(SQL_HINT, 503); }
     run.needs_person = all.rows.filter(function (r) { return !r.paid_in_full && (!r.auto || !r.auto.eligible); }).filter(function (r) { return !r.slot_sent; }).length; // a paid order waits for nobody
     var todo = all.rows.filter(function (r) { return r.auto && r.auto.eligible; });
-    for (var i = 0; i < todo.length; i++) {
-      var row = todo[i]; var tag = { order_id: row.order_id, release: row.release_number, slot: row.slot };
-      if (run.sent.length + run.failed.length + run.unconfirmed.length >= AUTO_MAX_PER_RUN || Date.now() - started > 42000) { run.skipped.push(Object.assign({ why: 'left for the next pass (time / number limit of one run)' }, tag)); continue; }
-      var d = draftOf(row, row.language, null);
-      if (!d.ok) { run.skipped.push(Object.assign({ why: d.error }, tag)); continue; }
-      var to = row.recipients.join(', ');
-      var att = await buildInvoiceAttachments(db, row.invoices.map(function (x) { return x.id; }));
-      var ins = await insertLog(db, { cc: ccAuto.join(', ') || null, invoices_attached: att.attachments.length, attachment_note: att.note }, { source: all.cfg.source, order_id: row.order_id, release_number: row.release_number, release_key: row.release_key, customer_name: row.hub_customer || row.customer,
-        invoice_ids: row.invoices.map(function (x) { return x.id; }), channel: 'email', mode: 'auto', phase: row.phase, slot: row.slot, language: d.lang, sent_to: to, subject: d.subject, body: d.body,
-        arrival_date: row.arrival_date, days_to_arrival: row.days, total: row.balance.total, received: row.balance.received, remaining: row.balance.remaining, status: 'sending', sent_by: null, sent_by_name: 'Automatic schedule' });
-      if (ins.error || !ins.data) { run.skipped.push(Object.assign({ why: 'not sent — the stage was already taken or the log refused the row (' + ((ins.error && ins.error.message) || 'no row') + ')' }, tag)); continue; }
-      var logId = ins.data.id;
-      var sent = await sendReminderMail({ to: to, cc: ccAuto, attachments: att.attachments, subject: d.subject, text: d.body, html: htmlOf(d.body, d.rtl), id: logId }, { config: mailCfg });
-      if (!sent.ok) {
-        await db.from('arrival_reminders').update({ status: sent.outcome_unknown ? 'unknown' : 'failed', error: String(sent.error || '').substring(0, 500) }).eq('id', logId).eq('status', 'sending');
-        try { await audit(db, null, sent.outcome_unknown ? 'arrival_reminder_delivery_unconfirmed' : 'arrival_reminder_send_failed', 'warehouse_order', String(row.order_id), { log: logId, release: row.release_number, to: to, automatic: true, error: sent.error, outcome_unknown: !!sent.outcome_unknown }); } catch (eA) { /* the log row holds it */ }
-        (sent.outcome_unknown ? run.unconfirmed : run.failed).push(Object.assign({ to: to, why: String(sent.error || '').substring(0, 200) }, tag));
-        continue;
-      }
-      await db.from('arrival_reminders').update({ status: 'sent', sent_at: new Date().toISOString(), message_id: sent.message_id, smtp_response: sent.smtp_response }).eq('id', logId).eq('status', 'sending');
-      try { await audit(db, null, 'arrival_reminder_sent', 'warehouse_order', String(row.order_id), { log: logId, release: row.release_number, to: to, phase: row.phase, slot: row.slot, language: d.lang, remaining: row.balance.remaining, message_id: sent.message_id, automatic: true, cc: ccAuto, invoices_attached: att.names, attachment_note: att.note, rejected: sent.rejected || [] }); } catch (eA2) { /* ok */ }
-      run.sent.push(Object.assign({ to: to, language: d.lang, remaining: row.balance.remaining, invoices_attached: att.attachments.length, attachment_note: att.note }, tag));
-    }
+    await sendDue(db, all, mailCfg, ccAuto, todo, run, { started: started, actorId: null, actorName: 'Automatic schedule' });
     return finish(null, 200);
   } catch (e) {
     return finish('The morning run stopped: ' + ((e && e.message) || 'error') + '. Whatever was sent before that is in the log.', 500);

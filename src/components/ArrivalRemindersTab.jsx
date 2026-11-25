@@ -151,6 +151,40 @@ export function CcLine(p) {
   </div>;
 }
 
+// v55.83-ZH (Max, 25 Nov 2026: "i should have a button to send the emails by batch with a manual button") — the confirm list and the
+// per-row results of "Send all ready reminders". No state of their own, so they can be rendered and checked alone.
+var BATCH_OUTCOME = { sent: ['Sent', '#065f46', '#d1fae5'], not_sent: ['Not sent', '#7f1d1d', '#fee2e2'], unconfirmed: ['Delivery unconfirmed', '#7c2d12', '#fed7aa'], skipped: ['Not sent', '#334155', '#e2e8f0'] };
+export function BatchListView(p) {
+  var list = p.list || [];
+  if (!list.length) { return <div className="mt-2 text-[12px]" style={{ color: SUB }}>No reminder is ready to go right now.</div>; }
+  return <table className="w-full text-[12px] mt-2" style={{ background: '#ffffff', border: '1px solid ' + LINE }}>
+    <thead><tr style={{ background: '#f1f5f9', color: '#334155' }}>{['Customer', 'Release', 'Stage', 'Language', 'E-mail', 'Still owed'].map(function (h, i) { return <th key={i} className={'px-2 py-1.5 font-bold ' + (i === 5 ? 'text-right' : 'text-left')}>{h}</th>; })}</tr></thead>
+    <tbody>{list.map(function (x) { var look = PHASE_LOOK[x.stage] || PHASE_LOOK.friendly;
+      return <tr key={x.key} style={{ borderTop: '1px solid ' + LINE, color: INK }}>
+        <td className="px-2 py-1.5">{x.customer || '—'}</td>
+        <td className="px-2 py-1.5 font-extrabold">{x.release || '—'}</td>
+        <td className="px-2 py-1.5"><span className="px-1.5 py-0.5 rounded font-extrabold" style={{ color: look[1], background: look[2] }}>{look[0] + ' · ' + counterWords(x.days)}</span></td>
+        <td className="px-2 py-1.5">{(LANG_NAMES[x.language] || x.language) + (x.language_chosen ? '' : ' (not chosen yet)')}</td>
+        <td className="px-2 py-1.5">{x.to}</td>
+        <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: '#991b1b' }}>{fmt(x.remaining)}</td>
+      </tr>; })}</tbody>
+  </table>;
+}
+export function BatchResultsView(p) {
+  var rows = p.results || [];
+  return <table className="w-full text-[12px] mt-2" style={{ background: '#ffffff', border: '1px solid ' + LINE }}>
+    <thead><tr style={{ background: '#f1f5f9', color: '#334155' }}>{['Result', 'Customer', 'Release', 'E-mail', ''].map(function (h, i) { return <th key={i} className="px-2 py-1.5 font-bold text-left">{h}</th>; })}</tr></thead>
+    <tbody>{rows.map(function (x, i) { var o = BATCH_OUTCOME[x.outcome] || BATCH_OUTCOME.skipped;
+      return <tr key={i} style={{ borderTop: '1px solid ' + LINE, color: INK }}>
+        <td className="px-2 py-1.5"><span className="px-1.5 py-0.5 rounded font-extrabold" style={{ color: o[1], background: o[2] }}>{o[0]}</span></td>
+        <td className="px-2 py-1.5">{x.customer || '—'}</td>
+        <td className="px-2 py-1.5 font-extrabold">{x.release || x.order_id}</td>
+        <td className="px-2 py-1.5">{x.to || '—'}</td>
+        <td className="px-2 py-1.5" style={{ color: x.outcome === 'sent' ? '#9a3412' : '#7c2d12' }}>{x.why || x.attachment_note || ''}</td>
+      </tr>; })}</tbody>
+  </table>;
+}
+
 var OUTCOME = { sent: ['Sent', '#065f46', '#d1fae5'], failed: ['Not sent', '#334155', '#e2e8f0'], unknown: ['Delivery unconfirmed', '#7c2d12', '#fed7aa'], sending: ['Delivery unconfirmed (never finished)', '#7c2d12', '#fed7aa'] };
 // every attempt for one order, newest first — no state of its own
 export function ReminderHistoryView(p) {
@@ -162,7 +196,7 @@ export function ReminderHistoryView(p) {
       <div className="flex items-center gap-2 flex-wrap text-[12px]">
         <span className="px-1.5 py-0.5 rounded font-extrabold" style={{ color: o[1], background: o[2] }}>{o[0]}</span>
         {x.mode === 'test' && <span className="px-1.5 py-0.5 rounded font-extrabold" style={{ color: '#1e3a8a', background: '#dbeafe' }}>TEST — not to the customer</span>}
-        <b>{when(x.sent_at || x.created_at)}</b><span>{'to ' + x.sent_to}</span><span style={{ color: SUB }}>{(PHASE_LOOK[x.phase] ? PHASE_LOOK[x.phase][0] : x.phase) + ' · ' + (LANG_NAMES[x.language] || x.language) + (x.sent_by_name ? ' · by ' + x.sent_by_name : '')}</span>
+        <b>{when(x.sent_at || x.created_at)}</b><span>{'to ' + x.sent_to}</span><span style={{ color: SUB }}>{(PHASE_LOOK[x.phase] ? PHASE_LOOK[x.phase][0] : x.phase) + ' · ' + (LANG_NAMES[x.language] || x.language) + (x.sent_by_name ? (x.sent_by_name === 'Automatic schedule' ? ' · by the automatic morning run' : ' · sent by ' + x.sent_by_name) : '')}</span>
       </div>
       {x.error && <div className="text-[11px] mt-1" style={{ color: '#7c2d12' }}>{x.error}</div>}
       {(x.cc || x.invoices_attached !== undefined) && <div className="text-[11px] mt-1" style={{ color: SUB }}>{(x.cc ? 'CC: ' + x.cc + ' · ' : '') + (x.invoices_attached ? x.invoices_attached + ' invoice PDF(s) attached' : 'no invoice attached')}{x.attachment_note && <b style={{ color: '#7c2d12' }}>{' · ' + x.attachment_note}</b>}</div>}
@@ -175,6 +209,7 @@ export default function ArrivalRemindersTab(props) {
   var _d = useState(null); var data = _d[0]; var setData = _d[1];
   var _e = useState(''); var err = _e[0]; var setErr = _e[1];
   var _b = useState(false); var busy = _b[0]; var setBusy = _b[1];
+  var _bt = useState(null); var batch = _bt[0]; var setBatch = _bt[1]; // "Send all ready": { list, count, cc, can_send, why_not, note, sending, done }
   var _h = useState(null); var hist = _h[0]; var setHist = _h[1];      // { row, rows, note } — every attempt logged for one order
   var openRef = useRef(null);
   var _o = useState(null); var open = _o[0]; var setOpen = _o[1];      // { row, lang, draft, to, ack, again, sending, note }
@@ -189,6 +224,21 @@ export default function ArrivalRemindersTab(props) {
   function setCc(text) {
     setBusy(true);
     call({ action: 'cc_set', cc: text }).then(function (j) { setBusy(false); if (!j.ok) { setErr(j.error || 'The copy list was not changed.'); return; } toast('Copied on every reminder: ' + (j.cc.length ? j.cc.join(', ') : 'nobody') + '.', 'success'); load(); }, function () { setBusy(false); setErr('Could not reach the Hub — press Refresh to see whether the copy list changed.'); });
+  }
+  // v55.83-ZH — "Send all ready reminders": first the list to confirm, then ONE send of exactly that list; the answer is shown per row.
+  function batchOpen() {
+    setBatch({ list: null, note: 'Reading what is ready…' });
+    call({ action: 'batch_list' }).then(function (j) { if (!j.ok) { setBatch({ list: [], count: 0, can_send: false, note: j.error || 'Could not read the list.' }); return; } setBatch({ list: j.list, count: j.count, cc: j.cc || [], can_send: j.can_send, why_not: j.why_not, note: '' }); },
+      function () { setBatch({ list: [], count: 0, can_send: false, note: 'Could not reach the Hub.' }); });
+  }
+  function batchSend() {
+    var b = batch; if (!b || !b.list || !b.list.length || !b.can_send || b.sending || b.done) { return; }
+    if (!window.confirm('Send these ' + b.list.length + ' reminders to the customers now?')) { return; }
+    setBatch(Object.assign({}, b, { sending: true, note: '' }));
+    call({ action: 'batch_send', confirm: true, items: b.list.map(function (x) { return { key: x.key, seal: x.seal }; }) }).then(function (j) {
+      if (!j.ok) { setBatch(function (x) { return x && Object.assign({}, x, { sending: false, note: j.error || 'Nothing was sent.' }); }); return; }
+      setBatch(function (x) { return x && Object.assign({}, x, { sending: false, done: j, note: '' }); }); toast(j.sent + ' reminder(s) sent' + (j.not_sent + j.delivery_unconfirmed + j.skipped > 0 ? ', ' + (j.not_sent + j.delivery_unconfirmed + j.skipped) + ' not — see the list.' : '.'), j.not_sent + j.delivery_unconfirmed > 0 ? 'warning' : 'success'); load();
+    }, function () { setBatch(function (x) { return x && Object.assign({}, x, { sending: false, lost: true, note: 'The answer from the Hub was lost — some or all of these reminders may have gone out. Nothing will be sent twice: press Refresh on the list to see what was sent, then open "Send all ready" again for whatever is left.' }); }); load(); });
   }
   function setAuto(on) {
     if (on && !window.confirm('Switch AUTOMATIC reminders ON?\n\nEvery morning the Hub will e-mail customers by itself — only the orders where nothing needs a person. You can switch it off here at any time.')) { return; }
@@ -219,9 +269,35 @@ export default function ArrivalRemindersTab(props) {
       {data && data.language_ready === false && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #d97706' }}>The customer language is not installed yet (sql/v55-83-XY-reminder-language-cc-attachments.sql) — every reminder is written in English until it is.</div>}
       {data && data.cc && <CcLine cc={data.cc} canEdit={!!(data.auto && data.auto.can_switch)} onSave={setCc} />}
       {data && data.auto && <AutoPanel auto={data.auto} busy={busy} onSet={setAuto} />}
+      {data && data.auto && <div className="mt-2 flex items-center gap-2 flex-wrap text-[12px]">
+        <button onClick={batchOpen} disabled={busy || !(data.auto.would_send > 0)} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: data.auto.would_send > 0 ? '#15803d' : '#94a3b8', color: '#ffffff' }}>{'Send all ready reminders (' + (data.auto.would_send || 0) + ')'}</button>
+        <span style={{ color: SUB }}>You see the list first. It sends the same reminders the morning run would — each stage once, never twice — and leaves the orders that need a person for you to send one by one.</span>
+      </div>}
       {err && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #dc2626' }}>{err}</div>}
     </div>
     {data && <ArrivalRemindersView rows={data.rows} autoOn={!!(data.auto && data.auto.on)} onPrepare={function (r) { prepare(r); }} onHistory={history} />}
+    {batch && <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 65, overflowY: 'auto' }}>
+      <div className="rounded-xl p-4" style={{ background: '#ffffff', color: INK, maxWidth: 900, margin: '40px auto', border: '2px solid #15803d' }}>
+        <div className="flex items-center gap-2"><div className="text-[15px] font-extrabold">{batch.done ? 'Send all ready — what happened' : 'Send all ready reminders' + (batch.list ? ' (' + batch.list.length + ')' : '')}</div>
+          <button onClick={function () { setBatch(null); }} className="ml-auto px-3 py-1 rounded-lg text-[12px] font-bold" style={{ background: '#e2e8f0', color: INK }}>Close</button></div>
+        {batch.note && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #d97706' }}>{batch.note}</div>}
+        {batch.why_not && !batch.done && <div className="mt-2 px-3 py-2 rounded text-[12px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #dc2626' }}>{batch.why_not}</div>}
+        {batch.list && !batch.done && <div>
+          <div className="mt-2 text-[12px]" style={{ color: SUB }}>Each customer gets the approved message for its stage, in its language, with the invoice attached{batch.cc && batch.cc.length ? ', copied to ' + batch.cc.join(', ') : ''}. Orders that need a person are not in this list.</div>
+          <BatchListView list={batch.list} />
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <button onClick={batchSend} disabled={!batch.can_send || !batch.list.length || batch.sending || batch.lost} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: batch.can_send && batch.list.length && !batch.sending && !batch.lost ? '#15803d' : '#94a3b8', color: '#ffffff' }}>{batch.sending ? 'Sending…' : 'Send these ' + batch.list.length + ' reminders now'}</button>
+            <button onClick={function () { setBatch(null); }} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#ffffff', color: INK, border: '1px solid ' + LINE }}>Cancel</button>
+          </div>
+        </div>}
+        {batch.done && <div>
+          <div className="mt-2 text-[13px] font-extrabold">{batch.done.sent + ' sent · ' + batch.done.not_sent + ' not sent · ' + batch.done.delivery_unconfirmed + ' delivery unconfirmed' + (batch.done.skipped ? ' · ' + batch.done.skipped + ' left out' : '')}</div>
+          {batch.done.changed > 0 && <div className="mt-1 text-[12px] font-bold" style={{ color: '#9a3412' }}>{batch.done.changed + ' were NOT sent because something about them changed after the list was shown. Close this and press "Send all ready reminders" again to see them as they are now.'}</div>}
+          {batch.done.left_over > 0 && <div className="mt-1 text-[12px] font-bold" style={{ color: '#9a3412' }}>{batch.done.left_over + ' were not attempted this time — close this and press "Send all ready reminders" again.'}</div>}
+          <BatchResultsView results={batch.done.results} />
+        </div>}
+      </div>
+    </div>}
     {hist && <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 70, overflowY: 'auto' }}>
       <div className="rounded-xl p-4" style={{ background: '#ffffff', color: INK, maxWidth: 820, margin: '40px auto', border: '2px solid #1d4ed8' }}>
         <div className="flex items-center gap-2"><div className="text-[15px] font-extrabold">{'Reminder history — release ' + (hist.row.release_number || '')}</div>

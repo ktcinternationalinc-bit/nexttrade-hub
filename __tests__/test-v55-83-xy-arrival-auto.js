@@ -220,7 +220,7 @@ async function readPdf(buf) {
   var h1 = await call('u-staff', Object.assign({}, b7, { to: 'x@eta.example, not an address', confirm_to: 'x@eta.example, not an address' }));
   var h2 = await call('u-staff', Object.assign({}, b7, { to: 'x@eta.example; y@eta.example', confirm_to: 'x@eta.example' }));
   var h3 = await call('u-staff', Object.assign({}, b7, { to: 'x@eta.example; y@eta.example', confirm_to: 'X@eta.example , y@eta.example' }));
-  check('by hand: a Send-to with something that is not an address is refused; the confirmation must name the same addresses; then ONE e-mail goes to both', h1.ok === false && h2.ok === false && h3.ok && sentMail.length === 1 && sentMail[0].to === 'x@eta.example, y@eta.example' && log()[log().length - 1].sent_to === 'x@eta.example, y@eta.example' && log()[log().length - 1].mode === 'manual', [h1, h2, h3]);
+  check('by hand: a Send-to with something that is not an address is refused; the confirmation must name the same addresses; then ONE e-mail goes to both', h1.ok === false && h2.ok === false && h3.ok && sentMail.length === 1 && sentMail[0].to === 'x@eta.example, y@eta.example' && log()[log().length - 1].sent_to === 'x@eta.example, y@eta.example' && log()[log().length - 1].mode === 'auto' && log()[log().length - 1].sent_by === 'u-staff' && log()[log().length - 1].sent_by_name === 'Staff', [h1, h2, h3]);
   var pv2 = await call('u-staff', { action: 'preview', order_id: 2 });
   check('by hand, no e-mail on the Hub customer: the box is empty and a person types one', pv2.ok && !pv2.to && pv2.can_send === true);
   var n2 = await call('u-staff', { action: 'send', order_id: 2, draft_hash: pv2.draft_hash, confirm: true, to: '', confirm_to: '' });

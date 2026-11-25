@@ -108,7 +108,7 @@ export function buildReminderRows(input) {
     var slotSent = mine.some(function (l) { return inSlot(l) && l.status === 'sent'; });
     // delivery unconfirmed (Codex 22 Nov P2): the mail server did not answer, or the send never finished. It may have reached the customer.
     var slotUnconfirmed = mine.some(function (l) { return inSlot(l) && (l.status === 'unknown' || l.status === 'sending'); });
-    var slotFailedAuto = mine.filter(function (l) { return l.slot === slot && l.channel === 'email' && l.mode === 'auto' && l.status === 'failed'; }).length;
+    var slotFailedAuto = mine.filter(function (l) { return l.slot === slot && l.channel === 'email' && l.mode === 'auto' && l.status === 'failed' && String(l.sent_to || '').toLowerCase() === String(hubEmail || '').toLowerCase(); }).length; // ZH rev 2: a refusal for an address a person typed does not count against the schedule
     var rem = statusOf(mine);
     if (limited) { blocks = [LIMITED_WORDS]; warnings = []; fields = Object.assign({}, fields, { total: null, received: null, remaining: null, releases: [] }); if (rem.last) { rem.last = Object.assign({}, rem.last, { total: null, received: null, remaining: null }); } }
     rows.push({ order_id: Number(o.id), release_number: o.release_number || null, release_key: rk, customer: o.customer_name || null, hub_customer: cust ? (cust.company_name || cust.contact_name || null) : null,

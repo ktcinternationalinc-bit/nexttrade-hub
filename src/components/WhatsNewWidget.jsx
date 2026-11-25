@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZH',
+    date: '2026-11-25',
+    title: 'Reminders: one button to send all the ready reminders',
+    items: [
+      { text: '**Accounting → SELLING → 📨 Arrival & final-payment reminders → "Send all ready reminders (N)".** It first shows the list — customer, release, stage, language and e-mail, with the count. Press **Send these N reminders now** and they go: the approved message for each stage, in the customer\u2019s language, copied to Jasmine and hsaad, with the invoice attached.' },
+      { text: 'It sends exactly what the morning run would send — the orders where nothing needs a person. Orders that need a person (no e-mail, a warning to check, a port of loading to confirm) are not in the list; send those one by one with **Prepare reminder**.' },
+      { text: '**Safe to press twice.** A stage that was already sent — by the button, by the morning run, or by a person — is never sent again; pressing again only sends what is still due. Afterwards each order shows **Sent**, **Not sent** (with the reason) or **Delivery unconfirmed**.' },
+      { text: '**Only what you saw is sent.** If a customer’s address, the copy list, the balance, the language or the stage changes after the list was shown, that reminder is held back and you are asked to open the list again.' },
+      { text: '**One reminder per stage, whoever sends it.** A single **Send**, the batch button and the morning run now share one lock: two of them at the same moment still means one e-mail. Sending a second reminder for the same stage stays a separate, deliberate tick.' },
+      { text: 'The automatic morning run is unchanged and stays as it is set. Who can use the button: the super admin and anyone with "AR: Send reminders".' },
+      { superAdminOnly: true, text: 'Technical (no SQL): actions batch_list / batch_send on /api/accounting/arrival-reminders; the timer and the button share one routine (sendDue) and one claim per stage (uq_arrival_reminders_auto_slot). Live warehouse only; a person limited by the history window is offered only the orders they may see in full.' },
+    ]
+  },
+  {
     version: 'v55.83-ZJ',
     date: '2026-11-25',
     title: 'Phone: the Call button is always visible',
