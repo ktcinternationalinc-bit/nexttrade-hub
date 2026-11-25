@@ -2,11 +2,14 @@
 // Called by the Vercel timer every 5 minutes (CRON_SECRET bearer). People start it from the desk with “Run now”
 // (POST /api/commercial, action run_now), which checks their permission — this route accepts the timer only.
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createNoStoreClient as createClient } from '../../../../lib/no-store-db'; // v55.83-YY — every read fresh (no Data Cache)
 import { runNextJob } from '../../../../lib/sourcing-server';
 import { mailCycle } from '../../../../lib/commercial-mail-server'; // v55.83-SW — send what was approved, read replies, prepare follow-ups
 
 export const dynamic = 'force-dynamic';
+// v55.83-YY — this GET-only route never keeps its reads in Next's Data Cache (it would otherwise keep them forever, across deployments)
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 export const maxDuration = 300;
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } }); }

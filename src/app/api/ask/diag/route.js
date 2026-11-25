@@ -19,6 +19,10 @@
 // error excerpts truncated to 200 chars.
 // ============================================================
 
+export const dynamic = 'force-dynamic';
+// v55.83-YY — this GET-only route never keeps its reads in Next's Data Cache (it would otherwise keep them forever, across deployments)
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 export async function GET() {
   var report = {
     timestamp: new Date().toISOString(),
@@ -101,8 +105,8 @@ export async function GET() {
   // -------- 4. Supabase round-trip --------
   if (report.env.has_supabase_url && (report.env.has_service_role || report.env.has_anon_key)) {
     try {
-      var supa = await import('@supabase/supabase-js');
-      var client = supa.createClient(
+      var supa = await import('../../../../lib/no-store-db'); // v55.83-YY — no-store reads
+      var client = supa.createNoStoreClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL,
         process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
       );

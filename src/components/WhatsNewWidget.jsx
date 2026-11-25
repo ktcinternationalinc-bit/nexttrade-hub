@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YY',
+    date: '2026-11-25',
+    title: 'Timers, the warehouse cost feed, WhatsApp and phone screens always read today’s data',
+    items: [
+      { text: '**Fixed:** the same fault that froze Change Schedule on 24 Nov could hit 23 other parts of the Hub that only ever read: the category-rules timer, the bank shadow timer, the Sourcing desk worker, the product-cost feed the warehouse reads, the WhatsApp list and conversation pages, the call-recording player, the transcription timer, the Wave checks, the backup list and download, the Gmail inbox and the phone / WhatsApp health pages. Each of them could keep repeating the first answer it ever got from the database. They now ask the database fresh every time.' },
+      { text: 'Nothing was lost: the database itself was always right. Only these answers could have been old copies.' },
+      { superAdminOnly: true, text: 'Technical: in Next.js 14 a route that exports only GET keeps its GET fetches (supabase-js select() and auth.getUser()) in the Data Cache with no expiry, even with dynamic = force-dynamic, and the Vercel Data Cache survives deployments. Every GET-only API route outside /api/releases (fixed by YW) now exports revalidate = 0 + fetchCache = force-no-store and builds its Supabase client with src/lib/no-store-db.js (fetch cache: no-store); phone-auth’s sign-in check uses it too, so a signed-out session is no longer accepted from a kept answer. Proven through Next’s real AppRouteRouteModule (test-v55-83-yy-get-routes-fresh.js, with contrast runs that reproduce the frozen answers). No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-YX',
     date: '2026-11-25',
     title: 'Warehouse check: one card per invoice — PASS or REVIEW, Approved or Disputed; NexPac + the vendors Max selects',

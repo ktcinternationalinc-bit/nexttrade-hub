@@ -1,8 +1,12 @@
 // v55.83-AJ — Wave capability audit (read-only, live). Queries the connected
 // account for how many customers / invoices / products exist per business, so we
 // know exactly what historical data is importable. Token stays server-side.
-import { createClient } from '@supabase/supabase-js';
+import { createNoStoreClient as createClient } from '../../../../lib/no-store-db'; // v55.83-YY — every read fresh (no Data Cache)
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ
+export const dynamic = 'force-dynamic';
+// v55.83-YY — this GET-only route never keeps its reads in Next's Data Cache (it would otherwise keep them forever, across deployments)
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 function cnt(c) { return c && c.pageInfo && typeof c.pageInfo.totalCount === 'number' ? c.pageInfo.totalCount : null; }
 
 export async function GET(req) {

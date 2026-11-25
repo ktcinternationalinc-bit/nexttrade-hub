@@ -17,7 +17,7 @@
 //    enough to slow down attackers.
 // ============================================================
 
-import { createClient } from '@supabase/supabase-js';
+import { createNoStoreClient as createClient } from './no-store-db'; // v55.83-YY — the sign-in check (auth.getUser, a GET) is never kept in Next's Data Cache
 import crypto from 'crypto';
 
 // In-memory rate limit store. NOTE: This resets on every cold start.

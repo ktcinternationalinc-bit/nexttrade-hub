@@ -1,8 +1,11 @@
-import { createClient } from '@supabase/supabase-js';
+import { createNoStoreClient as createClient } from '../../../../../lib/no-store-db'; // v55.83-YY — every read fresh (no Data Cache)
 import { createShadowJob } from '../../../../../lib/clickbooks-us-shadow-job.js';
 import { applyExpenseRules } from '../../../../../lib/expense-rules-server';
 import { syncWindows, isDailyCatchUpTick } from '../../../../../lib/clickbooks-sync-windows';
 export const dynamic = 'force-dynamic';
+// v55.83-YY — this GET-only route never keeps its reads in Next's Data Cache (it would otherwise keep them forever, across deployments)
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 // v55.83-QZ2 — a tick may run the drift check + several 31-day windows.
 export const maxDuration = 60;
 // v55.83-PD — the scheduler now runs BOTH syncs each tick: the engine's shadow
