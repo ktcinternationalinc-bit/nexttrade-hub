@@ -325,12 +325,20 @@ var TEXT = JSON.stringify(FILE); var SHA = crypto.createHash('sha256').update(TE
   stub(path.join(root, 'src/lib/supabase.js'), { supabase: { auth: { getSession: function () { return Promise.resolve({ data: { session: null } }); } } } });
   var React = require(path.join(root, 'node_modules/react')); var RDS = require(path.join(root, 'node_modules/react-dom/server'));
   var TabC = require(path.join(root, 'src/components/CanadaHistoryTab.jsx')).default;
-  function renderTab(dataObj) { var orig = React.useState; var ix = 0; React.useState = function (init) { var k = ix++; return orig(k === 0 ? dataObj : (k === 2 ? false : init)); }; try { return RDS.renderToStaticMarkup(React.createElement(TabC, {})).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '); } finally { React.useState = orig; } }
+  function renderTabMarkup(dataObj) { var orig = React.useState; var ix = 0; React.useState = function (init) { var k = ix++; return orig(k === 0 ? dataObj : (k === 2 ? false : init)); }; try { return RDS.renderToStaticMarkup(React.createElement(TabC, {})); } finally { React.useState = orig; } }
+  function renderTab(dataObj) { return renderTabMarkup(dataObj).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '); }
   var screen = renderTab({ ok: true, loaded: true, can_manage: true, batch: { source_file: 'test.xlsm', loaded_at: '2026-11-24T00:00:00Z', receipt_lines: CR.length, shipment_lines: CS.length }, receipts: CR, shipments: CS, decisions: [], ktc_invoices: null, ktc_invoices_note: '', warehouse_flow: fl2 });
   check('P2 on screen: the section “Warehouse grades not linked to a goods type” lists the grade and its pounds', screen.indexOf('Warehouse grades not linked to a goods type') > 0 && /Special Fabric Canada CANADA 2023-05 → 2023-06 500 60/.test(screen) && /Roofing Membrane CANADA 2023-04 40 0/.test(screen) && /Not linked, total 540 60/.test(screen), screen.slice(screen.indexOf('Warehouse grades not linked'), screen.indexOf('Warehouse grades not linked') + 500));
   check('P2 on screen: partial-total warning on the summary and the adding-up line', /PARTIAL — linked grades only; \+ 540 in \/ 60 out not linked/.test(screen) && /cards 125 \+ not linked 540 = warehouse Canadian total received 665 lb/.test(screen) && /Adds up\./.test(screen) && /PARTIAL TOTAL: 2 Canadian warehouse grades are not linked/.test(screen));
   var screenOk = renderTab({ ok: true, loaded: true, can_manage: true, batch: { source_file: 'test.xlsm', loaded_at: '2026-11-24T00:00:00Z', receipt_lines: CR.length, shipment_lines: CS.length }, receipts: CR, shipments: CS, decisions: [], ktc_invoices: null, ktc_invoices_note: '', warehouse_flow: fl });
   check('P2 on screen: when every grade is linked the section and the warning are not shown', screenOk.indexOf('Warehouse grades not linked to a goods type') < 0 && screenOk.indexOf('PARTIAL') < 0 && screenOk.indexOf('in 88 lb') > 0);
+  var mappingData = { ok: true, loaded: true, can_manage: true, receipts: [], shipments: [], decisions: [] };
+  var mappingMarkup = renderTabMarkup(mappingData);
+  var confirmRow = (mappingMarkup.match(/<tr[^>]*><td[^>]*>Seconds Auto<\/td>[\s\S]*?<\/tr>/) || [])[0] || '';
+  var confirmButton = (confirmRow.match(/<button[^>]*>Confirm<\/button>/) || [])[0] || '';
+  check('mapping: a suggested value can be confirmed without changing the dropdown', !!confirmButton && !/\bdisabled\b/.test(confirmButton) && /<option value="Seconds Canada" selected="">/.test(confirmRow));
+  check('mapping: dropdown opts into the light-panel form colors', /<select class="nt-light" aria-label="Goods type for Seconds Auto"/.test(confirmRow));
+  check('mapping: viewers have no edit controls', !/aria-label="Goods type for /.test(renderTabMarkup(Object.assign({}, mappingData, { can_manage: false }))));
 
   // the reader: address rule, token only in the header, no redirect, plain reasons
   var calls = []; var oldFetch = global.fetch;

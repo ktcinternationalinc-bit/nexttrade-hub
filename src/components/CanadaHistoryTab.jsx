@@ -87,7 +87,7 @@ export default function CanadaHistoryTab(props) {
 
   function load() {
     setLoading(true); setErr('');
-    bearer()
+    return bearer()
       .then(function (h) { return fetch('/api/canada-history', { cache: 'no-store', headers: h }); })
       .then(function (r) { return r.json(); })
       .then(function (j) {
@@ -106,7 +106,8 @@ export default function CanadaHistoryTab(props) {
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (!j || !j.ok) { say((j && j.error) || 'That did not work.', true); return false; }
-        say(doneText, false); load(); return true;
+        say(doneText, false);
+        return load().then(function () { return true; });
       })
       .catch(function () { say('Could not reach the Hub. Nothing was changed.', true); return false; })
       .then(function (r) { setBusy(''); return r; });
@@ -159,7 +160,7 @@ export default function CanadaHistoryTab(props) {
           </p>
           <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
             {loading ? 'Loading…' : (data && data.batch ? ('Source: ' + data.batch.source_file + ' · stored ' + String(data.batch.loaded_at || '').slice(0, 10) + ' · ' + data.batch.receipt_lines + ' received lines, ' + data.batch.shipment_lines + ' shipped lines') : '')}
-            <button onClick={load} style={Object.assign({}, btn, { marginLeft: 10, padding: '2px 8px', fontSize: 11 })}>Refresh</button>
+            <button onClick={load} disabled={loading || !!busy} style={Object.assign({}, btn, { marginLeft: 10, padding: '2px 8px', fontSize: 11 })}>Refresh</button>
           </div>
         </header>
 
@@ -302,7 +303,7 @@ export default function CanadaHistoryTab(props) {
                   {sales.money_shown ? (' The dollar column is the KTC invoice the Hub already holds for that release number: ' + sales.with_ktc_invoice + ' releases have one (' + fmtUsd(sales.ktc_total) + ' on ' + fmtLb(sales.lb_with_ktc_invoice) + ' lb); ' + sales.without_ktc_invoice + ' have none here — they were invoiced by NexTrade or prepaid, so their dollars are unknown in the Hub, not zero. An invoice can cover more than the goods in this list, so $ per lb is a guide only.') : ' Dollar figures are shown to the super admin only.'}
                 </div>
                 {data && data.ktc_invoices_note ? <div style={{ background: C.warnBg, border: '1px solid #fecaca', color: C.warn, borderRadius: 8, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>{data.ktc_invoices_note} No dollars are shown.</div> : null}
-                <input value={saleQ} onChange={function (e) { setSaleQ(e.target.value); setSaleN(60); }} placeholder="Search release, customer, invoice number or date" style={{ width: '100%', maxWidth: 420, fontSize: 13, padding: '6px 10px', border: '1px solid ' + C.line, borderRadius: 8, background: '#fff', color: C.ink, marginBottom: 8 }} />
+                <input className="nt-light" value={saleQ} onChange={function (e) { setSaleQ(e.target.value); setSaleN(60); }} placeholder="Search release, customer, invoice number or date" style={{ width: '100%', maxWidth: 420, padding: '6px 10px', border: '1px solid ' + C.line, borderRadius: 8, marginBottom: 8 }} />
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead><tr><th style={th}>Loaded</th><th style={th}>Release</th><th style={th}>Customer</th><th style={th}>Goods (old name → counts as)</th><th style={thR}>Pounds</th><th style={th}>NexTrade invoice (workbook)</th>{sales.money_shown ? <th style={thR}>KTC invoice $</th> : null}{sales.money_shown ? <th style={thR}>$ per lb</th> : null}</tr></thead>
@@ -332,7 +333,7 @@ export default function CanadaHistoryTab(props) {
             <div style={box}>
               <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 2 }}>Old Canadian name → current CGT goods type</div>
               <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
-                This is what makes the comparison like for like. “Proposed” links are suggestions until the super admin saves them. A name with no match is never guessed: it stays under its own name until the super admin decides. Earlier decisions are kept.
+                {canManage ? 'Click Confirm to accept the selection as shown, or choose a different goods type and click Save. Choose Keep separate to leave a name under its own label. Earlier decisions are kept.' : 'Proposed mappings are awaiting confirmation by a super admin. A name with no match stays under its own label.'}
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -341,6 +342,9 @@ export default function CanadaHistoryTab(props) {
                     {CANADA_GOODS.map(function (name) {
                       var cur = eff.map[name]; var src = eff.source[name];
                       var pick = picks[name] === undefined ? cur : picks[name];
+                      var changed = pick !== cur;
+                      var canConfirm = !changed && (src === 'proposed' || src === 'unmatched');
+                      var saveDisabled = loading || !!busy || (!changed && !canConfirm);
                       var opts = CURRENT_CGT_TYPES.slice(); if (cur && opts.indexOf(cur) < 0) { opts.push(cur); }
                       return (
                         <tr key={name} style={{ background: cur ? 'transparent' : C.warnBg }}>
@@ -349,12 +353,12 @@ export default function CanadaHistoryTab(props) {
                           <td style={td}>{src === 'proposed' ? <span style={{ color: C.gold, fontWeight: 700 }}>Proposed — not confirmed yet</span> : src === 'decided' ? <span style={{ color: C.ok, fontWeight: 700 }}>Decided</span> : src === 'decided-unmatched' ? 'Decided: keep separate' : <span style={{ color: C.warn, fontWeight: 700 }}>Waiting for a decision</span>}</td>
                           {canManage ? (
                             <td style={td}>
-                              <select value={pick} onChange={function (e) { var n = Object.assign({}, picks); n[name] = e.target.value; setPicks(n); }} style={{ fontSize: 12, padding: '3px 6px', border: '1px solid ' + C.line, borderRadius: 6, background: '#fff', color: C.ink }}>
+                              <select className="nt-light" aria-label={'Goods type for ' + name} value={pick} onChange={function (e) { var n = Object.assign({}, picks); n[name] = e.target.value; setPicks(n); }} style={{ padding: '5px 6px', border: '1px solid ' + C.line, borderRadius: 6 }}>
                                 <option value="">Keep separate (no match)</option>
                                 {opts.map(function (o) { return <option key={o} value={o}>{o}</option>; })}
                               </select>
-                              <button disabled={!!busy || pick === cur} onClick={function () { post({ action: 'map', goods_name: name, cgt_type: pick }, name + ' saved.'); }}
-                                style={Object.assign({}, btn, { marginLeft: 6, padding: '3px 10px', opacity: (busy || pick === cur) ? 0.45 : 1 })}>Save</button>
+                              <button disabled={saveDisabled} onClick={function () { post({ action: 'map', goods_name: name, cgt_type: pick }, name + ' saved.'); }}
+                                style={Object.assign({}, btn, { marginLeft: 6, padding: '5px 10px', background: saveDisabled ? '#f1f5f9' : '#1d4ed8', color: saveDisabled ? '#475569' : '#fff', borderColor: saveDisabled ? '#cbd5e1' : '#1d4ed8', cursor: saveDisabled ? 'default' : 'pointer' })}>{canConfirm ? 'Confirm' : 'Save'}</button>
                             </td>
                           ) : null}
                         </tr>
