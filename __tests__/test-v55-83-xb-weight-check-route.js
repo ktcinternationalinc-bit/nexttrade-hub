@@ -41,6 +41,7 @@ function Q(name) {
 function now() { return new Date(Date.now() + (seq++)).toISOString(); }
 function exec(st) {
   // before Max runs the XB SQL: PostgREST's real answer for a table that is not there (PGRST205)
+  if (world.noScopeTable && st.name === 'wc_vendor_scope') { return { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public.wc_vendor_scope' in the schema cache" } }; }
   if (world.noSql && /^wc_/.test(st.name)) { world.noSqlHits = (world.noSqlHits || 0) + 1; return { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public." + st.name + "' in the schema cache" } }; }
   var rows = tbl(st.name);
   if (st.op === 'insert') {
@@ -358,7 +359,7 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('SCREEN: needs revalidation shows the old decision and what changed', /Needs revalidation/.test(html5) && /Staff One/.test(html5) && /900 → 880/.test(html5));
   var PANEL = require(path.join(root, 'src/components/WeightCheckPanel.jsx'));
   var html6 = RDS.renderToStaticMarkup(React.createElement(PANEL.default, { bills: [], toast: {}, openDoc: function () {}, onClose: function () {} }));
-  check('SCREEN: the report panel renders with its filters, Exceptions / Report history / Mappings tabs and the save button', /Bill date from/.test(html6) && /Report history/.test(html6) && /Mappings &amp; tolerance/.test(html6) && /numbered report/.test(html6) && /Unresolved issues only/.test(html6));
+  check('SCREEN: the panel opens on Invoices (YX: dates + "Check against the warehouse"), with Exceptions / Report history / Mappings tabs', /Bill date from/.test(html6) && />Invoices</.test(html6) && />Exceptions</.test(html6) && /Report history/.test(html6) && /Mappings &amp; tolerance/.test(html6) && /Check against the warehouse/.test(html6) && /Show \(last reading\)/.test(html6), html6.substring(0, 300));
   var bt = fs.readFileSync(path.join(root, 'src/components/BillsTab.jsx'), 'utf8');
   check('Bills wiring: the box sits under the bill lines, the panel opens from a Bills button, both behind the view switch', /<WarehouseCheckBox bill={b}/.test(bt) && /panel === 'weightcheck' && canWeightCheck && <WeightCheckPanel/.test(bt) && bt.indexOf("modulePerms['bills.weight_check.view']") >= 0);
   // ---- a genuinely all-approved report (control): bill 3 (Jan 2025) is linked to receipt 14 — 500 lb billed, 500 lb scanned
@@ -417,6 +418,42 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   world.dropLog = false;
   check('an incomplete answer (fewer scan rows than the receipt says) is not stored; the run says incomplete', inc.body.recheck.ok === true && inc.body.recheck.complete === false && tbl('wc_receipt_versions').length === before, inc.body.recheck);
   check('…and the audit trail recorded every recheck, link and decision', tbl('audit').filter(function (a) { return /weight_check_/.test(a.action); }).length >= 12);
+
+  // ---- YX (Max 25 Nov): only NexPac + the vendors Max selects; one card per invoice with PASS / REVIEW
+  var BK = 'b0000000-0000-4000-8000-0000000000k1';
+  addBill(BK, '2026-10-06', '90000001', [{ description: 'Inbound freight', qty: 1, unit: 'EA' }], { vendor_name: 'Kronos Logistics', bill_number: 'K-77' });
+  world.perms = STAFF; world.feed = 'ok';
+  var okK = await call({ action: 'bill', bill_id: BK });
+  check('SCOPE default = NexPac only: a Kronos bill answers out_of_scope (the box hides itself)', okK.status === 200 && okK.body.out_of_scope === true && okK.body.scope.is_default === true && okK.body.scope.vendor_keys.join() === 'nexpac', okK.body);
+  var rcK = await call({ action: 'recheck', bill_id: BK }); var dcK = await call({ action: 'decide', bill_id: BK, item_key: 'x', kind: 'report_issue', reason: 'trying anyway' });
+  check('…recheck and decisions on it are refused (409, "not in the warehouse check")', rcK.status === 409 && /not in the warehouse check/.test(rcK.body.error) && dcK.status === 409, [rcK.body, dcK.body]);
+  var pvK = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true });
+  check('…and the lists leave it out (the NexPac bills are still there)', pvK.status === 200 && !pvK.body.rows.some(function (r) { return (r.bill_ids || []).indexOf(BK) >= 0; }) && pvK.body.rows.some(function (r) { return (r.bill_ids || []).indexOf(B1) >= 0; }) && pvK.body.scope.vendor_names.join() === 'NexPac Corporation', pvK.body.scope);
+  var svK0 = await call({ action: 'scope_save', vendor_names: ['NexPac Corporation', 'Kronos Logistics'] });
+  check('choosing the vendors is for the super admin only (403 for staff, nothing saved)', svK0.status === 403 && tbl('wc_vendor_scope').length === 0);
+  world.superAdmin = true;
+  var svK = await call({ action: 'scope_save', vendor_names: ['NexPac Corporation', 'Kronos Logistics', 'nexpac corporation'] });
+  var stK = await call({ action: 'settings_view' });
+  world.superAdmin = false;
+  check('the super admin saves NexPac + Kronos → version 1 (duplicates folded), audited; settings show it and offer the vendors with bill counts', svK.status === 200 && svK.body.scope.version === 1 && svK.body.scope.vendor_keys.join() === 'nexpac,kronos logistics' && tbl('audit').some(function (a) { return a.action === 'weight_check_scope_saved'; }) && stK.body.scope.version === 1 && stK.body.vendor_choices.some(function (v) { return v.key === 'kronos logistics' && v.bills === 1; }), [svK.body, stK.body.scope, (stK.body.vendor_choices || []).slice(0, 3)]);
+  var okK2 = await call({ action: 'bill', bill_id: BK });
+  check('…then the Kronos bill is in the check (no out_of_scope)', okK2.status === 200 && !okK2.body.out_of_scope, okK2.body.out_of_scope);
+  world.noScopeTable = true;
+  var okK3 = await call({ action: 'bill', bill_id: BK }); var okN3 = await call({ action: 'bill', bill_id: B1 });
+  world.noScopeTable = false;
+  check('before the YX SQL is run: NexPac only, said plainly (table_missing), the rest of the check still works', okK3.body.out_of_scope === true && okK3.body.scope.table_missing === true && okN3.status === 200 && !okN3.body.out_of_scope, [okK3.body.scope, okN3.status]);
+  var INV = require(path.join(root, 'src/components/WeightCheckInvoices.jsx'));
+  var pvI = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true });
+  var invs = INV.groupInvoices(pvI.body.rows);
+  var vB1 = invs.filter(function (v) { return v.key.indexOf(B1) >= 0; })[0];
+  check('INVOICES: one card per invoice (no row lost), PASS only when every product line is Matched / Equal, else REVIEW with the reasons', invs.length >= 1 && invs.reduce(function (n, v) { return n + v.rows.length; }, 0) === pvI.body.rows.length && invs.every(function (v) { return v.pass === (v.products.length > 0 && v.others.length === 0 && v.products.every(function (r) { return r.outcome === 'matched' || r.outcome === 'equal'; })); }) && vB1 && (vB1.pass || vB1.why.length > 0), invs.map(function (v) { return [v.key.substring(0, 12), v.pass, v.why.slice(0, 2)]; }));
+  var fc0 = world.feedCalls; world.perms = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 1 };
+  await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true, recheck: true });
+  var fc1 = world.feedCalls; world.perms = STAFF;
+  var pvR = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true, recheck: true });
+  check('"Check against the warehouse": reads the warehouse only with Validate (View-only stays on the stored copy), saves no numbered report', fc1 === fc0 && world.feedCalls > fc1 && !!pvR.body.recheck && pvR.body.freshness && pvR.body.freshness.kind !== 'stored_copy' && !pvR.body.report, [fc0, fc1, world.feedCalls, pvR.body.freshness]);
+  var invSrc = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
+  check('SCREEN (Invoices): PASS green / REVIEW red badge, Approved + Disputed buttons, a REVIEW needs a written reason to approve, Disputed always needs one', /'PASS', GREEN/.test(invSrc) && /'REVIEW', RED/.test(invSrc) && />Approved</.test(invSrc) && />Disputed</.test(invSrc) && /mode === 'approve' && !inv.pass && reason.length < 5/.test(invSrc) && /mode === 'dispute' && reason.length < 5/.test(invSrc) && /kind: kind, reason: reason, expected_fp: r.comparison_fp/.test(invSrc));
 
   // ---- the real route with its OWN receipts address + token (another staging sub-site here, so the fake's identity still fits)
   var keep = { u: process.env.NEXTRADE_RECEIPTS_URL, t: process.env.NEXTRADE_RECEIPTS_TOKEN };

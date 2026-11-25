@@ -7,6 +7,7 @@
 // where each item stands now — kept apart. A report with open items never looks approved.
 import React, { useState, useEffect } from 'react';
 import BillPeek from './BillPeek';
+import WeightCheckInvoices from './WeightCheckInvoices'; // v55.83-YX — one card per invoice: PASS / REVIEW + Approved / Disputed
 import { wcApi, say, ItemCard, DecisionDialog, FeedLine, Chip, num, when, OUTCOME_STYLE, STATE_STYLE, DECISION_LABEL } from './WarehouseCheckBox';
 import { toCsv, OUTCOME_WORDS, STATE_WORDS } from '../lib/weight-check';
 
@@ -24,7 +25,7 @@ function csvRows(rows, reportNo) {
 }
 
 export default function WeightCheckPanel(props) {
-  var _t = useState('report'); var tab = _t[0], setTab = _t[1];
+  var _t = useState('invoices'); var tab = _t[0], setTab = _t[1];
   var mr = monthRange();
   var _f = useState({ date_from: mr[0], date_to: mr[1], vendor: '', reference: '', warehouse: '', status: '', reviewer: '', unresolved: false, all: false }); var flt = _f[0], setFlt = _f[1];
   var _d = useState(null); var data = _d[0], setData = _d[1];
@@ -46,7 +47,7 @@ export default function WeightCheckPanel(props) {
   return <div className="nt-paper rounded-xl border-2 border-slate-300 p-3 mb-3" style={{ background: '#ffffff', color: INK }}>
     <div className="flex flex-wrap gap-2 items-center mb-2">
       <b className="text-[14px]">🏭 Warehouse check — billed vs scanned in</b>
-      {['report', 'history', 'settings'].map(function (k) { var lbl = k === 'report' ? 'Exceptions' : k === 'history' ? 'Report history' : 'Mappings & tolerance'; return <button key={k} onClick={function () { setTab(k); }} className="px-2 py-1 rounded-lg text-[11px] font-extrabold" style={tab === k ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{lbl}</button>; })}
+      {['invoices', 'report', 'history', 'settings'].map(function (k) { var lbl = k === 'invoices' ? 'Invoices' : k === 'report' ? 'Exceptions' : k === 'history' ? 'Report history' : 'Mappings & tolerance'; return <button key={k} onClick={function () { setTab(k); }} className="px-2 py-1 rounded-lg text-[11px] font-extrabold" style={tab === k ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{lbl}</button>; })}
       <span style={{ flex: 1 }} />
       <button onClick={props.onClose} className="px-2 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Close</button>
     </div>
@@ -63,6 +64,7 @@ export default function WeightCheckPanel(props) {
       say(props.toast, 'Decision saved.', 'success');
     }} />}
 
+    {tab === 'invoices' && <WeightCheckInvoices toast={props.toast} />}
     {tab === 'report' && <div>
       <div className="flex flex-wrap gap-2 items-end text-[11px] font-bold" style={{ color: SUB }}>
         <label>Bill date from<br /><input type="date" value={flt.date_from} onChange={function (e) { set('date_from', e.target.value); }} className={inp} /></label>
@@ -172,7 +174,8 @@ function WcSettings(props) {
   var _m = useState({ vendor_name: 'NexPac Corporation', bill_description: '', bill_unit: 'LBS', wh_product_type: '', wh_cgt: '', wh_nt: '', wh_color: '', wh_label: '', lb_per_yd: '', lb_factor_approved: false, note: '' }); var m = _m[0], setM = _m[1];
   var _t = useState({ pct: '', lb: '', note: '' }); var t = _t[0], setT = _t[1];
   var _e = useState(''); var msg = _e[0], setMsg = _e[1];
-  function load() { wcApi({ action: 'settings_view' }).then(setS); }
+  var _v = useState(null); var vsel = _v[0], setVsel = _v[1];
+  function load() { wcApi({ action: 'settings_view' }).then(function (j) { setS(j); if (j && j.ok && j.scope) { var o = {}; (j.scope.vendor_keys || []).forEach(function (k, i) { o[k] = (j.scope.vendor_names || [])[i] || k; }); setVsel(o); } }); }
   useEffect(load, []);
   if (!s) { return <div className="text-[12px]" style={{ color: SUB }}>Loading…</div>; }
   if (!s.ok) { return <div className="text-[12px] font-bold" style={{ color: '#991b1b' }}>{s.error}</div>; }
@@ -183,8 +186,15 @@ function WcSettings(props) {
   function retire(fam) { var r = window.prompt('Why is this mapping retired? (it stays in the history)'); if (!r) { return; } wcApi({ action: 'map_retire', family: fam, reason: r }).then(function (j) { setMsg(j.ok ? 'Retired.' : j.error); load(); }); }
   function saveTol() { setMsg(''); wcApi(Object.assign({ action: 'tolerance_save' }, t)).then(function (j) { setMsg(j.ok ? 'Tolerance saved (version ' + j.tolerance.version + ').' : j.error); load(); }); }
   var tol = (s.tolerances || [])[0];
+  function saveScope() { setMsg(''); var names = Object.keys(vsel || {}).filter(function (k) { return !!vsel[k]; }).map(function (k) { return vsel[k]; }); wcApi({ action: 'scope_save', vendor_names: names }).then(function (j) { setMsg(j.ok ? 'Vendors saved (version ' + j.scope.version + '): ' + j.scope.vendor_names.join(', ') : j.error); load(); }); }
+  var sc = s.scope || {}; var scKeys = sc.vendor_keys || [];
   return <div className="text-[12px]">
     {msg ? <div className="rounded px-2 py-1 mb-2 font-bold" style={{ background: '#f1f5f9' }}>{msg}</div> : null}
+    <div className="font-extrabold">Vendors in the warehouse check</div>
+    <div style={{ color: SUB }}>{'Checked now: ' + (sc.vendor_names || []).join(', ') + (sc.is_default ? ' — the default (NexPac only) until Max saves a selection' : ' — version ' + sc.version + ', ' + when(sc.at)) + '. Bills from other vendors show no warehouse check and are left out of every list.'}{sc.table_missing ? ' (The vendor list cannot be saved until Max runs sql/v55-83-YX-wc-vendor-scope.sql.)' : ''}</div>
+    {p.super_admin && vsel ? <div className="mt-1"><div className="flex flex-wrap gap-x-3 gap-y-1" style={{ maxHeight: 160, overflowY: 'auto' }}>{(s.vendor_choices || []).map(function (v) { var on = !!vsel[v.key]; return <label key={v.key} className="flex items-center gap-1"><input type="checkbox" checked={on} onChange={function (e) { var o = Object.assign({}, vsel); o[v.key] = e.target.checked ? v.name : false; setVsel(o); }} />{v.name + ' (' + v.bills + ')'}</label>; })}</div>
+      <button onClick={saveScope} className="mt-1 px-3 py-1 rounded-lg font-extrabold" style={{ background: '#0f172a', color: '#ffffff' }}>Save vendors</button></div> : <div className="text-[11px]" style={{ color: SUB }}>Only the super admin chooses the vendors.</div>}
+    <div className="mt-3" />
     <div className="font-extrabold">Tolerance</div>
     <div style={{ color: SUB }}>{tol ? 'Approved: ' + (tol.pct != null ? tol.pct + '%' : '') + (tol.pct != null && tol.lb != null ? ' or ' : '') + (tol.lb != null ? tol.lb + ' lb' : '') + ' (whichever is larger) — version ' + tol.version + ', ' + tol.actor_name + ', ' + when(tol.at) : 'None approved yet. Until Max sets one, nothing is called “Matched”; exact agreement shows “Equal”.'}</div>
     <div className="font-bold mt-1" style={{ color: '#7c2d12' }}>One way only: a bill may be LESS than what was scanned into the warehouse by up to this amount (packaging, gross vs net). A bill MORE than what was scanned is never allowed — no tolerance, it is always a discrepancy.</div>

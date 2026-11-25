@@ -157,7 +157,7 @@ export function openEvidence(decisionId, path) {
 }
 
 // a bill with no confirmed receipt: the proposals to confirm / reject, or choose one by hand
-function LinkChooser(props) {
+export function LinkChooser(props) {
   var it = props.item; var p = props.perms || {};
   var _m = useState(''); var rid = _m[0], setRid = _m[1];
   var _w = useState(''); var why = _w[0], setWhy = _w[1];
@@ -191,6 +191,7 @@ export default function WarehouseCheckBox(props) {
   useEffect(function () { load({ action: 'bill' }); }, [bill.id]);
   if (!data) { return <div className="text-[11px] mt-2" style={{ color: SUB }}>Warehouse Check: loading…</div>; }
   if (data.http_status === 403 && /Warehouse check: View/.test(String(data.error || ''))) { return null; } // not switched on for this person
+  if (data.out_of_scope) { return null; } // v55.83-YX: this vendor is not in the warehouse check (NexPac + the vendors Max selects)
   var perms = data.permissions || {};
   return <div className="mt-2 rounded-xl p-2" style={{ border: '2px solid #cbd5e1', background: '#f8fafc', color: INK }}>
     <div className="flex flex-wrap gap-2 items-center mb-1">

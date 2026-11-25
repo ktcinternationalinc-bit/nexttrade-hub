@@ -24,7 +24,7 @@ import { verifiedCaller } from '../../../../lib/verified-caller';
 import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server';
 import { audit } from '../../../../lib/audit-server';
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
-import { assemble, recheckWarehouse, lastRun, billAllowed, sha, decisionSnapshot, missingTables, latestMaps } from '../../../../lib/weight-check-server';
+import { assemble, recheckWarehouse, lastRun, billAllowed, sha, decisionSnapshot, missingTables, latestMaps, loadVendorScope, inVendorScope } from '../../../../lib/weight-check-server';
 import { WC_BUILD, allowedDecisions, DECISION_PERM, reportStatus, normRef, vendorKey, billItemKey, OUTCOME_WORDS, STATE_WORDS, BASIS_LABEL } from '../../../../lib/weight-check';
 import { receiptsFeedConfig } from '../../../../lib/weight-check-feed-server';
 
@@ -43,7 +43,7 @@ function clean(s, n) { return String(s == null ? '' : s).replace(/[\u0000-\u001f
 
 var VIEW_ACTIONS = { bill: 1, report_preview: 1, reports: 1, report: 1, settings_view: 1, people: 1, evidence_url: 1 };
 var VALIDATE_ACTIONS = { recheck: 1, link: 1, run_report: 1 };
-var SETTINGS_ACTIONS = { map_save: 1, map_retire: 1, tolerance_save: 1 };
+var SETTINGS_ACTIONS = { map_save: 1, map_retire: 1, tolerance_save: 1, scope_save: 1 };
 
 export async function POST(req) {
   var body = null;
@@ -79,6 +79,9 @@ export async function POST(req) {
     var runs = await lastRun(db);
     var lookups = (runs.lastGood && runs.lastGood.lookups) || {};
     var feedInfo = { source: source, staging: source !== 'nextrade-live', feed_error: cfg.error || null, last_run: runs.last ? runPublic(runs.last) : null, last_good: runs.lastGood ? runPublic(runs.lastGood) : null };
+    // v55.83-YX (Max 25 Nov): only the vendors Max selects are checked (NexPac only until he saves a selection)
+    var scope = await loadVendorScope(db);
+    var OUT_OF_SCOPE = 'This vendor is not in the warehouse check. Max chooses the vendors in Bills → 🏭 Warehouse check → Mappings & tolerance.';
 
     // ---------------------------------------------------------------- one bill (the "Warehouse Check" box)
     if (action === 'bill' || action === 'recheck' || action === 'link') {
@@ -86,6 +89,10 @@ export async function POST(req) {
       var bq = await db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, other_reference, release_number, record_status, wave_business_id, attachment_path').eq('id', billId).maybeSingle();
       if (bq.error || !bq.data) { return bad('Bill not found.', 404); }
       if (!billAllowed(bq.data, floor)) { return bad('This bill is outside what you may see.', 403); }
+      if (!inVendorScope(scope, bq.data.vendor_name)) {
+        if (action === 'bill') { return out({ ok: true, out_of_scope: true, vendor: bq.data.vendor_name, scope: scopePublic(scope), permissions: perms }); }
+        return bad(OUT_OF_SCOPE, 409);
+      }
       var recheckResult = null;
       if (action === 'recheck') {
         var pre = await assemble(db, [billId], floor, { source: source, lookups: lookups });
@@ -136,6 +143,7 @@ export async function POST(req) {
       var bq2 = await db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, record_status, wave_business_id').eq('id', bId).maybeSingle();
       if (bq2.error || !bq2.data) { return bad('Bill not found.', 404); }
       if (!billAllowed(bq2.data, floor)) { return bad('This bill is outside what you may see.', 403); }
+      if (!inVendorScope(scope, bq2.data.vendor_name)) { return bad(OUT_OF_SCOPE, 409); }
       var D = await assemble(db, [bId], floor, { source: source, lookups: lookups });
       var item = D.items.filter(function (i) { return i.item_key === key; })[0];
       if (!item) { return bad('That line of the check is no longer there — reload the bill.', 409); }
@@ -209,7 +217,7 @@ export async function POST(req) {
         return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, other_reference, release_number, record_status, wave_business_id, bill_type, shipment_direction, attachment_path')
           .gte('bill_date', from).lte('bill_date', f1).order('bill_date', { ascending: true });
       });
-      bl = bl.filter(function (b) { return billAllowed(b, floor); });
+      bl = bl.filter(function (b) { return billAllowed(b, floor) && inVendorScope(scope, b.vendor_name); });
       var withItems = {};
       var idsAll = bl.map(function (b) { return b.id; });
       for (var ci = 0; ci < idsAll.length; ci += 200) { (await allRows(function () { return db.from('vendor_bill_lines').select('bill_id').eq('line_kind', 'item').in('bill_id', idsAll.slice(ci, ci + 200)); })).forEach(function (l) { withItems[l.bill_id] = true; }); }
@@ -221,7 +229,8 @@ export async function POST(req) {
       var rr = null;
       var refreshSince = new Date(Date.now() - 60000).toISOString(); // a receipt read whole from now on counts as refreshed by this report (1 min clock margin)
       body.__since = refreshSince;
-      if (action === 'run_report' && body.recheck !== false && ids.length) {
+      // YX: the per-invoice view may read the warehouse first too (no numbered report is saved by a preview)
+      if (((action === 'run_report' && body.recheck !== false) || (action === 'report_preview' && body.recheck === true && perms.validate)) && ids.length) {
         var preR = await assemble(db, ids, floor, { source: source, lookups: lookups });
         var vis = ids.map(function (id) { return preR.bills[id]; }).filter(Boolean);
         rr = await recheckWarehouse(db, process.env, userId, 'report', vis, preR.links);
@@ -254,7 +263,7 @@ export async function POST(req) {
       function defaultRows() { return rows.filter(function (r) { return r.outstanding || (r.stale && r.needs_attention); }); }
       if (action === 'report_preview') {
         var shown = body.all === true ? rows : defaultRows();
-        return out({ ok: true, rows: shown, all_count: rows.length, summary: summary, freshness: freshWords(fresh, rows, runs), bills_checked: ids.length, from: from, to: f1, window_floor: floor, feed: feedInfo, tolerance: tolPublic(R.tolerance), permissions: perms });
+        return out({ ok: true, scope: scopePublic(scope), recheck: rr, rows: shown, all_count: rows.length, summary: summary, freshness: freshWords(fresh, rows, runs), bills_checked: ids.length, from: from, to: f1, window_floor: floor, feed: feedInfo, tolerance: tolPublic(R.tolerance), permissions: perms });
       }
       // run_report: save it, numbered, frozen as it stands (every item, not only the outstanding ones)
       var status = reportStatus(rows.map(function (r) { return { needs_attention: r.needs_attention, state: r.state }; }));
@@ -322,12 +331,15 @@ export async function POST(req) {
 
     // ---------------------------------------------------------------- settings (mappings, tolerance), people, evidence
     if (action === 'settings_view') {
+      var vrows = await allRows(function () { return db.from('vendor_bills').select('vendor_name, record_status, wave_business_id').eq('record_status', 'active'); });
+      var vc = {}; vrows.forEach(function (b) { if (!billAllowed(b, null)) { return; } var k = vendorKey(b.vendor_name); if (!k) { return; } if (!vc[k]) { vc[k] = { key: k, name: b.vendor_name, bills: 0 }; } vc[k].bills++; });
+      var vendorChoices = Object.keys(vc).map(function (k) { return vc[k]; }).sort(function (a, b) { return b.bills - a.bills; }).slice(0, 300);
       var mp = await allRows(function () { return db.from('wc_product_maps').select('*').order('at', { ascending: false }); });
       var tl = await db.from('wc_tolerances').select('*').order('version', { ascending: false }).limit(20);
       if (tl.error) { throw new Error(tl.error.message); }
       var nmS = await userNames(db, mp.map(function (m) { return m.actor; }).concat((tl.data || []).map(function (t) { return t.actor; })));
       return out({ ok: true, maps: latestMaps(mp).map(function (m) { return Object.assign({}, m, { actor_name: nmS[m.actor] || 'someone' }); }), map_history: mp.length, tolerances: (tl.data || []).map(function (t) { return Object.assign({}, t, { actor_name: nmS[t.actor] || 'someone' }); }),
-        lookups: lookups, feed: feedInfo, permissions: perms });
+        lookups: lookups, feed: feedInfo, permissions: perms, scope: scopePublic(scope), vendor_choices: vendorChoices });
     }
     if (action === 'people') {
       var pp = await db.from('users').select('id, name, active').eq('active', true).order('name', { ascending: true }).limit(500);
@@ -383,6 +395,22 @@ export async function POST(req) {
       await audit(db, userId, 'weight_check_map_retired', 'wc_product_map', ri.data.id, { family: famR, reason: whyR });
       return out({ ok: true });
     }
+    // YX (Max 25 Nov): which vendors the warehouse check looks at — super admin only, versioned, audited, never edited
+    if (action === 'scope_save') {
+      if (!isSuper) { return bad('Only the super admin chooses the vendors in the warehouse check (Max decides).', 403); }
+      var names = Array.isArray(body.vendor_names) ? body.vendor_names.map(function (v) { return clean(v, 160); }).filter(Boolean) : [];
+      var seenK = {}; var keysS = []; var namesS = [];
+      names.forEach(function (n) { var k = vendorKey(n); if (k && !seenK[k]) { seenK[k] = true; keysS.push(k); namesS.push(n); } });
+      if (!keysS.length) { return bad('Choose at least one vendor.'); }
+      if (keysS.length > 50) { return bad('At most 50 vendors.'); }
+      var sv0 = await db.from('wc_vendor_scope').select('version').order('version', { ascending: false }).limit(1);
+      if (sv0.error) { throw new Error(sv0.error.message); }
+      var sver = ((sv0.data || [])[0] || { version: 0 }).version + 1;
+      var sIns = await db.from('wc_vendor_scope').insert({ version: sver, vendor_keys: keysS, vendor_names: namesS, note: clean(body.note, 1000) || null, actor: userId }).select('id, version').single();
+      if (sIns.error) { throw new Error(sIns.error.message); }
+      await audit(db, userId, 'weight_check_scope_saved', 'wc_vendor_scope', sIns.data.id, { version: sver, vendors: namesS, keys: keysS });
+      return out({ ok: true, scope: { version: sver, vendor_names: namesS, vendor_keys: keysS } });
+    }
     if (action === 'tolerance_save') {
       if (!isSuper) { return bad('Only the super admin sets the tolerance (Max approves it).', 403); }
       var pct = body.pct === '' || body.pct == null ? null : Number(body.pct); var lbT = body.lb === '' || body.lb == null ? null : Number(body.lb);
@@ -423,6 +451,7 @@ async function namesOf(db, items) {
   return userNames(db, ids);
 }
 function runPublic(r) { return { at: r.finished_at || r.started_at, ok: r.ok, complete: r.complete, error: r.ok ? null : r.error, source: r.source, site: r.site, feed_generated_at: r.feed_generated_at }; }
+function scopePublic(sc) { return sc ? { version: sc.version, vendor_names: sc.vendor_names || [], vendor_keys: sc.vendor_keys || [], is_default: !!sc.is_default, table_missing: !!sc.table_missing, at: sc.at || null } : null; }
 function tolPublic(t) { return t ? { version: t.version, pct: t.pct, lb: t.lb, at: t.at } : null; }
 function billPublic(b) { return { id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date, other_reference: b.other_reference, attachment_path: b.attachment_path || null }; }
 function receiptsPublic(A, lookups) {
@@ -486,7 +515,7 @@ function viewReport(r, floor, visFrozen) {
 }
 // Codex 11:30 — did THIS report read the warehouse? refreshed / refresh_failed / refresh_incomplete / not_refreshed / stored_copy
 function freshnessOf(action, body, nBills, rr) {
-  if (action === 'report_preview') { return { kind: 'stored_copy', since: body.__since }; }
+  if (action === 'report_preview' && body.recheck !== true) { return { kind: 'stored_copy', since: body.__since }; }
   if (body.recheck === false) { return { kind: 'not_refreshed', since: body.__since }; }
   if (!nBills) { return { kind: 'refreshed', since: body.__since }; }
   if (!rr || rr.ok !== true) { return { kind: 'refresh_failed', since: body.__since, error: (rr && rr.error) || 'the warehouse was not read' }; }

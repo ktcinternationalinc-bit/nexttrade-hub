@@ -3,7 +3,7 @@
 // SWC-safe: var + string concatenation.
 import crypto from 'crypto';
 import { canonical, normRef, billReferences, proposeLinks, currentLinks, buildGroups, compareGroup, unlinkedBillItem, decisionState, isOutstanding,
-  needsDecision, needsAttention, blockedState, diffInputs, receiptKey, WC_BUILD, OUTCOME_WORDS, STATE_WORDS, BASIS_LABEL } from './weight-check';
+  needsDecision, needsAttention, blockedState, diffInputs, receiptKey, WC_BUILD, OUTCOME_WORDS, STATE_WORDS, BASIS_LABEL, vendorKey } from './weight-check';
 import { fetchReceipts, MAX_IDS, MAX_REFS } from './weight-check-feed-server';
 import { US_WAVE_BUSINESS_ID } from './business-of';
 
@@ -21,6 +21,24 @@ async function all(q) {
   return out;
 }
 function chunks(a, n) { var out = []; for (var i = 0; i < a.length; i += n) { out.push(a.slice(i, i + n)); } return out; }
+// v55.83-YX (Max 25 Nov: "warehouse check should only look at nexpac bills and only vendors we select").
+// The selection is versioned in wc_vendor_scope (sql/v55-83-YX-wc-vendor-scope.sql). Until Max saves one — or before that
+// SQL is run — the scope is NexPac only. A vendor is in scope when its vendorKey() is in the latest selection.
+export function defaultVendorScope() { return { version: 0, vendor_keys: ['nexpac'], vendor_names: ['NexPac Corporation'], is_default: true, at: null, actor: null, note: null }; }
+export async function loadVendorScope(db) {
+  var r = await db.from('wc_vendor_scope').select('*').order('version', { ascending: false }).limit(1);
+  if (r.error) {
+    if (missingTables(r.error.message)) { return Object.assign(defaultVendorScope(), { table_missing: true }); }
+    throw new Error(r.error.message);
+  }
+  var row = (r.data || [])[0];
+  if (!row) { return defaultVendorScope(); }
+  return { version: row.version, vendor_keys: (row.vendor_keys || []).slice(), vendor_names: (row.vendor_names || []).slice(), is_default: false, at: row.at || null, actor: row.actor || null, note: row.note || null };
+}
+export function inVendorScope(scope, vendorName) {
+  var k = vendorKey(vendorName);
+  return !!k && !!scope && Array.isArray(scope.vendor_keys) && scope.vendor_keys.indexOf(k) >= 0;
+}
 export function missingTables(msg) { return /wc_[a-z_]+/.test(String(msg || '')) && /does not exist|schema cache|could not find/i.test(String(msg || '')); }
 
 // ---------------------------------------------------------------- which bills a person may see
