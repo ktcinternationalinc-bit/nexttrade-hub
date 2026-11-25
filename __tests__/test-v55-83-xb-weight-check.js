@@ -67,8 +67,18 @@ var p2 = prod(run({ bills: [B1], lines: L1, receipts: [R2], links: [link('1', '1
 check('REAL DIFFERENCE: billed 2,000, scanned 1,900 → discrepancy −100 lb, −5%', p2.outcome === 'discrepancy' && p2.figures.diff === -100 && p2.figures.pct === -5, p2.figures);
 var p2t = prod(run({ bills: [B1], lines: L1, receipts: [R2], links: [link('1', '11')], tolerance: { id: 't1', version: 1, pct: 1, lb: 50 } }))[0];
 check('…still a discrepancy when beyond the approved tolerance (100 > max(1%·2000, 50))', p2t.outcome === 'discrepancy');
-var p2s = prod(run({ bills: [B1], lines: L1, receipts: [receipt('11', [log(101), log(102, { weight: '970' })])], links: [link('1', '11')], tolerance: { id: 't1', version: 1, pct: 1, lb: 50 } }))[0];
-check('…a 30 lb difference inside the approved tolerance is Matched', p2s.outcome === 'matched');
+// Max 25 Nov — ONE-WAY tolerance: a bill may be BELOW what was scanned (packaging); a bill ABOVE what was scanned never passes
+var p2s = prod(run({ bills: [B1], lines: L1, receipts: [receipt('11', [log(101), log(102, { weight: '1030' })])], links: [link('1', '11')], tolerance: { id: 't1', version: 1, pct: 1, lb: 50 } }))[0];
+check('…billed 30 lb BELOW what was scanned (2,000 vs 2,030), inside the tolerance → Matched', p2s.outcome === 'matched' && p2s.figures.diff === 30, p2s.figures);
+var p2o = prod(run({ bills: [B1], lines: L1, receipts: [receipt('11', [log(101), log(102, { weight: '970' })])], links: [link('1', '11')], tolerance: { id: 't1', version: 1, pct: 1, lb: 50 } }))[0];
+check('…billed 30 lb ABOVE what was scanned (2,000 vs 1,970) → discrepancy even inside the tolerance, and says why', p2o.outcome === 'discrepancy' && p2o.figures.diff === -30 && /billed MORE than was scanned/.test((p2o.reasons || []).join(' ')), [p2o.outcome, p2o.reasons]);
+check('…withinTolerance itself: −0.001 (bill above) is outside even a 50 % tolerance; +0 and +10 % are inside a 10 % one', W.withinTolerance(-0.001, 2000, { pct: 50 }) === false && W.withinTolerance(0, 2000, { pct: 10 }) === true && W.withinTolerance(200, 2000, { pct: 10 }) === true && W.withinTolerance(200.01, 2000, { pct: 10 }) === false);
+// Max's real case, bill 14753 Seconds: billed 4,460, scanned 4,890 (+9.6 %) with a 10 % tolerance → Matched; scanned 4,400 (bill 60 above) → never
+var L14 = { '1': [line(1, 'Cambridge Seconds (LBS)', 4460, 'LBS')] };
+var p14 = prod(run({ bills: [B1], lines: L14, receipts: [receipt('11', [log(101, { weight: '2558' }), log(102, { weight: '1112' }), log(103, { weight: '1220' })])], links: [link('1', '11')], tolerance: { id: 't2', version: 2, pct: 10 } }))[0];
+var p14o = prod(run({ bills: [B1], lines: L14, receipts: [receipt('11', [log(101, { weight: '4400' })])], links: [link('1', '11')], tolerance: { id: 't2', version: 2, pct: 10 } }))[0];
+var p14b = prod(run({ bills: [B1], lines: L14, receipts: [receipt('11', [log(101, { weight: '4950' })])], links: [link('1', '11')], tolerance: { id: 't2', version: 2, pct: 10 } }))[0];
+check('Max\'s 10 % rule on bill 14753 Seconds: 4,460 billed / 4,890 scanned → Matched; 4,400 scanned (bill above) → discrepancy; 4,950 scanned (bill 11 % below) → discrepancy', p14.outcome === 'matched' && p14.figures.diff === 430 && p14o.outcome === 'discrepancy' && p14b.outcome === 'discrepancy', [p14.outcome, p14.figures.diff, p14o.outcome, p14b.outcome]);
 
 // ---------- 3 missing product
 var L3 = { '1': [line(1, 'Cambridge Seconds (LBS)', 2000, 'LBS'), line(2, 'Texas Thirds (YDS)', 300, 'YDS')] };

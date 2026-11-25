@@ -297,6 +297,8 @@ export function compareGroup(inp) {
     else if (tol && withinTolerance(diff, billed, tol)) { outcome = 'matched'; }
     else if (!tol && diff === 0) { outcome = 'equal'; }
     else { outcome = 'discrepancy'; }
+    // Max 25 Nov: a bill above what was scanned is never allowed — say so plainly
+    if (outcome === 'discrepancy' && diff != null && diff < 0) { reasons.unshift('billed MORE than was scanned into the warehouse (' + Math.abs(diff) + ' ' + (unitWord || '') + ') — never allowed, no tolerance'); }
     if (flags.length) { reasons = reasons.concat(flags); }
     var inputs = {
       item_key: g.key + '|p:' + pk,
@@ -335,8 +337,11 @@ function lineOut(ln) { return { bill_id: ln.bill_id, bill_number: ln.bill_number
 function uniqF(x, i, a) { return a.indexOf(x) === i; }
 function cmpArr(a, b) { var x = canonical(a); var y = canonical(b); return x < y ? -1 : (x > y ? 1 : 0); }
 
+// v55.83-YX (Max 25 Nov): ONE-WAY. diff = scanned − billed. A bill may be BELOW what was scanned by up to the approved
+// tolerance (packaging / gross vs net); a bill ABOVE what was scanned is NEVER within tolerance — not by one pound.
 export function withinTolerance(diff, billed, tol) {
   if (!tol) { return false; }
+  if (Number(diff) < -1e-9) { return false; }
   var lim = 0;
   if (tol.lb != null) { lim = Math.max(lim, Number(tol.lb)); }
   if (tol.pct != null && billed) { lim = Math.max(lim, Math.abs(billed) * Number(tol.pct) / 100); }

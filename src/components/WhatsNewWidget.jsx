@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YX',
+    date: '2026-11-25',
+    title: 'Warehouse check: a bill may be below what was scanned — never above',
+    items: [
+      { text: 'The tolerance now works ONE way, as Max decided: a supplier bill may be LESS than what was scanned into the warehouse by up to the approved amount (packaging — the scanner weighs gross, suppliers bill net). A bill MORE than what was scanned is never allowed: it is always shown as a discrepancy, “billed MORE than was scanned … never allowed, no tolerance”.' },
+      { text: 'Bills → 🏭 Warehouse check → Mappings & tolerance shows this rule under the tolerance.' },
+      { superAdminOnly: true, text: 'Technical: weight-check.js withinTolerance() returns false for diff < 0 (diff = scanned − billed); compareGroup adds the reason line. No SQL, no stored data changed; the tolerance row (pct / lb) keeps its meaning for the allowed side only.' }
+    ]
+  },
+  {
     version: 'v55.83-YW',
     date: '2026-11-25',
     title: 'Change Schedule shows what is happening now (it was stuck on 24 Nov)',
