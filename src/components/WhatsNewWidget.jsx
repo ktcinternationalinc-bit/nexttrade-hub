@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZG',
+    date: '2026-11-25',
+    title: 'Reminders: the "Last run" line no longer says the Hub is on the test warehouse',
+    items: [
+      { text: '**Arrival & final-payment reminders → Automatic sending.** The "Last run" line repeated the reason stored at that run as if it were true now — after the switch to the live warehouse it still said the Hub was reading the staging copy. It now reads in the past and names the run: "At that run (date, time) the Hub was reading the staging test copy of the warehouse, so nothing was sent."' },
+      { text: 'The warning that the Hub **is** reading a test copy appears only while it really is.' },
+      { superAdminOnly: true, text: 'Technical (no SQL): the run record now carries source + a reason code; lastRunNote / lastRunWasTestCopy in ArrivalRemindersTab also correct the record already stored on live. Nothing about what is sent, or when, changed.' },
+    ]
+  },
+  {
     version: 'v55.83-ZF',
     date: '2026-11-25',
     title: 'Warehouse check: change a product mapping',

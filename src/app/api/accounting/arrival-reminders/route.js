@@ -230,8 +230,10 @@ export async function GET(req) {
   if (!isTimer(req)) { return bad('Timer only.', 401); }
   var db = admin(); var started = Date.now();
   var run = { at: new Date().toISOString(), today: todayInNewYork(), sent: [], failed: [], unconfirmed: [], skipped: [], needs_person: 0, note: null };
-  async function finish(note, status) {
-    run.note = note || null; run.took_ms = Date.now() - started;
+  // v55.83-ZG — every run record says WHICH copy of the warehouse it read (run.source) and, when it sent nothing for a standing reason,
+  // a reason code. A stored sentence is about THAT run only: the screen words it in the past and never repeats it as today's state.
+  async function finish(note, status, reason) {
+    run.note = note || null; run.reason = reason || null; run.took_ms = Date.now() - started;
     try { await writeSetting(db, AUTO_LAST_RUN_KEY, run, null); } catch (eW) { /* the audit rows and the log hold every send */ }
     return NextResponse.json({ ok: !status || status < 400, run: run, api_build_marker: API_BUILD_MARKER }, { status: status || 200 });
   }
@@ -245,7 +247,8 @@ export async function GET(req) {
     var ccAuto = await ccFor(db);
     var all = await loadRows(db, null);
     if (all.error) { return finish(all.error + ' Nothing was sent.', 503); }
-    if (all.cfg.source !== 'nextrade-live') { return finish('The Hub is reading the ' + all.cfg.source + ' copy of the warehouse, not the live one — automatic reminders are never sent from a test copy.', 200); }
+    run.source = all.cfg.source;
+    if (all.cfg.source !== 'nextrade-live') { return finish('At this run the Hub was reading the ' + all.cfg.source + ' copy of the warehouse, not the live one, so nothing was sent (automatic reminders are never sent from a test copy).', 200, 'not_live'); }
     if (!all.logReady) { return finish(SQL_HINT, 503); }
     run.needs_person = all.rows.filter(function (r) { return !r.paid_in_full && (!r.auto || !r.auto.eligible); }).filter(function (r) { return !r.slot_sent; }).length; // a paid order waits for nobody
     var todo = all.rows.filter(function (r) { return r.auto && r.auto.eligible; });

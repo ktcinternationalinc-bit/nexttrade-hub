@@ -106,6 +106,16 @@ export function createReminderActions(io) {
   return { prepare: prepare, send: send };
 }
 
+// v55.83-ZG (Max, 25 Nov 2026, the day the Hub was switched to the live warehouse: "this message is wrong") — the last run's stored
+// reason is about THAT run. It is worded in the past and tied to the run's time; it is never shown as if it were true now. The
+// present-tense test-copy warning (above the Last run line) appears only while the Hub really is reading a test copy (a.live_feed).
+export function lastRunWasTestCopy(run) { return !!run && (run.reason === 'not_live' || /not the live one/.test(String(run.note || ''))); }
+export function lastRunNote(run) {
+  if (!run || !run.note) { return ''; }
+  if (lastRunWasTestCopy(run)) { return 'At that run (' + when(run.at) + ') the Hub was reading the staging test copy of the warehouse, so nothing was sent.'; }
+  return 'At that run: ' + run.note;
+}
+
 // v55.83-XY — the automatic schedule: its switch, what it would do, and what the last morning run did. No state of its own.
 export function AutoPanel(p) {
   var a = p.auto || {}; var run = a.last_run; var on = a.on === true;
@@ -121,7 +131,7 @@ export function AutoPanel(p) {
     </div>
     <div className="mt-1" style={{ color: SUB }}>{(a.schedule || '') + ' It sends only when nothing needs a person: an invoice with a balance, no warning, a known port of loading and an e-mail on the Hub customer. It writes in the language chosen on the Hub customer (English when none is chosen). Each stage goes out once; past the arrival date it is once a day for at most ' + (a.max_overdue_days || 30) + ' days.'}</div>
     <div className="mt-1"><b>{(a.would_send || 0) + ' reminder(s)'}</b>{on ? ' will go out at the next run.' : ' would go out if it were ON.'}{!a.live_feed && <span style={{ color: '#991b1b', fontWeight: 800 }}>{' The Hub is reading a TEST copy of the warehouse — the automatic run sends nothing from it.'}</span>}</div>
-    {run && <div className="mt-1"><b>Last run</b>{' ' + when(run.at) + ': ' + n(run.sent) + ' sent, ' + n(run.failed) + ' not sent, ' + n(run.unconfirmed) + ' delivery unconfirmed, ' + (run.needs_person || 0) + ' waiting for a person' + (n(run.skipped) ? ', ' + n(run.skipped) + ' left for the next pass' : '') + '.'}{run.note && <span style={{ color: '#991b1b', fontWeight: 800 }}>{' ' + run.note}</span>}
+    {run && <div className="mt-1"><b>Last run</b>{' ' + when(run.at) + ': ' + n(run.sent) + ' sent, ' + n(run.failed) + ' not sent, ' + n(run.unconfirmed) + ' delivery unconfirmed, ' + (run.needs_person || 0) + ' waiting for a person' + (n(run.skipped) ? ', ' + n(run.skipped) + ' left for the next pass' : '') + '.'}{lastRunNote(run) && <span style={lastRunWasTestCopy(run) ? { color: SUB } : { color: '#991b1b', fontWeight: 800 }}>{' ' + lastRunNote(run)}</span>}
       {(run.failed || []).concat(run.unconfirmed || []).slice(0, 8).map(function (x, i) { return <div key={i} style={{ color: '#7c2d12' }}>{'• ' + (x.release || x.order_id) + ' to ' + x.to + ': ' + x.why}</div>; })}</div>}
   </div>;
 }
