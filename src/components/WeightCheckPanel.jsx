@@ -8,7 +8,7 @@
 import React, { useState, useEffect } from 'react';
 import BillPeek from './BillPeek';
 import WeightCheckInvoices from './WeightCheckInvoices'; // v55.83-YX — one card per invoice: PASS / REVIEW + Approved / Disputed
-import { wcApi, say, ItemCard, DecisionDialog, FeedLine, Chip, num, when, OUTCOME_STYLE, STATE_STYLE, DECISION_LABEL } from './WarehouseCheckBox';
+import { wcApi, say, ItemCard, DecisionDialog, FeedLine, Chip, num, when, OUTCOME_STYLE, STATE_STYLE, DECISION_LABEL, warehouseMappingLabel } from './WarehouseCheckBox';
 import { toCsv, OUTCOME_WORDS, STATE_WORDS } from '../lib/weight-check';
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
@@ -177,6 +177,8 @@ function WcSettings(props) {
   var _t = useState({ pct: '', lb: '', note: '' }); var t = _t[0], setT = _t[1];
   var _e = useState(''); var msg = _e[0], setMsg = _e[1];
   var _v = useState(null); var vsel = _v[0], setVsel = _v[1];
+  var [mapSaving, setMapSaving] = useState(false);
+  var [mapMessage, setMapMessage] = useState(null);
   function load() { wcApi({ action: 'settings_view' }).then(function (j) { setS(j); if (j && j.ok && j.scope) { var o = {}; (j.scope.vendor_keys || []).forEach(function (k, i) { o[k] = (j.scope.vendor_names || [])[i] || k; }); setVsel(o); } }); }
   useEffect(load, []);
   if (!s) { return <div className="text-[12px]" style={{ color: SUB }}>Loading…</div>; }
@@ -184,16 +186,42 @@ function WcSettings(props) {
   var p = s.permissions || {}; var L = s.lookups || {};
   var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white nt-light';
   function sel(tabName, key, label) { var opts = L[tabName] || {}; return <label>{label}<br /><select value={m[key]} onChange={function (e) { var o = {}; o[key] = e.target.value; setM(Object.assign({}, m, o)); }} className={inp}><option value="">any</option>{Object.keys(opts).map(function (id) { return <option key={id} value={id}>{opts[id] + ' (#' + id + ')'}</option>; })}</select></label>; }
-  function saveMap() {
-    setMsg('');
-    if (editing && String(m.note || '').trim().length < 5) { setMsg('Say why this mapping is changed (at least a few words) — it is kept with the new version.'); return; }
+  async function saveMap() {
+    if (mapSaving) { return; }
+    setMapMessage(null);
+    if (editing && String(m.note || '').trim().length < 5) { setMapMessage({ error: true, words: 'Enter a reason with at least five characters to save this change.' }); return; }
     var body = Object.assign({ action: 'map_save' }, m); if (!p.super_admin) { delete body.lb_factor_approved; } // Codex 25 Nov (ZF): the approval tick is hidden for non-super editors, so it is never sent; an unchanged approved factor is kept by the server, a changed one is saved unapproved
     if (editing) { body.family = editing.family; body.expected_version = editing.version; if (!String(body.vendor_name || '').trim()) { delete body.vendor_name; } }
-    wcApi(body).then(function (j) { if (!j.ok) { setMsg(j.error); return; } setMsg(editing ? 'Mapping changed: version ' + j.map.version + ' saved, version ' + j.changed_from + ' kept in the history. Decisions that used it are asked again.' : 'Mapping saved.'); setEditing(null); setM(BLANK_MAP); load(); });
+    var productChanged = editing && ['wh_product_type', 'wh_cgt', 'wh_nt', 'wh_color'].some(function (key) { return (m[key] || '') !== (editing[key] || ''); });
+    if (!String(body.wh_label || '').trim() || (productChanged && body.wh_label === (editing.wh_label || ''))) {
+      body.wh_label = warehouseMappingLabel(body, L);
+    }
+    setMapSaving(true);
+    try {
+      var j = await wcApi(body);
+      if (!j.ok) { setMapMessage({ error: true, words: j.error, reload: j.http_status === 409 }); return; }
+      var words = 'Mapping v' + j.map.version + ' saved' + (j.map.wh_label ? ' · ' + j.map.wh_label : '') + '.';
+      var fresh = await wcApi({ action: 'settings_view' });
+      if (fresh.ok) { setS(fresh); }
+      else { setS(function (current) { return Object.assign({}, current, { maps: [j.map].concat((current.maps || []).filter(function (map) { return map.family !== j.map.family; })) }); }); }
+      setEditing(null); setM(BLANK_MAP);
+      setMapMessage({ words: words });
+    } finally { setMapSaving(false); }
   }
   // v55.83-ZF (Max 25 Nov "need to be able to update the product mappings"): Edit = prefill the form with this mapping; saving makes a new version
-  function startEdit(x) { setMsg(''); setEditing(x); setM({ vendor_name: '', bill_description: x.bill_description || '' /* Codex 25 Nov (ZF): never prefill the stored key as a description (that would re-key it); the key shows as a hint */, bill_unit: x.bill_unit || '', wh_product_type: x.wh_product_type || '', wh_cgt: x.wh_cgt || '', wh_nt: x.wh_nt || '', wh_color: x.wh_color || '', wh_label: x.wh_label || '', lb_per_yd: x.lb_per_yd != null ? String(x.lb_per_yd) : '', lb_factor_approved: !!x.lb_factor_approved, note: '' }); }
-  function cancelEdit() { setEditing(null); setM(BLANK_MAP); setMsg(''); }
+  function startEdit(x) { if (mapSaving) { return; } setMapMessage(null); setEditing(x); setM({ vendor_name: '', bill_description: x.bill_description || '' /* Codex 25 Nov (ZF): never prefill the stored key as a description (that would re-key it); the key shows as a hint */, bill_unit: x.bill_unit || '', wh_product_type: x.wh_product_type || '', wh_cgt: x.wh_cgt || '', wh_nt: x.wh_nt || '', wh_color: x.wh_color || '', wh_label: x.wh_label || '', lb_per_yd: x.lb_per_yd != null ? String(x.lb_per_yd) : '', lb_factor_approved: !!x.lb_factor_approved, note: '' }); }
+  function cancelEdit() { setEditing(null); setM(BLANK_MAP); setMapMessage(null); }
+  async function reloadMap() {
+    setMapSaving(true);
+    try {
+      var fresh = await wcApi({ action: 'settings_view' });
+      if (!fresh.ok) { setMapMessage({ error: true, words: fresh.error, reload: true }); return; }
+      setS(fresh);
+      var current = editing && (fresh.maps || []).find(function (map) { return map.family === editing.family; });
+      if (current) { startEdit(current); }
+      else { cancelEdit(); }
+    } finally { setMapSaving(false); }
+  }
   function retire(fam) { var r = window.prompt('Why is this mapping retired? (it stays in the history)'); if (!r) { return; } wcApi({ action: 'map_retire', family: fam, reason: r }).then(function (j) { setMsg(j.ok ? 'Retired.' : j.error); load(); }); }
   function saveTol() { setMsg(''); wcApi(Object.assign({ action: 'tolerance_save' }, t)).then(function (j) { setMsg(j.ok ? 'Tolerance saved (version ' + j.tolerance.version + ').' : j.error); load(); }); }
   var tol = (s.tolerances || [])[0];
@@ -225,9 +253,12 @@ function WcSettings(props) {
       <label>lb per yard (optional)<br /><input value={m.lb_per_yd} onChange={function (e) { setM(Object.assign({}, m, { lb_per_yd: e.target.value })); }} className={inp + ' w-16'} /></label>
       {p.super_admin ? <label className="flex items-center gap-1"><input type="checkbox" checked={m.lb_factor_approved} onChange={function (e) { setM(Object.assign({}, m, { lb_factor_approved: e.target.checked })); }} />approve this factor for the check</label> : null}
       {editing ? <label>Why is it changed? (required)<br /><input value={m.note} onChange={function (e) { setM(Object.assign({}, m, { note: e.target.value })); }} placeholder="e.g. Texas Thirds are scanned as Folds, not Thirds" className={inp + ' w-72'} /></label> : null}
-      <button onClick={saveMap} className="px-3 py-1 rounded-lg font-extrabold" style={{ background: '#0f172a', color: '#ffffff' }}>{editing ? 'Save change (new version)' : 'Save mapping'}</button>
-      {editing ? <button onClick={cancelEdit} className="px-3 py-1 rounded-lg font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>Cancel</button> : null}
+      <button type="button" disabled={mapSaving} onClick={saveMap} className="px-3 py-1 rounded-lg font-extrabold" style={{ background: '#0f172a', color: '#ffffff' }}>{mapSaving ? 'Saving…' : editing ? 'Save change (new version)' : 'Save mapping'}</button>
+      {editing ? <button type="button" disabled={mapSaving} onClick={cancelEdit} className="px-3 py-1 rounded-lg font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>Cancel</button> : null}
     </div> : <div className="text-[11px] mt-1" style={{ color: SUB }}>Adding mappings needs “Warehouse check: Settings”.</div>}
+    {mapMessage && <div role={mapMessage.error ? 'alert' : 'status'} className="rounded px-2 py-1 mt-2 font-bold" style={{ background: mapMessage.error ? '#fef2f2' : '#f0fdf4', color: mapMessage.error ? '#991b1b' : '#14532d' }}>
+      {mapMessage.words}{mapMessage.reload && <button type="button" disabled={mapSaving} onClick={reloadMap} className="ml-2 underline" style={{ color: '#1d4ed8' }}>Reload latest mapping</button>}
+    </div>}
     {!Object.keys(L.product_types || {}).length ? <div className="text-[11px] mt-1" style={{ color: '#854d0e' }}>The warehouse product list appears after the first successful warehouse read.</div> : null}
   </div>;
 }

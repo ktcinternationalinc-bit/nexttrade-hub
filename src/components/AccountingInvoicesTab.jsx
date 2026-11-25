@@ -1,14 +1,14 @@
 // v55.83-AC — Accounting invoices + proformas (app-owned, accounting_customer_id only).
 // Approval: draft -> internal_review -> approved (Owner/Admin/Accounting Manager).
 // Proformas never touch balances until converted. Printable PDF via browser print.
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
-import { businessOfInvoice } from '../lib/business-of';
-import { canViewInvoices, canCreateInvoice, canReopen } from '../lib/bank-permissions';
+import { businessOfInvoice, US_WAVE_BUSINESS_ID } from '../lib/business-of';
+import { canViewInvoices, canCreateInvoice, canApproveInvoices } from '../lib/bank-permissions';
 import { roundMoney, isPaymentVoid } from '../lib/payment-matching';
 import { canDeleteInvoices, INVOICE_DELETE_DENIED } from '../lib/invoice-delete-access'; // v55.83-UM
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-UM — signed-in token on lifecycle calls
@@ -21,6 +21,7 @@ import ProformaPeek from './ProformaPeek';
 import InvoicePeek from './InvoicePeek';
 import CustomsInvoiceBox from './CustomsInvoiceBox'; // v55.83-XD — customs invoice saved under an invoice (counted nowhere)
 import ShippingPartsBox from './ShippingPartsBox'; // v55.83-WH — internal breakdown of the shipping (never printed)
+import { CashInvoiceReceipt } from './CashOnHandPanel';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -73,9 +74,10 @@ export default function AccountingInvoicesTab(props) {
   var _role = userProfile && userProfile.role;
   var mayView = canViewInvoices(isSuperAdmin, modulePerms, _role);
   var mayEdit = canCreateInvoice(isSuperAdmin, modulePerms, _role);
-  var mayApprove = canReopen(isSuperAdmin, modulePerms, userProfile && userProfile.role); // Owner/Admin/Accounting Mgr
+  var mayApprove = canApproveInvoices(isSuperAdmin, modulePerms, _role);
   // v55.83-UM — delete / void / cancel / archive / restore: the super admin, or the “Delete / void invoices 🔒” switch ON (no role gives it)
   var mayLifecycle = canDeleteInvoices(isSuperAdmin, modulePerms);
+  var mayRecordCash = isSuperAdmin || (modulePerms['bank.view_private'] === true && modulePerms['cash.manage'] === true);
 
   var [mode, setMode] = useState(props.defaultMode || 'invoices');     // invoices | proformas
   var [businessId, setBusinessId] = useState(null);
@@ -105,6 +107,7 @@ export default function AccountingInvoicesTab(props) {
   var [viewItems, setViewItems] = useState([]);
   var [viewPayments, setViewPayments] = useState([]);
   var [viewLoading, setViewLoading] = useState(false);
+  var viewRead = useRef(null);
   var [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null }); // v55.83-JL admin visibility window
   // v55.83-VZ — the small marks on the lists (which invoice has a proforma; which proforma has invoices / a signed copy) and the two pop-ups
   var [linkMap, setLinkMap] = useState({ by_invoice: {}, by_proforma: {} });
@@ -369,11 +372,11 @@ export default function AccountingInvoicesTab(props) {
   // open invoice to edit if necessary from here" — any invoice peek's ✏ Edit
   // lands here: fetch the full row by id and open the SAME editor.
   function openEditById(id) {
-    if (!id || !isInvoice()) { return; }
-    if (!mayEdit) { toast.error('You need invoice edit permission for that.'); return; }
+    if (!id || !isInvoice() || !mayView) { return; }
     supabase.from('accounting_invoices').select('*').eq('id', id).maybeSingle().then(function (r) {
-      if (r && r.data) { startEdit(r.data); }
-      else { toast.error('Could not open that invoice for editing.'); }
+      if (!r || !r.data) { toast.error('Could not open that invoice.'); return; }
+      if (locked(r.data) || !mayEdit) { setEditing(null); openView(r.data); }
+      else { startEdit(r.data); }
     });
   }
   // v55.83-WJ (Max: "take me to the exact invoice and exact area where i would enter that amount") — when another screen opens an
@@ -387,12 +390,13 @@ export default function AccountingInvoicesTab(props) {
   }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(function () { if (!editing && shipFocus) { setShipFocus(false); } }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(function () {
+    if (!mayView || mode !== 'invoices') { return; }
     var pending = typeof window !== 'undefined' ? window.__ntOpenInvoiceEdit : null;
     if (pending) { window.__ntOpenInvoiceEdit = null; openEditById(pending); }
     function onEvt(e) { if (e && e.detail) { window.__ntOpenInvoiceEdit = null; openEditById(e.detail); } }
     window.addEventListener('nt-open-invoice-edit', onEvt);
     return function () { window.removeEventListener('nt-open-invoice-edit', onEvt); };
-  }, []); // eslint-disable-line
+  }, [mayView, mayEdit, mode]); // eslint-disable-line
   // v55.83-TG — the invoice's shipping terms live in pl_invoice_terms (server route; the browser cannot read that table)
   function loadShippingTerms(invId, cb) {
     if (!invId) { return; }
@@ -435,15 +439,33 @@ export default function AccountingInvoicesTab(props) {
     });
     toast.success('Copy opened as a NEW draft — give it its own number, change anything, then Save.');
   }
+  function readViewPayments(id) {
+    return supabase.from('accounting_invoice_payments').select('*').eq('accounting_invoice_id', id).order('payment_date', { ascending: true })
+      .then(function (r) { return r.error ? null : (r.data || []); }).catch(function () { return null; });
+  }
   function openView(row) {
+    var request = { id: row.id };
+    viewRead.current = request;
     setViewing(row); setViewItems([]); setViewPayments([]); setViewLoading(true);
     var tbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
     var key = isInvoice() ? 'invoice_id' : 'proforma_id';
     var pItems = supabase.from(tbl).select('*').eq(key, row.id).order('sort_order', { ascending: true }).then(function (r) { return (r && r.data) || []; }).catch(function () { return []; });
     var pPays = isInvoice()
-      ? supabase.from('accounting_invoice_payments').select('*').eq('accounting_invoice_id', row.id).order('payment_date', { ascending: true }).then(function (r) { return (r && r.data) || []; }).catch(function () { return []; })
+      ? readViewPayments(row.id)
       : Promise.resolve([]);
-    Promise.all([pItems, pPays]).then(function (res) { setViewItems(res[0]); setViewPayments(res[1]); }).finally(function () { setViewLoading(false); });
+    Promise.all([pItems, pPays]).then(function (res) {
+      if (viewRead.current === request) { setViewItems(res[0]); setViewPayments(res[1] || []); }
+    }).finally(function () { if (viewRead.current === request) { setViewLoading(false); } });
+  }
+  function cashReceiptSaved(invoiceId) {
+    var request = viewRead.current;
+    load();
+    if (!request || request.id !== invoiceId) { return; }
+    return readViewPayments(invoiceId).then(function (payments) {
+      if (viewRead.current !== request) { return; }
+      if (payments) { setViewPayments(payments); }
+      else { toast.error('Cash receipt saved. Reopen the invoice to refresh payment history.'); }
+    });
   }
   // List-row paid/balance/status derived from loaded payment rows (+ wave_imported_paid),
   // so the blotter is correct even when the stored amount_paid/balance_due are stale.
@@ -708,8 +730,8 @@ export default function AccountingInvoicesTab(props) {
         load();
         var reopened = Object.assign({}, row, { approval_status: 'internal_review', ready_for_wave: false });
         if (waveTouch) { reopened.wave_sync_status = 'pending_sync'; }
-        setViewing(null);
-        startEdit(reopened);
+        if (mayEdit) { setViewing(null); startEdit(reopened); }
+        else { setEditing(null); openView(reopened); }
       })
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
@@ -934,7 +956,7 @@ export default function AccountingInvoicesTab(props) {
                   <button onClick={function () { printDoc(viewing); }} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Print / Save PDF</button>
                   {isInvoice() && mayEdit && (viewing.approval_status || 'draft') === 'draft' && <button onClick={function () { var row = viewing; setApproval(row, 'internal_review'); setViewing(null); }} disabled={busy} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Submit for Review</button>}
                   {isInvoice() && mayApprove && viewing.approval_status === 'internal_review' && <button onClick={function () { var row = viewing; setApproval(row, 'approved'); setViewing(null); }} disabled={busy} className="text-[11px] bg-blue-700 hover:bg-blue-600 text-white rounded px-2 py-1 font-bold">Approve</button>}
-                  {isInvoice() && mayApprove && viewing.approval_status === 'approved' && <button onClick={function () { var row = viewing; reopenInvoice(row); }} disabled={busy} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Reopen</button>}
+                  {invActions(viewing).canReopen && <button onClick={function () { reopenInvoice(viewing); }} disabled={busy} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Reopen</button>}
                   {isInvoice() && invActions(viewing).canUpdateWave && <button onClick={function () { var row = viewing; updateInWave(row); }} disabled={busy} className="text-[11px] bg-violet-700 hover:bg-violet-600 text-white rounded px-2 py-1 font-bold" title="Wave has no edit — deletes the old Wave copy and recreates it from this amended invoice">🔁 Update in Wave</button>}
                   {editable && mayEdit && <button onClick={function () { var row = viewing; setViewing(null); startEdit(row); }} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Edit</button>}
                   {mayEdit && <button onClick={function () { var row = viewing; setViewing(null); startDuplicate(row); }} className="text-[11px] bg-teal-700 hover:bg-teal-600 text-white rounded px-2 py-1 font-bold">⧉ Duplicate</button>}
@@ -966,17 +988,21 @@ export default function AccountingInvoicesTab(props) {
                   {vc.adjustment !== 0 && <Row k={vc.adjustment < 0 ? 'Discount / adjustment' : 'Adjustment'} v={fmt(vc.adjustment)} />}
                   <Row k="Total" v={fmt(vc.docTot)} bold={true} />
                   {isInvoice() && <Row k="Wave imported paid" v={fmt(vc.waveImported)} />}
-                  {isInvoice() && <Row k="Hub / Plaid matched paid" v={fmt(vc.hubPaid)} />}
+                  {isInvoice() && <Row k="Payments recorded in the Hub" v={fmt(vc.hubPaid)} />}
                   {isInvoice() && <Row k="Balance due" v={fmt(vc.balance)} bold={true} />}
                 </div></div>
 
                 {isInvoice() && (
                   <div className="mt-3">
-                    <div className="text-[11px] font-bold text-slate-300 mb-1 border-b border-slate-700 pb-0.5">Payment history</div>
-                    {viewPayments.length === 0 ? <div className="text-slate-400 italic">No bank-matched payments. {vc.waveImported > 0 ? 'Wave-imported paid (' + fmt(vc.waveImported) + ') is an aggregate from Wave — individual historical dates are not exposed by Wave\u2019s API.' : ''}</div> :
+                    <div className="flex flex-wrap justify-between items-center gap-2 text-[11px] font-bold text-slate-300 mb-2 border-b border-slate-700 pb-1">Payment history
+                      {mayRecordCash && !viewLoading && vc.balance > 0 && viewing.wave_business_id === US_WAVE_BUSINESS_ID &&
+                        (viewing.record_status || 'active') === 'active' && String(viewing.currency || 'USD').toUpperCase() === 'USD' &&
+                        <CashInvoiceReceipt key={viewing.id} invoiceId={viewing.id} due={vc.balance} toast={toast} onSaved={function () { return cashReceiptSaved(viewing.id); }} />}
+                    </div>
+                    {viewPayments.length === 0 ? <div className="text-slate-400 italic">No payments recorded in the Hub. {vc.waveImported > 0 ? 'Wave-imported paid (' + fmt(vc.waveImported) + ') is an aggregate from Wave — individual historical dates are not exposed by Wave\u2019s API.' : ''}</div> :
                       <table className="w-full"><thead><tr className="text-slate-400 text-left"><th className="py-1">Date</th><th className="text-right">Amount</th><th>Source</th><th>Wave sync</th></tr></thead>
                         <tbody>{viewPayments.map(function (p) {
-                          return <tr key={p.id} className="border-t border-slate-800"><td className="py-1">{p.payment_date || '—'}</td><td className="text-right font-mono">{fmt(p.amount)}</td><td>{p.source || ''}</td><td>{p.sync_status === 'synced' ? <span className="text-emerald-400">synced</span> : p.sync_status === 'failed' ? <span className="text-rose-400">failed</span> : <span className="text-amber-400">pending Wave sync</span>}</td></tr>;
+                          return <tr key={p.id} className="border-t border-slate-800"><td className="py-1">{p.payment_date || '—'}</td><td className="text-right font-mono">{fmt(p.amount)}</td><td>{p.source === 'cash' ? 'Cash on Hand' : p.source || ''}</td><td>{p.sync_status === 'synced' ? <span className="text-emerald-400">synced</span> : p.sync_status === 'failed' ? <span className="text-rose-400">failed</span> : <span className="text-amber-400">pending Wave sync</span>}</td></tr>;
                         })}</tbody>
                       </table>}
                   </div>
@@ -1000,7 +1026,10 @@ export default function AccountingInvoicesTab(props) {
         <div className="border border-slate-700 rounded bg-slate-900 p-3 w-full" style={{ maxWidth: '900px', maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }} onClick={function (e) { e.stopPropagation(); }}>
           <div className="flex items-center justify-between mb-2 sticky top-0 bg-slate-900 py-1 z-10">
             <div className="font-extrabold">{editing === 'new' ? 'New' : 'Edit'} {isInvoice() ? 'invoice' : 'proforma'}{editing !== 'new' && locked(editing) ? ' (approved — locked)' : ''}</div>
-            <button onClick={function () { setEditing(null); }} className="text-slate-400 hover:text-slate-200 text-xs">✕ close</button>
+            <div className="flex items-center gap-2">
+              {editing !== 'new' && invActions(editing).canReopen && <button type="button" onClick={function () { reopenInvoice(editing); }} disabled={busy} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Reopen</button>}
+              <button onClick={function () { setEditing(null); }} className="text-slate-400 hover:text-slate-200 text-xs">✕ close</button>
+            </div>
           </div>
           <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Accounting customer *</span>
@@ -1116,7 +1145,7 @@ export default function AccountingInvoicesTab(props) {
         </div>
       )}
       {/* v55.83-VZ — the linked document, opened on top of whatever is on screen */}
-      <InvoicePeek invoiceId={peekInv} onClose={function () { setPeekInv(null); }} onOpenProforma={openPeekProforma} />
+      <InvoicePeek invoiceId={peekInv} onClose={function () { setPeekInv(null); }} onOpenProforma={openPeekProforma} onEdit={function (id) { setPeekInv(null); openEditById(id); }} />
       <ProformaPeek proformaId={peekPf} onClose={function () { setPeekPf(null); }} onOpenInvoice={openPeekInvoice} />
     </div>
   );

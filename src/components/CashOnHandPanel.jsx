@@ -4,6 +4,7 @@
 // who handed over / received the cash and a receipt number or note. Undo keeps the record. The database checks everything again.
 import React, { useState, useEffect } from 'react';
 import { hubFetch } from '../lib/hub-fetch';
+import { todayET } from '../lib/et-time';
 
 function post(body) {
   return hubFetch('/api/accounting/cash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -15,6 +16,62 @@ function clickId() { return 'cash-' + Date.now().toString(36) + '-' + Math.rando
 var INK = '#0f172a', SUB = '#334155', MUTED = '#64748b';
 var inp = { border: '1px solid #cbd5e1', background: '#ffffff', color: INK };
 var KIND = { receive_invoice: 'Cash received — invoice', pay_bill: 'Bill paid in cash', deposit: 'Taken to the bank', adjust_in: 'Cash count — added', adjust_out: 'Cash count — taken out' };
+function cashPayload(f) {
+  return { entry_date: f.date, amount: f.amount, person: f.person, reference: f.reference, note: f.note || null, request_id: f.click };
+}
+function CashField(p) {
+  return <label className="text-[11px] font-bold" style={{ color: SUB }}>{p.label}<br />
+    <input value={p.value} onChange={function (e) { p.onChange(e.target.value); }} className={'px-2 py-1 rounded text-[12px] nt-light ' + (p.cls || '')}
+      style={inp} type={p.type || 'text'} inputMode={p.mode} required={p.required} minLength={p.minLength} maxLength={p.maxLength} min={p.min} max={p.max} step={p.step} />
+  </label>;
+}
+
+export function CashInvoiceReceipt(p) {
+  var [form, setForm] = useState(null);
+  var [busy, setBusy] = useState(false);
+  var [error, setError] = useState('');
+  function open() {
+    setError('');
+    setForm({ date: todayET(), amount: '', person: '', reference: '', note: '', click: clickId() });
+  }
+  function field(label, key, options) {
+    return <CashField {...options} label={label} value={form[key]} onChange={function (value) {
+      setForm(function (current) { return Object.assign({}, current, { [key]: value }); });
+    }} />;
+  }
+  function save(e) {
+    e.preventDefault();
+    if (busy) { return; }
+    if (form.person.trim().length < 2 || form.reference.trim().length < 2) {
+      setError('Enter who received the cash and a receipt number or short note.'); return;
+    }
+    setBusy(true); setError('');
+    post(Object.assign({ action: 'receive_invoice', invoice_id: p.invoiceId }, cashPayload(form))).then(function (j) {
+      if (!j || !j.ok) { setError((j && j.error) || 'Could not record the cash receipt.'); return; }
+      setForm(null);
+      p.toast.success('Cash received and applied to this invoice.');
+      p.onSaved();
+    }).finally(function () { setBusy(false); });
+  }
+  if (!form) {
+    return <button type="button" onClick={open} className="rounded px-2 py-1 text-[11px] font-bold" style={{ background: '#dcfce7', color: '#14532d' }}>Record cash received</button>;
+  }
+  return <form onSubmit={save} className="rounded-lg p-2 mb-2" style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: INK }}>
+    <div className="text-[12px] font-bold mb-1">Record cash received · {money(p.due)} due</div>
+    <div className="flex flex-wrap gap-2 items-end">
+      {field('Date received', 'date', { type: 'date', max: todayET(), required: true })}
+      {field('Amount ($)', 'amount', { type: 'number', mode: 'decimal', cls: 'w-28', min: '0.01', max: p.due, step: '0.01', required: true })}
+      {field('Received by', 'person', { required: true, minLength: 2, maxLength: 120 })}
+      {field('Receipt # / note', 'reference', { required: true, minLength: 2, maxLength: 120 })}
+      {field('Note (optional)', 'note', { maxLength: 300 })}
+    </div>
+    {error && <div role="alert" className="mt-2 text-[11px] font-bold" style={{ color: '#991b1b' }}>{error}</div>}
+    <div className="mt-2 flex gap-2">
+      <button type="submit" disabled={busy} className="rounded px-2 py-1 text-[11px] font-bold" style={{ background: '#14532d', color: '#ffffff' }}>{busy ? 'Saving…' : 'Save cash receipt'}</button>
+      <button type="button" disabled={busy} onClick={function () { setForm(null); }} className="rounded px-2 py-1 text-[11px] font-bold" style={{ background: '#e2e8f0', color: INK }}>Cancel</button>
+    </div>
+  </form>;
+}
 
 export default function CashOnHandPanel(props) {
   var toast = props.toast || { success: function () {}, error: function () {} };
@@ -39,7 +96,7 @@ export default function CashOnHandPanel(props) {
   }
   function submit() {
     var f = form; if (!f) { return; }
-    var base = { entry_date: f.date, amount: f.amount, person: f.person, reference: f.reference, note: f.note || null, request_id: f.click };
+    var base = cashPayload(f);
     var payload = null; var words = 'Saved';
     if (f.kind === 'receive_invoice') { if (!f.pick) { toast.error('Pick the invoice.'); return; } payload = Object.assign({ action: 'receive_invoice', invoice_id: f.pick }, base); words = 'Cash received recorded'; }
     else if (f.kind === 'pay_bill') { if (!f.pick) { toast.error('Pick the bill.'); return; } payload = Object.assign({ action: 'pay_bill', bill_id: f.pick }, base); words = 'Cash payment recorded'; }
@@ -54,7 +111,7 @@ export default function CashOnHandPanel(props) {
     }).finally(function () { setBusy(false); });
   }
   var btn = function (bg, fg) { return { background: bg, color: fg }; };
-  var field = function (label, key, extra) { return <label className="text-[11px] font-bold" style={{ color: SUB }}>{label}<br /><input value={form[key]} onChange={function (e) { var o = {}; o[key] = e.target.value; setForm(Object.assign({}, form, o)); }} className={'px-2 py-1 rounded text-[12px] ' + ((extra && extra.cls) || '')} style={inp} type={(extra && extra.type) || 'text'} inputMode={(extra && extra.mode) || undefined} /></label>; };
+  var field = function (label, key, extra) { return <CashField {...extra} label={label} value={form[key]} onChange={function (value) { setForm(Object.assign({}, form, { [key]: value })); }} />; };
   return <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #cbd5e1' }}>
     <div className="flex items-center gap-3 flex-wrap mb-2">
       <span className="text-sm font-extrabold" style={{ color: INK }}>💵 Cash on Hand — KTC USA</span>

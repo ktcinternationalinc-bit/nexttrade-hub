@@ -407,7 +407,8 @@ export async function POST(req) {
       if (others.length) { return bad(prev ? 'Another mapping already covers this vendor, bill product and unit — change or retire that one first.' : 'This bill product already has a mapping — change that one instead (its history is kept).', 409); }
       if (!fam) { fam = cryptoRandomId(); }
       var mi = await db.from('wc_product_maps').insert(Object.assign({ family: fam, version: ver, state: 'active', vendor_key: vk, item_key: ik, bill_unit: unitV, bill_description: descV,
-        wh_label: clean(body.wh_label, 200) || null, lb_per_yd: lbpy, lb_factor_approved: approveFactor, note: note || null, actor: userId }, wh)).select('id, family, version').single();
+        wh_label: clean(body.wh_label, 200) || null, lb_per_yd: lbpy, lb_factor_approved: approveFactor, note: note || null, actor: userId }, wh)).select('*').single();
+      if (mi.error && mi.error.code === '23505') { return bad('This mapping changed while you were saving. Reload the latest version before editing again.', 409); }
       if (mi.error) { throw new Error(mi.error.message); }
       var before = prev ? { version: prev.version, vendor: prev.vendor_key, item: prev.item_key, unit: prev.bill_unit, wh: { wh_product_type: prev.wh_product_type, wh_cgt: prev.wh_cgt, wh_nt: prev.wh_nt, wh_color: prev.wh_color }, lb_per_yd: prev.lb_per_yd, factor_approved: prev.lb_factor_approved } : null;
       await audit(db, userId, prev ? 'weight_check_map_changed' : 'weight_check_map_saved', 'wc_product_map', mi.data.id, { family: fam, version: ver, vendor: vk, item: ik, unit: unitV, wh: wh, lb_per_yd: lbpy, factor_approved: approveFactor, before: before, reason: prev ? note : undefined });

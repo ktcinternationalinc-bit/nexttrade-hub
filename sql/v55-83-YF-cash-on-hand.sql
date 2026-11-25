@@ -20,8 +20,8 @@ DECLARE v_us text := 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YT
 BEGIN
   SELECT id INTO v_conn FROM public.bank_connections WHERE plaid_item_id = 'manual-cash-on-hand-us';
   IF v_conn IS NULL THEN
-    INSERT INTO public.bank_connections (status, plaid_item_id, institution_name, wave_business_id, is_read_only, last_synced)
-    VALUES ('manual', 'manual-cash-on-hand-us', 'Cash on Hand', v_us, true, now()) RETURNING id INTO v_conn;
+    INSERT INTO public.bank_connections (status, plaid_item_id, access_token, institution_name, wave_business_id, is_read_only, last_synced)
+    VALUES ('manual', 'manual-cash-on-hand-us', 'manual-no-plaid', 'Cash on Hand', v_us, true, now()) RETURNING id INTO v_conn;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM public.plaid_accounts WHERE plaid_account_id = 'manual-acct-cash-on-hand-us') THEN
     INSERT INTO public.plaid_accounts (connection_id, plaid_account_id, name, official_name, mask, type, subtype, iso_currency, is_read_only, wave_business_id, is_private, assignment_source, updated_at)

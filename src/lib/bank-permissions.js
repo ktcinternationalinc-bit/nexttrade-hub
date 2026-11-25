@@ -1,5 +1,7 @@
 // v55.83-Z — Phase 2 bank/accounting permission gates (app-layer, pure).
 // Mirrors the app's existing module-permission convention. super_admin passes all.
+import { effectiveSwitch, permFamily } from './permission-aliases';
+
 function has(mp, keys) {
   if (!mp) return false;
   for (var i = 0; i < keys.length; i++) { if (mp[keys[i]] === true) return true; }
@@ -15,8 +17,8 @@ export function canEditMappings(isSuperAdmin, mp) { return isSuperAdmin === true
 // v55.83-HR (Codex P0) — these are DOCUMENT permissions and must NOT require bank.view. They are
 // role-aware + carry legacy fallbacks so current staff are not locked out, but bank.view is
 // intentionally never a fallback (viewing bank transactions must not imply document access).
-export function canCreateInvoice(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['Invoice: Create', 'invoice.create', 'Edit Invoices']); }
-export function canViewInvoices(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['Invoice: View', 'invoice.view', 'invoice.create', 'Edit Invoices', 'Invoices', 'Sales']); }
+export function canCreateInvoice(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['Invoice: Create', 'Invoice: Edit', 'invoice.create', 'invoice.edit', 'invoices.create', 'invoices.edit', 'Edit Invoices']); }
+export function canViewInvoices(isSuperAdmin, mp, role) { return canCreateInvoice(isSuperAdmin, mp, role) || has(mp, ['Invoice: View', 'invoice.view', 'invoices.view', 'Invoices', 'Sales']); }
 // ---- Accounting DOCUMENT view/edit (Codex ACCT-001..007) — explicit, NOT gated by bank.view ----
 export function canViewAccountingCustomers(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['accounting.customers.view', 'accounting.customers.edit', 'Customers', 'customer.view_ar', 'Sales']); }
 export function canEditAccountingCustomers(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['accounting.customers.edit', 'Merge Customers']); }
@@ -46,6 +48,16 @@ export function canReopen(isSuperAdmin, mp, role) {
   if (isSuperAdmin === true) return true;
   if (role === 'accounting_manager') return true; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   return has(mp, ['Accounting Manager', 'Bank: Reopen', 'accounting.reopen']);
+}
+
+export function canApproveInvoices(isSuperAdmin, mp, role) {
+  if (isSuperAdmin === true) { return true; }
+  var permissions = mp || {};
+  if (permissions['pnl.view_revenue'] === false) { return false; }
+  var denied = {};
+  permFamily('invoices.approve').forEach(function (key) { if (permissions[key] === false) { denied[key] = true; } });
+  var grant = effectiveSwitch(permissions, denied, 'invoices.approve');
+  return grant === true || (grant === null && role === 'accounting_manager');
 }
 
 // ---- AR (Accounts Receivable) — FIRST-CLASS permissions, NOT bundled into invoice view ----

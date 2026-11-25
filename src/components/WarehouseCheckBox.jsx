@@ -22,6 +22,11 @@ export function wcApi(payload) {
     .then(function (r) { return r.json().then(function (j) { j.http_status = r.status; return j; }, function () { return { ok: false, error: 'The server answered ' + r.status + '.', http_status: r.status }; }); })
     .catch(function () { return { ok: false, error: 'Could not reach the Hub server.' }; });
 }
+export function warehouseMappingLabel(map, lookups) {
+  return [['wh_product_type', 'product_types'], ['wh_cgt', 'cgt_grades'], ['wh_nt', 'nt_grades'], ['wh_color', 'colors']].map(function (pair) {
+    return (lookups[pair[1]] || {})[map[pair[0]]];
+  }).filter(Boolean).join(' · ');
+}
 export function num(v, d) { if (v === null || v === undefined) { return '—'; } return Number(v).toLocaleString('en-US', { maximumFractionDigits: d == null ? 3 : d }); }
 export function when(s) { if (!s) { return '—'; } try { return new Date(s).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) + ' ET'; } catch (e) { return String(s); } }
 export function Chip(props) { var s = OUTCOME_STYLE[props.outcome] || OUTCOME_STYLE.cannot_compare; return <span className="px-2 py-0.5 rounded-full text-[11px] font-extrabold" style={{ background: s.bg, color: s.fg, border: '1px solid ' + s.bd }}>{props.children}</span>; }

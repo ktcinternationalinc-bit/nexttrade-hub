@@ -174,7 +174,7 @@ export default function AccountingTab(props) {
   // the Books-home card groups. Order Reconciliation under SELLING (Max,
   // 11:19). Same tabs, same permissions — only the arrangement changed.
   var TAB_GROUPS = [
-    ['📥 DAILY WORK — handle the money', ['books_home', 'all_txns', 'review', 'categories']],
+    ['📥 DAILY WORK — handle the money', ['books_home', 'all_txns', 'review', 'cash', 'categories']],
     ['🧾 SELLING — customers & what they owe', ['orders', 'arrival_reminders', 'invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'customers_overview', 'balances']],
     ['🛒 BUYING — vendors & what we owe', ['waiting', 'bills', 'wires', 'purchaseorders']],
     ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'profitability', 'pnl']],

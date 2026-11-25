@@ -7,7 +7,7 @@
 // silently), then records the decisions. Lines without a product mapping can be mapped right on the card. Tolerance and vendors are
 // set at the top. Read-only towards bills, payments, inventory and the warehouse; every action is audited.
 import React, { useState, useEffect } from 'react';
-import { wcApi, say, num, when, LinkChooser } from './WarehouseCheckBox';
+import { wcApi, say, num, when, LinkChooser, warehouseMappingLabel } from './WarehouseCheckBox';
 import { vendorKey, billItemKey } from '../lib/weight-check';
 
 var INK = '#0f172a'; var SUB = '#475569'; var MUTED = '#64748b'; var LINE = '#e2e8f0'; var SOFT = '#f8fafc';
@@ -176,12 +176,17 @@ export default function WeightCheckInvoices(props) {
   var _v = useState(null); var vendorEdit = _v[0], setVendorEdit = _v[1];
   var _m = useState({}); var mapEdit = _m[0], setMapEdit = _m[1];
   var _ch = useState({}); var changing = _ch[0], setChanging = _ch[1]; // v55.83-ZF: product line → the mapping being changed
+  var [mapError, setMapError] = useState(null);
+  var [mapNotice, setMapNotice] = useState(null);
 
   function loadCfg() { return wcApi({ action: 'settings_view' }).then(function (j) { setCfg(j); return j; }); }
   useEffect(function () { loadCfg(); }, []);
+  function readPreview(recheck, dates) {
+    return wcApi({ action: 'report_preview', date_from: dates.date_from, date_to: dates.date_to, all: true, recheck: !!recheck });
+  }
   function load(recheck) {
     setBusy(recheck ? 'recheck' : 'load');
-    return wcApi({ action: 'report_preview', date_from: flt.date_from, date_to: flt.date_to, all: true, recheck: !!recheck }).then(function (j) { setBusy(''); setData(j); return j; });
+    return readPreview(recheck, flt).then(function (j) { setMapNotice(null); setBusy(''); setData(j); return j; });
   }
   var perms = (cfg && cfg.permissions) || (data && data.permissions) || {};
   var tol = cfg && cfg.ok ? (cfg.tolerances || [])[0] || null : null;
@@ -202,20 +207,64 @@ export default function WeightCheckInvoices(props) {
     wcApi({ action: 'scope_save', vendor_names: names }).then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); return; } say(props.toast, 'Vendors saved: ' + j.scope.vendor_names.join(', '), 'success'); setVendorEdit(null); loadCfg(); });
   }
   function openVendors() { var o = {}; ((scope && scope.vendor_keys) || []).forEach(function (k, i) { o[k] = (scope.vendor_names || [])[i] || k; }); setVendorEdit(o); }
-  function saveMapping(inv, r) {
+  function closeMapping(key) {
+    setMapEdit(function (current) { var next = Object.assign({}, current); delete next[key]; return next; });
+    setChanging(function (current) { var next = Object.assign({}, current); delete next[key]; return next; });
+    setMapError(null);
+  }
+  function readCurrentPreview() {
+    return readPreview(false, { date_from: (data && data.from) || flt.date_from, date_to: (data && data.to) || flt.date_to });
+  }
+  async function saveMapping(inv, r) {
+    if (busy) { return; }
     var e = mapEdit[r.item_key] || {}; var bl = r.bill_line || ((r.bill_lines || [])[0]) || {};
-    if (!e.wh_product_type && !e.wh_cgt) { say(props.toast, 'Choose the warehouse product (and grade if it has one).', 'error'); return; }
     var em = changing[r.item_key] || null;
-    if (em) {
-      if (String(e.note || '').trim().length < 5) { say(props.toast, 'Say why this mapping is changed (at least a few words) — it is kept with the new version.', 'error'); return; }
-      setBusy(r.item_key);
-      wcApi({ action: 'map_save', family: em.family, expected_version: em.version, wh_product_type: e.wh_product_type || '', wh_cgt: e.wh_cgt || '', wh_nt: e.wh_nt || '', wh_color: e.wh_color || '', wh_label: [L.product_types && L.product_types[e.wh_product_type], L.cgt_grades && L.cgt_grades[e.wh_cgt]].filter(Boolean).join(' · '), lb_per_yd: em.lb_per_yd != null ? String(em.lb_per_yd) : '', note: String(e.note).trim() })
-        .then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); return; } say(props.toast, 'Mapping changed: version ' + j.map.version + ' saved, version ' + j.changed_from + ' kept. Decisions that used it are asked again.', 'success'); var o = Object.assign({}, mapEdit); delete o[r.item_key]; setMapEdit(o); var c = Object.assign({}, changing); delete c[r.item_key]; setChanging(c); loadCfg().then(function () { load(false); }); });
-      return;
+    var key = r.item_key;
+    setMapNotice(null);
+    if (!e.wh_product_type && !e.wh_cgt && !e.wh_nt && !e.wh_color) {
+      setMapError({ key: key, words: 'Choose a warehouse product or grade.' }); return;
     }
-    setBusy(r.item_key);
-    wcApi({ action: 'map_save', vendor_name: inv.bills[0].vendor, bill_description: bl.description, bill_unit: bl.unit || '', wh_product_type: e.wh_product_type || '', wh_cgt: e.wh_cgt || '', wh_nt: '', wh_color: '', wh_label: [L.product_types && L.product_types[e.wh_product_type], L.cgt_grades && L.cgt_grades[e.wh_cgt]].filter(Boolean).join(' · ') })
-      .then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); return; } say(props.toast, 'Mapping saved — ' + bl.description, 'success'); var o = Object.assign({}, mapEdit); delete o[r.item_key]; setMapEdit(o); load(false); });
+    var note = String(e.note || '').trim();
+    if (em && note.length < 5) {
+      setMapError({ key: key, words: 'Enter a reason with at least five characters to save this change.' }); return;
+    }
+    setMapError(null); setBusy(key);
+    var body = Object.assign({ action: 'map_save', wh_product_type: e.wh_product_type || '', wh_cgt: e.wh_cgt || '',
+      wh_nt: e.wh_nt || '', wh_color: e.wh_color || '', wh_label: warehouseMappingLabel(e, L) },
+      em ? { family: em.family, expected_version: em.version, lb_per_yd: em.lb_per_yd != null ? String(em.lb_per_yd) : '', note: note }
+        : { vendor_name: (inv.bills.find(function (b) { return b.id === bl.bill_id; }) || inv.bills[0]).vendor, bill_description: bl.description, bill_unit: bl.unit || '' });
+    try {
+      var saved = await wcApi(body);
+      if (!saved || !saved.ok) {
+        setMapError({ key: key, words: (saved && saved.error) || 'The mapping could not be saved.', reload: saved && saved.http_status === 409 });
+        return;
+      }
+      setCfg(function (current) {
+        if (!current || !current.ok) { return current; }
+        return Object.assign({}, current, { maps: [saved.map].concat((current.maps || []).filter(function (m) { return m.family !== saved.map.family; })) });
+      });
+      var refreshed = await readCurrentPreview();
+      if (refreshed && refreshed.ok) { setData(refreshed); }
+      var words = 'Mapping v' + saved.map.version + ' saved' + (saved.map.wh_label ? ' · ' + saved.map.wh_label : '') + '.';
+      setMapNotice({ key: inv.key, words: words, warning: !refreshed || !refreshed.ok });
+      closeMapping(key);
+      say(props.toast, words, 'success');
+    } finally {
+      setBusy('');
+    }
+  }
+  async function reloadMapping(key) {
+    setBusy(key);
+    try {
+      var rs = await Promise.all([loadCfg(), readCurrentPreview()]);
+      if (rs[0].ok && rs[1].ok) { setData(rs[1]); closeMapping(key); return; }
+      setMapError({ key: key, words: (rs[0].ok ? rs[1].error : rs[0].error) || 'Could not reload the latest mapping.', reload: true });
+    } finally { setBusy(''); }
+  }
+  function mappingNotice() {
+    return <div role="status" style={{ marginTop: 8, padding: '6px 8px', background: mapNotice.warning ? '#fffbeb' : '#f0fdf4', color: mapNotice.warning ? '#92400e' : '#14532d' }}>
+      {mapNotice.words}{mapNotice.warning && ' The comparison could not refresh. Use Show (last reading) to try again.'}
+    </div>;
   }
 
   async function decideAll(inv, mode) {
@@ -238,8 +287,11 @@ export default function WeightCheckInvoices(props) {
       {em ? <label><span style={LABEL}>NT grade</span><select value={e.wh_nt || ''} onChange={function (ev) { setE('wh_nt', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any</option>{Object.keys(nts).map(function (id) { return <option key={id} value={id}>{nts[id]}</option>; })}</select></label> : null}
       {em ? <label><span style={LABEL}>Colour</span><select value={e.wh_color || ''} onChange={function (ev) { setE('wh_color', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any</option>{Object.keys(cols).map(function (id) { return <option key={id} value={id}>{cols[id]}</option>; })}</select></label> : null}
       {em ? <label style={{ flex: '1 1 260px' }}><span style={LABEL}>Why is it changed? (required)</span><input value={e.note || ''} onChange={function (ev) { setE('note', ev.target.value); }} placeholder="e.g. scanned as Folds, not Thirds" className="nt-light" style={Object.assign({}, FIELD, { width: '100%' })} /></label> : null}
-      <button disabled={busy === r.item_key} onClick={function () { saveMapping(p.inv, r); }} style={btn(INK, '#ffffff')}>{busy === r.item_key ? 'Saving…' : (em ? 'Save change (new version)' : 'Save mapping')}</button>
-      {em ? <button onClick={function () { var c = Object.assign({}, changing); delete c[r.item_key]; setChanging(c); var o = Object.assign({}, mapEdit); delete o[r.item_key]; setMapEdit(o); }} style={btn('#334155', '#ffffff', true)}>Cancel</button> : null}
+      <button type="button" disabled={!!busy} onClick={function () { saveMapping(p.inv, r); }} style={btn(INK, '#ffffff')}>{busy === r.item_key ? 'Saving…' : (em ? 'Save change (new version)' : 'Save mapping')}</button>
+      {em ? <button type="button" disabled={!!busy} onClick={function () { closeMapping(r.item_key); }} style={btn('#334155', '#ffffff', true)}>Cancel</button> : null}
+      {mapError && mapError.key === r.item_key && <div role="alert" style={{ width: '100%', color: RED, fontSize: 12, fontWeight: 700 }}>
+        {mapError.words}{mapError.reload && <button type="button" disabled={!!busy} onClick={function () { reloadMapping(r.item_key); }} style={{ marginLeft: 8, color: BLUE, textDecoration: 'underline' }}>Reload latest mapping</button>}
+      </div>}
     </div>;
   }
 
@@ -294,6 +346,7 @@ export default function WeightCheckInvoices(props) {
     </div> : null}
     {!data ? <div style={{ marginTop: 16, padding: 16, borderRadius: 12, background: SOFT, color: SUB, border: '1px solid ' + LINE }}>Choose the bill dates and press <b>Check against the warehouse</b>. Every invoice of the vendors above gets a card: each product billed vs scanned in, the difference, PASS or REVIEW, and Approved / Disputed.</div> : null}
     {data && data.ok && !invoices.length ? <div style={{ marginTop: 16, color: SUB }}>No invoices from these vendors in these dates.</div> : null}
+    {mapNotice && !shown.some(function (inv) { return inv.key === mapNotice.key; }) && mappingNotice()}
 
     {/* one card per invoice */}
     {shown.map(function (inv) {
@@ -303,6 +356,7 @@ export default function WeightCheckInvoices(props) {
       var receipts = []; inv.rows.forEach(function (r) { (r.receipts || []).forEach(function (x) { var t = 'Receipt ' + (x.reference_number || x.id) + (x.warehouse ? ' · ' + x.warehouse : '') + (x.receipt_date ? ' · received ' + String(x.receipt_date).substring(0, 10) : ''); if (receipts.indexOf(t) < 0) { receipts.push(t); } }); });
       var canDecide = inv.previewed || inv.rows.some(function (r) { return r.needs_decision; });
       return <div key={inv.key} style={{ marginTop: 12, background: '#ffffff', border: '1px solid ' + LINE, borderLeft: '5px solid ' + badge[1], borderRadius: 12, padding: 14, boxShadow: '0 1px 2px rgba(15,23,42,0.06)' }}>
+        {mapNotice && mapNotice.key === inv.key && mappingNotice()}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <span style={pill(badge[1], badge[2])}>{badgeText}</span>
           <span style={{ fontSize: 14, fontWeight: 800 }}>{head}</span>
