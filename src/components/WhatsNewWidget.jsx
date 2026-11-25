@@ -35,11 +35,13 @@ export const BUILD_HISTORY = [
   {
     version: 'v55.83-YX',
     date: '2026-11-25',
-    title: 'Warehouse check: a bill may be below what was scanned — never above',
+    title: 'Warehouse check: one card per invoice — PASS or REVIEW, Approved or Disputed; NexPac + the vendors Max selects',
     items: [
+      { text: '**New tab “Invoices”** (Bills → 🏭 Warehouse check, opens first): pick the dates, press **Check against the warehouse**, and every invoice of the selected vendors gets a card — each product with what was billed, what was scanned in, the difference — and a big **PASS** (green) or **REVIEW** (red). Press **Approved** or **Disputed** on the card; a REVIEW needs a short reason to approve, a dispute always needs one. Everything is recorded with who and when.' },
+      { text: '**Only NexPac and the vendors Max selects** are checked. Other vendors’ bills show no warehouse check at all. Max chooses the vendors under Mappings & tolerance → “Vendors in the warehouse check”.' },
       { text: 'The tolerance now works ONE way, as Max decided: a supplier bill may be LESS than what was scanned into the warehouse by up to the approved amount (packaging — the scanner weighs gross, suppliers bill net). A bill MORE than what was scanned is never allowed: it is always shown as a discrepancy, “billed MORE than was scanned … never allowed, no tolerance”.' },
       { text: 'Bills → 🏭 Warehouse check → Mappings & tolerance shows this rule under the tolerance.' },
-      { superAdminOnly: true, text: 'Technical: weight-check.js withinTolerance() returns false for diff < 0 (diff = scanned − billed); compareGroup adds the reason line. No SQL, no stored data changed; the tolerance row (pct / lb) keeps its meaning for the allowed side only.' }
+      { superAdminOnly: true, text: 'Technical: weight-check.js withinTolerance() returns false for diff < 0 (diff = scanned − billed). Vendor scope: wc_vendor_scope (sql/v55-83-YX-wc-vendor-scope.sql, after XB + XW; until run or saved = NexPac only), route refuses / hides out-of-scope bills, scope_save super admin only. Invoices tab = WeightCheckInvoices.jsx on report_preview(all, optional recheck with Validate); buttons send the existing audited decide calls. Also puts sql/v55-83-XW-xb-wx-privileges.sql (already run by Max) on main.' }
     ]
   },
   {
