@@ -12,6 +12,8 @@
 import { COMPANIES } from '../lib/companies'; // v55.83-TW
 import React, { useState } from 'react';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
+import { readPdfPagesInBrowser } from '../lib/pdf-statement-browser';
+import { readUsStatementText } from '../lib/us-bank-statement-pdf';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -93,6 +95,10 @@ export default function StatementImport(props) {
   var s7 = useState(null); var result = s7[0]; var setResult = s7[1];
   var s8 = useState(''); var err = s8[0]; var setErr = s8[1];
   var s9 = useState(null); var newAcct = s9[0]; var setNewAcct = s9[1]; // v55.83-QS — {institution, name, mask} while adding a manual account
+  var s10 = useState(false); var reading = s10[0]; var setReading = s10[1];
+  var selectedAccount = targets.find(function (account) { return account.plaid_account_id === target; });
+  var pdf = parsed && parsed.pdf;
+  var accountMismatch = !!(pdf && pdf.accountMask && selectedAccount && selectedAccount.mask !== pdf.accountMask);
 
   function api(payload) {
     return hubFetch('/api/accounting/statement-import', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -128,9 +134,22 @@ export default function StatementImport(props) {
   function onFile(e) {
     var f = e.target.files && e.target.files[0];
     if (!f) { return; }
-    setErr(''); setResult(null);
+    e.target.value = '';
+    setErr(''); setResult(null); setParsed(null); setMap(null); setReading(true);
+    if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf') {
+      f.arrayBuffer().then(readPdfPagesInBrowser).then(function (pages) {
+        var statement = readUsStatementText(pages);
+        if (statement.error) { setErr(statement.error); return; }
+        setParsed({ pdf: statement, fileName: f.name });
+      }).catch(function () {
+        setErr('Could not read this PDF. Check that it opens without a password, or use the bank’s CSV.');
+      }).finally(function () { setReading(false); });
+      return;
+    }
     var rd = new FileReader();
+    rd.onerror = function () { setReading(false); setErr('Could not read this CSV.'); };
     rd.onload = function () {
+      setReading(false);
       var rows = parseCsv(String(rd.result || ''));
       if (rows.length < 2) { setErr('That file has no data rows.'); return; }
       var headers = rows[0];
@@ -143,7 +162,7 @@ export default function StatementImport(props) {
       var creditCol = guessCol(headers, ['credit', 'deposit', 'money in']);
       var checkCol = guessCol(headers, ['check', 'cheque']);
       var mode = (debitCol >= 0 && creditCol >= 0 && amountCol < 0) ? 'debitcredit' : 'single';
-      setParsed({ headers: headers, rows: rows.slice(1) });
+      setParsed({ headers: headers, rows: rows.slice(1), fileName: f.name });
       setMap({ dateCol: dateCol, descCol: descCol, memoCol: memoCol, mode: mode, amountCol: amountCol, debitCol: debitCol, creditCol: creditCol, checkCol: checkCol, negIsOut: true });
     };
     rd.readAsText(f);
@@ -179,12 +198,15 @@ export default function StatementImport(props) {
       check_number: map.checkCol >= 0 ? String(r0[map.checkCol] || '').trim() : '' };
   }
   function normalizedAll() {
+    if (pdf) { return { rows: pdf.rows, bad: 0 }; }
     var out = []; var badN = 0;
     ((parsed && parsed.rows) || []).forEach(function (r0) { var n = normalize(r0); if (n) { out.push(n); } else { badN++; } });
     return { rows: out, bad: badN };
   }
   function doImport() {
+    if (busy || reading) { return; }
     if (!target) { setErr('Pick which account these rows belong to.'); return; }
+    if (accountMismatch) { setErr('Pick the bank account that matches the statement’s last four digits.'); return; }
     var all = normalizedAll();
     if (!all.rows.length) { setErr('No readable rows with the current column mapping — fix the dropdowns.'); return; }
     setBusy(true); setErr(''); setResult(null);
@@ -195,7 +217,7 @@ export default function StatementImport(props) {
     chunks.forEach(function (ch) {
       chain = chain.then(function (okSoFar) {
         if (!okSoFar) { return false; }
-        return api({ action: 'import_rows', target_plaid_account_id: target, rows: ch }).then(function (j) {
+        return api({ action: 'import_rows', target_plaid_account_id: target, rows: ch, source_format: pdf ? 'pdf' : 'csv', statement_account_last4: pdf ? pdf.accountMask : undefined }).then(function (j) {
           if (!j || !j.ok) { setErr((j && j.error) || 'Import failed part-way — what already imported stays (re-running is safe: nothing duplicates).'); return false; }
           agg.imported += j.imported || 0; agg.skipped_existing += j.skipped_existing || 0; agg.descriptions_updated += j.descriptions_updated || 0; if (j.us_books === false) { agg.not_us = true; } agg.skipped_bad += j.skipped_bad || 0; agg.dup_removed += j.duplicates_removed || 0; agg.dup_review = j.duplicates_to_review || 0; /* v55.83-SU */
           if (j.window) { if (!agg.from || j.window.from < agg.from) { agg.from = j.window.from; } if (!agg.to || j.window.to > agg.to) { agg.to = j.window.to; } }
@@ -203,14 +225,16 @@ export default function StatementImport(props) {
         });
       });
     });
-    chain.then(function (okAll) { if (okAll) { setResult(agg); } }).finally(function () { setBusy(false); });
+    chain.then(function (okAll) { if (okAll) { setResult(agg); } }).catch(function () {
+      setErr('The import connection was interrupted. Review the account and retry the same file to import any remaining rows.');
+    }).finally(function () { setBusy(false); });
   }
 
   if (!canUse) { return null; }
   if (!open) {
     return <div className="mt-3"><button onClick={openPanel} className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#0f766e', color: '#ffffff' }}
-      title="Bank won't give Plaid the history? Download the CSV from the bank's own online banking and import it here — it flows into the same pipeline (categories, rules, matching, reports), and anything Plaid already pulled is skipped automatically.">
-      📄 Import statement CSV (when Plaid can't get the history)</button></div>;
+      title="Import a bank-exported statement PDF or CSV and preview the transactions before saving.">
+      📄 Import bank statement (PDF or CSV)</button></div>;
   }
   var all = parsed ? normalizedAll() : { rows: [], bad: 0 };
   var sumIn = 0; var sumOut = 0; var minD = null; var maxD = null;
@@ -226,18 +250,18 @@ export default function StatementImport(props) {
   }
   return <div className="mt-3 rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
     <div className="flex gap-2 items-center flex-wrap mb-2">
-      <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>📄 Import statement CSV</div>
+      <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>📄 Import bank statement</div>
       <div className="flex-1" />
-      <button onClick={function () { setOpen(false); setParsed(null); setResult(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>✕ close</button>
+      <button disabled={reading || busy} onClick={function () { setOpen(false); setParsed(null); setResult(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>✕ close</button>
     </div>
-    <div className="text-[10px] mb-2" style={{ color: '#64748b' }}>Download the transactions CSV from the bank's own online banking (full date range), upload it here, check the mapping, import. Rows join the normal pipeline — categories, rules, matching, transfers, reports. Anything already stored (Plaid or an earlier import) is skipped automatically, so re-importing is always safe.</div>
+    <div className="text-[10px] mb-2" style={{ color: '#475569' }}>Choose a bank-exported PDF with selectable text or a transactions CSV. Review the rows and select their account before importing.</div>
     <div className="flex gap-2 items-center flex-wrap mb-2">
-      <input type="file" accept=".csv,text/csv" onChange={onFile} className="text-[10px]" style={{ color: '#334155' }} />
-      <select value={target} onChange={function (e) { setTarget(e.target.value); }} className="px-1.5 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={selStyle}>
+      <input type="file" accept=".csv,text/csv,.pdf,application/pdf" aria-label="Bank statement PDF or CSV" disabled={reading || busy} onChange={onFile} className="text-[10px]" style={{ color: '#334155' }} />
+      <select value={target} disabled={busy} onChange={function (e) { setTarget(e.target.value); }} className="px-1.5 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={selStyle}>
         <option value="">these rows belong to account…</option>
-        {targets.map(function (a) { return <option key={a.plaid_account_id} value={a.plaid_account_id}>{a.institution} · {a.name}{a.mask ? ' •' + a.mask : ''}{a.connection_status === 'archived' ? ' (archived link)' : a.connection_status === 'manual' ? ' (manual — CSV only)' : ''}</option>; })}
+        {targets.map(function (a) { return <option key={a.plaid_account_id} value={a.plaid_account_id}>{a.institution} · {a.name}{a.mask ? ' •' + a.mask : ''}{a.connection_status === 'archived' ? ' (archived link)' : a.connection_status === 'manual' ? ' (manual)' : ''}</option>; })}
       </select>
-      {!newAcct && <button onClick={function () { setNewAcct({ institution: '', name: '', mask: '', company: props.companyId || '', card: false }); }} title="A bank Plaid can't connect yet (e.g. PNC)? Add it here, then import its CSV. If Plaid connects it later, the same last-4 is recognized and nothing doubles."
+      {!newAcct && <button disabled={busy} onClick={function () { setNewAcct({ institution: '', name: '', mask: '', company: props.companyId || '', card: false }); }} title="A bank Plaid can't connect yet (e.g. PNC)? Add it here, then import its statement."
         className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#0f766e', color: '#ffffff' }}>➕ account not in the list (e.g. PNC)</button>}
     </div>
     {newAcct && <div className="flex gap-2 items-center flex-wrap mb-2 rounded-lg p-2" style={{ background: '#f0fdfa', border: '1px solid #99f6e4' }}>
@@ -250,7 +274,7 @@ export default function StatementImport(props) {
       <input value={newAcct.mask} onChange={function (e) { setNewAcct(Object.assign({}, newAcct, { mask: e.target.value })); }} placeholder="Last 4 digits" maxLength={4} className="px-1.5 py-1 rounded border border-slate-300 text-[10px] nt-light" style={{ width: 90 }} />
       <button onClick={createManual} disabled={busy} className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#0f766e', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>Add account ✓</button>
       <button onClick={function () { setNewAcct(null); }} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>cancel</button>
-      <div className="w-full text-[9px]" style={{ color: '#134e4a' }}>The last 4 digits matter: if Plaid ever connects this same account, the hub recognizes it by bank + last 4 and skips every transaction you already imported — and a re-import of the same CSV adds nothing.</div>
+      <div className="w-full text-[9px]" style={{ color: '#134e4a' }}>The Hub uses the bank name and last four digits to recognize this same account if you link it through Plaid later.</div>
     </div>}
     {parsed && map && <div className="flex gap-3 items-center flex-wrap mb-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
       {colSel('Date', 'dateCol')}
@@ -271,26 +295,32 @@ export default function StatementImport(props) {
       {map.mode === 'debitcredit' && colSel('Credit (in)', 'creditCol')}
       {colSel('Check # (optional)', 'checkCol')}
     </div>}
-    {parsed && map && <div className="mb-2">
+    {reading && <div role="status" className="mb-2 text-[11px]" style={{ color: '#334155' }}>Reading the statement…</div>}
+    {parsed && <div className="mb-1 break-all text-[11px] font-bold" style={{ color: '#0f172a' }}>{parsed.fileName}</div>}
+    {pdf && <div className="mb-2 text-[11px] font-bold" style={{ color: '#065f46' }}>
+      PDF: {pdf.pages} page(s) read · {pdf.checkedBalances ? pdf.checkedBalances + ' running balance(s) and closing balance match' : 'Opening and closing balances reconcile'}{pdf.accountMask ? ' · Account ending in ' + pdf.accountMask : ''}
+    </div>}
+    {accountMismatch && <div role="alert" className="mb-2 text-[11px] font-bold" style={{ color: '#991b1b' }}>Choose the account ending in {pdf.accountMask} before importing this PDF.</div>}
+    {parsed && <div className="mb-2">
       <div className="text-[10px] font-extrabold mb-1" style={{ color: '#0f172a' }}>
         {all.rows.length} readable row(s){all.bad > 0 ? ' · ' + all.bad + ' skipped (no date/amount — headers, totals, balance lines)' : ''}{minD ? ' · ' + minD + ' → ' + maxD : ''} · in +${fmt(sumIn)} · out −${fmt(sumOut)}</div>
-      <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
-        {all.rows.slice(0, 5).map(function (r0, i) {
+      <div className={pdf ? 'max-h-64 overflow-auto' : ''}><table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
+        {(pdf ? all.rows : all.rows.slice(0, 5)).map(function (r0, i) {
           return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
             <td className="py-0.5 pr-2 whitespace-nowrap">{r0.date}</td>
-            <td className="py-0.5 pr-2">{r0.name.substring(0, 60)}</td>
+            <td className="py-0.5 pr-2">{pdf ? r0.name : r0.name.substring(0, 60)}</td>
             <td className="py-0.5 text-right font-extrabold tabular-nums" style={{ color: r0.direction === 'out' ? '#7f1d1d' : '#065f46' }}>{(r0.direction === 'out' ? '−$' : '+$') + fmt(r0.amount_abs)}</td></tr>;
         })}
-      </tbody></table>
-      {all.rows.length > 5 && <div className="text-[9px]" style={{ color: '#64748b' }}>…first 5 shown — the import takes all {all.rows.length}.</div>}
+      </tbody></table></div>
+      {!pdf && all.rows.length > 5 && <div className="text-[9px]" style={{ color: '#64748b' }}>…first 5 shown — the import takes all {all.rows.length}.</div>}
     </div>}
     {err && <div className="text-[10px] font-bold mb-1 rounded p-1.5" style={{ background: '#fef2f2', color: '#7f1d1d' }}>{err}</div>}
     {result && <div className="text-[10px] font-bold mb-1 rounded p-1.5" style={{ background: '#ecfdf5', color: '#064e3b' }}>
       ✅ Imported {result.imported} transaction(s) ({result.from} → {result.to}) · {result.skipped_existing} already stored (no duplicate made){result.descriptions_updated ? ' · ' + result.descriptions_updated + ' stored line(s) got their real description' : ''} · {result.skipped_bad} unreadable line(s).{result.dup_removed ? ' 🧹 ' + result.dup_removed + ' line(s) already in the Hub through another connection of this account were removed automatically (kept on file, can be restored).' : ''}{result.dup_review ? ' 🔍 ' + result.dup_review + ' possible duplicate(s) need a person — press “Check for duplicates”.' : ''} They now behave like any bank transaction — categorize in 📑 All Transactions (rules + bulk make it fast), match deposits to invoices, pair transfers. The 15-minute sync also runs your rules on them automatically.
         {result.window_hint !== false && result.from && result.from < '2026-01-01' ? ' Lines before Jan 1, 2026: in 📑 All Transactions press "All dates" to see them.' : ''}
         {result.not_us ? ' ⚠ This account is assigned to a NON-US silo, so ClickBooks (USA) screens do not list it — move it to the USA silo in the Bank tab if it is a US account.' : ''}</div>}
-    {parsed && <button onClick={doImport} disabled={busy || !target || all.rows.length === 0}
-      className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#0f766e', color: '#ffffff', opacity: (busy || !target || all.rows.length === 0) ? 0.5 : 1 }}>
+    {parsed && <button onClick={doImport} disabled={busy || !target || accountMismatch || all.rows.length === 0}
+      className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#0f766e', color: '#ffffff', opacity: (busy || !target || accountMismatch || all.rows.length === 0) ? 0.5 : 1 }}>
       {busy ? 'Importing…' : 'Import ' + all.rows.length + ' row(s) ✓'}</button>}
   </div>;
 }

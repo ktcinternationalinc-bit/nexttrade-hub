@@ -720,7 +720,7 @@ export default function AllTransactionsTab(props) {
         </div>
         {tPanel.candidates.length === 0 ? <div className="text-[10px] rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #bfdbfe', color: '#1e3a8a' }}>
           <b>No other leg found{tPanel.manual ? ' in the last ±90 days' : ''}.</b> Pick what this really is:
-          <div className="mt-0.5">• <b>Your own account that isn't in the hub yet</b> (a card, savings, PNC): add it (Bank → 📄 Import statement CSV → ➕ account), then pair. Until then just set the category to Transfer — it stays out of income and spending and sits in the transit clearing account.</div>
+          <div className="mt-0.5">• <b>Your own account that isn't in the hub yet</b> (a card, savings, PNC): add it (Bank → Import bank statement → ➕ account), then pair. Until then just set the category to Transfer — it stays out of income and spending and sits in the transit clearing account.</div>
           <div>• <b>Paying a credit card</b> that is not connected: Transfer too — it reduces what you owe on the card; the card PURCHASES are the expenses, never the payment.</div>
           <div>• <b>Money to or from the owner</b>: use Owner draw / Owner contribution — not a transfer, not an expense.</div>
           <div>• <b>Another company of the group</b> (KTC Egypt, etc.): intercompany loan — not a transfer and not income/expense.</div>

@@ -50,7 +50,7 @@ export async function POST(req) {
     if (!userId) { return NextResponse.json({ ok: false, error: 'user_id required.' }, { status: 401 }); }
     // v55.83-QB permission: importing statements is connection management.
     var gate = await assertPermission(d, userId, 'bank.connections', req);
-    if (!gate.ok) { return NextResponse.json({ ok: false, error: 'CSV import needs the "Bank: Manage Connections" permission — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: gate.status || 403 }); }
+    if (!gate.ok) { return NextResponse.json({ ok: false, error: 'Statement import needs the "Bank: Manage Connections" permission — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: gate.status || 403 }); }
 
     if (action === 'targets') {
       var accs = await d.from('plaid_accounts').select('plaid_account_id, name, mask, wave_business_id, connection_id');
@@ -114,6 +114,11 @@ export async function POST(req) {
       if (!target) { return NextResponse.json({ ok: false, error: 'Pick the account these statement rows belong to.' }, { status: 400 }); }
       var acc = await d.from('plaid_accounts').select('plaid_account_id, name, mask, wave_business_id, connection_id').eq('plaid_account_id', target).maybeSingle();
       if (acc.error || !acc.data) { return NextResponse.json({ ok: false, error: 'Target account not found.' }, { status: 404 }); }
+      var fromPdf = body.source_format === 'pdf';
+      var statementMask = fromPdf ? String(body.statement_account_last4 || '') : '';
+      if (statementMask && (!/^\d{4}$/.test(statementMask) || acc.data.mask !== statementMask)) {
+        return NextResponse.json({ ok: false, error: 'The selected account does not match the last four digits on the PDF statement.' }, { status: 409 });
+      }
       var connQ = await d.from('bank_connections').select('id, institution_name, wave_business_id, business_id').eq('id', acc.data.connection_id).maybeSingle();
       var conn = (connQ && connQ.data) || {};
       var silo = acc.data.wave_business_id || conn.wave_business_id || null;
@@ -165,7 +170,7 @@ export async function POST(req) {
       var exRows = [];
       for (var pgE = 0; pgE < 40; pgE++) {
         var exP = await d.from('bank_transactions')
-          .select('id, date, posted_date, amount_abs, direction, name, plaid_transaction_id, review_status')
+          .select('id, date, posted_date, amount_abs, direction, name, plaid_transaction_id, review_status, bank_source')
           .in('account_id', twinsI[target] || [target]).gte('date', minD).lte('date', maxD)
           .order('id', { ascending: true }).range(pgE * 1000, pgE * 1000 + 999);
         if (exP.error) { return NextResponse.json({ ok: false, error: exP.error.message }, { status: 400 }); }
@@ -220,10 +225,20 @@ export async function POST(req) {
         }
         leftover2.push(g);
       });
+      var formatConflicts = [];
       leftover2.forEach(function (g) {
         var nk = g.date + '|' + g.amount_abs.toFixed(2) + '|' + g.direction;
         var k = nk + '|' + normDesc(g.name);
         if ((usedPlaid[nk] || 0) < (plaidCount[nk] || 0)) { usedPlaid[nk] = (usedPlaid[nk] || 0) + 1; skippedExisting++; return; } // Plaid already pulled it (wording differs, money matches)
+        // PDF and CSV descriptions can differ even for the same bank entry.
+        // Keep both records untouched when the date/amount match is inconclusive.
+        var ambiguous = (manualByBase[nk] || []).some(function (stored) {
+          return !usedRow[stored.id] && fromPdf !== /^\[PDF\]/.test(String(stored.bank_source || ''));
+        });
+        if (ambiguous) {
+          if (formatConflicts.length < 5) { formatConflicts.push(g.date + ' · $' + g.amount_abs.toFixed(2) + (g.direction === 'out' ? ' out' : ' in')); }
+          return;
+        }
         insCount[k] = (insCount[k] || 0) + 1;
         var occ = (manualCount[k] || 0) + insCount[k]; // deterministic + collision-free vs existing manual ids
         var mid = 'manual-' + crypto.createHash('sha1').update(target + '|' + k + '|' + occ).digest('hex');
@@ -231,7 +246,7 @@ export async function POST(req) {
           connection_id: acc.data.connection_id || null,
           business_id: conn.business_id || null,
           wave_business_id: silo,
-          bank_source: '[CSV] ' + (conn.institution_name || 'statement'),
+          bank_source: (fromPdf ? '[PDF] ' : '[CSV] ') + (conn.institution_name || 'statement'),
           plaid_transaction_id: mid,
           account_id: target,
           date: g.date,
@@ -249,10 +264,13 @@ export async function POST(req) {
           check_number: g.check_number,
           pending: false,
           pending_transaction_id: null,
-          raw: { source: 'csv_statement_import', imported_by: userId, imported_at: new Date().toISOString() },
+          raw: { source: fromPdf ? 'pdf_statement_import' : 'csv_statement_import', imported_by: userId, imported_at: new Date().toISOString() },
           updated_at: new Date().toISOString(),
         });
       });
+      if (formatConflicts.length) {
+        return NextResponse.json({ ok: false, error: 'Possible PDF/CSV overlap. Review the existing transactions with the same date, amount and direction but different descriptions: ' + formatConflicts.join(', ') + '. Nothing from this batch was saved.' }, { status: 409 });
+      }
       var renamed = 0;
       for (var rn = 0; rn < toRename.length; rn++) {
         var rU = await d.from('bank_transactions').update({ name: toRename[rn].name, updated_at: new Date().toISOString() })
@@ -268,7 +286,7 @@ export async function POST(req) {
         if (up.error) { return NextResponse.json({ ok: false, error: up.error.message }, { status: 500 }); }
         inserted = toInsert.length;
       }
-      await audit(d, userId, 'statement_rows_imported', 'plaid_account', target, { imported: inserted, skipped_existing: skippedExisting, descriptions_updated: renamed, skipped_bad: bad, window: { from: minD, to: maxD } }); // v55.83-QI
+      await audit(d, userId, 'statement_rows_imported', 'plaid_account', target, { source_format: fromPdf ? 'pdf' : 'csv', imported: inserted, skipped_existing: skippedExisting, descriptions_updated: renamed, skipped_bad: bad, window: { from: minD, to: maxD } }); // v55.83-QI
       var dupC = null; // v55.83-SU — the duplicate check runs by itself after an upload (fail-soft; before wires are matched)
       if (inserted > 0) { try { dupC = await autoTwinCheck(d, { actorId: userId, budgetMs: 6000 }); } catch (eDu) { dupC = null; } }
       var wireM = null; // v55.83-RZ — imported lines may be the wires we sent: match them (fail-soft)

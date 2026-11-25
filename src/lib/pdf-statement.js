@@ -68,14 +68,19 @@ function linesOf(items) { // words on one baseline → one line, left to right; 
   return rows;
 }
 
-// → { ok, error, transactions: [{ date, description, amount }], check: {...} }   (amount: + money in, − money out)
-export function statementFromTextItems(pages) {
+export function statementLines(pages) {
   var lines = [];
   (pages || []).forEach(function (items, pi) {
     var clean = (items || []).filter(function (i) { return i && String(i.str || '').trim() !== '' && isFinite(i.x) && isFinite(i.y); })
       .map(function (i) { return { s: String(i.str).trim(), x: Number(i.x), y: Number(i.y), r: Number(i.x) + (Number(i.w) || 0) }; });
     linesOf(clean).forEach(function (l) { l.page = pi + 1; lines.push(l); });
   });
+  return lines;
+}
+
+// → { ok, error, transactions: [{ date, description, amount }], check: {...} }   (amount: + money in, − money out)
+export function statementFromTextItems(pages) {
+  var lines = statementLines(pages);
   // a transaction line starts with a date; the word after the date starts the description column
   var dated = lines.filter(function (l) { return !!parseStatementDate(l.items[0].s) && l.items.length >= 2; });
   if (dated.length < 1) { return { ok: false, error: 'No dated lines were found in this PDF. If it is a scanned picture of a statement, it cannot be read — export the statement from the bank as PDF or Excel.', transactions: [], check: null }; }

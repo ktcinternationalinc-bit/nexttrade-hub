@@ -7,12 +7,22 @@ export async function readPdfPagesInBrowser(arrayBuffer) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf');
   const worker = await import('pdfjs-dist/legacy/build/pdf.worker.entry');
   pdfjs.GlobalWorkerOptions.workerSrc = worker.default || worker;
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer), isEvalSupported: false }).promise;
+  const task = pdfjs.getDocument({ data: new Uint8Array(arrayBuffer), isEvalSupported: false });
   const pages = [];
-  for (let n = 1; n <= doc.numPages; n++) {
-    const tc = await (await doc.getPage(n)).getTextContent();
-    pages.push(tc.items.map(i => ({ str: i.str, x: i.transform[4], y: i.transform[5], w: i.width })));
+  try {
+    const doc = await task.promise;
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const viewport = page.getViewport({ scale: 1 });
+      const tc = await page.getTextContent();
+      pages.push(tc.items.map(i => {
+        const [x, y] = viewport.convertToViewportPoint(i.transform[4], i.transform[5]);
+        return { str: i.str, x, y: -y, w: i.width };
+      }));
+    }
+    return pages;
+  } finally {
+    await task.destroy();
   }
-  return pages;
 }
 export async function readPdfStatementInBrowser(arrayBuffer) { return statementFromTextItems(await readPdfPagesInBrowser(arrayBuffer)); }

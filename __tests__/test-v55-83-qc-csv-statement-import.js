@@ -46,7 +46,7 @@ ok('2a: gated on bank.connections (Max 11:45 — connections are a permission; s
   /assertPermission\(d, userId, 'bank\.connections', req\)/.test(rt));
 ok('2b: imported rows are SHAPED like Plaid rows — same columns, Plaid sign convention, [CSV] bank_source, channel statement_import',
   /amount: g\.direction === 'out' \? g\.amount_abs : -g\.amount_abs, \/\/ Plaid convention: positive = money out/.test(rt) &&
-  /bank_source: '\[CSV\] '/.test(rt) && /channel: 'statement_import'/.test(rt) &&
+  /bank_source: \(fromPdf \? '\[PDF\] ' : '\[CSV\] '\)/.test(rt) && /channel: 'statement_import'/.test(rt) &&
   /posted_date: g\.date/.test(rt) && /pending: false/.test(rt));
 ok('2c (QD superseded the single-tier check): DEFICIT DEDUPE still holds — re-imports and Plaid overlap add NOTHING, legit same-day duplicates survive (now two tiers: exact vs earlier imports, nameless vs Plaid)',
   // RC: exact tier now consumes specific earlier rows (so the description-repair tier can use the rest) — realigned
