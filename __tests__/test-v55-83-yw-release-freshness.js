@@ -138,7 +138,8 @@ async function call(m) {
   check('13: neither is still in the "waiting" list', lists.queued.every(function (it) { return it.id !== 'wh-order-queue' && it.id !== 'wh-xb-receipts-feed'; }));
 
     var page = read('src/app/page.jsx'); var wn = read('src/components/WhatsNewWidget.jsx');
-  check('14: What\'s New has the YW entry on top and the badge says YW', /v55\.83-YW<\/span>/.test(page) && /BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-YW'/.test(wn));
+  // v55.83-YX: a later build moves the badge on — the badge names the newest entry, and the YW entry is still there
+  check('14: What\'s New has the YW entry and the badge names the newest entry (YW or a later build)', /version: 'v55\.83-YW'/.test(wn) && (function () { var t = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(wn); return !!t && page.indexOf('>' + t[1] + '</span>') > 0; })());
   check('15: the test is in the regression runner', read('scripts/run-accounting-bank-regression.js').indexOf('test-v55-83-yw-release-freshness.js') >= 0);
   console.log('\nYW freshness: ' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
