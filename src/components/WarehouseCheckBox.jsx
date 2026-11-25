@@ -70,13 +70,13 @@ export function DecisionDialog(props) {
         <div style={{ color: SUB }}>{head}</div>
         {f.basis ? <div className="font-semibold">{'Billed ' + num(f.billed) + ' ' + f.unit + ' · scanned in ' + num(f.received) + ' ' + f.unit + ' · difference ' + num(f.diff) + ' ' + f.unit + (f.pct != null ? ' (' + num(f.pct, 2) + '%)' : '')}</div> : null}
         <label className="block font-bold">{kind === 'report_issue' ? 'What is wrong (explanation)' : kind === 'resolve' ? 'Resolution' : 'Reason'}
-          <textarea value={reason} onChange={function (e) { setReason(e.target.value); }} rows={3} className="w-full mt-1 px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white" /></label>
+          <textarea value={reason} onChange={function (e) { setReason(e.target.value); }} rows={3} className="w-full mt-1 px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white nt-light" /></label>
         {kind === 'report_issue' && <label className="block font-bold">Assign to (optional)
-          <select value={assignee} onChange={function (e) { setAssignee(e.target.value); }} className="w-full mt-1 px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white">
+          <select value={assignee} onChange={function (e) { setAssignee(e.target.value); }} className="w-full mt-1 px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white nt-light">
             <option value="">— me —</option>{(people || []).map(function (p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}</select></label>}
         {kind !== 'reopen' && <label className="block font-bold">{kind === 'resolve' ? 'Evidence (a file and / or what proves it — required)' : 'Evidence (optional)'}
           <input type="file" multiple onChange={pick} className="block mt-1 text-[12px]" />
-          <textarea value={note} onChange={function (e) { setNote(e.target.value); }} rows={2} placeholder="e.g. scale ticket number, supplier email of 20 Nov" className="w-full mt-1 px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white" /></label>}
+          <textarea value={note} onChange={function (e) { setNote(e.target.value); }} rows={2} placeholder="e.g. scale ticket number, supplier email of 20 Nov" className="w-full mt-1 px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white nt-light" /></label>}
         {err && <div className="rounded-lg px-2 py-1 font-extrabold" style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5' }}>{'⛔ ' + err}</div>}
       </div>
       <div className="px-3 py-2 flex gap-2 justify-end" style={{ borderTop: '1px solid ' + LINE }}>
@@ -172,8 +172,8 @@ export function LinkChooser(props) {
     })}
     {it.needs_link || it.outcome === 'no_receipt' ? <div className="flex flex-wrap gap-1 items-center mt-1">
       <span style={{ color: SUB }}>Choose by hand — warehouse receipt id:</span>
-      <input value={rid} onChange={function (e) { setRid(e.target.value.replace(/[^0-9]/g, '')); }} className="px-2 py-0.5 rounded border border-slate-300 w-24 text-[12px] text-slate-900 bg-white" />
-      <input value={why} onChange={function (e) { setWhy(e.target.value); }} placeholder="why it is this bill’s receipt" className="px-2 py-0.5 rounded border border-slate-300 w-64 text-[12px] text-slate-900 bg-white" />
+      <input value={rid} onChange={function (e) { setRid(e.target.value.replace(/[^0-9]/g, '')); }} className="px-2 py-0.5 rounded border border-slate-300 w-24 text-[12px] text-slate-900 bg-white nt-light" />
+      <input value={why} onChange={function (e) { setWhy(e.target.value); }} placeholder="why it is this bill’s receipt" className="px-2 py-0.5 rounded border border-slate-300 w-64 text-[12px] text-slate-900 bg-white nt-light" />
       <button disabled={!rid} onClick={function () { props.onLink({ receipt_id: rid, basis: 'manual', reason: why, state: 'confirmed' }); }} className="px-2 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#334155', color: '#ffffff', opacity: rid ? 1 : 0.5 }}>Link</button>
     </div> : null}
   </div>;

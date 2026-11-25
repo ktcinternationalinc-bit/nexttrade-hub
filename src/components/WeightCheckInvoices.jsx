@@ -55,6 +55,60 @@ export function groupInvoices(rows) {
   });
 }
 
+// What a person saw on the card: which bills, and per product the figures and the result. Used to stop an "Approved" / "Disputed"
+// click when confirming the previewed receipt changes any of it (Codex 25 Nov: B1 previewed within tolerance, after confirming the
+// receipt the real comparison also held B2 and was over — one click must never decide that).
+export function invoiceSignature(inv) {
+  if (!inv) { return ''; }
+  var bills = (inv.bills || []).map(function (b) { return String(b.id); }).sort();
+  var prods = (inv.products || []).map(function (r) { var f = r.figures || {}; return [r.product_label || '', f.billed, f.received, f.diff, f.unit || '', r.outcome || ''].join('|'); }).sort();
+  return JSON.stringify({ bills: bills, pass: !!inv.pass, products: prods });
+}
+var AUTO_REASON = 'Approved: billed vs scanned within the approved tolerance';
+function reasonProblem(inv, mode, reason) {
+  if (mode === 'approve' && !inv.pass && reason.length < 5) { return 'This invoice is REVIEW — write why you approve it anyway (at least a few words).'; }
+  if (mode === 'dispute' && reason.length < 5) { return 'Write what is wrong (at least a few words) before disputing.'; }
+  return '';
+}
+// The Approved / Disputed flow, outside React so it can be tested. o = { inv, mode: 'approve'|'dispute', reason, api(body) → json,
+// reload() → fresh report rows }. A previewed card first has its receipt confirmed by this person; then the fresh, REAL result must be
+// exactly what was shown, otherwise nothing is decided and the person looks again. The reason is judged against the real result.
+export async function runInvoiceDecision(o) {
+  var inv = o.inv; var mode = o.mode; var reason = String(o.reason || '').trim();
+  var problem = reasonProblem(inv, mode, reason); if (problem) { return { ok: false, error: problem, wrote: 0 }; }
+  if (inv.previewed) {
+    var shown = invoiceSignature(inv);
+    var c = inv.proposed || (inv.linkRow && (inv.linkRow.candidates || [])[0]);
+    if (!c) { return { ok: false, error: 'No warehouse receipt to confirm.', wrote: 0 }; }
+    var j0 = await o.api({ action: 'link', bill_id: inv.bills[0].id, receipt_id: c.receipt_id, basis: (c.bases || [])[0], bill_value: c.bill_value, receipt_value: c.receipt_value, state: 'confirmed' });
+    if (!j0 || !j0.ok) { return { ok: false, error: (j0 && j0.error) || 'The receipt could not be confirmed.', wrote: 0 }; }
+    var rows = await o.reload();
+    var again = groupInvoices(rows || []).filter(function (v) { return v.bills.some(function (b) { return b.id === inv.bills[0].id; }); })[0] || null;
+    if (!again) { return { ok: false, stopped: true, linked: true, error: 'Receipt ' + c.receipt_id + ' is confirmed. The invoice is no longer in this list — nothing was ' + (mode === 'dispute' ? 'disputed' : 'approved') + '.', wrote: 0 }; }
+    if (invoiceSignature(again) !== shown) {
+      var more = again.bills.filter(function (b) { return !inv.bills.some(function (x) { return x.id === b.id; }); });
+      var what = more.length ? 'the receipt also covers ' + more.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || b.id); }).join(' + ') + ', so the bills are compared together' : 'the figures or the result are not what the preview showed';
+      return { ok: false, stopped: true, linked: true, error: 'Receipt ' + c.receipt_id + ' is confirmed, but with it ' + what + (again.pass ? '' : ' — now REVIEW') + '. Nothing was ' + (mode === 'dispute' ? 'disputed' : 'approved') + ': look at the card again and choose.', wrote: 0, inv: again };
+    }
+    inv = again;
+    problem = reasonProblem(inv, mode, reason); if (problem) { return { ok: false, stopped: true, linked: true, error: problem, wrote: 0, inv: inv }; }
+  }
+  if (mode === 'approve' && inv.pass && reason.length < 5) { reason = AUTO_REASON; }
+  var todo = inv.rows.filter(function (r) { return r.needs_decision; });
+  if (!todo.length) { return { ok: false, error: 'Nothing left to decide on this invoice.', wrote: 0, linked: !!o.inv.previewed }; }
+  var blocked = todo.filter(function (r) { var a = r.allowed || []; return mode === 'dispute' ? a.indexOf('report_issue') < 0 : (a.indexOf('validate_match') < 0 && a.indexOf('accept_discrepancy') < 0); });
+  if (blocked.length) { return { ok: false, error: 'Not possible yet: ' + blocked.map(function (r) { return r.product_label || r.outcome_words || r.outcome; }).join(', ') + ' — see the note on the card.', wrote: 0, linked: !!o.inv.previewed }; }
+  var failed = []; var wrote = 0;
+  for (var i = 0; i < todo.length; i++) {
+    var r = todo[i]; var a = r.allowed || [];
+    var kind = mode === 'dispute' ? 'report_issue' : (a.indexOf('validate_match') >= 0 ? 'validate_match' : 'accept_discrepancy');
+    var j = await o.api({ action: 'decide', bill_id: (r.bill_ids || [])[0] || inv.bills[0].id, item_key: r.item_key, kind: kind, reason: reason, expected_fp: r.comparison_fp });
+    if (!j || !j.ok) { failed.push((r.product_label || r.item_key) + ': ' + ((j && j.error) || 'not saved')); } else { wrote++; }
+  }
+  if (failed.length) { return { ok: false, error: 'Some lines were not saved — ' + failed.join(' · '), wrote: wrote, failed: failed }; }
+  return { ok: true, wrote: wrote, message: (mode === 'dispute' ? 'Disputed: ' : 'Approved: ') + inv.bills.map(function (b) { return b.vendor + ' ' + b.bill_number; }).join(' + ') };
+}
+
 export default function WeightCheckInvoices(props) {
   var dr = lastDays(60);
   var _f = useState({ date_from: dr[0], date_to: dr[1] }); var flt = _f[0], setFlt = _f[1];
@@ -100,38 +154,12 @@ export default function WeightCheckInvoices(props) {
       .then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); return; } say(props.toast, 'Mapping saved — ' + bl.description, 'success'); var o = Object.assign({}, mapEdit); delete o[r.item_key]; setMapEdit(o); load(false); });
   }
 
-  async function confirmPreview(inv) {
-    var c = inv.proposed || (inv.linkRow && (inv.linkRow.candidates || [])[0]);
-    if (!c) { return null; }
-    var j = await wcApi({ action: 'link', bill_id: inv.bills[0].id, receipt_id: c.receipt_id, basis: (c.bases || [])[0], bill_value: c.bill_value, receipt_value: c.receipt_value, state: 'confirmed' });
-    if (!j || !j.ok) { say(props.toast, (j && j.error) || 'The receipt could not be confirmed.', 'error'); return null; }
-    var fresh = await load(false);
-    var again = groupInvoices((fresh && fresh.rows) || []).filter(function (v) { return v.bills.some(function (b) { return b.id === inv.bills[0].id; }); })[0];
-    return again || null;
-  }
-  async function decideAll(inv0, mode) {
-    var inv = inv0;
-    var reason = String(reasons[inv.key] || '').trim();
-    if (mode === 'approve' && !inv.pass && reason.length < 5) { say(props.toast, 'This invoice is REVIEW — write why you approve it anyway (at least a few words).', 'error'); return; }
-    if (mode === 'dispute' && reason.length < 5) { say(props.toast, 'Write what is wrong (at least a few words) before disputing.', 'error'); return; }
-    if (mode === 'approve' && inv.pass && reason.length < 5) { reason = 'Approved: billed vs scanned within the approved tolerance'; }
+  async function decideAll(inv, mode) {
     setBusy(inv.key);
-    if (inv.previewed) { var conf = await confirmPreview(inv); if (!conf) { setBusy(''); return; } inv = conf; }
-    var todo = inv.rows.filter(function (r) { return r.needs_decision; });
-    if (!todo.length) { setBusy(''); say(props.toast, 'Nothing left to decide on this invoice.', 'error'); return; }
-    var blocked = todo.filter(function (r) { var a = r.allowed || []; return mode === 'dispute' ? a.indexOf('report_issue') < 0 : (a.indexOf('validate_match') < 0 && a.indexOf('accept_discrepancy') < 0); });
-    if (blocked.length) { setBusy(''); say(props.toast, 'Not possible yet: ' + blocked.map(function (r) { return r.product_label || r.outcome_words || r.outcome; }).join(', ') + ' — see the note on the card.', 'error'); return; }
-    var failed = [];
-    for (var i = 0; i < todo.length; i++) {
-      var r = todo[i]; var a = r.allowed || [];
-      var kind = mode === 'dispute' ? 'report_issue' : (a.indexOf('validate_match') >= 0 ? 'validate_match' : 'accept_discrepancy');
-      var j = await wcApi({ action: 'decide', bill_id: (r.bill_ids || [])[0] || inv.bills[0].id, item_key: r.item_key, kind: kind, reason: reason, expected_fp: r.comparison_fp });
-      if (!j || !j.ok) { failed.push((r.product_label || r.item_key) + ': ' + ((j && j.error) || 'not saved')); }
-    }
-    await load(false);
+    var res = await runInvoiceDecision({ inv: inv, mode: mode, reason: reasons[inv.key], api: wcApi, reload: function () { return load(false).then(function (j) { return (j && j.rows) || []; }); } });
+    if (res.wrote || res.linked) { await load(false); }
     setBusy('');
-    if (failed.length) { say(props.toast, 'Some lines were not saved — ' + failed.join(' · '), 'error'); }
-    else { say(props.toast, (mode === 'dispute' ? 'Disputed: ' : 'Approved: ') + inv.bills.map(function (b) { return b.vendor + ' ' + b.bill_number; }).join(' + '), 'success'); }
+    if (res.ok) { say(props.toast, res.message, 'success'); } else { say(props.toast, res.error, 'error'); }
   }
 
   function MapForm(p) {
@@ -141,8 +169,8 @@ export default function WeightCheckInvoices(props) {
     if (!perms.settings) { return <div style={{ fontSize: 12, color: MUTED }}>No product mapping yet — someone with “Warehouse check: Settings” maps it.</div>; }
     return <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end', marginTop: 6, padding: 8, background: SOFT, border: '1px dashed #cbd5e1', borderRadius: 8 }}>
       <div style={{ fontSize: 12, color: SUB, width: '100%' }}>{'Map “' + (((r.bill_line || (r.bill_lines || [])[0]) || {}).description || 'this product') + '” to the warehouse product it is scanned as:'}</div>
-      <label><span style={LABEL}>Warehouse product</span><select value={e.wh_product_type || ''} onChange={function (ev) { setE('wh_product_type', ev.target.value); }} style={FIELD}><option value="">choose…</option>{Object.keys(pts).map(function (id) { return <option key={id} value={id}>{pts[id]}</option>; })}</select></label>
-      <label><span style={LABEL}>Grade (CGT)</span><select value={e.wh_cgt || ''} onChange={function (ev) { setE('wh_cgt', ev.target.value); }} style={FIELD}><option value="">any grade</option>{Object.keys(cgts).map(function (id) { return <option key={id} value={id}>{cgts[id]}</option>; })}</select></label>
+      <label><span style={LABEL}>Warehouse product</span><select value={e.wh_product_type || ''} onChange={function (ev) { setE('wh_product_type', ev.target.value); }} className="nt-light" style={FIELD}><option value="">choose…</option>{Object.keys(pts).map(function (id) { return <option key={id} value={id}>{pts[id]}</option>; })}</select></label>
+      <label><span style={LABEL}>Grade (CGT)</span><select value={e.wh_cgt || ''} onChange={function (ev) { setE('wh_cgt', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any grade</option>{Object.keys(cgts).map(function (id) { return <option key={id} value={id}>{cgts[id]}</option>; })}</select></label>
       <button disabled={busy === r.item_key} onClick={function () { saveMapping(p.inv, r); }} style={btn(INK, '#ffffff')}>{busy === r.item_key ? 'Saving…' : 'Save mapping'}</button>
     </div>;
   }
@@ -151,8 +179,8 @@ export default function WeightCheckInvoices(props) {
   return <div style={{ color: INK, fontSize: 13 }}>
     {/* controls */}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
-      <label><span style={LABEL}>Bill date from</span><input type="date" value={flt.date_from} onChange={function (e) { setFlt(Object.assign({}, flt, { date_from: e.target.value })); }} style={FIELD} /></label>
-      <label><span style={LABEL}>to</span><input type="date" value={flt.date_to} onChange={function (e) { setFlt(Object.assign({}, flt, { date_to: e.target.value })); }} style={FIELD} /></label>
+      <label><span style={LABEL}>Bill date from</span><input type="date" value={flt.date_from} onChange={function (e) { setFlt(Object.assign({}, flt, { date_from: e.target.value })); }} className="nt-light" style={FIELD} /></label>
+      <label><span style={LABEL}>to</span><input type="date" value={flt.date_to} onChange={function (e) { setFlt(Object.assign({}, flt, { date_to: e.target.value })); }} className="nt-light" style={FIELD} /></label>
       <button disabled={!!busy} onClick={function () { load(true); }} style={Object.assign(btn(BLUE, '#ffffff'), { opacity: busy ? 0.6 : 1 })}>{busy === 'recheck' ? 'Reading the warehouse…' : 'Check against the warehouse'}</button>
       <button disabled={!!busy} onClick={function () { load(false); }} style={btn('#334155', '#ffffff', true)}>{busy === 'load' ? 'Loading…' : 'Show (last reading)'}</button>
     </div>
@@ -163,7 +191,7 @@ export default function WeightCheckInvoices(props) {
         <span style={LABEL}>Tolerance</span>
         {tol ? <div style={{ fontSize: 16, fontWeight: 800 }}>{(tol.pct != null ? tol.pct + '%' : '') + (tol.lb != null ? (tol.pct != null ? ' or ' : '') + tol.lb + ' lb' : '')}</div> : <div style={{ fontSize: 15, fontWeight: 800, color: AMBER }}>Not set</div>}
         <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>A bill may be BELOW what was scanned by up to this much. A bill ABOVE what was scanned is never allowed.</div>
-        {perms.super_admin ? <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}><input value={tolPct} onChange={function (e) { setTolPct(e.target.value.replace(/[^0-9.]/g, '')); }} placeholder={tol && tol.pct != null ? String(tol.pct) : '10'} style={Object.assign({}, FIELD, { width: 70 })} /><span style={{ color: SUB }}>%</span><button disabled={busy === 'tol' || !tolPct} onClick={saveTolerance} style={Object.assign(btn(INK, '#ffffff'), { opacity: tolPct ? 1 : 0.5 })}>{tol ? 'Change' : 'Set tolerance'}</button></div> : null}
+        {perms.super_admin ? <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}><input value={tolPct} onChange={function (e) { setTolPct(e.target.value.replace(/[^0-9.]/g, '')); }} placeholder={tol && tol.pct != null ? String(tol.pct) : '10'} className="nt-light" style={Object.assign({}, FIELD, { width: 70 })} /><span style={{ color: SUB }}>%</span><button disabled={busy === 'tol' || !tolPct} onClick={saveTolerance} style={Object.assign(btn(INK, '#ffffff'), { opacity: tolPct ? 1 : 0.5 })}>{tol ? 'Change' : 'Set tolerance'}</button></div> : null}
       </div>
       <div style={tile}>
         <span style={LABEL}>Vendors checked</span>
@@ -238,7 +266,7 @@ export default function WeightCheckInvoices(props) {
         {inv.linkRow && !inv.previewed ? <div style={{ marginTop: 8 }}><LinkChooser item={inv.linkRow} perms={perms} onLink={function (l) { setBusy(inv.key); wcApi(Object.assign({ action: 'link', bill_id: inv.bills[0].id }, l)).then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); } load(false); }); }} /></div> : null}
 
         {canDecide && (perms.validate || perms.accept) && !inv.approved && !inv.disputed ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: '1px solid ' + LINE }}>
-          <input value={reasons[inv.key] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[inv.key] = e.target.value; setReasons(o); }} placeholder={inv.pass ? 'Note (optional)' : 'Reason — needed to approve a REVIEW or to dispute'} style={Object.assign({}, FIELD, { flex: '1 1 260px' })} />
+          <input value={reasons[inv.key] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[inv.key] = e.target.value; setReasons(o); }} placeholder={inv.pass ? 'Note (optional)' : 'Reason — needed to approve a REVIEW or to dispute'} className="nt-light" style={Object.assign({}, FIELD, { flex: '1 1 260px' })} />
           <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'approve'); }} style={Object.assign(btn(GREEN, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Approved</button>
           <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'dispute'); }} style={Object.assign(btn(RED, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Disputed</button>
         </div> : null}

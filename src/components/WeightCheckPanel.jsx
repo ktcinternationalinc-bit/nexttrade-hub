@@ -41,7 +41,7 @@ export default function WeightCheckPanel(props) {
     wcApi(Object.assign({ action: action }, flt, { recheck: true })).then(function (j) { setBusy(''); setData(j); if (j && j.report) { say(props.toast, 'Report ' + j.report.report_no + ' saved — ' + j.report.status, 'success'); } });
   }
   var rows = (data && data.rows) || []; var perms = (data && data.permissions) || {};
-  var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white';
+  var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white nt-light';
   var billsById = {}; (props.bills || []).forEach(function (b) { billsById[b.id] = b; });
   function openBill(b) { var full = billsById[b.id] || {}; setPeek({ bill_number: b.bill_number, vendor: b.vendor, bill_date: b.bill_date, release: full.release_number || null, bill_total_cents: full.total_amount != null ? Math.round(Number(full.total_amount) * 100) : null, cents: full.paid != null ? Math.round(Number(full.paid) * 100) : null, attachment_path: b.attachment_path || full.attachment_path || null, reference: b.reference }); }
   return <div className="nt-paper rounded-xl border-2 border-slate-300 p-3 mb-3" style={{ background: '#ffffff', color: INK }}>
@@ -180,7 +180,7 @@ function WcSettings(props) {
   if (!s) { return <div className="text-[12px]" style={{ color: SUB }}>Loading…</div>; }
   if (!s.ok) { return <div className="text-[12px] font-bold" style={{ color: '#991b1b' }}>{s.error}</div>; }
   var p = s.permissions || {}; var L = s.lookups || {};
-  var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white';
+  var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white nt-light';
   function sel(tabName, key, label) { var opts = L[tabName] || {}; return <label>{label}<br /><select value={m[key]} onChange={function (e) { var o = {}; o[key] = e.target.value; setM(Object.assign({}, m, o)); }} className={inp}><option value="">any</option>{Object.keys(opts).map(function (id) { return <option key={id} value={id}>{opts[id] + ' (#' + id + ')'}</option>; })}</select></label>; }
   function saveMap() { setMsg(''); wcApi(Object.assign({ action: 'map_save' }, m)).then(function (j) { if (!j.ok) { setMsg(j.error); return; } setMsg('Mapping saved.'); load(); }); }
   function retire(fam) { var r = window.prompt('Why is this mapping retired? (it stays in the history)'); if (!r) { return; } wcApi({ action: 'map_retire', family: fam, reason: r }).then(function (j) { setMsg(j.ok ? 'Retired.' : j.error); load(); }); }

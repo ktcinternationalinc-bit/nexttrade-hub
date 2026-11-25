@@ -498,7 +498,51 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   var realP = pvP2.body.rows.filter(function (r) { return (r.bill_ids || []).indexOf(BPV) >= 0 && r.kind === 'product'; })[0];
   check('…after a person confirms the receipt, the same comparison becomes a real, decidable line (same figures)', lkP.status === 200 && realP && !realP.preview && realP.needs_decision && realP.figures.billed === 1000 && realP.figures.received === 1100, realP);
   var invSrc2 = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
-  check('SCREEN (dashboard): readable fields (white background, dark text), tolerance + vendors tiles, map-this-product form, Approved confirms a previewed receipt first', /var FIELD = \{ background: '#ffffff', color: INK/.test(invSrc2) && /<span style=\{LABEL\}>Tolerance<\/span>/.test(invSrc2) && /<span style=\{LABEL\}>Vendors checked<\/span>/.test(invSrc2) && /action: 'map_save'/.test(invSrc2) && /if \(inv\.previewed\) \{ var conf = await confirmPreview\(inv\)/.test(invSrc2) && /action: 'tolerance_save'/.test(invSrc2) && /action: 'scope_save'/.test(invSrc2));
+  check('SCREEN (dashboard): readable fields (white background, dark text), tolerance + vendors tiles, map-this-product form, Approved confirms a previewed receipt first', /var FIELD = \{ background: '#ffffff', color: INK/.test(invSrc2) && /<span style=\{LABEL\}>Tolerance<\/span>/.test(invSrc2) && /<span style=\{LABEL\}>Vendors checked<\/span>/.test(invSrc2) && /action: 'map_save'/.test(invSrc2) && /if \(inv\.previewed\) \{\s*var shown = invoiceSignature\(inv\)/.test(invSrc2) && /action: 'tolerance_save'/.test(invSrc2) && /action: 'scope_save'/.test(invSrc2));
+  // ---- Codex 25 Nov (ZA, finding 1): the REAL Approved handler (runInvoiceDecision) on a previewed card. B1 is previewed within
+  // tolerance against receipt 16; B2 is already confirmed on receipt 16, so after B1's receipt is confirmed the real comparison is
+  // B1+B2 together and billed is MORE than scanned. The first click must confirm the receipt and then STOP — no decision written.
+  var BS1 = 'b0000000-0000-4000-8000-0000000000s1'; var BS2 = 'b0000000-0000-4000-8000-0000000000s2';
+  world.wh.receipts.push({ id: 16, reference_number: 'P-16', nexpac_bill: null, is_draf: 0, info: {}, supplier: { id: 1, name: 'NexPac' }, warehouse: { id: 2, name: 'CANADA' } });
+  world.wh.logs[16] = [{ id: 161, unit: 'W', product_type: 7, cgt: 2, weight: '1010', rolls: '1', pl_weight: '450', is_scan_out: 0 }];
+  addBill(BS1, '2026-10-09', 'P-16', [{ description: 'Cambridge Seconds (LBS)', qty: 1000, unit: 'LBS' }]);
+  addBill(BS2, '2026-10-09', 'Q-OTHER-2', [{ description: 'Cambridge Seconds (LBS)', qty: 600, unit: 'LBS' }]);
+  world.perms = STAFF; world.feed = 'ok';
+  await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true, recheck: true });
+  var lkS2 = await call({ action: 'link', bill_id: BS2, receipt_id: '16', basis: 'manual', reason: 'same truck as P-16 (test)', state: 'confirmed' });
+  var pvS = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true });
+  var invS = INV.groupInvoices(pvS.body.rows).filter(function (v) { return v.key === BS1; })[0];
+  check('(set-up) B2 is confirmed on receipt 16; B1 is shown as a PREVIEW against receipt 16, within tolerance (PASS)', lkS2.status === 200 && invS && invS.previewed && invS.pass === true && String(invS.proposed.receipt_id) === '16', [lkS2.body, invS && [invS.previewed, invS.pass, invS.why]]);
+  var sentS = []; var decBefore = tbl('wc_decisions').length;
+  var apiS = function (body) { sentS.push(body.action); return call(body).then(function (r) { return Object.assign({ ok: r.status === 200 }, r.body); }); };
+  var reloadS = function () { return call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true }).then(function (r) { return r.body.rows; }); };
+  var resS = await INV.runInvoiceDecision({ inv: invS, mode: 'approve', reason: '', api: apiS, reload: reloadS });
+  check('APPROVED on that card: the receipt is confirmed, then it STOPS — the fresh result holds B2 and is REVIEW, so NO decision is written (first click)', resS.ok === false && resS.stopped === true && resS.linked === true && resS.wrote === 0 && sentS.join() === 'link' && tbl('wc_decisions').length === decBefore && /also covers/.test(resS.error) && /now REVIEW/.test(resS.error) && /Nothing was approved/.test(resS.error), [resS, sentS, tbl('wc_decisions').length - decBefore]);
+  var pvS2 = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true });
+  var invS2 = INV.groupInvoices(pvS2.body.rows).filter(function (v) { return v.bills.some(function (b) { return b.id === BS1; }); })[0];
+  check('…the card now shows the real group result (B1 + B2, not previewed, REVIEW) for the person to look at again', invS2 && !invS2.previewed && invS2.bills.length === 2 && invS2.pass === false, invS2 && [invS2.bills.length, invS2.previewed, invS2.pass]);
+  var resS2 = await INV.runInvoiceDecision({ inv: invS2, mode: 'approve', reason: '', api: apiS, reload: reloadS });
+  check('…a second Approved without a reason is refused: the real result is REVIEW, the automatic "within tolerance" reason never applies', resS2.ok === false && resS2.wrote === 0 && /REVIEW — write why/.test(resS2.error) && tbl('wc_decisions').length === decBefore, resS2);
+  // contrast: a previewed card whose confirmed result is exactly what was shown is decided in the same click
+  var BS3 = 'b0000000-0000-4000-8000-0000000000s3';
+  world.wh.receipts.push({ id: 17, reference_number: 'P-17', nexpac_bill: null, is_draf: 0, info: {}, supplier: { id: 1, name: 'NexPac' }, warehouse: { id: 2, name: 'CANADA' } });
+  world.wh.logs[17] = [{ id: 171, unit: 'W', product_type: 7, cgt: 2, weight: '1005', rolls: '1', pl_weight: '450', is_scan_out: 0 }];
+  addBill(BS3, '2026-10-10', 'P-17', [{ description: 'Cambridge Seconds (LBS)', qty: 1000, unit: 'LBS' }]);
+  var pvS3 = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true, recheck: true });
+  var invS3 = INV.groupInvoices(pvS3.body.rows).filter(function (v) { return v.key === BS3; })[0];
+  sentS = []; var decB3 = tbl('wc_decisions').length;
+  var resS3 = invS3 ? await INV.runInvoiceDecision({ inv: invS3, mode: 'approve', reason: '', api: apiS, reload: reloadS }) : null;
+  check('(contrast) a previewed card whose confirmed result is unchanged is confirmed AND approved in one click, with the automatic reason', invS3 && invS3.previewed && invS3.pass && resS3 && resS3.ok === true && resS3.wrote >= 1 && sentS[0] === 'link' && sentS.slice(1).every(function (a) { return a === 'decide'; }) && tbl('wc_decisions').length > decB3, [invS3 && [invS3.previewed, invS3.pass], resS3, sentS]);
+  check('…invoiceSignature changes when the bills, the figures or the result change', INV.invoiceSignature(invS) !== INV.invoiceSignature(invS2) && INV.invoiceSignature(invS) === INV.invoiceSignature(JSON.parse(JSON.stringify(invS))));
+  var invSrc3 = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
+  check('SCREEN: the dashboard\'s Approved / Disputed buttons go through runInvoiceDecision (no separate copy of the flow)', /var res = await runInvoiceDecision\(\{ inv: inv, mode: mode/.test(invSrc3) && !/async function confirmPreview/.test(invSrc3));
+  // ---- Codex 25 Nov (ZA, finding 2): every typed field opts into the shared light-panel styles (globals.css .nt-light, !important)
+  function fieldsWithout(src) { var out = []; var re = /<(input|select|textarea)\b[^>]*>/g; var m; while ((m = re.exec(src))) { if (/type="(checkbox|file)"/.test(m[0])) { continue; } if (!/nt-light/.test(m[0]) && !/className=\{inp/.test(m[0])) { out.push(m[0].slice(0, 80)); } } return out; }
+  var boxSrc = fs.readFileSync(path.join(root, 'src/components/WarehouseCheckBox.jsx'), 'utf8');
+  var panSrc = fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8');
+  check('SCREEN: every date / tolerance / mapping / reason / link field uses nt-light (Invoices, Panel, Check box); the panel\'s inp class carries it', fieldsWithout(invSrc3).length === 0 && fieldsWithout(boxSrc).length === 0 && fieldsWithout(panSrc).length === 0 && (panSrc.match(/var inp = '[^']*nt-light'/g) || []).length === 2, [fieldsWithout(invSrc3), fieldsWithout(boxSrc), fieldsWithout(panSrc)]);
+  var css = fs.readFileSync(path.join(root, 'src/app/globals.css'), 'utf8');
+  check('…and globals.css still makes .nt-light white with dark text, !important (beats the dark-skin input rules)', /input\.nt-light, select\.nt-light, textarea\.nt-light \{\s*background: #ffffff !important;\s*color: #0f172a !important;/.test(css));
   // ---- the real route with its OWN receipts address + token (another staging sub-site here, so the fake's identity still fits)
   var keep = { u: process.env.NEXTRADE_RECEIPTS_URL, t: process.env.NEXTRADE_RECEIPTS_TOKEN };
   process.env.NEXTRADE_RECEIPTS_URL = 'https://receipts.nextrade-staging.com/api/hub-feed'; process.env.NEXTRADE_RECEIPTS_TOKEN = 'rtok-0123456789abcdef0123456789abcdef';
