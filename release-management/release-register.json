@@ -345,6 +345,51 @@
         "result": "PASS",
         "summary": "Deployment owner executed exact candidate files in isolated staging-server Laravel fixture, uncached/cached/after clears: token refusal, receipt 2282 and reference 80221856 with 17 logs, missing id, 101-id rejection, field exclusions, shipping absent and missing-source refusal passed. Evidence: CLAUDE_HANDOFF.md section QA RECEIPT - XB LIVE candidate 905ef4b8, 24 Nov. Codex independently verified three artifact hashes, manifest digest and 23 source/fixture checks; Codex did not execute the PHP/server tests. No production or end-to-end live matching claim."
       }
+    },
+    {
+      "id": "wh-hub-feed-shipping-live",
+      "title": "Hub feed on live: read-only orders / shipping feed (switch the Hub to the live warehouse)",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "09d21b12370a694bfd45eb04f8b6285e41cbcb14",
+      "date": "2026-11-25",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": true,
+      "needsMax": true,
+      "dataChange": false,
+      "routesChanged": true,
+      "configChanged": false,
+      "dependsOn": [
+        "wh-xb-receipts-feed"
+      ],
+      "meta": "25 Nov · Max: \"Yes, switch to live\" · built on the live receipts build 905ef4b8",
+      "desc": "Adds ONE read-only address on the live warehouse, GET /api/hub-feed/shipping: orders, their checklist and status history for the Hub's Orders report, shipping-cost sync and arrival reminders. The same method as on fix staging, word for word. Answers only with the Hub's secret token (already set on live for the receipts feed); never writes. NO close-order on live (the Hub cannot close orders there). No database change. Then Max points the Hub at the live warehouse in Vercel (NEXTRADE_FEED_URL / TOKEN / ALLOW_LIVE) and sets the Hub's active warehouse source to nextrade-live.",
+      "files": "app/Http/Controllers/HubFeedController.php (+shipping()), routes/api.php (+1 route)",
+      "backup": "made by the release worker before replacement (the two files)",
+      "rollback": "Change Schedule roll back: restores the two files (the receipts feed stays); php artisan route:clear",
+      "releaseSteps": [
+        "Isolated fixture on the staging server with the exact live files (deployment owner): token missing / wrong / correct, a real order list, capabilities on a schema without the 4 newer checklist columns, cached + uncached routes.",
+        "Codex review of this exact build and manifest; staging behavioural QA bound to it.",
+        "Max's go here; the worker checks the live fingerprints under its lock, moves the two files, clears route + view caches.",
+        "Then (Max): Vercel NEXTRADE_FEED_URL = https://nextradeindustries.com/api/hub-feed/shipping, NEXTRADE_FEED_TOKEN = the live secret, NEXTRADE_FEED_ALLOW_LIVE = yes; the Hub's active warehouse source → nextrade-live."
+      ],
+      "manifest": {
+        "sha": "09d21b12370a694bfd45eb04f8b6285e41cbcb14",
+        "target": "production",
+        "dataCompatible": true,
+        "files": [
+          {
+            "path": "app/Http/Controllers/HubFeedController.php",
+            "before": "f5eb24f9b6d40ac1e00e8d885c6163b58fdf27a385312d1be0352fcf8a3c644d",
+            "after": "50aec9dc2544431d485a86c0e142542d092d9f79531223a5f2f98911c0ca264d"
+          },
+          {
+            "path": "routes/api.php",
+            "before": "39edb117dbbe93dd3d6919d9e70e361e7b7aca05942af04145f5df673d9969e3",
+            "after": "ee032994ef4117294af2893e3390c5ff7fcec335208e26cbc9f3ac172cc896c0"
+          }
+        ]
+      }
     }
   ],
   "protocol": [
