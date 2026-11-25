@@ -11,7 +11,7 @@
 // the Hub build (Vercel), which is a deployment SNAPSHOT; the fs read is a local-dev freshness
 // path only. The screen labels it a maintained plan as-of a time, not a live deployment status.
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { releaseDb } from '../../../lib/release-db'; // v55.83-YW — no-store reads
 import fs from 'fs';
 import path from 'path';
 import { verifiedCaller } from '../../../lib/verified-caller';
@@ -23,11 +23,14 @@ import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, latestByItem, itemSignState, tableMissi
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// v55.83-YW — GET database reads in this route are never kept in Next's Data Cache (it froze Change Schedule at 24 Nov 12:08 UTC)
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 var API_BUILD_MARKER = 'warehouse-release-controls-v1';
 var REGISTER_PATH = 'release-management/release-register.json';
 var LIVE_HEADERS = { 'Cache-Control': 'private, no-store, max-age=0', 'Vary': 'Authorization' };
-function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY); }
+function admin() { return releaseDb(); }
 function deny(msg, status) { return NextResponse.json({ ok: false, error: msg, api_build_marker: API_BUILD_MARKER }, { status: status || 403, headers: LIVE_HEADERS }); }
 
 export async function GET(request) {

@@ -4,7 +4,7 @@
 // the row is only Max's go for the exact build Codex passed; the gated deploy / rollback step reads it.
 // The stored sentence is made by the server, never taken from the browser. SWC-safe (var + concat).
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { releaseDb } from '../../../../lib/release-db'; // v55.83-YW — no-store reads
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, requireReleaseManager, findItem, checkSignoff, tableMissing } from '../../../../lib/release-signoff';
 import { matchesReview, reviewState } from '../../../../lib/release-review';
@@ -14,9 +14,12 @@ import { readReleasePause, pauseSentence } from '../../../../lib/release-pause';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// v55.83-YW — GET database reads in this route are never kept in Next's Data Cache (it froze Change Schedule at 24 Nov 12:08 UTC)
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 var API_BUILD_MARKER = 'warehouse-release-controls-v1';
-function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY); }
+function admin() { return releaseDb(); }
 function deny(msg, status) { return NextResponse.json({ ok: false, error: msg, api_build_marker: API_BUILD_MARKER }, { status: status || 403 }); }
 
 export async function POST(request) {

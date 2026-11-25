@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { releaseDb } from '../../../../lib/release-db'; // v55.83-YW — no-store reads
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { requireReleaseManager, latestByItem, SIGNOFF_COLUMNS } from '../../../../lib/release-signoff';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY); }
+// v55.83-YW — GET database reads in this route are never kept in Next's Data Cache (it froze Change Schedule at 24 Nov 12:08 UTC)
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
+function admin() { return releaseDb(); }
 function deny(error, status) { return NextResponse.json({ ok: false, error }, { status }); }
 export async function POST(request) {
   const who = await verifiedCaller(request, {}, admin);

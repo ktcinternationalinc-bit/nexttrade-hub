@@ -108,6 +108,19 @@ function activeRequest(sign) {
   return !!(sign && (sign.kind === 'go' || sign.kind === 'rollback' || sign.executing || sign.where === 'unknown'));
 }
 
+// Which list each change is in. Sign-off state and permission to take action come from the server; which list a change is in
+// follows the recorded history (current), not only the register file. v55.83-YW: moved out of the component unchanged.
+export function scheduleLists(data) {
+  var statusReadable = !!(data && data.signoffsInstalled !== false && !data.signoffsError && data.historyComplete !== false);
+  var items = statusReadable ? (data.items || []) : [];
+  var signs = (data && data.signoffs) || {};
+  var active = items.filter(function (it) { return it && activeRequest(signs[it.id]); });
+  var queued = items.filter(function (it) { return it && !activeRequest(signs[it.id]) && whereOf(it, signs[it.id]) === 'staging'; });
+  var live = items.filter(function (it) { return it && !activeRequest(signs[it.id]) && ['live', 'deployed'].includes(whereOf(it, signs[it.id])); });
+  var rollbackItems = live.filter(function (it) { return signs[it.id]?.canRollback; });
+  return { statusReadable: statusReadable, items: items, signs: signs, active: active, queued: queued, live: live, rollbackItems: rollbackItems };
+}
+
 function requestStatus(sign, data) {
   if (sign.execution?.phase === 'attention' || sign.where === 'unknown') return 'Blocked - recovery check required';
   if (sign.execution?.phase === 'running') return data.workerOnline ? 'Running' : 'Started - worker contact lost; completion unconfirmed';
@@ -272,16 +285,10 @@ export default function ChangeScheduleTab() {
     panel.focus({ preventScroll: true });
   }, [reviewOpen, headerHeight]);
 
-  var statusReadable = !!(data && data.signoffsInstalled !== false && !data.signoffsError && data.historyComplete !== false);
-  var items = statusReadable ? (data.items || []) : [];
-  // Sign-off state and permission to take action come from the server.
-  // Which list a change is in follows the recorded history (current), not only the register file.
-  var signs = (data && data.signoffs) || {};
-  var active = items.filter(function (it) { return it && activeRequest(signs[it.id]); });
-  var queued = items.filter(function (it) { return it && !activeRequest(signs[it.id]) && whereOf(it, signs[it.id]) === 'staging'; });
-  var live = items.filter(function (it) { return it && !activeRequest(signs[it.id]) && ['live', 'deployed'].includes(whereOf(it, signs[it.id])); });
+  var lists = scheduleLists(data);   // v55.83-YW — one function, also used by the tests
+  var statusReadable = lists.statusReadable; var items = lists.items; var signs = lists.signs;
+  var active = lists.active; var queued = lists.queued; var live = lists.live; var rollbackItems = lists.rollbackItems;
   var canSign = !!(data && data.canSign);
-  var rollbackItems = live.filter(function (it) { return signs[it.id]?.canRollback; });
   var selectableIds = new Set((selectionAction === 'rollback' ? rollbackItems : queued).map(function (it) { return it.id; }));
   var selectedIds = Object.keys(picked).filter(function (id) { return picked[id] && selectableIds.has(id); });
   var workerLabel = data?.worker?.enabled === false ? 'Worker disabled - approved releases will not start until activation is authorized' :

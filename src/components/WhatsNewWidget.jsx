@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-YW',
+    date: '2026-11-25',
+    title: 'Change Schedule shows what is happening now (it was stuck on 24 Nov)',
+    items: [
+      { text: '**Fixed:** Change Schedule kept showing an old copy from 24 Nov in the morning: “Worker disabled”, “Change history 0 entries”, and only one change on production. The Hub was keeping its first answer and repeating it. It now asks the database fresh every time, so the worker status, the history and both moves to production (Order Queue and the Warehouse check receipts) show as they really are.' },
+      { text: 'Nothing on the warehouse or in the history was wrong or lost: the moves, backups and notes were all recorded; only this screen was showing an old copy.' },
+      { superAdminOnly: true, text: 'Technical: Next.js 14 keeps GET database reads made inside a GET-only route handler in its Data Cache with no expiry, even with dynamic = force-dynamic (the cache also survives deployments). Every /api/releases route now exports revalidate = 0 + fetchCache = force-no-store and uses one Supabase client whose fetch is cache: no-store (src/lib/release-db.js). Proven through Next\'s real AppRouteRouteModule + patched fetch (test-v55-83-yw-release-freshness.js, with a contrast run that reproduces the frozen screen). Other GET-only routes with the same exposure are listed for separate review. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-YT',
     date: '2026-11-24',
     title: 'Warehouse check: the Hub now asks the warehouse at the right address',

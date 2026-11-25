@@ -1,17 +1,20 @@
 // Dedicated office worker channel. Its credential grants no general database/API access.
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { releaseDb } from '../../../../lib/release-db'; // v55.83-YW — no-store reads
 import workerRules from '../../../../../release-management/lib/worker-authorization';
 import selection from '../../../../../release-management/lib/selection';
 import { readReleasePause } from '../../../../lib/release-pause'; // v55.83-YQ — the stop switch
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// v55.83-YW — GET database reads in this route are never kept in Next's Data Cache (it froze Change Schedule at 24 Nov 12:08 UTC)
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 function response(data, status = 200) { return NextResponse.json(data, { status, headers: { 'Cache-Control': 'no-store' } }); }
 export async function POST(request) {
   const token = /^Bearer ([a-f0-9]{64})$/.exec(request.headers.get('authorization') || '');
   if (!token) return response({ error: { message: 'Worker authentication required.' } }, 401);
-  const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  const db = releaseDb();
   const hash = crypto.createHash('sha256').update(token[1]).digest('hex');
   const auth = await db.from('release_worker_credentials').select('worker,enabled').eq('token_hash', hash).maybeSingle();
   if (auth.error || !auth.data?.enabled) return response({ error: { message: 'Worker authentication refused.' } }, 403);
