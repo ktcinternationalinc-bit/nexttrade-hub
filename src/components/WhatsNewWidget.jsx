@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZE',
+    date: '2026-11-25',
+    title: 'The notification bell works again',
+    items: [
+      { text: 'The 🔔 bell at the top loads your notifications again (it had stopped showing anything). Clicking one marks it read; "Mark all read" marks them all.' },
+      { superAdminOnly: true, text: 'Technical: the live table public.notifications has id, user_id, type, title, body, read, created_at. NotificationBell asked for target_user / read_at (PostgREST 400 every minute in the edge logs); it now reads user_id = the signed-in person and marks read with read = true (limited to that person). /api/notify is NOT changed (Codex 25 Nov: it must first check who is sending; its bell insert keeps failing as before, e-mail is unaffected). No SQL. Note for later (needs SQL, Max’s call): the table’s RLS policy allow_all_notifications lets anyone read or change notifications. Test: test-v55-83-ze-notification-bell.js.' }
+    ]
+  },
+  {
     version: 'v55.83-ZN',
     date: '2026-11-26',
     title: 'Profitability: the Lines to fix list says plainly what is wrong and takes you to the exact place to fix it',

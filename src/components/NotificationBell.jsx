@@ -12,25 +12,25 @@ export default function NotificationBell({ userId, users }) {
     try {
       const { data } = await supabase.from('notifications')
         .select('*')
-        .or(`target_user.eq.${userId},target_user.eq.all`)
+        .eq('user_id', userId) // v55.83-ZE — the live table has user_id (no target_user, no "all" rows); the old filter answered 400 every minute
         .order('created_at', { ascending: false })
         .limit(30);
       setNotifications(data || []);
-      setUnread((data || []).filter(n => !n.read_at && n.target_user !== 'system').length);
+      setUnread((data || []).filter(n => n.read !== true).length);
     } catch (e) { /* table may not exist yet */ }
   }, [userId]);
 
   useEffect(() => { load(); const iv = setInterval(load, 60000); return () => clearInterval(iv); }, [load]);
 
   const markRead = async (id) => {
-    await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', id);
+    await supabase.from('notifications').update({ read: true }).eq('id', id).eq('user_id', userId); // ZE: the table has read (true / false), not read_at
     load();
   };
 
   const markAllRead = async () => {
-    const ids = notifications.filter(n => !n.read_at).map(n => n.id);
+    const ids = notifications.filter(n => n.read !== true).map(n => n.id);
     if (ids.length > 0) {
-      await supabase.from('notifications').update({ read_at: new Date().toISOString() }).in('id', ids);
+      await supabase.from('notifications').update({ read: true }).in('id', ids).eq('user_id', userId);
       load();
     }
   };
@@ -86,7 +86,7 @@ export default function NotificationBell({ userId, users }) {
                 <div className="text-center py-10 text-sm text-slate-400">No notifications yet</div>
               ) : notifications.map(n => (
                 <div key={n.id}
-                  className={`px-4 py-3 border-b border-slate-50 hover:bg-blue-50 cursor-pointer transition ${!n.read_at ? 'bg-blue-50/50' : ''}`}
+                  className={`px-4 py-3 border-b border-slate-50 hover:bg-blue-50 cursor-pointer transition ${n.read !== true ? 'bg-blue-50/50' : ''}`}
                   onClick={() => markRead(n.id)}>
                   <div className="flex items-start gap-2.5">
                     <span className="text-lg mt-0.5">{getIcon(n.type)}</span>
@@ -95,8 +95,8 @@ export default function NotificationBell({ userId, users }) {
                       {n.body && <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{n.body}</div>}
                       <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-2">
                         <span>{timeAgo(n.created_at)}</span>
-                        {n.created_by && <span>· {getUserName(n.created_by)}</span>}
-                        {!n.read_at && <span className="w-2 h-2 bg-blue-500 rounded-full" />}
+
+                        {n.read !== true && <span className="w-2 h-2 bg-blue-500 rounded-full" />}
                       </div>
                     </div>
                   </div>
