@@ -171,7 +171,9 @@ function ReportHistory(props) {
 
 function WcSettings(props) {
   var _s = useState(null); var s = _s[0], setS = _s[1];
-  var _m = useState({ vendor_name: 'NexPac Corporation', bill_description: '', bill_unit: 'LBS', wh_product_type: '', wh_cgt: '', wh_nt: '', wh_color: '', wh_label: '', lb_per_yd: '', lb_factor_approved: false, note: '' }); var m = _m[0], setM = _m[1];
+  var BLANK_MAP = { vendor_name: 'NexPac Corporation', bill_description: '', bill_unit: 'LBS', wh_product_type: '', wh_cgt: '', wh_nt: '', wh_color: '', wh_label: '', lb_per_yd: '', lb_factor_approved: false, note: '' };
+  var _m = useState(BLANK_MAP); var m = _m[0], setM = _m[1];
+  var _ed = useState(null); var editing = _ed[0], setEditing = _ed[1]; // v55.83-ZF: the mapping row being changed (or null = adding)
   var _t = useState({ pct: '', lb: '', note: '' }); var t = _t[0], setT = _t[1];
   var _e = useState(''); var msg = _e[0], setMsg = _e[1];
   var _v = useState(null); var vsel = _v[0], setVsel = _v[1];
@@ -182,7 +184,15 @@ function WcSettings(props) {
   var p = s.permissions || {}; var L = s.lookups || {};
   var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-[12px] text-slate-900 bg-white nt-light';
   function sel(tabName, key, label) { var opts = L[tabName] || {}; return <label>{label}<br /><select value={m[key]} onChange={function (e) { var o = {}; o[key] = e.target.value; setM(Object.assign({}, m, o)); }} className={inp}><option value="">any</option>{Object.keys(opts).map(function (id) { return <option key={id} value={id}>{opts[id] + ' (#' + id + ')'}</option>; })}</select></label>; }
-  function saveMap() { setMsg(''); wcApi(Object.assign({ action: 'map_save' }, m)).then(function (j) { if (!j.ok) { setMsg(j.error); return; } setMsg('Mapping saved.'); load(); }); }
+  function saveMap() {
+    setMsg('');
+    if (editing && String(m.note || '').trim().length < 5) { setMsg('Say why this mapping is changed (at least a few words) — it is kept with the new version.'); return; }
+    var body = Object.assign({ action: 'map_save' }, m); if (editing) { body.family = editing.family; body.expected_version = editing.version; if (!String(body.vendor_name || '').trim()) { delete body.vendor_name; } }
+    wcApi(body).then(function (j) { if (!j.ok) { setMsg(j.error); return; } setMsg(editing ? 'Mapping changed: version ' + j.map.version + ' saved, version ' + j.changed_from + ' kept in the history. Decisions that used it are asked again.' : 'Mapping saved.'); setEditing(null); setM(BLANK_MAP); load(); });
+  }
+  // v55.83-ZF (Max 25 Nov "need to be able to update the product mappings"): Edit = prefill the form with this mapping; saving makes a new version
+  function startEdit(x) { setMsg(''); setEditing(x); setM({ vendor_name: '', bill_description: x.bill_description || x.item_key || '', bill_unit: x.bill_unit || '', wh_product_type: x.wh_product_type || '', wh_cgt: x.wh_cgt || '', wh_nt: x.wh_nt || '', wh_color: x.wh_color || '', wh_label: x.wh_label || '', lb_per_yd: x.lb_per_yd != null ? String(x.lb_per_yd) : '', lb_factor_approved: !!x.lb_factor_approved, note: '' }); }
+  function cancelEdit() { setEditing(null); setM(BLANK_MAP); setMsg(''); }
   function retire(fam) { var r = window.prompt('Why is this mapping retired? (it stays in the history)'); if (!r) { return; } wcApi({ action: 'map_retire', family: fam, reason: r }).then(function (j) { setMsg(j.ok ? 'Retired.' : j.error); load(); }); }
   function saveTol() { setMsg(''); wcApi(Object.assign({ action: 'tolerance_save' }, t)).then(function (j) { setMsg(j.ok ? 'Tolerance saved (version ' + j.tolerance.version + ').' : j.error); load(); }); }
   var tol = (s.tolerances || [])[0];
@@ -203,16 +213,19 @@ function WcSettings(props) {
     <div className="font-extrabold mt-3">Product mappings (this bill product = that warehouse product)</div>
     <div style={{ color: SUB }}>A bill line is compared only through an approved mapping — different names are never treated as the same product on their own. Changing a mapping keeps its history and asks for revalidation of decisions that used it.</div>
     <table className="w-full mt-1"><thead><tr style={{ background: '#f1f5f9', color: SUB }} className="text-left text-[11px]"><th className="px-1">Vendor</th><th className="px-1">Bill product</th><th className="px-1">Unit</th><th className="px-1">Warehouse product</th><th className="px-1">lb / yd for this check</th><th className="px-1">By</th><th /></tr></thead>
-      <tbody>{(s.maps || []).map(function (x) { return <tr key={x.id} style={{ borderTop: '1px solid ' + LINE }}><td className="px-1">{x.vendor_key}</td><td className="px-1">{x.bill_description || x.item_key}</td><td className="px-1">{x.bill_unit}</td><td className="px-1">{x.wh_label || ['product_type', 'cgt', 'nt', 'color'].map(function (k) { return x['wh_' + k] ? k + ' #' + x['wh_' + k] : null; }).filter(Boolean).join(' · ')}</td><td className="px-1">{x.lb_per_yd ? x.lb_per_yd + (x.lb_factor_approved ? ' (approved)' : ' (NOT approved — not used)') : '—'}</td><td className="px-1">{x.actor_name + ', v' + x.version}</td><td className="px-1">{p.settings ? <button onClick={function () { retire(x.family); }} className="underline text-[11px]" style={{ color: '#991b1b' }}>retire</button> : null}</td></tr>; })}</tbody></table>
+      <tbody>{(s.maps || []).map(function (x) { return <tr key={x.id} style={{ borderTop: '1px solid ' + LINE }}><td className="px-1">{x.vendor_key}</td><td className="px-1">{x.bill_description || x.item_key}</td><td className="px-1">{x.bill_unit}</td><td className="px-1">{x.wh_label || ['product_type', 'cgt', 'nt', 'color'].map(function (k) { return x['wh_' + k] ? k + ' #' + x['wh_' + k] : null; }).filter(Boolean).join(' · ')}</td><td className="px-1">{x.lb_per_yd ? x.lb_per_yd + (x.lb_factor_approved ? ' (approved)' : ' (NOT approved — not used)') : '—'}</td><td className="px-1">{x.actor_name + ', v' + x.version}</td><td className="px-1">{p.settings ? <span className="inline-flex gap-2"><button onClick={function () { startEdit(x); }} className="underline text-[11px] font-bold" style={{ color: '#1d4ed8' }}>Edit</button><button onClick={function () { retire(x.family); }} className="underline text-[11px]" style={{ color: '#991b1b' }}>retire</button></span> : null}</td></tr>; })}</tbody></table>
+    {p.settings && editing ? <div className="rounded-lg px-2 py-1 mt-2 text-[12px] font-bold" style={{ background: '#eff6ff', color: '#1e3a8a', border: '1px solid #bfdbfe' }}>{'Editing the mapping for “' + (editing.bill_description || editing.item_key) + '” (' + editing.bill_unit + ', ' + editing.vendor_key + ') — version ' + editing.version + '. Saving makes version ' + (editing.version + 1) + '; version ' + editing.version + ' is kept in the history. Decisions that used it are asked again.'}</div> : null}
     {p.settings ? <div className="flex flex-wrap gap-2 items-end mt-2 text-[11px] font-bold" style={{ color: SUB }}>
-      <label>Vendor<br /><input value={m.vendor_name} onChange={function (e) { setM(Object.assign({}, m, { vendor_name: e.target.value })); }} className={inp + ' w-40'} /></label>
+      <label>Vendor<br /><input value={m.vendor_name} onChange={function (e) { setM(Object.assign({}, m, { vendor_name: e.target.value })); }} placeholder={editing ? editing.vendor_key + ' (unchanged)' : ''} className={inp + ' w-40'} /></label>
       <label>Bill product (as on the bill)<br /><input value={m.bill_description} onChange={function (e) { setM(Object.assign({}, m, { bill_description: e.target.value })); }} placeholder="Cambridge Seconds (LBS)" className={inp + ' w-48'} /></label>
       <label>Bill unit<br /><input value={m.bill_unit} onChange={function (e) { setM(Object.assign({}, m, { bill_unit: e.target.value })); }} className={inp + ' w-20'} /></label>
       {sel('product_types', 'wh_product_type', 'Warehouse product type')}{sel('cgt_grades', 'wh_cgt', 'CGT grade')}{sel('nt_grades', 'wh_nt', 'NT grade')}{sel('colors', 'wh_color', 'Colour')}
       <label>Name to show<br /><input value={m.wh_label} onChange={function (e) { setM(Object.assign({}, m, { wh_label: e.target.value })); }} className={inp + ' w-40'} /></label>
       <label>lb per yard (optional)<br /><input value={m.lb_per_yd} onChange={function (e) { setM(Object.assign({}, m, { lb_per_yd: e.target.value })); }} className={inp + ' w-16'} /></label>
       {p.super_admin ? <label className="flex items-center gap-1"><input type="checkbox" checked={m.lb_factor_approved} onChange={function (e) { setM(Object.assign({}, m, { lb_factor_approved: e.target.checked })); }} />approve this factor for the check</label> : null}
-      <button onClick={saveMap} className="px-3 py-1 rounded-lg font-extrabold" style={{ background: '#0f172a', color: '#ffffff' }}>Save mapping</button>
+      {editing ? <label>Why is it changed? (required)<br /><input value={m.note} onChange={function (e) { setM(Object.assign({}, m, { note: e.target.value })); }} placeholder="e.g. Texas Thirds are scanned as Folds, not Thirds" className={inp + ' w-72'} /></label> : null}
+      <button onClick={saveMap} className="px-3 py-1 rounded-lg font-extrabold" style={{ background: '#0f172a', color: '#ffffff' }}>{editing ? 'Save change (new version)' : 'Save mapping'}</button>
+      {editing ? <button onClick={cancelEdit} className="px-3 py-1 rounded-lg font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>Cancel</button> : null}
     </div> : <div className="text-[11px] mt-1" style={{ color: SUB }}>Adding mappings needs “Warehouse check: Settings”.</div>}
     {!Object.keys(L.product_types || {}).length ? <div className="text-[11px] mt-1" style={{ color: '#854d0e' }}>The warehouse product list appears after the first successful warehouse read.</div> : null}
   </div>;

@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZF',
+    date: '2026-11-25',
+    title: 'Warehouse check: change a product mapping',
+    items: [
+      { text: '**Settings → Mappings**: every mapping now has an **Edit** button. Change the warehouse product, CGT / NT grade, colour, name — or the bill unit — then say why and press **Save change (new version)**.' },
+      { text: 'On an invoice card, each mapped product line has **Change mapping** — it opens exactly the mapping that line was compared through.' },
+      { text: 'A change never overwrites: it is saved as a new version with who, when and why; the old version stays in the history. Anything already approved through that mapping is asked again.' },
+      { text: 'An approved pounds-per-yard factor stays approved when you change something else; changing the factor itself still needs the super admin.' },
+      { superAdminOnly: true, text: 'Technical: map_save with family = edit → version N+1 (append-only); reason required; retired family 409; expected_version guard (409 if the editor is stale); collisions judged on each family’s CURRENT version (also fixes new-mapping checks that looked at old versions); bill side defaults to the previous version; unchanged approved lb/yd factor kept; audit weight_check_map_changed with before. Products carry map_families (id, family, version) → Change mapping opens that family. Fingerprints already include map id + version, so decisions on the old version are asked again. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-ZC',
     date: '2026-11-25',
     title: 'Warehouse check: fixed “Bad Request” on long date ranges; “PASS — within tolerance” on each line',

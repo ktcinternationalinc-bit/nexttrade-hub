@@ -8,6 +8,7 @@
 // set at the top. Read-only towards bills, payments, inventory and the warehouse; every action is audited.
 import React, { useState, useEffect } from 'react';
 import { wcApi, say, num, when, LinkChooser } from './WarehouseCheckBox';
+import { vendorKey, billItemKey } from '../lib/weight-check';
 
 var INK = '#0f172a'; var SUB = '#475569'; var MUTED = '#64748b'; var LINE = '#e2e8f0'; var SOFT = '#f8fafc';
 var GREEN = '#15803d'; var RED = '#b91c1c'; var AMBER = '#b45309'; var BLUE = '#1d4ed8';
@@ -67,6 +68,16 @@ export function invoiceSignature(inv) {
 function checkSig(c) { return c ? [c.billed, c.received, c.diff, c.result].join(':') : '-'; }
 // v55.83-ZB (Max 25 Nov "yards and yards and weight and weight"): the two side-by-side checks of one product, in plain words.
 // A side without a figure says "not on the bill" / "not recorded" — never a mismatch. No conversion between yards and pounds.
+// v55.83-ZF: the mapping a product line of this invoice is compared through (latest active version of its family), or null
+export function mappingFor(maps, vendor, line, used) {
+  // Codex 25 Nov: the SAME mapping the comparison used (by family), falling back to the comparison's own match only without it
+  if (used && used.length === 1 && used[0].family) { var byFam = (maps || []).filter(function (m) { return m.family === used[0].family && m.state === 'active'; }); return byFam.length === 1 ? byFam[0] : null; }
+  if (used && used.length > 1) { return null; }
+  if (!line) { return null; }
+  var vk = vendorKey(vendor); var ik = billItemKey(line); var un = String(line.unit || '').toUpperCase().trim();
+  var hits = (maps || []).filter(function (m) { return m.state === 'active' && m.vendor_key === vk && m.item_key === ik && String(m.bill_unit || '').toUpperCase().trim() === un; });
+  return hits.length === 1 ? hits[0] : null;
+}
 export function checkWords(label, c) {
   if (!c) { return { text: label + ': —', tone: 'muted' }; }
   if (c.result === 'not_recorded') {
@@ -164,6 +175,7 @@ export default function WeightCheckInvoices(props) {
   var _t = useState(''); var tolPct = _t[0], setTolPct = _t[1];
   var _v = useState(null); var vendorEdit = _v[0], setVendorEdit = _v[1];
   var _m = useState({}); var mapEdit = _m[0], setMapEdit = _m[1];
+  var _ch = useState({}); var changing = _ch[0], setChanging = _ch[1]; // v55.83-ZF: product line → the mapping being changed
 
   function loadCfg() { return wcApi({ action: 'settings_view' }).then(function (j) { setCfg(j); return j; }); }
   useEffect(function () { loadCfg(); }, []);
@@ -193,6 +205,14 @@ export default function WeightCheckInvoices(props) {
   function saveMapping(inv, r) {
     var e = mapEdit[r.item_key] || {}; var bl = r.bill_line || ((r.bill_lines || [])[0]) || {};
     if (!e.wh_product_type && !e.wh_cgt) { say(props.toast, 'Choose the warehouse product (and grade if it has one).', 'error'); return; }
+    var em = changing[r.item_key] || null;
+    if (em) {
+      if (String(e.note || '').trim().length < 5) { say(props.toast, 'Say why this mapping is changed (at least a few words) — it is kept with the new version.', 'error'); return; }
+      setBusy(r.item_key);
+      wcApi({ action: 'map_save', family: em.family, expected_version: em.version, bill_description: em.bill_description || bl.description, bill_unit: em.bill_unit, wh_product_type: e.wh_product_type || '', wh_cgt: e.wh_cgt || '', wh_nt: e.wh_nt || '', wh_color: e.wh_color || '', wh_label: [L.product_types && L.product_types[e.wh_product_type], L.cgt_grades && L.cgt_grades[e.wh_cgt]].filter(Boolean).join(' · '), lb_per_yd: em.lb_per_yd != null ? String(em.lb_per_yd) : '', note: String(e.note).trim() })
+        .then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); return; } say(props.toast, 'Mapping changed: version ' + j.map.version + ' saved, version ' + j.changed_from + ' kept. Decisions that used it are asked again.', 'success'); var o = Object.assign({}, mapEdit); delete o[r.item_key]; setMapEdit(o); var c = Object.assign({}, changing); delete c[r.item_key]; setChanging(c); loadCfg().then(function () { load(false); }); });
+      return;
+    }
     setBusy(r.item_key);
     wcApi({ action: 'map_save', vendor_name: inv.bills[0].vendor, bill_description: bl.description, bill_unit: bl.unit || '', wh_product_type: e.wh_product_type || '', wh_cgt: e.wh_cgt || '', wh_nt: '', wh_color: '', wh_label: [L.product_types && L.product_types[e.wh_product_type], L.cgt_grades && L.cgt_grades[e.wh_cgt]].filter(Boolean).join(' · ') })
       .then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); return; } say(props.toast, 'Mapping saved — ' + bl.description, 'success'); var o = Object.assign({}, mapEdit); delete o[r.item_key]; setMapEdit(o); load(false); });
@@ -209,13 +229,17 @@ export default function WeightCheckInvoices(props) {
   function MapForm(p) {
     var r = p.row; var e = mapEdit[r.item_key] || {};
     function setE(k, v) { var o = Object.assign({}, mapEdit); o[r.item_key] = Object.assign({}, e); o[r.item_key][k] = v; setMapEdit(o); }
-    var pts = L.product_types || {}; var cgts = L.cgt_grades || {};
+    var pts = L.product_types || {}; var cgts = L.cgt_grades || {}; var nts = L.nt_grades || {}; var cols = L.colors || {}; var em = changing[r.item_key] || null;
     if (!perms.settings) { return <div style={{ fontSize: 12, color: MUTED }}>No product mapping yet — someone with “Warehouse check: Settings” maps it.</div>; }
     return <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end', marginTop: 6, padding: 8, background: SOFT, border: '1px dashed #cbd5e1', borderRadius: 8 }}>
-      <div style={{ fontSize: 12, color: SUB, width: '100%' }}>{'Map “' + (((r.bill_line || (r.bill_lines || [])[0]) || {}).description || 'this product') + '” to the warehouse product it is scanned as:'}</div>
+      <div style={{ fontSize: 12, color: em ? '#1e3a8a' : SUB, fontWeight: em ? 700 : 400, width: '100%' }}>{em ? 'Change the mapping for “' + (em.bill_description || em.item_key) + '” (' + em.bill_unit + ') — now version ' + em.version + '. Saving makes version ' + (em.version + 1) + '; version ' + em.version + ' is kept in the history. Decisions that used it are asked again.' : 'Map “' + (((r.bill_line || (r.bill_lines || [])[0]) || {}).description || 'this product') + '” to the warehouse product it is scanned as:'}</div>
       <label><span style={LABEL}>Warehouse product</span><select value={e.wh_product_type || ''} onChange={function (ev) { setE('wh_product_type', ev.target.value); }} className="nt-light" style={FIELD}><option value="">choose…</option>{Object.keys(pts).map(function (id) { return <option key={id} value={id}>{pts[id]}</option>; })}</select></label>
       <label><span style={LABEL}>Grade (CGT)</span><select value={e.wh_cgt || ''} onChange={function (ev) { setE('wh_cgt', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any grade</option>{Object.keys(cgts).map(function (id) { return <option key={id} value={id}>{cgts[id]}</option>; })}</select></label>
-      <button disabled={busy === r.item_key} onClick={function () { saveMapping(p.inv, r); }} style={btn(INK, '#ffffff')}>{busy === r.item_key ? 'Saving…' : 'Save mapping'}</button>
+      {em ? <label><span style={LABEL}>NT grade</span><select value={e.wh_nt || ''} onChange={function (ev) { setE('wh_nt', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any</option>{Object.keys(nts).map(function (id) { return <option key={id} value={id}>{nts[id]}</option>; })}</select></label> : null}
+      {em ? <label><span style={LABEL}>Colour</span><select value={e.wh_color || ''} onChange={function (ev) { setE('wh_color', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any</option>{Object.keys(cols).map(function (id) { return <option key={id} value={id}>{cols[id]}</option>; })}</select></label> : null}
+      {em ? <label style={{ flex: '1 1 260px' }}><span style={LABEL}>Why is it changed? (required)</span><input value={e.note || ''} onChange={function (ev) { setE('note', ev.target.value); }} placeholder="e.g. scanned as Folds, not Thirds" className="nt-light" style={Object.assign({}, FIELD, { width: '100%' })} /></label> : null}
+      <button disabled={busy === r.item_key} onClick={function () { saveMapping(p.inv, r); }} style={btn(INK, '#ffffff')}>{busy === r.item_key ? 'Saving…' : (em ? 'Save change (new version)' : 'Save mapping')}</button>
+      {em ? <button onClick={function () { var c = Object.assign({}, changing); delete c[r.item_key]; setChanging(c); var o = Object.assign({}, mapEdit); delete o[r.item_key]; setMapEdit(o); }} style={btn('#334155', '#ffffff', true)}>Cancel</button> : null}
     </div>;
   }
 
@@ -294,14 +318,14 @@ export default function WeightCheckInvoices(props) {
           <tbody>{inv.products.map(function (r) {
             var f = r.figures || {}; var ok = PASS_OUTCOMES.indexOf(r.outcome) >= 0; var bl = r.bill_line || (r.bill_lines || [])[0] || {};
             return <React.Fragment key={r.item_key}><tr style={{ borderTop: '1px solid ' + LINE }}>
-              <td style={{ padding: '7px 8px', fontWeight: 600 }}>{r.product_label || bl.description || '—'}{r.product_label && bl.description && r.product_label !== bl.description ? <div style={{ fontSize: 11, color: MUTED, fontWeight: 400 }}>{'billed as ' + bl.description}</div> : null}</td>
+              <td style={{ padding: '7px 8px', fontWeight: 600 }}>{r.product_label || bl.description || '—'}{r.product_label && bl.description && r.product_label !== bl.description ? <div style={{ fontSize: 11, color: MUTED, fontWeight: 400 }}>{'billed as ' + bl.description}</div> : null}{(function () { if (!perms.settings || r.needs_mapping || changing[r.item_key] || r.kind !== 'product') { return null; } var mm = mappingFor((cfg && cfg.maps) || [], (inv.bills[0] || {}).vendor, bl, r.map_families); if (!mm) { return null; } return <div><button onClick={function () { var c = Object.assign({}, changing); c[r.item_key] = mm; setChanging(c); var o = Object.assign({}, mapEdit); o[r.item_key] = { wh_product_type: mm.wh_product_type || '', wh_cgt: mm.wh_cgt || '', wh_nt: mm.wh_nt || '', wh_color: mm.wh_color || '', note: '' }; setMapEdit(o); }} style={{ background: 'none', border: 'none', padding: 0, color: BLUE, fontSize: 11, fontWeight: 700, textDecoration: 'underline', cursor: 'pointer' }}>{'Change mapping (v' + mm.version + ')'}</button></div>; })()}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{f.billed != null ? num(f.billed) + ' ' + (f.unit || '') : (bl.qty != null ? num(bl.qty) + ' ' + (bl.unit || '') : '—')}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{f.received != null ? num(f.received) + ' ' + (f.unit || '') : '—'}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: f.diff < 0 ? RED : INK, fontWeight: 700 }}>{f.diff != null ? (f.diff > 0 ? '+' : '') + num(f.diff) + (f.pct != null ? '  (' + (f.pct > 0 ? '+' : '') + f.pct + '%)' : '') : '—'}</td>
               <td style={{ padding: '7px 8px' }}><span style={pill(ok ? GREEN : RED, ok ? '#f0fdf4' : '#fef2f2')}>{ok ? passWords(f.diff, ((f.checks || {})[f.basis === 'yd' ? 'yards' : 'weight'] || {}).tol || tol, f.basis) : 'REVIEW'}</span><span style={{ fontSize: 12, color: MUTED, marginLeft: 6 }}>{r.outcome_words || r.outcome}{r.state && DONE_STATES.indexOf(r.state) >= 0 ? ' · ' + (r.state_words || r.state) : r.state === 'issue_open' ? ' · disputed' : ''}</span></td>
             </tr>
             {f.checks ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{checksBlock(f.checks)}</td></tr> : null}
-            {r.needs_mapping ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{MapForm({ row: r, inv: inv })}</td></tr> : null}
+            {r.needs_mapping || changing[r.item_key] ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{MapForm({ row: r, inv: inv })}</td></tr> : null}
             </React.Fragment>;
           })}</tbody></table> : null}
 

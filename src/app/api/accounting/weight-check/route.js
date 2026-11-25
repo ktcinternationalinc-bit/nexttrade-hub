@@ -359,29 +359,53 @@ export async function POST(req) {
       return out({ ok: true, url: su.data.signedUrl });
     }
     if (action === 'map_save') {
-      var vName = clean(body.vendor_name, 160); var line = { item_key: body.item_key, description: body.bill_description };
-      var ik = billItemKey(line); var vk = vendorKey(vName);
+      // v55.83-ZF (Max 25 Nov: "need to be able to update the product mappings"): with `family` this is an EDIT — a new version of
+      // that mapping (the old one is kept, never changed or deleted), with a reason; every comparison that used the old version
+      // gets a new fingerprint (map id + version are in it), so decisions made on it are asked again.
+      var fam = clean(body.family, 60) || null; var ver = 1; var prev = null;
+      if (fam) {
+        var fv = await db.from('wc_product_maps').select('*').eq('family', fam).order('version', { ascending: false }).limit(1);
+        if (fv.error) { throw new Error(fv.error.message); }
+        prev = (fv.data || [])[0] || null;
+        if (!prev) { return bad('That mapping was not found.', 404); }
+        if (prev.state !== 'active') { return bad('That mapping is retired — add a new mapping instead (the retired one stays in the history).', 409); }
+        // Codex 25 Nov (ZF): an editor opened on an older version must not overwrite a newer one
+        if (body.expected_version != null && Number(body.expected_version) !== prev.version) { return bad('This mapping was changed meanwhile (now version ' + prev.version + ') — reload and make your change again.', 409); }
+        ver = prev.version + 1;
+      }
+      var vName = clean(body.vendor_name, 160);
+      var descIn = clean(body.bill_description, 300); var unitIn = clean(body.bill_unit, 20).toUpperCase();
+      var vk = vName ? vendorKey(vName) : (prev ? prev.vendor_key : '');
+      var ik = (descIn || body.item_key) ? billItemKey({ item_key: body.item_key, description: descIn }) : (prev ? prev.item_key : '');
+      var unitV = unitIn || (prev ? String(prev.bill_unit || '').toUpperCase() : '');
+      var descV = descIn || (prev ? prev.bill_description : null) || null;
       if (!vk || !ik) { return bad('The mapping needs the vendor and the bill product.'); }
       var wh = { wh_product_type: clean(body.wh_product_type, 40) || null, wh_cgt: clean(body.wh_cgt, 40) || null, wh_nt: clean(body.wh_nt, 40) || null, wh_color: clean(body.wh_color, 40) || null };
       if (!wh.wh_product_type && !wh.wh_cgt && !wh.wh_nt && !wh.wh_color) { return bad('Choose the warehouse product (at least its product type or grade).'); }
       var lbpy = body.lb_per_yd === '' || body.lb_per_yd == null ? null : Number(body.lb_per_yd);
       if (lbpy !== null && !(lbpy > 0 && lbpy < 100)) { return bad('Pounds per yard must be a positive number.'); }
-      var approveFactor = body.lb_factor_approved === true && lbpy !== null;
-      if (approveFactor && !isSuper) { return bad('Only the super admin approves a pounds-per-yard factor for the weight check (Max decides).', 403); }
+      // an approved factor that the edit leaves unchanged stays approved (anyone with Settings may edit the product without losing
+      // Max's approval); approving a new or changed factor is still the super admin's
+      var keepApproval = !!(prev && prev.lb_factor_approved && lbpy !== null && Number(prev.lb_per_yd) === lbpy && body.lb_factor_approved !== false);
+      var approveFactor = keepApproval || (body.lb_factor_approved === true && lbpy !== null);
+      if (approveFactor && !keepApproval && !isSuper) { return bad('Only the super admin approves a pounds-per-yard factor for the weight check (Max decides).', 403); }
       var note = clean(body.note, 1000);
-      var fam = clean(body.family, 60) || null; var ver = 1;
-      if (fam) { var fv = await db.from('wc_product_maps').select('version').eq('family', fam).order('version', { ascending: false }).limit(1); if (fv.error) { throw new Error(fv.error.message); } ver = ((fv.data || [])[0] || { version: 0 }).version + 1; if (ver === 1) { return bad('That mapping was not found.', 404); } }
-      else {
-        var dup = await db.from('wc_product_maps').select('family, version, state').eq('vendor_key', vk).eq('item_key', ik).eq('bill_unit', clean(body.bill_unit, 20).toUpperCase());
-        if (dup.error) { throw new Error(dup.error.message); }
-        if (latestMaps(dup.data || []).length) { return bad('This bill product already has a mapping — change that one instead (its history is kept).', 409); }
-        fam = cryptoRandomId();
-      }
-      var mi = await db.from('wc_product_maps').insert(Object.assign({ family: fam, version: ver, state: 'active', vendor_key: vk, item_key: ik, bill_unit: clean(body.bill_unit, 20).toUpperCase(), bill_description: clean(body.bill_description, 300) || null,
+      if (prev && note.length < 5) { return bad('Say why this mapping is changed (at least a few words) — it is kept with the new version.'); }
+      var dup = await db.from('wc_product_maps').select('family, version, state, vendor_key, item_key, bill_unit').eq('vendor_key', vk).eq('item_key', ik).eq('bill_unit', unitV);
+      if (dup.error) { throw new Error(dup.error.message); }
+      // judge each family by its CURRENT (latest) version: an older version that had this unit does not block, a retired one neither
+      var dupFams = (dup.data || []).map(function (x) { return x.family; }).filter(function (f, i, a) { return f && f !== fam && a.indexOf(f) === i; });
+      var famRows = [];
+      if (dupFams.length) { var fr = await db.from('wc_product_maps').select('family, version, state, vendor_key, item_key, bill_unit').in('family', dupFams); if (fr.error) { throw new Error(fr.error.message); } famRows = fr.data || []; }
+      var others = latestMaps(famRows).filter(function (x) { return x.vendor_key === vk && x.item_key === ik && String(x.bill_unit || '').toUpperCase() === unitV; });
+      if (others.length) { return bad(prev ? 'Another mapping already covers this vendor, bill product and unit — change or retire that one first.' : 'This bill product already has a mapping — change that one instead (its history is kept).', 409); }
+      if (!fam) { fam = cryptoRandomId(); }
+      var mi = await db.from('wc_product_maps').insert(Object.assign({ family: fam, version: ver, state: 'active', vendor_key: vk, item_key: ik, bill_unit: unitV, bill_description: descV,
         wh_label: clean(body.wh_label, 200) || null, lb_per_yd: lbpy, lb_factor_approved: approveFactor, note: note || null, actor: userId }, wh)).select('id, family, version').single();
       if (mi.error) { throw new Error(mi.error.message); }
-      await audit(db, userId, 'weight_check_map_saved', 'wc_product_map', mi.data.id, { family: fam, version: ver, vendor: vk, item: ik, wh: wh, lb_per_yd: lbpy, factor_approved: approveFactor });
-      return out({ ok: true, map: mi.data });
+      var before = prev ? { version: prev.version, vendor: prev.vendor_key, item: prev.item_key, unit: prev.bill_unit, wh: { wh_product_type: prev.wh_product_type, wh_cgt: prev.wh_cgt, wh_nt: prev.wh_nt, wh_color: prev.wh_color }, lb_per_yd: prev.lb_per_yd, factor_approved: prev.lb_factor_approved } : null;
+      await audit(db, userId, prev ? 'weight_check_map_changed' : 'weight_check_map_saved', 'wc_product_map', mi.data.id, { family: fam, version: ver, vendor: vk, item: ik, unit: unitV, wh: wh, lb_per_yd: lbpy, factor_approved: approveFactor, before: before, reason: prev ? note : undefined });
+      return out({ ok: true, map: mi.data, changed_from: prev ? prev.version : null });
     }
     if (action === 'map_retire') {
       var famR = clean(body.family, 60); var whyR = clean(body.reason, 1000);
@@ -476,7 +500,7 @@ function itemPublic(i, A, names, lookups) {
   return {
     item_key: i.item_key, kind: i.kind, outcome: i.outcome, outcome_words: i.outcome_words, reasons: i.reasons || [], provisional: !!i.provisional,
     bill_ids: limited ? bills.map(function (b) { return b.id; }) : (i.bill_ids || []), bills: bills, references: bills.map(function (b) { return b.reference; }).filter(Boolean), receipts: recs,
-    product_label: i.product_label || null, figures: limited ? null : (i.figures || null), bill_lines: limited ? null : (i.bill_lines || null),
+    product_label: i.product_label || null, map_families: limited ? null : (i.map_families || null), figures: limited ? null : (i.figures || null), bill_lines: limited ? null : (i.bill_lines || null),
     scan_rows: limited ? null : (i.scan_rows || []).map(function (s) { return { id: s.id, receipt_key: s.receipt_key, skew: s.skew, pallet: s.pallet, lb: s.lb, yd: s.yd, rolls: s.rolls, pl_kg: s.pl_kg, scanned_out: s.scanned_out, sold_by: s.sold_by }; }),
     links: limited ? [] : (i.links || []).map(function (l) { return Object.assign({}, l, { actor_name: names[l.actor] || 'someone' }); }),
     candidates: i.candidates || null, needs_link: !!i.needs_link, needs_mapping: !!i.needs_mapping, searched_at: i.searched_at || null,

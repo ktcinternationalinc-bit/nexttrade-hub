@@ -345,7 +345,9 @@ export function compareGroup(inp) {
     };
     if (ydRuleChanged) { inputs.yd_rule = 'percent only (v55.83-ZB)'; }
     items.push(Object.assign({}, base, {
-      item_key: inputs.item_key, kind: 'product', product_key: pk, product_label: P.map.wh_label || pk, outcome: outcome, reasons: reasons,
+      item_key: inputs.item_key, kind: 'product', product_key: pk, product_label: P.map.wh_label || pk,
+      // v55.83-ZF (Codex): the exact mapping(s) this comparison used, so an edit opens THAT mapping (never a guess by name)
+      map_families: Object.keys(P.maps).sort().map(function (id) { var mm = P.maps[id]; return { id: mm.id, family: mm.family || null, version: mm.version }; }), outcome: outcome, reasons: reasons,
       provisional: drafts.length > 0,
       figures: { basis: basis, unit: unitWord, billed: billed, received: received, diff: diff, pct: pct, billed_lb: kinds.weight ? billedLb : null, billed_yd: kinds.length ? billedYd : null,
         received_lb: recLb, received_yd: recYd, received_rolls: recRolls, declared_pl_kg: recPlKg, conversion: conversion,

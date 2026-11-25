@@ -577,6 +577,85 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('…and the route shows that plain message (here forced on the first list read): "The warehouse check failed: reading <table> failed (HTTP 400): Bad Request — …"', zc2.status === 500 && /^The warehouse check failed: reading [a-z_]+ failed \(HTTP 400\): Bad Request/.test(zc2.body.error), zc2.body.error);
   world.maxInLen = 0;
 
+  // ---- v55.83-ZF (Max 25 Nov: "need to be able to update the product mappings"): EDIT an existing mapping = a new version with a
+  // reason; the old version is kept; what used it is asked again; retired / colliding / unauthorised edits are refused.
+  world.maxInLen = 0; world.perms = Object.assign({}, STAFF, { 'bills.weight_check.settings': 1 }); world.superAdmin = false; world.feed = 'ok';
+  var BZ = 'b0000000-0000-4000-8000-0000000000z1';
+  world.wh.receipts.push({ id: 30, reference_number: 'ZF-30', nexpac_bill: null, is_draf: 0, info: {}, supplier: { id: 1, name: 'NexPac' }, warehouse: { id: 2, name: 'CANADA' } });
+  world.wh.logs[30] = [{ id: 301, unit: 'W', product_type: 7, cgt: 2, weight: '1000', rolls: '1', pl_weight: '450', is_scan_out: 0 }, { id: 302, unit: 'W', product_type: 7, cgt: 3, weight: '400', rolls: '1', pl_weight: '180', is_scan_out: 0 }];
+  addBill(BZ, '2026-10-20', 'ZF-30', [{ description: 'ZF Widgets (LBS)', qty: 1000, unit: 'LBS' }]);
+  var zm1 = await call({ action: 'map_save', vendor_name: 'NexPac Corporation', bill_description: 'ZF Widgets (LBS)', bill_unit: 'LBS', wh_product_type: '7', wh_cgt: '2', wh_label: 'Widgets · grade 2' });
+  await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true, recheck: true });
+  var zl = await call({ action: 'link', bill_id: BZ, receipt_id: '30', basis: 'reference_number', bill_value: 'ZF-30', receipt_value: 'ZF-30', state: 'confirmed' });
+  function zfItem(body) { return (body.items || body.rows || []).filter(function (i) { return (i.bill_ids || []).indexOf(BZ) >= 0 && i.kind === 'product'; })[0]; }
+  var zb1 = await call({ action: 'bill', bill_id: BZ }); var zi1 = zfItem(zb1.body);
+  check('ZF (set-up): mapping v1 (product 7, grade 2) → billed 1,000 lb vs scanned 1,000 lb, decidable', zm1.status === 200 && zl.status === 200 && zi1 && zi1.figures.received === 1000 && zi1.needs_decision, [zm1.body, zl.body, zi1 && zi1.figures]);
+  var zd1 = await call({ action: 'decide', bill_id: BZ, item_key: zi1.item_key, kind: 'validate_match', reason: 'checked the scale ticket', expected_fp: zi1.comparison_fp });
+  check('(set-up) a person validates it', zd1.status === 200, zd1.body);
+  var fam = zm1.body.map.family;
+  var zn = await call({ action: 'map_save', family: fam, wh_product_type: '7', wh_cgt: '3', wh_label: 'Widgets · grade 3', note: '' });
+  check('ZF: an edit WITHOUT a reason is refused (400) and nothing is saved', zn.status === 400 && /Say why this mapping is changed/.test(zn.body.error) && tbl('wc_product_maps').filter(function (m) { return m.family === fam; }).length === 1, zn.body);
+  var ze = await call({ action: 'map_save', family: fam, wh_product_type: '7', wh_cgt: '3', wh_label: 'Widgets · grade 3', note: 'scanned in as grade 3, not 2' });
+  var famRows = tbl('wc_product_maps').filter(function (m) { return m.family === fam; }).sort(function (a, b) { return a.version - b.version; });
+  check('ZF: EDIT saves version 2 (grade 3) with the reason; version 1 is kept exactly as it was (append-only); bill side unchanged', ze.status === 200 && ze.body.map.version === 2 && ze.body.changed_from === 1 && famRows.length === 2 && String(famRows[0].wh_cgt) === '2' && famRows[0].state === 'active' && String(famRows[1].wh_cgt) === '3' && famRows[1].note === 'scanned in as grade 3, not 2' && famRows[1].vendor_key === famRows[0].vendor_key && famRows[1].item_key === famRows[0].item_key && famRows[1].bill_unit === 'LBS', [ze.body, famRows.map(function (m) { return [m.version, m.wh_cgt, m.state]; })]);
+  var zaud = tbl('audit').filter(function (a) { return a.action === 'weight_check_map_changed'; }).pop();
+  check('…audited as a change, with the version before and the reason', !!zaud && JSON.stringify(zaud).indexOf('"before"') >= 0 && JSON.stringify(zaud).indexOf('scanned in as grade 3') >= 0, zaud);
+  var zb2 = await call({ action: 'bill', bill_id: BZ }); var zi2 = zfItem(zb2.body);
+  check('…the comparison now follows version 2 (scanned 400 lb of grade 3) and is NOT covered by the earlier validation — it is outstanding and asked again', zi2 && zi2.figures.received === 400 && zi2.state !== 'validated' && zi2.outstanding === true && zi2.needs_decision, zi2 && [zi2.figures.received, zi2.state, zi2.outstanding]);
+  var zn2 = await call({ action: 'map_save', family: fam, wh_product_type: '7', wh_cgt: '3', wh_label: 'Widgets — grade three', note: 'clearer name only' });
+  var zb3 = await call({ action: 'bill', bill_id: BZ }); var zi3 = zfItem(zb3.body);
+  world.perms = Object.assign({}, STAFF, { 'bills.weight_check.settings': 1, 'bills.weight_check.accept': 1 });
+  var zd3 = await call({ action: 'decide', bill_id: BZ, item_key: zi3.item_key, kind: 'accept_discrepancy', reason: 'supplier short, credit agreed', expected_fp: zi3.comparison_fp });
+  var zn4 = await call({ action: 'map_save', family: fam, wh_product_type: '7', wh_cgt: '3', wh_label: 'Widgets · grade 3 (final)', note: 'name again' });
+  var zb4 = await call({ action: 'bill', bill_id: BZ }); var zi4 = zfItem(zb4.body);
+  check('…even an edit that keeps the same warehouse product (name only, v3 → v4) asks an earlier decision again: needs revalidation', zn2.status === 200 && zd3.status === 200 && zn4.status === 200 && zi4 && zi4.item_key === zi3.item_key && zi4.state === 'needs_revalidation' && zi4.outstanding === true, zi4 && [zi4.state, zi4.outstanding]);
+  // collisions judged on the CURRENT version of each mapping
+  var zg = await call({ action: 'map_save', vendor_name: 'NexPac Corporation', bill_description: 'ZF Gadgets (LBS)', bill_unit: 'LBS', wh_product_type: '7', wh_cgt: '4' });
+  var zc = await call({ action: 'map_save', family: zg.body.map.family, bill_description: 'ZF Widgets (LBS)', bill_unit: 'LBS', wh_product_type: '7', wh_cgt: '4', note: 'merge into widgets' });
+  check('ZF: an edit that would make a SECOND active mapping for the same vendor / bill product / unit is refused (409)', zg.status === 200 && zc.status === 409 && /Another mapping already covers/.test(zc.body.error), zc.body);
+  var zu = await call({ action: 'map_save', family: zg.body.map.family, bill_unit: 'KG', wh_product_type: '7', wh_cgt: '4', note: 'gadgets are billed in kg now' });
+  var znew = await call({ action: 'map_save', vendor_name: 'NexPac Corporation', bill_description: 'ZF Gadgets (LBS)', bill_unit: 'LBS', wh_product_type: '7', wh_cgt: '5' });
+  check('…a mapping whose CURRENT version moved to another unit (LBS → KG) no longer blocks a new LBS mapping (its old version does not count)', zu.status === 200 && znew.status === 200, [zu.body, znew.body]);
+  var zr = await call({ action: 'map_retire', family: zg.body.map.family, reason: 'no longer bought' });
+  var zre = await call({ action: 'map_save', family: zg.body.map.family, bill_unit: 'KG', wh_product_type: '7', wh_cgt: '4', note: 'try to edit a retired one' });
+  check('ZF: a RETIRED mapping cannot be edited (409) — add a new one instead', zr.status === 200 && zre.status === 409 && /retired/.test(zre.body.error), zre.body);
+  // the approved lb/yd factor: kept when the edit leaves it unchanged; approving a changed factor is the super admin's
+  var zy = await call({ action: 'map_save', vendor_name: 'NexPac Corporation', bill_description: 'ZF Cloth (YDS)', bill_unit: 'YDS', wh_product_type: '8', wh_cgt: '3' });
+  world.superAdmin = true; var zya = await call({ action: 'map_save', family: zy.body.map.family, wh_product_type: '8', wh_cgt: '3', lb_per_yd: '2.5', lb_factor_approved: true, note: 'Max approves 2.5 lb per yard' }); world.superAdmin = false;
+  var zyk = await call({ action: 'map_save', family: zy.body.map.family, wh_product_type: '8', wh_cgt: '3', wh_nt: '1', lb_per_yd: '2.5', note: 'add the NT grade' });
+  var lastY = tbl('wc_product_maps').filter(function (m) { return m.family === zy.body.map.family; }).sort(function (a, b) { return b.version - a.version; })[0];
+  var zyc = await call({ action: 'map_save', family: zy.body.map.family, wh_product_type: '8', wh_cgt: '3', lb_per_yd: '2.7', lb_factor_approved: true, note: 'change the factor' });
+  check('ZF: someone with Settings can edit the product and KEEP Max\'s approved 2.5 lb/yd; approving a CHANGED factor stays super-admin only (403)', zya.status === 200 && zyk.status === 200 && lastY.lb_factor_approved === true && Number(lastY.lb_per_yd) === 2.5 && String(lastY.wh_nt) === '1' && zyc.status === 403, [zya.body, zyk.body, lastY && [lastY.lb_factor_approved, lastY.lb_per_yd], zyc.status]);
+  world.perms = STAFF;
+  var zp = await call({ action: 'map_save', family: fam, wh_product_type: '7', wh_cgt: '2', note: 'someone without Settings' });
+  check('ZF: someone WITHOUT "Warehouse check: Settings" cannot edit a mapping (403)', zp.status === 403, zp.body);
+  // Codex 25 Nov (ZF plan review): stale editor, the exact mapping the comparison used, a bill line with no unit
+  world.perms = Object.assign({}, STAFF, { 'bills.weight_check.settings': 1 });
+  var zs = await call({ action: 'map_save', family: fam, expected_version: 1, wh_product_type: '7', wh_cgt: '2', note: 'an editor opened long ago' });
+  var zsOk = await call({ action: 'map_save', family: fam, expected_version: 4, wh_product_type: '7', wh_cgt: '3', wh_label: 'Widgets · grade 3 (final)', note: 'editor showing the current version' });
+  check('ZF: an editor opened on an OLDER version (v1) cannot overwrite the current one (v4) — 409 "changed meanwhile … reload"; with the current version it saves v5', zs.status === 409 && /changed meanwhile \(now version 4\)/.test(zs.body.error) && zsOk.status === 200 && zsOk.body.map.version === 5, [zs.body, zsOk.body]);
+  var zb5 = await call({ action: 'bill', bill_id: BZ }); var zi5 = zfItem(zb5.body);
+  check('…each compared product says exactly which mapping it used (family + version), so "Change mapping" opens THAT mapping', zi5 && zi5.map_families && zi5.map_families.length === 1 && zi5.map_families[0].family === fam && zi5.map_families[0].version === 5, zi5 && zi5.map_families);
+  var mapsNow = (await call({ action: 'settings_view' })).body.maps || [];
+  var INVZ0 = require(path.join(root, 'src/components/WeightCheckInvoices.jsx'));
+  var viaFam = INVZ0.mappingFor(mapsNow, 'Some Other Name', { description: 'renamed on the bill', unit: 'XX' }, zi5.map_families);
+  check('…mappingFor follows the comparison\'s family even when the line\'s name / unit would not match by text', viaFam && viaFam.family === fam && viaFam.version === 5, viaFam);
+  var BU = 'b0000000-0000-4000-8000-0000000000z2';
+  world.wh.receipts.push({ id: 31, reference_number: 'ZF-31', nexpac_bill: null, is_draf: 0, info: {}, supplier: { id: 1, name: 'NexPac' }, warehouse: { id: 2, name: 'CANADA' } });
+  world.wh.logs[31] = [{ id: 311, unit: 'W', product_type: 9, cgt: 1, weight: '500', rolls: '1', pl_weight: '220', is_scan_out: 0 }];
+  addBill(BU, '2026-10-21', 'ZF-31', [{ description: 'ZF Mixed lot', qty: 500, unit: '' }]);
+  var zmu = await call({ action: 'map_save', vendor_name: 'NexPac Corporation', bill_description: 'ZF Mixed lot', bill_unit: '', wh_product_type: '9', wh_cgt: '1' });
+  var zmuE = await call({ action: 'map_save', family: zmu.body.map.family, expected_version: 1, wh_product_type: '9', wh_cgt: '2', note: 'mixed lot is grade 2' });
+  var muRows = tbl('wc_product_maps').filter(function (m) { return m.family === zmu.body.map.family; }).sort(function (a, b) { return a.version - b.version; });
+  var muMap = INVZ0.mappingFor([Object.assign({}, muRows[1])], 'NexPac Corporation', { description: 'ZF Mixed lot', unit: '' });
+  check('ZF: a bill line with NO unit — its mapping (unit empty) can be edited and keeps the empty unit; the fallback match finds it', zmu.status === 200 && zmuE.status === 200 && muRows.length === 2 && muRows[1].bill_unit === '' && String(muRows[1].wh_cgt) === '2' && muMap && muMap.family === zmu.body.map.family, [zmu.body, zmuE.body, muRows.map(function (m) { return [m.version, m.bill_unit, m.wh_cgt]; })]);
+  var panSrcZ = fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8'); var invSrcZ = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
+  check('SCREEN: Settings → Mappings has Edit on every row (prefills, "Why is it changed? (required)", "Save change (new version)", Cancel, banner "version N is kept")', /onClick=\{function \(\) \{ startEdit\(x\); \}\}[^>]*>Edit<\/button>/.test(panSrcZ) && /Why is it changed\? \(required\)/.test(panSrcZ) && /Save change \(new version\)/.test(panSrcZ) && /is kept in the history\. Decisions that used it are asked again\./.test(panSrcZ) && /body\.family = editing\.family/.test(panSrcZ));
+  check('SCREEN: each mapped product line on an invoice card has "Change mapping (vN)" → the same edit (family + reason), with NT grade and colour', /'Change mapping \(v' \+ mm\.version \+ '\)'/.test(invSrcZ) && /action: 'map_save', family: em\.family/.test(invSrcZ) && /Why is it changed\? \(required\)/.test(invSrcZ) && /<span style=\{LABEL\}>NT grade<\/span>/.test(invSrcZ));
+  var INVZ = require(path.join(root, 'src/components/WeightCheckInvoices.jsx'));
+  var mapsZ = [{ family: 'f1', version: 3, state: 'active', vendor_key: 'nexpac', item_key: 'texas thirds', bill_unit: 'YDS' }, { family: 'f2', version: 1, state: 'active', vendor_key: 'nexpac', item_key: 'texas thirds', bill_unit: 'LBS' }];
+  check('…mappingFor finds the line\'s own mapping by vendor + bill product + unit (YDS line → the YDS mapping, not the LBS one)', (INVZ.mappingFor(mapsZ, 'NexPac Corporation', { description: 'Texas Thirds (YDS)', unit: 'YDS' }) || {}).family === 'f1' && (INVZ.mappingFor(mapsZ, 'NexPac Corporation', { description: 'Texas Thirds (LBS)', unit: 'LBS' }) || {}).family === 'f2' && INVZ.mappingFor(mapsZ, 'Other Vendor', { description: 'Texas Thirds (YDS)', unit: 'YDS' }) === null);
+
   module.exports = { pass: pass, fail: failN };
   if (require.main === module) { console.log('\nXB route: ' + pass + ' passed, ' + failN + ' failed'); process.exit(failN ? 1 : 0); }
 })().catch(function (e) { console.log('  ✗ FAIL: crashed ' + (e && e.stack)); failN++; module.exports = { pass: pass, fail: failN }; if (require.main === module) { process.exit(1); } });
