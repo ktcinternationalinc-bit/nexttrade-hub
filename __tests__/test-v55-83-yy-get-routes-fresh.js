@@ -209,7 +209,8 @@ var EXPECTED = ['accounting/clickbooks-us/rules-job', 'accounting/clickbooks-us/
   var pa = read('src/lib/phone-auth.js');
   check('18 (source): phone-auth (sign-in check used by WhatsApp / phone / conversation-log) uses the no-store client', /import \{ createNoStoreClient as createClient \} from '\.\/no-store-db'/.test(pa) && !/@supabase\/supabase-js/.test(pa));
   var page = read('src/app/page.jsx'); var wn = read('src/components/WhatsNewWidget.jsx');
-  check('19: the badge says YY and What\'s New has a YY entry', /v55\.83-YY<\/span>/.test(page) && /version: 'v55\.83-YY'/.test(wn));
+  // v55.83-ZA: a later build moves the badge on — the badge names the newest entry, and the YY entry is still there
+  check('19: What\'s New has a YY entry and the badge names the newest entry (YY or a later build)', /version: 'v55\.83-YY'/.test(wn) && (function () { var t = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(wn); return !!t && page.indexOf('>' + t[1] + '</span>') > 0; })());
   var parseErr = null;
   try { require('sucrase').transform(wn, { transforms: ['jsx', 'imports'] }); new Function(read('scripts/run-accounting-bank-regression.js').replace(/^#!.*\n/, '').replace(/^\s*(import|export)\b.*$/mg, '')); } catch (eP) { parseErr = eP.message; }
   check('19b: What\'s New and the runner still parse (a stray quote in a note breaks the build)', parseErr === null, parseErr);

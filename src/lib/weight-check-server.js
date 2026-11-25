@@ -215,8 +215,24 @@ export async function assemble(db, focusIds, floor, opts) {
     var pool = Object.keys(receipts).map(function (k) { return receipts[k]; }).filter(function (r) { return !(rejected[id] || {})[r.source + ':' + r.id]; });
     var prop = proposeLinks(b, pool);
     var it = unlinkedBillItem(b, prop, refs.length === 0 ? true : searched || prop.candidates.length > 0);
+    var previews = [];
+    // Max 25 Nov: show the comparison straight away against the ONE receipt that carries this bill's reference. It is a PREVIEW:
+    // nothing about it can be decided until a person confirms that receipt (the link rule stays); "Approved" on the Invoices card
+    // does exactly that first. Ambiguous references (2+ receipts) get no preview — a person chooses.
+    if (prop.candidates.length === 1 && !prop.ambiguous && receipts[prop.candidates[0].receipt_key]) {
+      var c0 = prop.candidates[0];
+      var pg = { key: 'p:' + id + '|' + c0.receipt_key, bill_ids: [id], receipt_keys: [c0.receipt_key], links: [] };
+      compareGroup({ group: pg, bills: bills, linesByBill: linesByBill, receipts: receipts, maps: maps, tolerance: tolerance, lookups: lookups, hiddenBillIds: hidden }).forEach(function (pi) {
+        pi.item_key = 'preview|' + pi.item_key; pi.preview = true; pi.proposed_receipt = c0;
+        pi.receipt_versions = [Object.assign({ key: c0.receipt_key }, versions[c0.receipt_key] || {})];
+        pi.last_verified_at = pi.receipt_versions[0].last_verified_at || null; pi.links = [];
+        previews.push(pi);
+      });
+      it.preview_available = true;
+    }
     it.searched_at = refs.map(function (r) { return searches[r.norm] ? { ref: r.raw, basis: r.basis, at: searches[r.norm].at, found: searches[r.norm].found } : { ref: r.raw, basis: r.basis, at: null }; });
     items.push(it);
+    previews.forEach(function (pi) { items.push(pi); });
   });
   // 5. decisions, fingerprints, states
   var keys = items.map(function (i) { return i.item_key; });
@@ -237,6 +253,8 @@ export async function assemble(db, focusIds, floor, opts) {
     it.outstanding = it.needs_attention && isOutstanding(it.state);
     it.outcome_words = OUTCOME_WORDS[it.outcome] || it.outcome;
     it.state_words = STATE_WORDS[it.state] || '';
+    // a preview is information only: never decided, never counted (the bill's own "confirm the receipt" item stays outstanding)
+    if (it.preview) { it.needs_decision = false; it.needs_attention = false; it.outstanding = false; it.state = 'awaiting_link'; it.state_words = 'receipt not confirmed yet'; it.decision = null; it.issue = null; it.history = []; it.changed = null; }
   });
   return { items: items, bills: bills, hidden: hidden, tolerance: tolerance, maps: maps, receipts: receipts, linkRows: linkRows, links: links };
 }

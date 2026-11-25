@@ -473,6 +473,32 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('…even a stored selection without NexPac (version 9: Kronos only) still checks NexPac', !okN5.body.out_of_scope && okN5.status === 200, okN5.body.out_of_scope);
   var panelSrc = fs.readFileSync(path.join(root, 'src/components/WeightCheckPanel.jsx'), 'utf8');
   check('SCREEN (vendors): NexPac shown ticked and locked ("always")', /var always = v\.key === 'nexpac'/.test(panelSrc) && /disabled=\{always\}/.test(panelSrc) && /NexPac always, plus the ones you tick/.test(panelSrc));
+  // ---- Max 25 Nov: the comparison is shown STRAIGHT AWAY against the one receipt carrying the bill's reference (a preview);
+  // deciding needs the receipt confirmed first; ambiguous references get no preview
+  var BPV = 'b0000000-0000-4000-8000-0000000000p1'; var BAM = 'b0000000-0000-4000-8000-0000000000a1';
+  world.wh.receipts.push({ id: 15, reference_number: 'P-15', nexpac_bill: null, is_draf: 0, info: {}, supplier: { id: 1, name: 'NexPac' }, warehouse: { id: 2, name: 'CANADA' } });
+  world.wh.logs[15] = [{ id: 151, unit: 'W', product_type: 7, cgt: 2, weight: '1100', rolls: '1', pl_weight: '450', is_scan_out: 0 }];
+  addBill(BPV, '2026-10-08', 'P-15', [{ description: 'Cambridge Seconds (LBS)', qty: 1000, unit: 'LBS' }]);
+  addBill(BAM, '2026-10-08', '90000002', [{ description: 'Cambridge Seconds (LBS)', qty: 700, unit: 'LBS' }]);
+  world.perms = STAFF; world.feed = 'ok';
+  var pvP = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true, recheck: true });
+  var rowsP = pvP.body.rows.filter(function (r) { return (r.bill_ids || []).indexOf(BPV) >= 0; });
+  var prevP = rowsP.filter(function (r) { return r.preview; });
+  check('PREVIEW: an unlinked bill whose reference is on exactly ONE receipt shows its comparison straight away (billed 1,000 / scanned 1,100 / +100)', prevP.length >= 1 && prevP[0].kind === 'product' && prevP[0].figures && prevP[0].figures.billed === 1000 && prevP[0].figures.received === 1100 && prevP[0].figures.diff === 100 && prevP[0].proposed_receipt && String(prevP[0].proposed_receipt.receipt_id) === '15', rowsP.map(function (r) { return [r.kind, r.outcome, r.preview, r.figures]; }));
+  check('…but a preview is never decided or counted: needs_decision false, not outstanding, state "awaiting_link"; the bill\'s own "confirm the receipt" line stays outstanding', prevP.every(function (r) { return !r.needs_decision && !r.outstanding && r.state === 'awaiting_link'; }) && rowsP.some(function (r) { return r.needs_link && r.outstanding && r.preview_available; }), rowsP.map(function (r) { return [r.kind, r.state, r.needs_decision, r.outstanding]; }));
+  var dP = await call({ action: 'decide', bill_id: BPV, item_key: prevP[0].item_key, kind: 'accept_discrepancy', reason: 'trying to decide a preview', expected_fp: prevP[0].comparison_fp });
+  check('…deciding a preview is refused ("Confirm the warehouse receipt first")', dP.status === 409 && /Confirm the warehouse receipt first/.test(dP.body.error), dP.body);
+  var rowsA = pvP.body.rows.filter(function (r) { return (r.bill_ids || []).indexOf(BAM) >= 0; });
+  check('…an AMBIGUOUS reference (on two receipts) gets NO preview — a person chooses', rowsA.length >= 1 && !rowsA.some(function (r) { return r.preview; }) && rowsA.some(function (r) { return r.needs_link && (r.candidates || []).length === 2; }), rowsA.map(function (r) { return [r.kind, r.preview, (r.candidates || []).length]; }));
+  var invP = INV.groupInvoices(pvP.body.rows).filter(function (v) { return v.key === BPV; })[0];
+  check('INVOICES: the previewed invoice is one card with its product line, marked previewed, the receipt it matched, and the confirm line is not a REVIEW reason', invP && invP.previewed === true && invP.products.length >= 1 && invP.proposed && String(invP.proposed.receipt_id) === '15' && invP.others.length === 0 && invP.why.every(function (w) { return !/must confirm the link/.test(w); }), invP && [invP.previewed, invP.others.length, invP.why]);
+  // what "Approved" does on such a card: confirm the receipt, then decide the real (no longer preview) lines
+  var lkP = await call({ action: 'link', bill_id: BPV, receipt_id: '15', basis: prevP[0].proposed_receipt.bases[0], bill_value: prevP[0].proposed_receipt.bill_value, receipt_value: prevP[0].proposed_receipt.receipt_value, state: 'confirmed' });
+  var pvP2 = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true });
+  var realP = pvP2.body.rows.filter(function (r) { return (r.bill_ids || []).indexOf(BPV) >= 0 && r.kind === 'product'; })[0];
+  check('…after a person confirms the receipt, the same comparison becomes a real, decidable line (same figures)', lkP.status === 200 && realP && !realP.preview && realP.needs_decision && realP.figures.billed === 1000 && realP.figures.received === 1100, realP);
+  var invSrc2 = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
+  check('SCREEN (dashboard): readable fields (white background, dark text), tolerance + vendors tiles, map-this-product form, Approved confirms a previewed receipt first', /var FIELD = \{ background: '#ffffff', color: INK/.test(invSrc2) && /<span style=\{LABEL\}>Tolerance<\/span>/.test(invSrc2) && /<span style=\{LABEL\}>Vendors checked<\/span>/.test(invSrc2) && /action: 'map_save'/.test(invSrc2) && /if \(inv\.previewed\) \{ var conf = await confirmPreview\(inv\)/.test(invSrc2) && /action: 'tolerance_save'/.test(invSrc2) && /action: 'scope_save'/.test(invSrc2));
   // ---- the real route with its OWN receipts address + token (another staging sub-site here, so the fake's identity still fits)
   var keep = { u: process.env.NEXTRADE_RECEIPTS_URL, t: process.env.NEXTRADE_RECEIPTS_TOKEN };
   process.env.NEXTRADE_RECEIPTS_URL = 'https://receipts.nextrade-staging.com/api/hub-feed'; process.env.NEXTRADE_RECEIPTS_TOKEN = 'rtok-0123456789abcdef0123456789abcdef';

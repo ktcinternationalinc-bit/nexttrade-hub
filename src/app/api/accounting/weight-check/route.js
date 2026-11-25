@@ -147,6 +147,7 @@ export async function POST(req) {
       var D = await assemble(db, [bId], floor, { source: source, lookups: lookups });
       var item = D.items.filter(function (i) { return i.item_key === key; })[0];
       if (!item) { return bad('That line of the check is no longer there — reload the bill.', 409); }
+      if (item.preview) { return bad('Confirm the warehouse receipt first — this comparison is a preview until a person confirms the receipt belongs to the bill.', 409); }
       if (item.outcome === 'limited_access') { return bad('Part of this group is outside your access — it cannot be decided here.', 403); }
       if (String(body.expected_fp || '') !== String(item.comparison_fp || '')) { return bad('The figures changed since you opened this — look at them again before deciding.', 409); }
       var last = item.decision;
@@ -481,7 +482,9 @@ function itemPublic(i, A, names, lookups) {
     candidates: i.candidates || null, needs_link: !!i.needs_link, needs_mapping: !!i.needs_mapping, searched_at: i.searched_at || null,
     needs_decision: !!i.needs_decision, needs_attention: !!i.needs_attention, allowed: i.needs_decision ? allowedDecisions(i.outcome) : [], state: i.state, state_words: i.state_words, outstanding: !!i.outstanding,
     decision: dec(i.decision), issue: dec(i.issue), history: (i.history || []).map(dec), changed: i.changed || null, comparison_fp: i.comparison_fp || null,
-    last_verified_at: limited ? null : (i.last_verified_at || null), stale: false
+    last_verified_at: limited ? null : (i.last_verified_at || null), stale: false,
+    preview: !!i.preview, proposed_receipt: i.preview && i.proposed_receipt ? { receipt_id: i.proposed_receipt.receipt_id, receipt_key: i.proposed_receipt.receipt_key, reference_number: i.proposed_receipt.reference_number, bases: i.proposed_receipt.bases, bill_value: i.proposed_receipt.bill_value, receipt_value: i.proposed_receipt.receipt_value } : null,
+    preview_available: !!i.preview_available, bill_line: limited ? null : (i.bill_line || null)
   };
 }
 // Codex 11:39 — a saved report seen by someone with a narrower date window. The stored report is never changed; the viewer

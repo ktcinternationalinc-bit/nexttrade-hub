@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZA',
+    date: '2026-11-25',
+    title: 'Warehouse check: the comparison is shown straight away, and everything is handled on one screen',
+    items: [
+      { text: '**Bills → 🏭 Warehouse check → Invoices** now shows each invoice’s comparison immediately — every product, billed vs scanned in, the difference, PASS or REVIEW — as soon as the warehouse receipt with the same reference is found. Pressing **Approved** confirms that receipt belongs to the bill and approves in one step; **Disputed** records the problem.' },
+      { text: 'A product with no mapping yet can be **mapped right on the card** (warehouse product + grade → Save mapping), then the line compares at once.' },
+      { text: 'The **tolerance** and the **vendors** being checked are set at the top of the Invoices screen. NexPac is always checked.' },
+      { text: 'Cleaner, readable layout: white input boxes, aligned numbers, clear status badges and counts.' },
+      { superAdminOnly: true, text: 'Technical: assemble() adds PREVIEW items (compareGroup against the single non-ambiguous proposed receipt; needs_decision/needs_attention false, state awaiting_link; decide refuses them with 409). WeightCheckInvoices rebuilt with inline styles; Approved on a previewed card = link confirm → reload → decide. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-YY',
     date: '2026-11-25',
     title: 'Timers, the warehouse cost feed, WhatsApp and phone screens always read today’s data',
