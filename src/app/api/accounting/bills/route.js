@@ -9,6 +9,7 @@
 // • Cash flow = settled bank reality (money that actually moved) alongside
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
 import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
 import { loadPartyFunds, isMissingOpeningsTable, openingsUnavailable } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
@@ -252,7 +253,7 @@ async function loadOpenUsInvoices(db) {
   return out;
 }
 
-export async function POST(req) {
+async function postZD(req) {
   var db = admin();
   try {
     var body = await req.json();
@@ -261,6 +262,11 @@ export async function POST(req) {
     var whoWQ = await verifiedCaller(req, body, createClient);
     if (whoWQ.error) { return NextResponse.json({ error: whoWQ.error }, { status: whoWQ.status || 401 }); }
     var userId = whoWQ.userId;
+    // v55.83-ZD — payroll bills: SUPER ADMIN ONLY. Who is calling + the payroll list, read once (fails closed); for anyone else a request
+    // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
+    var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
+    if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
     // v55.83-TO (Codex QA 16 Nov, P1) — the actions that MOVE MONEY act only for the verified signed-in person (bearer token);
     // a user_id in the request that is not that person is refused.
     var MONEY_ACTIONS = { record_payment: 1, void_payment: 1, pay_bills_from_bank: 1, bank_lines_for_bills: 1 };
@@ -368,6 +374,8 @@ export async function POST(req) {
     if (action === 'list') {
       var L = await loadBills(db); var enrichWarn = []; // v55.83-WT
       var rows = decorate(L.bills, L.pays, L.credits);
+      // v55.83-ZD — the super admin sees WHY each payroll bill is payroll; the screen puts them all in one "Payroll" group
+      if (payZD.isSuper === true) { rows.forEach(function (b) { var why = payZD.pay.ids[b.id]; if (why && why.length) { b.payroll_reasons = why; } }); }
       var totals = { open: 0, overdue: 0, open_count: 0 };
       var today = new Date().toISOString().substring(0, 10);
       rows.forEach(function (b) {
@@ -2281,3 +2289,6 @@ export async function POST(req) {
     return NextResponse.json({ error: (e && e.message) || 'Bills request failed.' }, { status: 500 });
   }
 }
+
+// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
+export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

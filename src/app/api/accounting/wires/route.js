@@ -15,6 +15,7 @@
 // Permissions: ClickBooks (KTC Hub) Access + Wires: View to see; Wires: Sign
 // Off to sign; Bills: Manage to fill a missing release number. Every step is
 // written to the append-only audit trail.
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { sameIdentityFor } from '../../../../lib/bill-identity-server'; // v55.83-WZ
@@ -149,7 +150,7 @@ async function aiReview(input, rules) {
   return { ok: null, text: 'AI review unavailable — ' + ((lastErr && lastErr.message) || 'no answer') + '. The rule checks above still ran.' };
 }
 
-export async function POST(req) {
+async function postZD(req) {
   try {
     var body = await req.json();
     var action = body.action;
@@ -157,6 +158,11 @@ export async function POST(req) {
     var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
     if (whoWQ.error) { return NextResponse.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
     var userId = whoWQ.userId;
+    // v55.83-ZD — payroll bills: SUPER ADMIN ONLY. Who is calling + the payroll list, read once (fails closed); for anyone else a request
+    // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
+    var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
+    if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
     var g1 = await assertPermission(db, userId, 'accounting.clickbooks.access', req);
     if (!g1.ok) { return NextResponse.json({ ok: false, error: 'This needs "P1a · ClickBooks (KTC Hub) Access" — Settings → 🏦 Banking & Accounting Access.' }, { status: g1.status || 403 }); }
     var g2 = await assertPermission(db, userId, 'wires.view', req);
@@ -288,3 +294,6 @@ export async function POST(req) {
     return NextResponse.json({ ok: false, error: (e && e.message) || 'Server error' }, { status: 500 });
   }
 }
+
+// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
+export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

@@ -31,9 +31,11 @@ export var NO_CATEGORY_LABEL = 'No KTC category yet — set it in Nextrade → C
 export function groupNextradeBills(rows, catLabelOf) {
   var labels = catLabelOf || {}; var by = {}; var order = [];
   (rows || []).forEach(function (r) {
-    var k = String((r && r.bill && r.bill.category) || '');
+    // v55.83-ZD — every payroll bill (marked by the server with its reasons, for the super admin only) is in ONE "Payroll" group
+    var isPay = !!(r && Array.isArray(r.payroll_reasons) && r.payroll_reasons.length);
+    var k = isPay ? '__payroll' : String((r && r.bill && r.bill.category) || '');
     var g = by[k];
-    if (!g) { g = by[k] = { key: k, label: k ? (labels[k] || k.replace(/_/g, ' ')) : NO_CATEGORY_LABEL, rows: [], count: 0, owed_count: 0, owed_cents: 0, hidden: 0 }; order.push(k); }
+    if (!g) { g = by[k] = { key: k, label: isPay ? 'Payroll' : (k ? (labels[k] || k.replace(/_/g, ' ')) : NO_CATEGORY_LABEL), payroll: isPay || undefined, rows: [], count: 0, owed_count: 0, owed_cents: 0, hidden: 0 }; order.push(k); }
     g.rows.push(r); g.count += 1;
     var st = nextradeRowState(r);
     if (st === 'owed') { g.owed_count += 1; }
@@ -41,6 +43,7 @@ export function groupNextradeBills(rows, catLabelOf) {
     var oc = rowOwedCents(r); if (oc != null) { g.owed_cents += oc; }
   });
   return order.map(function (k) { return by[k]; }).sort(function (a, b) {
+    if (a.key === '__payroll') { return -1; } if (b.key === '__payroll') { return 1; } // ZD: Payroll first
     if (!a.key !== !b.key) { return a.key ? -1 : 1; }
     var x = String(a.label).toLowerCase(); var y = String(b.label).toLowerCase();
     return x < y ? -1 : x > y ? 1 : 0;

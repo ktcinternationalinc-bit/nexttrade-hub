@@ -5,6 +5,7 @@
 // never more than the credit has left, never more than a bill still owes (payments, open wires and other credits counted), same
 // vendor / company / currency, nothing deleted. Employees see only the permitted history window; payroll vendors stay masked.
 // SWC-safe: var + string concatenation.
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { verifiedCaller } from '../../../../lib/verified-caller';
@@ -55,13 +56,18 @@ async function owedFor(db, bills) {
   return { byBill: out };
 }
 
-export async function POST(req) {
+async function postZD(req) {
   var db = admin();
   try {
     var body = await req.json();
     var who = await verifiedCaller(req, body, createClient);
     if (who.error) { return bad(who.error, who.status || 401); }
     var userId = who.userId;
+    // v55.83-ZD — payroll bills: SUPER ADMIN ONLY. Who is calling + the payroll list, read once (fails closed); for anyone else a request
+    // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
+    var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
+    if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
     var p1 = await assertPermission(db, userId, 'accounting.view', req);
     if (!p1 || p1.ok !== true) { return bad('This needs "Accounting Access" (P1).', 403); }
     var action = String(body.action || 'list');
@@ -222,3 +228,6 @@ export async function POST(req) {
     return NextResponse.json({ ok: false, error: (e && e.message) || 'error', api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }
 }
+
+// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
+export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

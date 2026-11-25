@@ -11,6 +11,7 @@
 //     pl_* table and to the audit trail with who and when.
 // It NEVER writes to an invoice, a bill, inventory or the ledger.
 // Permissions: pnl.view to see it, pnl.edit_costs to change the set-up (super admin passes both).
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { NextResponse } from 'next/server';
 import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server';
 import { creditsPendingInWindow } from '../../../../lib/vendor-credits-server'; // v55.83-YD
@@ -62,7 +63,7 @@ function stripCustomerInvoiceAmounts(row) {
   delete row.expected_cents;
 }
 
-export async function POST(req) {
+async function postZD(req) {
   var db = admin();
   try {
     var body = await req.json();
@@ -71,6 +72,11 @@ export async function POST(req) {
     var who = await verifiedCaller(req, body, createClient);
     if (who.error) { return bad(who.error, who.status); }
     var userId = who.userId;
+    // v55.83-ZD — payroll bills: SUPER ADMIN ONLY. Who is calling + the payroll list, read once (fails closed); for anyone else a request
+    // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
+    var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
+    if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
     var pv = await assertPermission(db, userId, 'pnl.view', req);
     // v55.83-XV (Max, Nov 23: "only invoicing permissioning needed to enter inside the shipping data. should not block the user")
     // The two shipping-breakdown actions of the invoice form (read the parts of a release, type one part) also work with the
@@ -461,3 +467,6 @@ export async function POST(req) {
     return NextResponse.json({ ok: false, error: (e && e.message) || 'profitability failed', api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }
 }
+
+// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
+export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

@@ -60,8 +60,11 @@ export function sortBills(bills, sortBy, dir) {
 export function groupByVendor(bills, today, dir) {
   var by = {}; var order = [];
   (bills || []).forEach(function (b) {
-    var k = vendorKey(b.vendor_name);
-    var g = by[k]; if (!g) { g = by[k] = { key: k, vendor: String(b.vendor_name || '').trim() || '(no vendor)', bills: [], count: 0, total_cents: 0, paid_cents: 0, open_cents: 0, late: 0, duplicates: 0, earliest_due: '' }; order.push(k); }
+    // v55.83-ZD (Max, 25 Nov) — every payroll bill (the server marks it with its reasons, for the super admin only) is in ONE
+    // "Payroll" group, whatever its vendor
+    var isPay = Array.isArray(b.payroll_reasons) && b.payroll_reasons.length > 0;
+    var k = isPay ? PAYROLL_KEY : vendorKey(b.vendor_name);
+    var g = by[k]; if (!g) { g = by[k] = { key: k, vendor: isPay ? 'Payroll' : (String(b.vendor_name || '').trim() || '(no vendor)'), payroll: isPay || undefined, bills: [], count: 0, total_cents: 0, paid_cents: 0, open_cents: 0, late: 0, duplicates: 0, earliest_due: '' }; order.push(k); }
     g.bills.push(b); g.count += 1;
     if (b.record_status !== 'active') { return; }
     g.total_cents += cents(b.total_amount); g.paid_cents += cents(b.paid); g.open_cents += cents(b.open);
@@ -71,5 +74,7 @@ export function groupByVendor(bills, today, dir) {
     if (b.dup_flag) { g.duplicates += 1; }
   });
   var d = dir === 'desc' ? -1 : 1;
-  return order.map(function (k) { return by[k]; }).sort(function (a, b) { return d * (a.key < b.key ? -1 : (a.key > b.key ? 1 : 0)); });
+  // the Payroll group always comes first; the vendors follow A → Z (or Z → A)
+  return order.map(function (k) { return by[k]; }).sort(function (a, b) { if (a.key === PAYROLL_KEY) { return -1; } if (b.key === PAYROLL_KEY) { return 1; } return d * (a.key < b.key ? -1 : (a.key > b.key ? 1 : 0)); });
 }
+export var PAYROLL_KEY = '__payroll'; // v55.83-ZD

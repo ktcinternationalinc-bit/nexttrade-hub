@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZD',
+    date: '2026-11-25',
+    title: 'Payroll bills: one Payroll group, shown to the super admin only',
+    items: [
+      { text: '**Every payroll bill is in one “Payroll” group** at the top of Bills (and of 🟦 Nextrade bills). A bill is payroll when its vendor, its category or one of its lines says “payroll” (any spelling, e.g. “ADP Payroll”, “Gusto - payroll”, “Payroll taxes”), its vendor is “Warehouse staff”, or it was made from a Nextrade payroll line. Each bill says why it is there.' },
+      { text: '**Only the super admin sees payroll bills** — everywhere: Bills, Nextrade bills, wires, cash, funds with RTM / NextTrade, vendor credits, the warehouse check, Profitability and P&L, the audit trail and the AI reports. For everyone else they are simply not there, and a wire that pays a payroll bill is not shown at all.' },
+      { text: 'Totals shown to anyone else say **“excluding payroll”**. Only the super admin can take a bill out of payroll (by changing it, its category or its Nextrade link).' },
+      { text: 'The old switch “Payroll / salaries: view” is gone (nobody but the super admin had it on).' },
+      { text: '**Needs a database step** so payroll bills and their files cannot be read straight from the database either. Old payroll bill files in the public folder are moved to the private folder (Max 25 Nov: “Yes, move them”).' },
+      { superAdminOnly: true, text: 'Technical: lib/payroll-bills.js — one rule (payrollReasons / loadPayrollBills, fails closed) and payrollFilteredDb: for a non-super-admin every read / update / delete on vendor_bills, lines, payments, events, company_bill_links, recurring_bills, wire_packages / lines / files and hub_audit_log leaves payroll rows out; inserts and RPCs naming one are refused; requestNamesPayroll → 404; withPayrollLabel adds payroll_excluded. Wired into 19 routes. payrollScope = super admin only. SQL sql/v55-83-ZD-payroll-bills.sql NOT installed (hub_private helpers, restrictive rules on 9 tables + bills-private files; real Postgres 21/21). Tests: test-v55-83-zd-payroll-bills.js 21/21; XE 48/48 (updated to the new rule).' }
+    ]
+  },
+  {
     version: 'v55.83-ZM',
     date: '2026-11-26',
     title: 'Notices can only be sent by people signed in to the Hub',

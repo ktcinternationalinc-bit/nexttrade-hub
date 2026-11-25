@@ -7,6 +7,7 @@
 // BEFORE the category is saved, so the two never disagree; when the KTC side refuses, the category is not saved.
 // Every action acts for the verified signed-in person (bearer token). Reads need the company's view permission, writes
 // its manage permission (super admin passes). Nothing is ever deleted. SWC-safe: var + string concatenation only.
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -57,7 +58,7 @@ async function loadCats(db, companyId) {
   return r;
 }
 
-export async function POST(req) {
+async function postZD(req) {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) { return fail('Server key missing.', 500); }
   var db = admin();
   try {
@@ -66,6 +67,11 @@ export async function POST(req) {
     var who = await verifiedCaller(req, body, createClient);
     if (who.error) { return fail(who.error, who.status || 401); }
     var userId = who.userId;
+    // v55.83-ZD — payroll bills: SUPER ADMIN ONLY. Who is calling + the payroll list, read once (fails closed); for anyone else a request
+    // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
+    var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
+    if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
     // v55.83-TP (live) — private bank accounts: hidden unless super admin or 'bank.view_private'; fails closed
     var scope = await privateScope(db, userId);
     if (scope.error) { return fail(scope.error + ' — nothing shown.', 503); }
@@ -109,7 +115,9 @@ export async function POST(req) {
           var stateNb = b0 && paid0 >= (Number(b0.total_amount) || 0) - 0.005 ? 'paid' : 'owed';
           return { link: l, bill: maskPayrollBill(b0), line: ln0 ? { date: ln0.date, name: 'Warehouse staff', payroll_restricted: true } : null, paid: null, state: stateNb, payroll_restricted: true };
         }
-        return { link: l, bill: b0, line: ln0, paid: paid0 };
+        // v55.83-ZD — the super admin sees why a bill is payroll (the screen groups them under "Payroll"); nobody else gets payroll rows
+        var whyZD = b0 && payZD.isSuper === true ? payZD.pay.ids[b0.id] : null;
+        return whyZD && whyZD.length ? { link: l, bill: b0, line: ln0, paid: paid0, payroll_reasons: whyZD } : { link: l, bill: b0, line: ln0, paid: paid0 };
       });
       var gTotN = await assertPermission(db, userId, 'accounting.view_totals', req); // the 'still owed' sum is a sensitive total (Codex P1-1)
       // XE — the "still owed" sum would contain the hidden payroll bills (or reveal them by subtraction): withheld when any is hidden
@@ -377,7 +385,7 @@ export async function POST(req) {
       for (var mj = 0; mj < doM.length; mj++) { resM.push(await categorize(doM[mj], mb.cats[doM[mj].company_category], 'manual', nctxM)); }
       var badM = resM.filter(function (r) { return !r.ok; });
       await audit(db, userId, 'nextrade_missing_bills_made', 'company', cid, { tried: doM.length, made: doM.length - badM.length, failed: badM.length });
-      return NextResponse.json({ ok: badM.length === 0, made: doM.length - badM.length, left: mb.lines.length - doM.length + badM.length + heldPay, payroll_left: heldPay || undefined, note: heldPay ? heldPay + ' payroll line(s) left for someone with "Payroll / salaries: view".' : undefined, error: badM.length ? badM.length + ' line(s) not billed: ' + badM.slice(0, 5).map(function (b) { return b.error; }).join(' · ') : undefined });
+      return NextResponse.json({ ok: badM.length === 0, made: doM.length - badM.length, left: mb.lines.length - doM.length + badM.length + heldPay, payroll_left: heldPay || undefined, note: heldPay ? heldPay + ' payroll line(s) left for the super admin (payroll is shown to the super admin only).' : undefined, error: badM.length ? badM.length + ' line(s) not billed: ' + badM.slice(0, 5).map(function (b) { return b.error; }).join(' · ') : undefined });
     }
 
     // v55.83-VK — learn a rule from each line a person categorized by hand. Best effort: the category is already saved, so a
@@ -611,3 +619,6 @@ export async function POST(req) {
     return NextResponse.json({ ok: false, error: (e && e.message) || 'error', api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }
 }
+
+// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
+export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

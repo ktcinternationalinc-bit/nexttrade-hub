@@ -5,6 +5,7 @@
 // Viewing needs its own permission: audit.view (super admins always pass).
 // There is NO write action here — audit rows cannot be edited or deleted
 // through the app, by anyone.
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
@@ -16,13 +17,18 @@ function db() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 }
 
-export async function POST(req) {
+async function postZD(req) {
   try {
     var body = await req.json();
     var d = db();
     var whoWQ = await verifiedCaller(req, body, createClient); // v55.83-WQ (Codex 21 Nov, F3): never a user_id from the request
     if (whoWQ.error) { return NextResponse.json({ ok: false, error: whoWQ.error }, { status: whoWQ.status || 401 }); }
     var userId = whoWQ.userId;
+    // v55.83-ZD — payroll bills: SUPER ADMIN ONLY. Who is calling + the payroll list, read once (fails closed); for anyone else a request
+    // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
+    var payZD = await payrollBillScope(d, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
+    if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    d = payrollFilteredDb(d, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
     if (!userId) { return NextResponse.json({ ok: false, error: 'user_id required.' }, { status: 401 }); }
     var gateP1 = await assertPermission(d, userId, 'accounting.view', req); // v55.83-RE — P1 first
     if (!gateP1.ok) { return NextResponse.json({ ok: false, error: 'This needs "Accounting Access" (P1) — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: gateP1.status || 403 }); }
@@ -93,3 +99,6 @@ export async function POST(req) {
     return NextResponse.json({ ok: false, error: (e && e.message) || 'Server error' }, { status: 500 });
   }
 }
+
+// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
+export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

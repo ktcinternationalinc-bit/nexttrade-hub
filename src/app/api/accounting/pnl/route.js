@@ -16,6 +16,7 @@
 //   pounds, CNF shipping taken out of the price) and splits every sale into CONFIRMED (bill costs + standard allowances) or TENTATIVE (missing data,
 //   with the reasons). A cost typed here (product_costs) is used only where the engine has none — and makes that sale tentative.
 //   'report_typed' is the older view on typed costs only (kept, unchanged).
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, withPayrollLabel } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { NextResponse } from 'next/server';
 import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server'; // v55.83-UD: employees see only their history window
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -55,7 +56,7 @@ function isLiveInvoice(i) {
   return st !== 'void' && st !== 'cancelled' && st !== 'archived' && st !== 'deleted';
 }
 
-export async function POST(req) {
+async function postZD(req) {
   var db = admin();
   try {
     var body = await req.json();
@@ -64,6 +65,11 @@ export async function POST(req) {
     var who = await verifiedCaller(req, body, createClient);
     if (who.error) { return NextResponse.json({ error: who.error }, { status: who.status }); }
     var userId = who.userId;
+    // v55.83-ZD — payroll bills: SUPER ADMIN ONLY. Who is calling + the payroll list, read once (fails closed); for anyone else a request
+    // naming a payroll bill / wire package is "not found", and every read below leaves payroll out (so every total excludes it).
+    var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); }
+    if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD); try { req.__payZD = payZD; } catch (eZD) { /* read-only request */ }
 
     // ── set_cost / delete_cost: the cost-entry permission
     if (action === 'set_cost' || action === 'delete_cost') {
@@ -284,3 +290,6 @@ export async function POST(req) {
     return NextResponse.json({ error: (e && e.message) || 'pnl failed' }, { status: 500 });
   }
 }
+
+// v55.83-ZD — the answer says "excluding payroll" to a non-super-admin whenever payroll bills exist (they are left out of it)
+export async function POST(req) { return withPayrollLabel(req, await postZD(req)); }

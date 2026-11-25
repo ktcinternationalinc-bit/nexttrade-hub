@@ -86,7 +86,8 @@ function hasFullOut(j) { var s = JSON.stringify(j); var full = Math.round((SAL1 
     check(t + ' lines: no salary amount or name anywhere in the answer', leaks(lj).length === 0, leaks(lj));
   }
   var rh = await call('tok-holder', { action: 'lines' }); var rs = await call('tok-super', { action: 'lines' });
-  check('holder lines: payroll amount shown (names still "Warehouse staff")', (rh.j.lines || []).some(function (l) { return l.id === 'P1' && l.amount_abs === SAL1 && l.name === 'Warehouse staff' && !l.payroll_restricted; }), rh.j.lines);
+  // v55.83-ZD (Max 25 Nov: "should only be displayed to superadmin") — the old "payroll.view" holder no longer sees payroll amounts
+  check('ZD: an old payroll.view holder sees payroll lines like everyone else — no amount (super admin only now)', (rh.j.lines || []).some(function (l) { return l.id === 'P1' && l.amount_abs === null && l.payroll_restricted === true; }), rh.j.lines);
   check('super admin lines: payroll amount shown', (rs.j.lines || []).some(function (l) { return l.id === 'P2' && l.amount_abs === SAL2; }));
 
   // ── totals ──
@@ -97,26 +98,29 @@ function hasFullOut(j) { var s = JSON.stringify(j); var full = Math.round((SAL1 
   var tsj = JSON.parse(JSON.stringify(ts.j)); tsj.totals.inTotal = 0; tsj.totals.rows = tsj.totals.rows.filter(function (r) { return r.key !== '__none'; }); // U1 money in is not payroll
   check('staff totals: no salary amount, no full money-out total', leaks(tsj).length === 0 && !hasFullOut(ts.j), leaks(tsj));
   var th = await call('tok-holder', { action: 'totals' });
-  check('holder totals: full money out, not labelled', th.j.totals && th.j.totals.outTotal === Math.round((SAL1 + SAL2 + ELEC) * 100) / 100 && !th.j.totals.excludes_payroll, th.j.totals);
+  check('ZD: an old payroll.view holder gets the totals WITHOUT payroll, labelled (super admin only now)', th.j.totals && th.j.totals.outTotal === ELEC && th.j.totals.excludes_payroll === true, th.j.totals);
 
   // ── KTC Bills → Nextrade bills ──
   for (var k = 0; k < NOPE.length; k++) {
     var nb = await call(NOPE[k], { action: 'nextrade_bills' });
     var rowP = (nb.j.rows || []).filter(function (r) { return r.link.bill_id === 'B1'; })[0];
-    check(NOPE[k] + ' nextrade bills: payroll bill listed as Warehouse staff, owed, no amount / paid / notes', !!rowP && rowP.payroll_restricted === true && rowP.bill.total_amount === null && rowP.paid === null && rowP.bill.notes === null && rowP.state === 'owed' && rowP.bill.vendor_name === 'Warehouse staff', rowP);
+    // v55.83-ZD (Max 25 Nov) — a payroll bill is no longer listed as a 🔒 "Warehouse staff" row: it is not shown at all
+    check(NOPE[k] + ' nextrade bills (ZD): the payroll bill is not listed at all', !rowP, rowP);
     check(NOPE[k] + ' nextrade bills: the electricity bill unchanged', (nb.j.rows || []).some(function (r) { return r.link.bill_id === 'B2' && r.bill.total_amount === ELEC; }));
-    check(NOPE[k] + ' nextrade bills: "still owed" sum withheld while payroll is hidden', nb.j.can_totals === false && /restricted/.test(nb.j.payroll_restricted || ''), nb.j);
+    check(NOPE[k] + ' nextrade bills (ZD): the "still owed" sum covers the bills shown and the answer says it is excluding payroll', /excluding payroll/.test(nb.j.payroll_excluded || ''), nb.j);
     check(NOPE[k] + ' nextrade bills: no salary amount anywhere', leaks(nb.j).length === 0, leaks(nb.j));
   }
   var nbh = await call('tok-holder', { action: 'nextrade_bills' });
-  check('holder nextrade bills: amount and paid shown, still-owed sum allowed', (nbh.j.rows || []).some(function (r) { return r.link.bill_id === 'B1' && r.bill.total_amount === SAL1 && r.paid === 1000; }) && nbh.j.can_totals === true, nbh.j);
+  check('ZD: an old payroll.view holder does not get the payroll bill either', !(nbh.j.rows || []).some(function (r) { return r.link.bill_id === 'B1'; }) && leaks(nbh.j).length === 0, nbh.j);
+  var nbs = await call('tok-super', { action: 'nextrade_bills' });
+  check('ZD: the super admin gets the payroll bill with its amount, paid and the reason it is payroll', (nbs.j.rows || []).some(function (r) { return r.link.bill_id === 'B1' && r.bill.total_amount === SAL1 && r.paid === 1000 && (r.payroll_reasons || []).length > 0; }), nbs.j);
 
   // ── Codex 22 Nov 08:43 P2: the categories cannot be read + a payroll line ATTACHED to a bill with its own vendor name ──
   fresh();
   world.db.t.vendor_bills.push({ id: 'B3', vendor_name: 'Acme Staffing LLC', bill_number: 'ACME-11', bill_date: '2026-11-12', due_date: '2026-11-30', total_amount: SAL2, category: 'labor', record_status: 'active', paid_via: 'NextTrade Industries', notes: 'Jane Roe November' });
   world.db.t.company_bill_links.push({ id: 'k3', company_id: 'NEXTRADE_BOOKS', source_bank_transaction_id: 'P2', bill_id: 'B3', mode: 'attached', status: 'active', category_key: 'warehouse_staff', updated_at: '2026-11-12' });
   var nbOk = await call('tok-staff', { action: 'nextrade_bills' });
-  check('attached payroll bill (own vendor name) hidden when categories CAN be read', (nbOk.j.rows || []).some(function (r) { return r.link.bill_id === 'B3' && r.payroll_restricted === true && r.bill.total_amount === null; }) && leaks(nbOk.j).length === 0, leaks(nbOk.j));
+  check('attached payroll bill (own vendor name) hidden when categories CAN be read (ZD: not listed at all)', !(nbOk.j.rows || []).some(function (r) { return r.link.bill_id === 'B3'; }) && leaks(nbOk.j).length === 0, leaks(nbOk.j));
   world.db.fail.company_categories = { select: 'connection reset' };
   var FAILERS = ['tok-staff', 'tok-admin', 'tok-holder'];
   for (var fi = 0; fi < FAILERS.length; fi++) {
@@ -131,7 +135,8 @@ function hasFullOut(j) { var s = JSON.stringify(j); var full = Math.round((SAL1 
   check('staff missing bills: payroll line listed, amount null', (mbS.j.lines || []).some(function (l) { return l.id === 'P2' && l.amount === null && l.payroll_restricted === true && l.name === 'Warehouse staff'; }) && leaks(mbS.j).length === 0, mbS.j);
   var calls = 0; world.db.rpcs.hub_company_categorize = function () { calls++; return { data: { ok: true, action: 'none' }, error: null }; };
   var mkS = await call('tok-staff', { action: 'make_missing_bills' });
-  check('staff make missing bills: payroll lines NOT billed by them, left for a holder', calls === 0 && mkS.j.payroll_left === 1 && /Payroll \/ salaries: view/.test(mkS.j.note || ''), { calls: calls, j: mkS.j });
+  // ZD: left for the SUPER ADMIN (the switch is retired); the payroll line whose bill is hidden from this person counts here too
+  check('staff make missing bills: payroll lines NOT billed by them, left for the super admin', calls === 0 && mkS.j.payroll_left >= 1 && /super admin/.test(mkS.j.note || ''), { calls: calls, j: mkS.j });
 
   // ── declassifying: only the super admin ──
   fresh();
@@ -168,8 +173,9 @@ function hasFullOut(j) { var s = JSON.stringify(j); var full = Math.round((SAL1 
   check('payroll.view is sensitive (never from a role, not even admin / owner)', SP.isSensitivePerm('payroll.view') && !SP.userHasPermission({ role: 'admin', mp: {}, deny: {} }, 'payroll.view') && !SP.userHasPermission({ role: 'owner', mp: {}, deny: {} }, 'payroll.view') && SP.userHasPermission({ role: 'super_admin', isSuperAdmin: true, mp: {}, deny: {} }, 'payroll.view'));
   var fs = require('fs');
   var st = fs.readFileSync(path.join(root, 'src/components/SettingsTab.jsx'), 'utf8'); var bp = fs.readFileSync(path.join(root, 'src/components/BankingAccessPanel.jsx'), 'utf8');
-  check('Settings lists the switch and marks it sensitive', /key: 'payroll\.view'/.test(st) && /'payroll\.view': true/.test(st));
-  check('Banking & Accounting Access lists it, sensitive', /key: 'payroll\.view'[^\n]*sensitive: true/.test(bp));
+  // v55.83-ZD (Max 25 Nov: "should only be displayed to superadmin") — the switch is RETIRED: no longer offered anywhere in Settings
+  check('ZD: Settings no longer offers "Payroll / salaries: view"', !/key: 'payroll\.view'/.test(st));
+  check('ZD: Banking & Accounting Access no longer offers it', !/key: 'payroll\.view'/.test(bp));
   var sc = fs.readFileSync(path.join(root, 'src/components/CompanyBooksTab.jsx'), 'utf8'); var np = fs.readFileSync(path.join(root, 'src/components/NextradeBillsPanel.jsx'), 'utf8');
   check('screens show 🔒 for a restricted amount (never 0.00) and label totals without payroll', /l\.payroll_restricted \?/.test(sc) && /excludes_payroll/.test(sc) && /r\.payroll_restricted \?/.test(np) && /!r\.payroll_restricted && <button/.test(np));
 

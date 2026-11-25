@@ -11,14 +11,15 @@ import { assertPermission, loadUserPermissions } from './server-permissions';
 
 export var PAYROLL_PERM = 'payroll.view';
 export var PAYROLL_NAME = 'Warehouse staff';
-export var PAYROLL_NOTE = 'Payroll amount restricted — needs the "Payroll / salaries: view" switch (super admin grants it).';
+export var PAYROLL_NOTE = 'Payroll amount restricted — payroll is shown to the super admin only.';
 
 // { canSee, isSuperAdmin } for the verified caller. Fails CLOSED: any problem reading permissions = cannot see.
+// v55.83-ZD (Max, 25 Nov: "should only be displayed to superadmin") — the SUPER ADMIN ONLY. The 'payroll.view' switch is retired:
+// it no longer lets anyone else see payroll (nobody but the super admin had it ON when this was built).
 export async function payrollScope(db, userId, req) {
-  var canSee = false; var sup = false;
-  try { var g = await assertPermission(db, userId, PAYROLL_PERM, req); canSee = !!(g && g.ok === true); } catch (e) { canSee = false; }
-  try { var ctx = await loadUserPermissions(db, userId); sup = !!(ctx && ctx.isSuperAdmin === true); } catch (e2) { sup = false; }
-  return { canSee: canSee || sup, isSuperAdmin: sup };
+  var sup = false;
+  try { var ctx = await loadUserPermissions(db, userId); sup = !!(ctx && ctx.isSuperAdmin === true && !ctx.readError); } catch (e2) { sup = false; }
+  return { canSee: sup, isSuperAdmin: sup };
 }
 
 // The keys of a company's payroll categories ({ key: true }).
