@@ -24,7 +24,7 @@ import { verifiedCaller } from '../../../../lib/verified-caller';
 import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server';
 import { audit } from '../../../../lib/audit-server';
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
-import { assemble, recheckWarehouse, lastRun, billAllowed, sha, decisionSnapshot, missingTables, latestMaps, loadVendorScope, inVendorScope } from '../../../../lib/weight-check-server';
+import { assemble, recheckWarehouse, lastRun, billAllowed, sha, decisionSnapshot, missingTables, latestMaps, loadVendorScope, inVendorScope, chunksByLength, MAX_IN_CHARS, dbReadError } from '../../../../lib/weight-check-server';
 import { WC_BUILD, allowedDecisions, DECISION_PERM, reportStatus, normRef, vendorKey, billItemKey, OUTCOME_WORDS, STATE_WORDS, BASIS_LABEL } from '../../../../lib/weight-check';
 import { receiptsFeedConfig } from '../../../../lib/weight-check-feed-server';
 
@@ -311,7 +311,7 @@ export async function POST(req) {
       var repView = viewReport(rp.data, floor, visIts);
       var keysR = visIts.map(function (i) { return i.item_key; });
       var decsR = [];
-      for (var ck = 0; ck < keysR.length; ck += 200) { decsR = decsR.concat(await allRows(function () { return db.from('wc_decisions').select('id, item_key, kind, reason, actor, at, assignee, ticket_id, evidence').in('item_key', keysR.slice(ck, ck + 200)).gt('at', rp.data.run_at).order('at', { ascending: true }); })); }
+      var keyBatchesR = chunksByLength(keysR, MAX_IN_CHARS); for (var ck = 0; ck < keyBatchesR.length; ck++) { var kbR = keyBatchesR[ck]; decsR = decsR.concat(await allRows(function () { return db.from('wc_decisions').select('id, item_key, kind, reason, actor, at, assignee, ticket_id, evidence').in('item_key', kbR).gt('at', rp.data.run_at).order('at', { ascending: true }); })); }
       // the CURRENT state of the same items (recomputed) — kept apart from the frozen state and the later events
       var billIdsR = {}; visIts.forEach(function (i) { (i.bill_ids || []).forEach(function (b) { billIdsR[b] = true; }); });
       var cur = {};
@@ -435,7 +435,7 @@ export async function POST(req) {
 function cryptoRandomId() { return crypto.randomUUID(); }
 async function allRows(q) {
   var outR = []; var from = 0;
-  for (var g = 0; g < 60; g++) { var r = await q().range(from, from + 999); if (r.error) { throw new Error(r.error.message); } outR = outR.concat(r.data || []); if (!r.data || r.data.length < 1000) { break; } from += 1000; }
+  for (var g = 0; g < 60; g++) { var qbR = q(); var r = await qbR.range(from, from + 999); if (r.error) { throw new Error(dbReadError(qbR, r)); } outR = outR.concat(r.data || []); if (!r.data || r.data.length < 1000) { break; } from += 1000; }
   return outR;
 }
 async function userNames(db, ids) {

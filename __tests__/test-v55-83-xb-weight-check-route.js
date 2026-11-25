@@ -14,12 +14,12 @@ function tbl(n) { return T[n] || (T[n] = []); }
 var IMMUTABLE = { wc_receipt_versions: 1, wc_ref_searches: 1, wc_links: 1, wc_product_maps: 1, wc_tolerances: 1, wc_decisions: 1, wc_reports: 1, wc_report_items: 1 };
 var world = { perms: {}, superAdmin: false, floor: null, feed: null, feedCalls: 0, uid: 'u-staff' };
 function Q(name) {
-  var st = { name: name, f: [], ord: [], lim: null, rng: null, op: 'select', vals: null, sel: '*', single: 0 };
+  var st = { name: name, f: [], ord: [], lim: null, rng: null, op: 'select', vals: null, sel: '*', single: 0, inLen: 0 };
   var q = {
     select: function (s) { if (st.op === 'select') { st.sel = s || '*'; } else { st.ret = true; } return q; },
     eq: function (k, v) { st.f.push(function (r) { return String(r[k]) === String(v); }); return q; },
     is: function (k, v) { st.f.push(function (r) { return v === null ? (r[k] === null || r[k] === undefined) : r[k] === v; }); return q; },
-    in: function (k, vs) { var s = (vs || []).map(String); st.f.push(function (r) { return s.indexOf(String(r[k])) >= 0; }); return q; },
+    in: function (k, vs) { var s = (vs || []).map(String); st.inLen += s.reduce(function (n, x) { return n + encodeURIComponent(x).length + 3; }, 0); q.url = { pathname: '/rest/v1/' + name, href: 'https://db.test/rest/v1/' + name + '?' + 'x'.repeat(st.inLen) }; st.f.push(function (r) { return s.indexOf(String(r[k])) >= 0; }); return q; },
     gte: function (k, v) { st.f.push(function (r) { return r[k] != null && String(r[k]) >= String(v); }); return q; },
     lte: function (k, v) { st.f.push(function (r) { return r[k] != null && String(r[k]) <= String(v); }); return q; },
     gt: function (k, v) { st.f.push(function (r) { return r[k] != null && String(r[k]) > String(v); }); return q; },
@@ -43,6 +43,7 @@ function exec(st) {
   // before Max runs the XB SQL: PostgREST's real answer for a table that is not there (PGRST205)
   if (world.noScopeTable && st.name === 'wc_vendor_scope') { return { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public.wc_vendor_scope' in the schema cache" } }; }
   if (world.noSql && /^wc_/.test(st.name)) { world.noSqlHits = (world.noSqlHits || 0) + 1; return { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public." + st.name + "' in the schema cache" } }; }
+  if (world.maxInLen && st.inLen > world.maxInLen) { world.tooLongHits = (world.tooLongHits || 0) + 1; return { data: null, error: { message: 'Bad Request' }, status: 400 }; }
   var rows = tbl(st.name);
   if (st.op === 'insert') {
     if (world.failInsert && world.failInsert[st.name]) { return { data: null, error: { message: world.failInsert[st.name] } }; }
@@ -552,6 +553,29 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   world.acceptToken = null;
   if (keep.u === undefined) { delete process.env.NEXTRADE_RECEIPTS_URL; } else { process.env.NEXTRADE_RECEIPTS_URL = keep.u; }
   if (keep.t === undefined) { delete process.env.NEXTRADE_RECEIPTS_TOKEN; } else { process.env.NEXTRADE_RECEIPTS_TOKEN = keep.t; }
+
+  // ---- v55.83-ZC (Max 25 Nov 06:50, live): "The warehouse check failed: Bad Request". The live logs show the decisions read sending
+  // 200 comparison keys in one address (~27,000 characters); the gateway refused it. The fake gateway here refuses .in() lists over
+  // 8,000 characters the same way (bare 400). With many invoices in range, the check must still load, batching by length.
+  var SV = require(path.join(root, 'src/lib/weight-check-server.js'));
+  var longKeys = []; for (var lk = 0; lk < 400; lk++) { longKeys.push('g:nextrade-live:' + (2200 + lk) + '|p:product_type=1|cgt=54|nt=*|color=*'); }
+  var lb = SV.chunksByLength(longKeys, SV.MAX_IN_CHARS);
+  var lbLens = lb.map(function (c) { return c.reduce(function (n, x) { return n + encodeURIComponent(x).length + 3; }, 0); });
+  check('ZC: 400 long comparison keys are batched by LENGTH (every batch ≤ 6,000 characters), none lost or reordered', lb.length > 1 && lbLens.every(function (n) { return n <= 6000; }) && [].concat.apply([], lb).join() === longKeys.join(), lbLens);
+  var shortIds = []; for (var si = 0; si < 450; si++) { shortIds.push(uuid()); }
+  check('…short ids still go 200 at a time (the count cap stays)', SV.chunksByLength(shortIds, SV.MAX_IN_CHARS).every(function (c) { return c.length <= 200; }));
+  var oldStyle = 200 * (encodeURIComponent(longKeys[0]).length + 3);
+  check('(fixture) the old batching of 200 such keys would be ~' + oldStyle + ' characters — over the gateway limit used here (8,000)', oldStyle > 8000);
+  var BULK = []; for (var bk = 0; bk < 260; bk++) { var bid = 'b0000000-0000-4000-8000-' + String(900000000000 + bk); BULK.push(bid); addBill(bid, '2026-06-' + String(1 + (bk % 28)).padStart(2, '0'), 'ZC-' + bk, [{ description: 'Cambridge Seconds (LBS)', qty: 100, unit: 'LBS' }]); }
+  world.perms = STAFF; world.feed = 'ok'; world.maxInLen = 8000; world.tooLongHits = 0;
+  var zc = await call({ action: 'report_preview', date_from: '2026-06-01', date_to: '2026-11-25', all: true });
+  check('ZC: with 260 more invoices in range (1 Jun – 25 Nov, as on Max\'s screen) and the gateway limit on, Check / Show loads (200) — no "Bad Request", no over-long read', zc.status === 200 && zc.body.ok === true && world.tooLongHits === 0 && (zc.body.rows || []).filter(function (r) { return BULK.indexOf((r.bill_ids || [])[0]) >= 0; }).length >= 260, [zc.status, zc.body.error, world.tooLongHits]);
+  var fakeQb = { url: { pathname: '/rest/v1/wc_decisions', href: 'https://db.test/rest/v1/wc_decisions?' + 'x'.repeat(27070) } };
+  var em = SV.dbReadError(fakeQb, { error: { message: 'Bad Request' }, status: 400 });
+  check('ZC: a failed read names the table, the HTTP status and the reason — never only "Bad Request"', em === 'reading wc_decisions failed (HTTP 400): Bad Request — the request was 27107 characters long, too long for the database gateway', em);
+  world.maxInLen = 30; var zc2 = await call({ action: 'report_preview', date_from: '2026-06-01', date_to: '2026-11-25', all: true });
+  check('…and the route shows that plain message (here forced on the first list read): "The warehouse check failed: reading <table> failed (HTTP 400): Bad Request — …"', zc2.status === 500 && /^The warehouse check failed: reading [a-z_]+ failed \(HTTP 400\): Bad Request/.test(zc2.body.error), zc2.body.error);
+  world.maxInLen = 0;
 
   module.exports = { pass: pass, fail: failN };
   if (require.main === module) { console.log('\nXB route: ' + pass + ' passed, ' + failN + ' failed'); process.exit(failN ? 1 : 0); }

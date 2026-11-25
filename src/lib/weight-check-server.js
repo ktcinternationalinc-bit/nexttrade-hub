@@ -12,15 +12,41 @@ var PAGE = 1000;
 async function all(q) {
   var out = []; var from = 0;
   for (var guard = 0; guard < 60; guard++) {
-    var r = await q().range(from, from + PAGE - 1);
-    if (r.error) { throw new Error(r.error.message); }
+    var qb = q();
+    var r = await qb.range(from, from + PAGE - 1);
+    if (r.error) { throw new Error(dbReadError(qb, r)); }
     out = out.concat(r.data || []);
     if (!r.data || r.data.length < PAGE) { break; }
     from += PAGE;
   }
   return out;
 }
+// v55.83-ZC (Max 25 Nov 06:50, live): "The warehouse check failed: Bad Request". A database read failed with a bare HTTP 400 — the
+// message must say WHICH read failed and why it may have, never only "Bad Request".
+export function dbReadError(qb, r) {
+  var u = qb && qb.url; var table = 'the database';
+  try { if (u) { table = String(u.pathname || u).split('?')[0].split('/').filter(Boolean).pop() || table; } } catch (e) { /* keep the generic name */ }
+  var len = 0; try { len = u ? String(u.href || u).length : 0; } catch (e) { len = 0; }
+  var err = (r && r.error) || {}; var status = r && r.status ? r.status : null;
+  var msg = String(err.message || 'unknown error');
+  var extra = [err.details, err.hint].filter(function (x) { return x && String(x) !== msg; }).join(' — ');
+  return 'reading ' + table + ' failed' + (status ? ' (HTTP ' + status + ')' : '') + ': ' + msg + (extra ? ' — ' + extra : '') +
+    (len > 8000 ? ' — the request was ' + len + ' characters long, too long for the database gateway' : '');
+}
 function chunks(a, n) { var out = []; for (var i = 0; i < a.length; i += n) { out.push(a.slice(i, i + n)); } return out; }
+// v55.83-ZC: an .in() list goes into the web address. 200 short ids fit; 200 comparison item keys (~130 characters each once
+// encoded) made a ~27,000-character address the gateway refused ("Bad Request"). Batch by encoded LENGTH, never only by count.
+export var MAX_IN_CHARS = 6000;
+export function chunksByLength(a, maxChars, maxCount) {
+  var out = []; var cur = []; var len = 0; var lim = maxChars || MAX_IN_CHARS; var cap = maxCount || 200;
+  (a || []).forEach(function (x) {
+    var l = encodeURIComponent(String(x)).length + 3; // + the encoded comma between values
+    if (cur.length && (len + l > lim || cur.length >= cap)) { out.push(cur); cur = []; len = 0; }
+    cur.push(x); len += l;
+  });
+  if (cur.length) { out.push(cur); }
+  return out;
+}
 // v55.83-YX (Max 25 Nov: "warehouse check should only look at nexpac bills and only vendors we select").
 // The selection is versioned in wc_vendor_scope (sql/v55-83-YX-wc-vendor-scope.sql). Until Max saves one — or before that
 // SQL is run — the scope is NexPac only. A vendor is in scope when its vendorKey() is in the latest selection.
@@ -237,7 +263,7 @@ export async function assemble(db, focusIds, floor, opts) {
   // 5. decisions, fingerprints, states
   var keys = items.map(function (i) { return i.item_key; });
   var decs = [];
-  var L_c7 = chunks(keys, 200); for (var i_c7 = 0; i_c7 < L_c7.length; i_c7++) { var c7 = L_c7[i_c7]; decs = decs.concat(await all(function () { return db.from('wc_decisions').select('id, item_key, kind, reason, evidence, assignee, ticket_id, actor, at, comparison_fp, evidence_hash, outcome, snapshot').in('item_key', c7); })); }
+  var L_c7 = chunksByLength(keys, MAX_IN_CHARS); for (var i_c7 = 0; i_c7 < L_c7.length; i_c7++) { var c7 = L_c7[i_c7]; decs = decs.concat(await all(function () { return db.from('wc_decisions').select('id, item_key, kind, reason, evidence, assignee, ticket_id, actor, at, comparison_fp, evidence_hash, outcome, snapshot').in('item_key', c7); })); }
   var byKey = {}; decs.forEach(function (d) { (byKey[d.item_key] = byKey[d.item_key] || []).push(d); });
   items.forEach(function (it) {
     it.comparison_fp = it.inputs ? sha(it.inputs) : null;

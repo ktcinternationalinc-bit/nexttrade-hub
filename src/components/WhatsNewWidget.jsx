@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZC',
+    date: '2026-11-25',
+    title: 'Warehouse check: fixed “Bad Request” when checking a long date range',
+    items: [
+      { text: 'Pressing **Check against the warehouse** for a long range (for example 1 June to today) showed “The warehouse check failed: Bad Request”. The Hub asked for all earlier decisions in one oversized request; it now asks in smaller pieces, so the check loads.' },
+      { text: 'If a read ever fails again, the message says which part failed and why, not just “Bad Request”.' },
+      { superAdminOnly: true, text: 'Technical: wc_decisions .in(item_key) was chunked by count (200 keys ≈ 27,000-character URL; edge logs 25 Nov 11:50 UTC: 400). New chunksByLength (≤ 6,000 encoded characters and ≤ 200 per batch) in assemble() and the saved-report view; all()/allRows() errors go through dbReadError (table, HTTP status, message, details/hint, request length). No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-ZB',
     date: '2026-11-25',
     title: 'Warehouse check: weight against weight AND yards against yards',
