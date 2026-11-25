@@ -58,8 +58,9 @@ export async function POST(req) {
       if (st.error) { throw new Error(st.error.message); }
       if (st.data && st.data.value) { whSource = String(st.data.value); }
       warehouse = await fetchAll(function () {
-        return db.from('pl_warehouse_shipping').select('id, release_key, arrival_date, section, superseded, in_latest_feed, flags').eq('source', whSource).eq('superseded', false).eq('in_latest_feed', true).order('id', { ascending: true });
+        return db.from('pl_warehouse_shipping').select('id, release_key, arrival_date, section, superseded, in_latest_feed, flags').eq('source', whSource).eq('superseded', false).eq('in_latest_feed', true).eq('section', 'main').order('id', { ascending: true });
       });
+      if (!warehouse.length) { whNote = 'No arrival dates are available from the selected warehouse yet. They will appear after the warehouse data syncs.'; }
     } catch (eW) { warehouse = []; whNote = 'The warehouse arrival dates could not be read just now, so none are shown.'; }
 
     var report = buildCustomersOverview({
