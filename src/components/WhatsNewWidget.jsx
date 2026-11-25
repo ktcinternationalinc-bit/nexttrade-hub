@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZJ',
+    date: '2026-11-25',
+    title: 'Phone: the Call button is always visible',
+    items: [
+      { text: 'In the green phone panel, the ⌫ Delete and 📞 Call buttons now sit right under the number, above the keypad, so they are never cut off on a small screen. The panel also scrolls if the screen is short, and pressing Enter in the number box places the call.' },
+      { text: 'Technical: PhoneWidget panel overflow-hidden → overflow-y-auto, maxHeight 70vh → calc(100vh - 6rem); Delete/Call row moved above DIAL_KEYS grid; number input onKeyDown Enter → makeCall() with the same guards as the button (number, toE164, callState idle). Test test-v55-83-zj-phone-call-button.js.', superAdminOnly: true }
+    ]
+  },
+  {
     version: 'v55.83-ZI',
     date: '2026-11-25',
     title: 'Phone: a missed call goes to voicemail instead of "an application error has occurred"',

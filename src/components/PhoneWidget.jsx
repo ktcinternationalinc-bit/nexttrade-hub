@@ -602,7 +602,11 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
 
       {/* Phone panel — anchored to the left now, matching the button */}
       {open && (
-        <div className="fixed bottom-20 left-4 w-80 bg-white rounded-2xl shadow-2xl z-50 overflow-hidden border" style={{ maxHeight: '70vh' }}>
+        // v55.83-ZJ (Max 25 Nov, photo of Aman's screen) — was overflow-hidden:
+        // on a short screen the keypad filled the 70vh panel and the Call button
+        // was clipped with no way to scroll. Now the panel scrolls, and the
+        // Delete / Call row sits ABOVE the keypad so it is always visible.
+        <div className="fixed bottom-20 left-4 w-80 bg-white rounded-2xl shadow-2xl z-50 overflow-y-auto border" style={{ maxHeight: 'calc(100vh - 6rem)' }}>
           {/* Header */}
           <div className="bg-slate-900 text-white p-4">
             <div className="flex justify-between items-center">
@@ -661,6 +665,7 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
           {tab === 'dial' && (
             <div className="p-4">
               <input value={number} onChange={e => setNumber(e.target.value)} placeholder="+1 (555) 123-4567"
+                onKeyDown={e => { if (e.key === 'Enter' && number && toE164(number) && callState === 'idle') { e.preventDefault(); makeCall(); } }}
                 className="w-full text-center text-xl font-bold border-b-2 border-slate-200 pb-2 mb-1 outline-none" />
               {/* v55.29 — live E.164 preview. Shows the user exactly what number
                   will be dialed. If they type just 10 digits, this confirms
@@ -674,19 +679,20 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
                   )
                 ) : null}
               </div>
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                {DIAL_KEYS.flat().map(k => (
-                  <button key={k} onClick={() => setNumber(n => n + k)}
-                    className="py-3 rounded-lg bg-slate-50 text-lg font-bold hover:bg-slate-100 transition">{k}</button>
-                ))}
-              </div>
-              <div className="flex gap-2">
+              {/* v55.83-ZJ — Delete / Call row moved ABOVE the keypad so it can never be pushed off a short screen. */}
+              <div className="flex gap-2 mb-3">
                 <button onClick={() => setNumber(n => n.slice(0, -1))} className="flex-1 py-3 rounded-lg bg-slate-100 text-sm font-semibold">⌫ Delete</button>
                 {/* v55.29 — disable Call if the typed number can't be normalized.
                     Better to grey out the button than send to /outbound and get
                     the "must be in E.164" rejection. */}
                 <button onClick={() => makeCall()} disabled={!number || !toE164(number) || callState !== 'idle'}
                   className="flex-1 py-3 rounded-lg bg-green-500 text-white font-bold text-sm disabled:opacity-50">📞 Call</button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {DIAL_KEYS.flat().map(k => (
+                  <button key={k} onClick={() => setNumber(n => n + k)}
+                    className="py-3 rounded-lg bg-slate-50 text-lg font-bold hover:bg-slate-100 transition">{k}</button>
+                ))}
               </div>
             </div>
           )}
