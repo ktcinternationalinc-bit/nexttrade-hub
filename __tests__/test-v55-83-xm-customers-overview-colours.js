@@ -82,5 +82,22 @@ var h2 = RS.renderToStaticMarkup(React.createElement(V.CustomersOverviewView, { 
 function rowHtml(h, text) { var i = h.indexOf(text); var a = h.lastIndexOf('<tr', i); return h.slice(a, h.indexOf('</tr>', i)); }
 check('24: screen — the $90 and the $200 invoices say plain “arrived” (no red cell, no “ARRIVED, not paid”); the $200.01 one is still red', rowHtml(h2, '>N21<').indexOf('ARRIVED, not paid') < 0 && rowHtml(h2, '>N21<').indexOf('· arrived') > 0 && rowHtml(h2, '>N21<').indexOf('background:#dc2626') < 0 && rowHtml(h2, '>N22<').indexOf('ARRIVED, not paid') < 0 && rowHtml(h2, '>N24<').indexOf('ARRIVED, not paid') > 0 && rowHtml(h2, '>N24<').indexOf('background:#dc2626') > 0, [rowHtml(h2, '>N21<').slice(-260)]);
 check('25: screen — the amount left is still shown for the $90 invoice, and the customer badge says 1 arrived, not paid', rowHtml(h2, '>N21<').indexOf('$90.00') > 0 && /1 arrived, not paid/.test(h2) && !/[23] arrived, not paid/.test(h2));
+var LIGHT_GREEN = 'background:#f0fdf4';
+check('26: small open invoices use very light green, including exactly $200; $200.01 stays yellow when partially paid',
+  [21, 22, 23].every(function (id) { return trOf(h2, '>N' + id + '<').includes(LIGHT_GREEN); }) && trOf(h2, '>N24<').includes(YELLOW));
+check('27: small balances still show red amounts, with plain Partially paid only after a payment was recorded',
+  /color:#991b1b">\$90\.00</.test(rowHtml(h2, '>N21<')) &&
+  /color:#14532d">Partially paid</.test(rowHtml(h2, '>N21<')) &&
+  !/Unpaid|Partially paid/.test(rowHtml(h2, '>N23<')) && i2(23).status === 'unpaid');
+check('28: the customer’s small overdue total stays red even when the customer has other larger balances',
+  /color:#991b1b;font-weight:800">\$90\.00 \(1\)</.test(rowHtml(h2, 'Alpha Co')) && !trOf(h2, 'Alpha Co').includes(LIGHT_GREEN));
+var smallReport = C.buildCustomersOverview({ invoices: [inv2[0]], payments: pay2, customers: customers, warehouse: warehouse, today: '2026-11-23', business: 'US' });
+var stackedReport = C.buildCustomersOverview({ invoices: inv2.slice(0, 2), payments: pay2, customers: customers, warehouse: warehouse, today: '2026-11-23', business: 'US' });
+check('29: a known small USD customer balance uses light green, while multiple small invoices totalling over $200 and restricted balances do not',
+  trOf(html({ report: smallReport }), 'Alpha Co').includes(LIGHT_GREEN) &&
+  !trOf(html({ report: stackedReport }), 'Alpha Co').includes(LIGHT_GREEN) &&
+  C.customerTone(Object.assign({}, smallReport.rows[0], { balance_incomplete: true })) === '');
+check('30: the USD styling does not change the Egypt side', C.invoiceTone(rep2e.rows[0].invoices[0]) === 'yellow' &&
+  C.customerTone(rep2e.rows[0]) === 'yellow');
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 if (failN) { process.exit(1); }

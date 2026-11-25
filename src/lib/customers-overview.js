@@ -161,8 +161,10 @@ export function owesOrUnknown(row) { return !!row && ((Number(row.owed) || 0) > 
 // v55.83-XM (Max, Nov 23: "need the ones that arrived and paid fully in green. Partially paid in yellow.")
 // ONE rule for the colour of a row, used for an invoice and for a customer:
 //   invoice   green  = the goods ARRIVED (every release has a warehouse date, none after today) AND the invoice is fully paid
-//             yellow = partially paid (arrived or not)
-//   customer  yellow = at least one of its invoices in the period is partially paid
+//             light green = a small open USD balance
+//             yellow = partially paid with a larger USD balance or a non-USD balance
+//   customer  yellow = at least one of its invoices in the period is yellow
+//             light green = a known USD balance of $200 or less across the customer's invoices
 //             green  = it has invoices in the period, EVERY one of them arrived and is fully paid, and no balance is withheld
 // Anything else keeps its normal colour. A withheld amount ('limited') is never called paid.
 export var SINCE_JUNE = '2026-06-01';
@@ -172,14 +174,18 @@ export var SINCE_JUNE = '2026-06-01';
 export var SMALL_OPEN_USD = 200; // this many dollars OR LESS (Max, same day: "anything owed $200 or under does not require a red flag")
 export function invoiceTone(v) {
   if (!v) { return ''; }
+  if (v.small_open === true) { return 'smallBalance'; }
   if (v.status === 'partial') { return 'yellow'; }
   if (v.status === 'paid' && v.arrived === true) { return 'green'; }
   return '';
 }
 export function customerTone(r) {
   var inv = (r && r.invoices) || []; if (!inv.length) { return ''; }
-  if (inv.some(function (v) { return v.status === 'partial'; })) { return 'yellow'; }
+  if (inv.some(function (v) { return invoiceTone(v) === 'yellow'; })) { return 'yellow'; }
   if (r.balance_incomplete || r.limited_count > 0) { return ''; }
+  if (r.owed > 0 && r.owed <= SMALL_OPEN_USD &&
+      inv.some(function (v) { return v.small_open === true; }) &&
+      inv.every(function (v) { return v.status === 'paid' || v.small_open === true; })) { return 'smallBalance'; }
   if (inv.every(function (v) { return v.status === 'paid' && v.arrived === true; })) { return 'green'; }
   return '';
 }
