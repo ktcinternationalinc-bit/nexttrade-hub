@@ -50,6 +50,34 @@ for (const [pages, error] of [
   assert.match(rejected.error, error);
 }
 
+const splitHeader = [
+  word('ACCOUNT NUMBER', 380, 500), word('STATEMENT PERIOD', 488, 500),
+  word('1234567890', 398, 486), word('01/01/26 - 01/31/26', 495, 486),
+  word('BEGINNING BALANCE', 370, 455), right('$100.00', 570, 455),
+  word('ENDING BALANCE', 370, 430), right('$70.00', 570, 430),
+  word('POSTING', 30, 392), word('DEPOSITS & OTHER', 328, 392), word('WITHDRAWALS &', 419, 392), word('DAILY', 528, 392),
+  word('TRANSACTION DESCRIPTION', 142, 387),
+  word('DATE', 37, 383), right('CREDITS (+)', 391, 383), right('OTHER DEBITS (-)', 488, 383), right('BALANCE', 560, 383),
+  word('01/01/2026', 28, 365), word('BEGINNING BALANCE', 79, 365), right('$100.00', 572, 365),
+  word('01/21/2026', 28, 350), word('Electronic debit', 79, 350), right('$20.00', 485, 350),
+  word('Ref A', 79, 340), right('80.00', 572, 340),
+  word('01/23/2026', 28, 327), word('Transfer out', 79, 327), right('10.00', 485, 327),
+  word('Ref B', 79, 317), right('70.00', 572, 317),
+  word('NUMBER OF DEPOSITS/CHECKS PAID', 79, 305), word('0', 390, 305), word('0', 477, 305)
+];
+assert.deepEqual(readUsStatementText([splitHeader, []]), {
+  rows: [
+    { date: '2026-01-21', name: 'Electronic debit Ref A', direction: 'out', amount_abs: 20 },
+    { date: '2026-01-23', name: 'Transfer out Ref B', direction: 'out', amount_abs: 10 }
+  ],
+  accountMask: '7890', checkedBalances: 2, pages: 2
+});
+assert.match(readUsStatementText([change(splitHeader, '80.00', '80.01')]).error, /printed balance on 2026-01-21/);
+assert.match(readUsStatementText([change(splitHeader, '$70.00', '$70.01')]).error, /printed closing balance/);
+assert.match(readUsStatementText([splitHeader.map(item =>
+  item.y === 455 && item.str === '$100.00' ? { ...item, str: '$100.01' } : item
+)]).error, /printed opening balances disagree/);
+
 function mock(id, exports) {
   const filename = require.resolve(id);
   const entry = new Module(filename, module);
