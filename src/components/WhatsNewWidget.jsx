@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZN',
+    date: '2026-11-26',
+    title: 'Profitability: the Lines to fix list says plainly what is wrong and takes you to the exact place to fix it',
+    items: [
+      { text: '**Every row of “Lines to fix” now says, in one sentence, what is wrong and, in one more, exactly what to do.** No more “either … or”: the Hub works out which case it is.' },
+      { text: '**One button per row takes you to the exact place to fix it.** That is the unit box of that product in Set-up, its supplier-bill link, the invoice, or its row in By invoice. The box is highlighted and a line tells you what to do there.' },
+      { text: '**“← Back to the fix list”** takes you back to the same period and the same row. The list reloads: the row is gone (✓ Fixed) or it says what is still open.' },
+      { text: '**When the name already says the unit** (for example “STOCK PVC ROLLS BY KGs”), the row offers **“✓ Yes, kilos”**: one click saves it.' },
+      { text: '**“The shipping charged cannot be worked out”** now names the product line with no unit that causes it, and points to that row. Example: on invoice America 1747 it is “STOCK PVC ROLLS BY KGs”. Fixing that unit clears both rows.' },
+      { text: '**The “How … is worked out” pop-up:** the button on the lines with no cost now says what it does and how many, for example **“Fix 25 lines with no cost →”**, with one line under it on what fixing means. With 3 lines or fewer, each one is shown right there (invoice, release, what is missing) with its own fix button. With nothing to fix there is no button. After a fix the count and the amount drop by themselves, and Back returns to the pop-up.' },
+      { text: '**“Paid to suppliers, truckers, brokers”** now says plainly: nothing to do. Their cost is already counted, sale by sale. Only if a payment there is not for goods or shipping (rent, for example) do you open it and change its category.' },
+      { superAdminOnly: true, text: 'Technical: openTasks() (src/lib/pnl-period.js) adds what / todo / fix {go, label, direction} / suggest to every task, and how = what + todo. The terms row reads its no-weight blockers from the cells: in profitability.js a missing weight is the only reason transport_revenue is null. unitFromName() proposes a unit only when the name says exactly one. ProfitabilityTab: fixBtn / sugBtn, goPlace / backToFixList (keeps pOpen + the row key), a Set-up focus on data-unit-name, a back bar, and a Fixed / Still open note; formulaFixes() gives the pop-up its counts, the what-fixing-means line and up to 3 lines with their tasks (PnlFormula fixBlock; onFix comes back to the pop-up). AccountingTab: Profitability is kept alive; goFrom(k, {backLabel, note}). No SQL. Test: test-v55-83-zn-fix-list-clear.js.' },
+    ]
+  },
+  {
     version: 'v55.83-ZP',
     date: '2026-11-26',
     title: 'Partner fee in its own column, counted once — and RTM money that is not linked to bills yet',

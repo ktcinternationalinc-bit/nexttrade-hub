@@ -11,7 +11,7 @@ import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
-import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, addPeriodCell, blankPeriodRow, settlePeriodRow, avgProfitPerUnit } from '../lib/pnl-period';
+import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, formulaFixes, addPeriodCell, blankPeriodRow, settlePeriodRow, avgProfitPerUnit } from '../lib/pnl-period';
 import FixChips from './FixChips'; // v55.83-WN — each missing thing on a line is a button that jumps to where it is fixed
 import { needCategoryList, pickerState, pickableCategories, currentCategoryOf, categoryLabel, samePick } from '../lib/cat-picker-state'; // v55.83-WR — the category menu loads in the pop-up too
 import AvgProfitCell from './AvgProfitCell'; // v55.83-WK — average profit per unit, never from an unknown profit
@@ -206,7 +206,54 @@ export default function ProfitabilityTab(props) {
   // its edit window on the Invoices screen (the same hand-over the invoice pop-up's Edit uses): shipping terms and the shipping cost box are at its top
   // v55.83-WJ (Max: "the exact invoice and exact area where i would enter that amount") — the hand-over also says WHERE: the Invoices
   // screen opens the invoice for editing, scrolls to its shipping box, opens the internal breakdown and puts the cursor in the cost box
-  function editInvoice(id) { if (!id) { return; } setFull(false); setFShow(null); try { window.__ntInvoiceFocus = 'shipping'; window.__ntOpenInvoiceEdit = id; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id })); } catch (e5) {} onGo('invoices'); }
+  function editInvoice(id, backOpts) { if (!id) { return; } setFull(false); setFShow(null); try { window.__ntInvoiceFocus = 'shipping'; window.__ntOpenInvoiceEdit = id; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id })); } catch (e5) {} onGo('invoices', backOpts); }
+  // v55.83-ZN (Max, 26 Nov: "a button to take you to the exact place to update or fix it ... with direction and then a back button to
+  // take you back to that screen ... and it updates correctly on this blotter after it is updated") — ONE button per row of the fix
+  // list: it opens the exact place (the unit box of that description in Set-up, that product's supplier-bill link, the invoice's
+  // edit window, its row in By invoice), highlights it, shows the row's direction there, and remembers the way back: the same
+  // period opened and the same row. A save reloads the report, so on the way back the row is gone or says what is still open.
+  var sFF = useState(null); var fixFrom = sFF[0]; var setFixFrom = sFF[1]; // { pOpen, key, title, direction, y }
+  var sFN = useState(''); var focusName = sFN[0]; var setFocusName = sFN[1]; // the description whose unit box is highlighted in Set-up
+  var sRet = useState(null); var fixReturned = sRet[0]; var setFixReturned = sRet[1]; // { key, title } — shown once back on the list
+  var sFF2 = useState(null); var fromFormula = sFF2[0]; var setFromFormula = sFF2[1]; // { key, label } — the fix list was opened from that period's pop-up
+  function markEl(el) { if (!el) { return; } try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); var o = el.style.outline; el.style.outline = '3px solid #f59e0b'; el.style.outlineOffset = '2px'; setTimeout(function () { el.style.outline = o; }, 4000); } catch (eM) {} }
+  // opts { pOpen, formula, formulaLabel } — v55.83-ZN: a fix started from the "How … is worked out" pop-up comes back to that pop-up
+  function goPlace(t, opts) {
+    var f = t && t.fix; if (!f) { return; }
+    var y0 = 0; try { y0 = window.scrollY || 0; } catch (eY) {}
+    var b = { pOpen: opts && opts.pOpen !== undefined ? opts.pOpen : pOpen, key: t.key, title: t.title, direction: f.direction || '', y: y0, formula: (opts && opts.formula) || null, formulaLabel: (opts && opts.formulaLabel) || '' };
+    var backWords = b.formula ? '“How ' + b.formulaLabel + ' is worked out”' : 'the fix list';
+    setFixReturned(null);
+    if (f.go === 'invoice') { if (!f.invoice_id) { return; } setFixFrom(b); editInvoice(f.invoice_id, { backLabel: backWords, note: f.direction || '' }); return; }
+    setFixFrom(b); setFull(false); setFShow(null);
+    if (f.go === 'unit' || f.go === 'names') { setOpen(null); setView('setup'); setNameQ(f.name || ''); setFocusName(f.go === 'unit' ? (f.name || '') : ''); if (f.go === 'names') { setTimeout(function () { markEl(document.getElementById('pl-setup-names')); }, 200); } return; }
+    if (f.go === 'link') { openSetupFor(f.name, f.group_id); return; }
+    if (f.go === 'invoice_row') { setSearchQ(String(f.invoice || '')); setView('invoice'); setOpen(f.invoice_id ? 'invoice:' + f.invoice_id : null); }
+  }
+  function backToFixList() {
+    var f = fixFrom; if (!f) { return; }
+    setFixFrom(null); setFocusName(''); setView('period'); setPOpen(f.pOpen); setOpen(null); setFixReturned({ key: f.key, title: f.title });
+    if (f.formula) { setFShow({ key: f.formula, pinned: true }); } // back to the pop-up it was started from (its counts come from the reloaded report)
+    setTimeout(function () {
+      try {
+        var hit = null; document.querySelectorAll('[data-task-key]').forEach(function (el) { if (el.getAttribute('data-task-key') === f.key) { hit = el; } });
+        if (hit) { hit.scrollIntoView({ block: 'center' }); var o = hit.style.boxShadow; hit.style.boxShadow = 'inset 0 0 0 3px #f59e0b'; setTimeout(function () { hit.style.boxShadow = o; }, 2500); }
+        else { var bx = document.getElementById('nt-fix-list') || document.getElementById('nt-fix-returned'); if (bx) { bx.scrollIntoView({ block: 'start' }); } else { window.scrollTo(0, f.y || 0); } }
+      } catch (eB) {}
+    }, 150);
+  }
+  // the unit box of the description being fixed: scrolled to, outlined and given the cursor once Set-up is on screen
+  useEffect(function () {
+    if (!focusName || view !== 'setup') { return; }
+    var tm = setTimeout(function () { try { var hit = null; var nz = function (x) { return String(x || '').replace(/\s+/g, ' ').trim().toLowerCase(); }; document.querySelectorAll('[data-unit-name]').forEach(function (el) { if (nz(el.getAttribute('data-unit-name')) === nz(focusName)) { hit = el; } }); if (hit) { markEl(hit); if (hit.focus) { hit.focus({ preventScroll: true }); } } } catch (eF) {} }, 250);
+    return function () { clearTimeout(tm); };
+  }, [focusName, view, data]);
+  // back from the Invoices screen (AccountingTab's "← Back to the fix list"): reload the report — the invoice may have changed — and land on the row
+  useEffect(function () {
+    function onBack(ev) { if (!ev || !ev.detail || ev.detail.sub !== 'profitability' || !fixFrom) { return; } load(applied.from, applied.to); backToFixList(); }
+    try { window.addEventListener('nt-acct-returned', onBack); } catch (eL) {}
+    return function () { try { window.removeEventListener('nt-acct-returned', onBack); } catch (eL2) {} };
+  });
   // …and a product with no supplier cost: Set-up, already filtered to that product, where a supplier bill line is linked to it
   // v55.83-WJ — straight to THAT product in Set-up with its “link supplier bill” control already open (the same jump the cost
   // chips use: goFix scrolls to the product card and outlines it); a description that is not under a product yet goes to the names list, filtered
@@ -564,47 +611,60 @@ export default function ProfitabilityTab(props) {
       // resolved row leaves the list by itself.
       var ot = openTasks(cs, revH ? false : hidden, { revenueHidden: revH });
       var invs = periodInvoices(cs, hidden);
+      // v55.83-ZN (Max, 26 Nov) — ONE clear button per row: t.fix (from openTasks) names the exact place; goPlace opens it, highlights it,
+      // shows the row's direction there and keeps the way back. A unit the description names itself ("… BY KGs") is one click: ✓ Yes, kilos.
+      function fixBtn(t) {
+        var f = t.fix; if (!f) { return null; }
+        if ((f.go === 'unit' || f.go === 'names' || f.go === 'link') && !canEdit) { return <span style={{ color: SUB }}>needs “P&L: Edit Product Costs”</span>; }
+        return <button onClick={function (e) { e.stopPropagation(); goPlace(t); }} title={f.direction || ''} className="px-2.5 py-1 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>{f.label}</button>;
+      }
+      function sugBtn(t) {
+        var s0 = t.suggest; if (!s0 || !canEdit) { return null; }
+        return <button disabled={busy} onClick={function (e) { e.stopPropagation(); act({ action: 'set_name_unit', names: [s0.name], unit: s0.unit }, 'Saved: “' + s0.name + '” is sold in ' + s0.words + '. The list is refreshed.'); }} title={'Its name says ' + s0.words + ': saves that unit for “' + s0.name + '”'} className="px-2.5 py-1 rounded font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>{'✓ Yes, ' + s0.words}</button>;
+      }
       function taskAction(t) {
         if (t.action === 'type') {
           if (!canEdit) { return <span style={{ color: SUB }}>needs “P&L: Edit Product Costs”</span>; }
           if (!data.part_estimates_ready) { return <button onClick={function (e) { e.stopPropagation(); goFix('containers', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>Open Containers →</button>; }
           var tk = 'ot:' + t.key; var inv0 = (t.invoices || []).filter(function (x) { return !!x.invoice_id; })[0];
-          return <span className="flex gap-1 items-center flex-wrap justify-end" onClick={function (e) { e.stopPropagation(); }}>{inv0 ? <button onClick={function (e) { e.stopPropagation(); editInvoice(inv0.invoice_id); }} title="Opens this invoice for editing: its shipping terms (EXW / CNF) and “Our shipping cost” box are at the top" className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>{'Open invoice ' + inv0.invoice + ' to set it →'}</button> : null}<span style={{ color: SUB }}>or type it here:</span>
+          return <span className="flex gap-1 items-center flex-wrap justify-end" onClick={function (e) { e.stopPropagation(); }}>{fixBtn(t)}<span style={{ color: SUB }}>or type it here:</span>
             <span>$</span><input value={draft[tk] === undefined ? '' : draft[tk]} onChange={function (e) { d(tk, e.target.value); }} placeholder={t.part + ' cost'} aria-label={t.part + ' cost for release ' + t.release} className="nt-light px-1.5 py-0.5 rounded text-[11px]" style={Object.assign({ width: 96 }, inp)} />
             <button disabled={draft[tk] === undefined || String(draft[tk]).trim() === ''} onClick={function (e) { e.stopPropagation(); act({ action: 'set_part_estimate', release: t.release, part: t.part, amount: draft[tk] }, (t.part === 'trucking' ? 'Trucking' : 'Freight') + ' saved for ' + t.release + '. The list is refreshed.').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[tk]; setDraft(o); } }); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: (draft[tk] === undefined || String(draft[tk]).trim() === '') ? '#94a3b8' : '#047857', color: '#ffffff' }}>Save</button>
           </span>;
         }
-        // v55.83-VT (Max, Nov 20: "it should give you that pop-up there, what to fix, and then it'll update it in its own place")
-        if (t.action === 'unit') {
-          if (!canEdit) { return <span style={{ color: SUB }}>needs “P&L: Edit Product Costs”</span>; }
-          return <span className="flex flex-col gap-1" onClick={function (e) { e.stopPropagation(); }}>{(t.names || []).map(function (nm) { return <span key={nm} className="flex gap-1 items-center"><b style={{ maxWidth: 220 }}>{nm}</b><span>is sold in</span>
-            <select value="" disabled={busy} aria-label={'Unit of ' + nm} onChange={function (e) { var u = e.target.value; if (!u) { return; } act({ action: 'set_name_unit', names: [nm], unit: u }, 'Unit saved for “' + nm + '”. The list is refreshed.'); }} className="nt-light px-1.5 py-0.5 rounded text-[11px] font-bold" style={inp}>
-              <option value="">pick the unit…</option>{['lb', 'kg', 't', 'yd', 'lm'].map(function (u) { return <option key={u} value={u}>{UNIT_WORDS[u]}</option>; })}</select></span>; })}</span>;
-        }
         if (t.action === 'cost') {
           if (!canEdit) { return <span style={{ color: SUB }}>needs “P&L: Edit Product Costs”</span>; }
-          if (!data.manual_costs_ready) { return <button onClick={function (e) { e.stopPropagation(); goFix('setup', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Open Set-up →</button>; }
+          if (!data.manual_costs_ready) { return fixBtn(t); }
           var ck = 'oc:' + t.key; var cEmpty = draft[ck] === undefined || String(draft[ck]).trim() === '';
-          return <span className="flex gap-1 items-center flex-wrap justify-end" onClick={function (e) { e.stopPropagation(); }}><button onClick={function (e) { e.stopPropagation(); openSetupFor(t.product, t.group_id); }} title="Opens this product in Set-up with its supplier-bill link list already open" className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Link its supplier bill →</button><span style={{ color: SUB }}>or type the cost here:</span>
+          return <span className="flex gap-1 items-center flex-wrap justify-end" onClick={function (e) { e.stopPropagation(); }}>{fixBtn(t)}<span style={{ color: SUB }}>or type the cost here:</span>
             <span>$</span><input value={draft[ck] === undefined ? '' : draft[ck]} onChange={function (e) { d(ck, e.target.value); }} placeholder={t.cost_unit === 'sold_unit' ? 'cost per yd' : 'cost per lb'} aria-label={'Cost per ' + (t.cost_unit === 'sold_unit' ? 'yard' : 'pound') + ' of ' + t.product} className="nt-light px-1.5 py-0.5 rounded text-[11px]" style={Object.assign({ width: 96 }, inp)} /><span>{t.cost_unit === 'sold_unit' ? 'per yd' : 'per lb'}</span>
             <button disabled={cEmpty} onClick={function (e) { e.stopPropagation(); act({ action: 'set_manual_cost', level: 'group', group_id: t.group_id, cost_unit: t.cost_unit === 'sold_unit' ? 'sold_unit' : 'lb', cost_per_lb: draft[ck], commission_per_lb: '' }, 'Cost saved for ' + t.product + ' (typed by hand). The list is refreshed.').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[ck]; setDraft(o); } }); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: cEmpty ? '#94a3b8' : '#047857', color: '#ffffff' }}>Save</button>
           </span>;
         }
-        if (t.action === 'open_invoice') { return <span>{showProfit && t.invoice_id ? <button onClick={function (e) { e.stopPropagation(); setPeekId(t.invoice_id); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open this invoice →</button> : null}<button onClick={function (e) { e.stopPropagation(); goFix('invoice', t); }} className="ml-1 px-2 py-0.5 rounded font-bold" style={{ background: '#ffffff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>its row in By invoice</button></span>; }
-        return <button onClick={function (e) { e.stopPropagation(); goFix('setup', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Open Set-up →</button>;
+        // v55.83-VT kept (Max, Nov 20: "it should give you that pop-up there, what to fix, and then it'll update it in its own place"):
+        // the unit can still be picked right in the row; ZN adds the one-click proposal and the button to the exact place in Set-up
+        var nmList = (t.kind === 'pounds' || t.kind === 'not_shared') ? (t.names || []) : (t.fix && t.fix.go === 'unit' && t.fix.name ? [t.fix.name] : []);
+        return <span className="flex gap-1 items-center flex-wrap justify-end" onClick={function (e) { e.stopPropagation(); }}>{sugBtn(t)}
+          {canEdit && nmList.map(function (nm) { return <span key={nm} className="flex gap-1 items-center">{nmList.length > 1 ? <b style={{ maxWidth: 220 }}>{nm}</b> : null}<span style={{ color: SUB }}>{t.suggest ? 'or pick:' : 'pick here:'}</span>
+            <select value="" disabled={busy} aria-label={'Unit of ' + nm} onChange={function (e) { var u = e.target.value; if (!u) { return; } act({ action: 'set_name_unit', names: [nm], unit: u }, 'Unit saved for “' + nm + '”. The list is refreshed.'); }} className="nt-light px-1.5 py-0.5 rounded text-[11px] font-bold" style={inp}>
+              <option value="">pick the unit…</option>{['lb', 'kg', 't', 'yd', 'lm'].map(function (u) { return <option key={u} value={u}>{UNIT_WORDS[u]}</option>; })}</select></span>; })}
+          {fixBtn(t)}</span>;
       }
       // v55.83-WN — a button on a sale line jumps to its numbered row above, marks it for a moment and puts the cursor in its box / menu
       function goTask(f) { try { var el = document.getElementById('nt-open-task-' + f.n); if (!el) { return; } el.scrollIntoView({ block: 'center', behavior: 'smooth' }); var old = el.style.boxShadow; el.style.boxShadow = 'inset 0 0 0 3px #f59e0b'; setTimeout(function () { el.style.boxShadow = old; }, 2500); var first = el.querySelector('input, select') || el.querySelector('span:last-child button'); if (first && first.focus) { first.focus({ preventScroll: true }); } } catch (eG) {} }
       var openBox = ot.tasks.length === 0 ? null : <div className="mb-2 rounded-lg" style={{ background: '#ffffff', border: '1px solid #f59e0b' }}>
         <div className="px-2 py-1.5 font-extrabold text-[12px]" style={{ background: '#fef3c7', color: '#92400e' }}>{'What remains open in ' + r.label + ': ' + ot.tasks.length + ' thing(s) to fix, covering ' + ot.lines + ' sale line(s). Fix one and it leaves this list.'}</div>
-        {ot.tasks.slice(0, 100).map(function (t, i) { return <div key={t.key} id={'nt-open-task-' + (i + 1)} className="px-2 py-1.5 text-[11px] flex gap-2 items-start flex-wrap" style={{ borderTop: '1px solid ' + LINE, color: INK }}>
-          <span style={{ flex: '1 1 420px' }}><b>{(i + 1) + '. ' + t.title + '.'}</b>{' ' + t.how}<span style={{ color: SUB }}>{' — ' + t.lines + ' line(s)' + (t.sold_for === null || t.sold_for === undefined ? '' : ', sold for $' + fmt(t.sold_for)) /* v55.83-XK — no sale amount for a researcher */ + ((t.kind === 'trucking' || t.kind === 'freight') && t.charged > 0 ? ' · the invoice charges the customer $' + fmt(t.charged) + ' for shipping' : '') + (t.invoices.length ? ' · invoice ' : '')}{t.invoices.slice(0, 6).map(function (x) { return x.invoice_id ? <button key={x.invoice} onClick={function (ev) { ev.stopPropagation(); setPeekId(x.invoice_id); }} title="Open this invoice on top of this page" className="mr-1 px-1.5 rounded font-extrabold" style={{ background: '#dbeafe', color: '#1d4ed8', border: '1px solid #93c5fd' }}>{x.invoice + ' ↗'}</button> : <span key={x.invoice} className="mr-1">{x.invoice}</span>; })}{t.invoices.length > 6 ? '+' + (t.invoices.length - 6) + ' more' : ''}</span></span>
+        {ot.tasks.slice(0, 100).map(function (t, i) { return <div key={t.key} id={'nt-open-task-' + (i + 1)} data-task-key={t.key} className="px-2 py-1.5 text-[11px] flex gap-2 items-start flex-wrap" style={{ borderTop: '1px solid ' + LINE, color: INK }}>
+          <span style={{ flex: '1 1 420px' }}><b>{(i + 1) + '. ' + t.title + '.'}</b>
+            <div className="mt-0.5">{t.what || t.how}</div>
+            {t.todo ? <div className="mt-0.5"><b style={{ color: '#92400e' }}>What to do: </b>{t.todo}</div> : null}
+            <div className="mt-0.5" style={{ color: SUB }}>{t.lines + ' line(s)' + (t.sold_for === null || t.sold_for === undefined ? '' : ', sold for $' + fmt(t.sold_for)) /* v55.83-XK — no sale amount for a researcher */ + ((t.kind === 'trucking' || t.kind === 'freight') && t.charged > 0 ? ' · the invoice charges the customer $' + fmt(t.charged) + ' for shipping' : '') + (t.invoices.length ? ' · invoice ' : '')}{t.invoices.slice(0, 6).map(function (x) { return x.invoice_id ? <button key={x.invoice} onClick={function (ev) { ev.stopPropagation(); setPeekId(x.invoice_id); }} title="Open this invoice on top of this page" className="mr-1 px-1.5 rounded font-extrabold" style={{ background: '#dbeafe', color: '#1d4ed8', border: '1px solid #93c5fd' }}>{x.invoice + ' ↗'}</button> : <span key={x.invoice} className="mr-1">{x.invoice}</span>; })}{t.invoices.length > 6 ? '+' + (t.invoices.length - 6) + ' more' : ''}</div></span>
           <span>{taskAction(t)}</span>
         </div>; })}
         {ot.tasks.length > 100 && <div className="px-2 py-1 text-[10px]" style={{ color: SUB }}>{'Showing the first 100 of ' + ot.tasks.length + '.'}</div>}
         <div className="px-2 py-1 text-[10px]" style={{ color: SUB, borderTop: '1px solid ' + LINE }}>A figure that is already there — a bill, a typed figure or an estimate, also 0 — counts as known and is not listed. A bill for the release always replaces a typed figure or an estimate.</div>
       </div>;
-      var fixBox = fx.rows.length === 0 ? null : <div className="mb-3 rounded-lg p-2" style={{ background: '#fffbeb', border: '2px solid #f59e0b' }}>
+      var fixBox = fx.rows.length === 0 ? null : <div id="nt-fix-list" className="mb-3 rounded-lg p-2" style={{ background: '#fffbeb', border: '2px solid #f59e0b' }}>
         <div className="font-extrabold text-[12px]" style={{ color: '#92400e' }}>{'⚠ Lines to fix — ' + fx.rows.length + ' of ' + fx.total + ' sale lines in ' + r.label + ' are missing a cost, so their profit is not counted yet.'}</div>
         {openBox}
         <div className="text-[11px] mb-1" style={{ color: '#92400e' }}>The same sale lines, one by one. Click what is missing on a line and it takes you to its number in the list above, where it is fixed:</div>
@@ -620,6 +680,9 @@ export default function ProfitabilityTab(props) {
         {fx.rows.length > 300 && <div className="text-[10px] mt-1" style={{ color: SUB }}>{'Showing the 300 biggest of ' + fx.rows.length + '.'}</div>}
       </div>;
       return <div>
+        {/* v55.83-ZN — back from fixing a row: it says whether that row is now gone (fixed) or what is still open, from the reloaded report */}
+        {fromFormula && fromFormula.key === r.key && <div className="mb-2"><button onClick={function (e) { e.stopPropagation(); setFromFormula(null); setFShow({ key: r.key, pinned: true }); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>{'← Back to “How ' + fromFormula.label + ' is worked out”'}</button><span className="ml-2 text-[11px]" style={{ color: SUB }}>Its figures are worked out again from what you fix here.</span></div>}
+        {fixReturned && (function () { var still = ot.tasks.filter(function (k) { return k.key === fixReturned.key; })[0]; return <div id="nt-fix-returned" role="status" className="mb-2 rounded-lg px-2 py-1.5 text-[12px] font-bold flex gap-2 items-center flex-wrap" style={busy ? { background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1' } : (still ? { background: '#fef3c7', color: '#78350f', border: '2px solid #f59e0b' } : { background: '#dcfce7', color: '#14532d', border: '2px solid #16a34a' })}><span style={{ flex: '1 1 300px' }}>{busy ? 'Checking the list again…' : (still ? '⚠ Still open: ' + still.title + '. ' + (still.todo || still.how) : '✓ Fixed: ' + fixReturned.title + ' — it has left the list.')}</span><button onClick={function (e) { e.stopPropagation(); setFixReturned(null); }} className="px-2 py-0.5 rounded font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>OK</button></div>; })()}
         {fixBox}
         {/* Codex 07:20 P2 — shown on its own, also when the period has nothing to fix; openTasks returns no list at all to a person who may not see profit */}
         <CombinedShippingNote combined={ot.combined} />
@@ -749,7 +812,7 @@ export default function ProfitabilityTab(props) {
             {rows.length === 0 && <tr><td colSpan={periodColumns.length} className="px-3 py-4 text-center" style={{ color: SUB }}>No sales in these dates for these releases.</td></tr>}</tbody>
         </table>
       </div>
-      {fShow && (function () { var fr = rows.concat([tot]).filter(function (x) { return x.key === fShow.key; })[0]; if (!fr) { return null; } return <div style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 250, pointerEvents: fShow.pinned ? 'auto' : 'none' }}><PnlFormula title={fr.label || 'the total'} balancesBlock={balancesNote()} detail={(function () { var ee0 = expOn ? expOf(fr) : null; return ee0 && ee0.status === 'ok' ? (ee0.detail || null) : null; })()} picker={catPicker} onShowOpen={fr.key === 'total' ? null : function () { setFShow(null); setPOpen(fr.key); }} onConfirm={confirmFunds} onOpenBill={openBill} catLabel={function (k) { var ee = expOn ? expOf(fr) : null; var mk3 = ee && ee.detail && ee.detail.byKey[k]; return mk3 ? mk3.label : k; }} formula={pnlFormula(fr, expOn ? expOf(fr) : null, hidden)} onClose={fShow.pinned ? function () { setFShow(null); } : null} /></div>; })()}
+      {fShow && (function () { var fr = rows.concat([tot]).filter(function (x) { return x.key === fShow.key; })[0]; if (!fr) { return null; } return <div style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 250, pointerEvents: fShow.pinned ? 'auto' : 'none' }}><PnlFormula title={fr.label || 'the total'} balancesBlock={balancesNote()} detail={(function () { var ee0 = expOn ? expOf(fr) : null; return ee0 && ee0.status === 'ok' ? (ee0.detail || null) : null; })()} picker={catPicker} onShowOpen={fr.key === 'total' ? null : function (taskKey) { setFShow(null); setPOpen(fr.key); setFromFormula({ key: fr.key, label: fr.label }); setTimeout(function () { try { var hit = null; if (taskKey) { document.querySelectorAll('[data-task-key]').forEach(function (el) { if (el.getAttribute('data-task-key') === taskKey) { hit = el; } }); } var el2 = hit || document.getElementById('nt-fix-list'); if (el2) { el2.scrollIntoView({ block: hit ? 'center' : 'start' }); if (hit) { markEl(hit); } } } catch (eS) {} }, 200); }} fixesFor={fr.key === 'total' ? null : function (side) { var fc = cells.filter(function (c) { return bucketOf(c.invoice_date, pGran).key === fr.key; }); return formulaFixes(fc, openTasks(fc, revH ? false : hidden, { revenueHidden: revH }))[side]; }} onFix={fr.key === 'total' ? null : function (t) { setFShow(null); goPlace(t, { pOpen: fr.key, formula: fr.key, formulaLabel: fr.label }); }} onConfirm={confirmFunds} onOpenBill={openBill} catLabel={function (k) { var ee = expOn ? expOf(fr) : null; var mk3 = ee && ee.detail && ee.detail.byKey[k]; return mk3 ? mk3.label : k; }} formula={pnlFormula(fr, expOn ? expOf(fr) : null, hidden)} onClose={fShow.pinned ? function () { setFShow(null); } : null} /></div>; })()}
       <div className="text-[10px] mt-1" style={{ color: SUB }}>Dated by invoice date. Goods cost = goods + commission + inbound allowance + bonded ($200 per Houston container; brokerage is the same thing and is not added twice). Transport profit = transport charged − trucking − freight − any shipping amount kept as one combined figure (not divided into trucking and freight). Total profit = goods profit + transport profit; a line whose cost is not known yet adds nothing to profit until it is (its revenue is shown under the total). “Not known yet” = some lines have no figure for that column yet (e.g. a bill not in) — the total shows only what is known. The same lines as By product / customer / invoice, so the totals agree.</div>
     </div>;
     return full && typeof document !== 'undefined' ? createPortal(body, document.body) : body;
@@ -981,7 +1044,7 @@ export default function ProfitabilityTab(props) {
               return <tr key={n.key} style={{ background: pick[n.key] ? '#ecfdf5' : (i % 2 ? '#f8fafc' : '#ffffff'), color: INK, borderTop: '1px solid ' + LINE }}>
                 <td className="px-2 py-1"><input type="checkbox" checked={!!pick[n.key]} onChange={function () { var o = Object.assign({}, pick); o[n.key] = !o[n.key]; setPick(o); }} style={{ width: 15, height: 15 }} /></td>
                 <td className="px-2 py-1 font-bold">{n.name}</td><td className="px-2 py-1">{n.lines}</td><td className="px-2 py-1 tabular-nums">{fmt(n.qty)}</td>{showProfit && <td className="px-2 py-1 tabular-nums">{usd(n.invoiced)}</td>}
-                <td className="px-2 py-1"><select value={n.unit || ''} disabled={!canEdit || busy} onChange={function (e) { if (e.target.value === '__transport') { act({ action: 'set_name_kind', names: [n.name], kind: 'transport' }, '“' + n.name + '” is now counted as shipping charged to the customer.'); } else if (e.target.value) { act({ action: 'set_name_unit', names: [n.name], unit: e.target.value }, 'Unit saved for “' + n.name + '”.'); } }} className="nt-light px-1.5 py-0.5 rounded text-[11px]" style={Object.assign({}, inp, n.unit ? {} : { border: '2px solid #f59e0b' })}>
+                <td className="px-2 py-1"><select data-unit-name={n.name} aria-label={'What “' + n.name + '” is sold in'} value={n.unit || ''} disabled={!canEdit || busy} onChange={function (e) { if (e.target.value === '__transport') { act({ action: 'set_name_kind', names: [n.name], kind: 'transport' }, '“' + n.name + '” is now counted as shipping charged to the customer.'); } else if (e.target.value) { act({ action: 'set_name_unit', names: [n.name], unit: e.target.value }, 'Unit saved for “' + n.name + '”.'); } }} className="nt-light px-1.5 py-0.5 rounded text-[11px]" style={Object.assign({}, inp, n.unit ? {} : { border: '2px solid #f59e0b' })}>
                   <option value="">⚠ not set</option><option value="lb">pounds</option><option value="kg">kilograms</option><option value="t">tons</option><option value="yd">yards</option><option value="lm">linear metres</option><option value="__transport">🚚 not a product — a shipping charge</option></select></td>
                 <td className="px-2 py-1">{(n.unit === 'yd' || n.unit === 'lm') ? (n.keep_rule ? <span className="font-bold" style={{ color: '#1d4ed8' }} title="Headliner is bought and sold in yards, so it is always kept in yards (rule, 20 Nov 2026)">kept in yards — headliner rule</span> : data.keep_unit_ready ? <span className="flex gap-2 items-center" role="radiogroup" aria-label={'Yard goods: ' + n.name}>
                   <label className="flex items-center gap-1" style={{ cursor: canEdit ? 'pointer' : 'default' }}><input type="radio" name={'keep:' + n.key} checked={!n.keep_unit} disabled={!canEdit || busy} onChange={function () { if (n.keep_unit) { askKeep([n.name], false); } }} />convert to pounds</label>
@@ -1106,14 +1169,14 @@ export default function ProfitabilityTab(props) {
         <span className="flex gap-1.5 flex-wrap items-center px-1.5 py-1 rounded-lg" style={{ border: '1px solid ' + LINE }}>
           <span className="text-[10px] font-extrabold uppercase" style={{ color: SUB }}>Reports</span>
           {[['period', showProfit ? '📅 P&L by period (goods · transport)' : '📅 Costs by period (goods · transport)'], ['product', 'By product'], ['customer', 'By customer'], ['invoice', 'By invoice']].map(function (v) {
-            return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{v[1]}</button>; })}
+            return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); setFixFrom(null); setFixReturned(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{v[1]}</button>; })}
         </span>
         <span className="flex gap-1.5 flex-wrap items-center px-1.5 py-1 rounded-lg" style={{ border: '1px solid #7dd3fc', background: '#f0f9ff' }}>
           <span className="text-[10px] font-extrabold uppercase" style={{ color: '#075985' }}>Shipping</span>
           {[['containers', '🚢 Containers (shipping cost)'], ['estfinal', '⚖ Estimate vs Final (shipping)'], ['inbound', '🚚 Inbound trucking (Kronos)']].map(function (v) {
-            return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#075985', color: '#ffffff' } : { background: '#e0f2fe', color: '#075985' }}>{v[1]}</button>; })}
+            return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); setFixFrom(null); setFixReturned(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#075985', color: '#ffffff' } : { background: '#e0f2fe', color: '#075985' }}>{v[1]}</button>; })}
         </span>
-        <button onClick={function () { setView('setup'); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" title="Set-up, not a report: product names, units and which supplier bills belong to which product" style={view === 'setup' ? { background: '#7c2d12', color: '#ffffff', border: '2px solid #7c2d12' } : { background: '#ffffff', color: '#7c2d12', border: '2px dashed #c2410c' }}>⚙ Set-up: names, units and supplier links</button>
+        <button onClick={function () { setView('setup'); setOpen(null); setFixFrom(null); setFixReturned(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" title="Set-up, not a report: product names, units and which supplier bills belong to which product" style={view === 'setup' ? { background: '#7c2d12', color: '#ffffff', border: '2px solid #7c2d12' } : { background: '#ffffff', color: '#7c2d12', border: '2px dashed #c2410c' }}>⚙ Set-up: names, units and supplier links</button>
         {view === 'product' && <span className="text-[11px] self-center" style={{ color: SUB }}>Click a product to see the names that make it up. Click a name to see its shipments.</span>}
         {(view === 'product' || view === 'customer' || view === 'invoice') && <span className="flex items-center gap-1 ml-auto">
           <input type="search" value={searchQ} onChange={function (e) { setSearchQ(e.target.value); setOpen(null); }} placeholder="🔎 Search invoice, customer, release, product…" aria-label="Search the rows of this table" className="nt-light px-2.5 py-1.5 rounded-lg text-[12px]" style={{ width: 290, border: '1px solid ' + LINE, background: '#ffffff', color: INK }} />
@@ -1121,6 +1184,11 @@ export default function ProfitabilityTab(props) {
           {searchQ.trim() !== '' && <button type="button" onClick={function () { setSearchQ(''); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155', border: '1px solid ' + LINE }}>clear</button>}
         </span>}
       </div>
+      {/* v55.83-ZN — on the screen where a row of the fix list is fixed: what to do here, and the way back to the same period and row */}
+      {fixFrom && view !== 'period' && <div role="status" className="mb-2 rounded-lg p-2 flex gap-2 items-center flex-wrap" style={{ background: '#fef3c7', border: '2px solid #f59e0b', color: '#78350f' }}>
+        <button onClick={backToFixList} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>{'← Back to ' + (fixFrom.formula ? '“How ' + fixFrom.formulaLabel + ' is worked out”' : 'the fix list')}</button>
+        <span className="text-[12px]" style={{ flex: '1 1 320px' }}><b>{'Fixing: ' + fixFrom.title + '. '}</b>{fixFrom.direction ? 'What to do here: ' + fixFrom.direction : ''}</span>
+      </div>}
       {view === 'period' && periodView()}
       {view === 'product' && viewTable(data.by_product || [], 'Product', false)}
       {view === 'customer' && viewTable(data.by_customer || [], 'Customer', false)}

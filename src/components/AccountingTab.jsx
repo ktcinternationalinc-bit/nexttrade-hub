@@ -64,10 +64,11 @@ export default function AccountingTab(props) {
   // person was. That screen stays alive but hidden, so its filters, open rows and typed text are untouched,
   // and Back returns to the same scroll position. Picking a tab from the strip is a fresh start (no Back).
   var [back, setBack] = useState(null); // { sub, y } | null
-  function goFrom(k) {
+  // v55.83-ZN — opts { backLabel, note }: a jump can name its way back ("the fix list") and say what to do on the screen it opens
+  function goFrom(k, opts) {
     if (!k || k === sub) { return; }
     var y0 = 0; try { y0 = window.scrollY || 0; } catch (e0) {}
-    setBack({ sub: sub, y: y0 });
+    setBack({ sub: sub, y: y0, label: (opts && opts.backLabel) || '', note: (opts && opts.note) || '' });
     setSub(k);
     try { window.scrollTo(0, 0); } catch (e1) {}
   }
@@ -254,7 +255,8 @@ export default function AccountingTab(props) {
       </div>}
       {/* v55.83-SO — the obvious way back after a quick jump, or after arriving from another part of the Hub */}
       {((back && back.sub !== sub) || props.onReturn) && <div className="px-3 pt-3 flex items-center gap-2 flex-wrap">
-        {back && back.sub !== sub && <button onClick={goBack} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>← Back to {labelOfSub(tabs, back.sub)}</button>}
+        {back && back.sub !== sub && <button onClick={goBack} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>← Back to {back.label || labelOfSub(tabs, back.sub)}</button>}
+        {back && back.sub !== sub && back.note && <span className="text-[12px] font-bold px-2 py-1 rounded" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>{'What to do here: ' + back.note}</span>}
         {!(back && back.sub !== sub) && props.onReturn && <button onClick={props.onReturn} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>← Back to {props.returnLabel || 'where you were'}</button>}
         <span className="text-[11px]" style={{ color: '#cbd5e1' }}>Your filters and place are kept.</span>
       </div>}
@@ -287,7 +289,8 @@ export default function AccountingTab(props) {
       {sub === 'pnl' && <PnLTab {...props} />}
       {alive('orders') && <div className="p-3" style={shown('orders')}><OrderMonitorTab {...props} onGo={goFrom} /></div>}
       {sub === 'arrival_reminders' && <div className="p-3"><ArrivalRemindersTab {...props} /></div>}
-      {sub === 'profitability' && <div className="p-3"><ProfitabilityTab {...props} onGo={goFrom} /></div>}
+      {/* v55.83-ZN — kept alive (hidden) while a fix is made on another screen, so "← Back to the fix list" returns to the same period and row */}
+      {alive('profitability') && <div className="p-3" style={shown('profitability')}><ProfitabilityTab {...props} onGo={goFrom} /></div>}
       {alive('all_invoices') && <div style={shown('all_invoices')}><BusinessBooksTab {...props} onGo={goFrom} /></div>}
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
