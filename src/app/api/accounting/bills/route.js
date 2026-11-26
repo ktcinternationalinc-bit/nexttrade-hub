@@ -40,6 +40,7 @@ import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 import { maskCashflow, maskPeriodStats, maskForecast, booksOpenInvoices } from '../../../../lib/accounting-access'; // v55.83-RE — unified accounting permissions
 import { revenueScope } from '../../../../lib/revenue-visibility'; // v55.83-XK
+import { pairReturnedDeposits } from '../../../../lib/returned-deposit-pairing'; // v55.83-ZO
 
 // v55.83-QO (Max 15:53: "attempted to add bill from document and nothing
 // happened") — the AI read of a multi-page PDF outlives Vercel's DEFAULT
@@ -1997,6 +1998,10 @@ export async function POST(req) {
             if (!mbR.data || mbR.data.length < 1000) { break; }
           }
         } catch (eMb) { moneyBack = {}; mbUnavailable = true; mbNote = 'Money back from RTM / NextTrade could not be read.'; }
+        // v55.83-ZO (Max, 26 Nov) — a return a person categorized as a returned check, whose bank text names its deposit (date + amount),
+        // nets that deposit automatically when exactly one money-in line fits. Nothing is saved; only how this report counts the line.
+        var autoPair = pairReturnedDeposits(spTx.filter(function (tA) { var dA = tA.posted_date || tA.date; return dA >= pFrom && dA <= pTo; }), isContraCat, function (tS) { return !!moneyBack[tS.id]; });
+        contra.not_paired = autoPair.not_paired;
         spTx.forEach(function (t6) {
           var d6 = t6.posted_date || t6.date;
           if (!(d6 >= pFrom && d6 <= pTo)) { return; }
@@ -2023,6 +2028,22 @@ export async function POST(req) {
             }
             // WO — a deposit a person categorized as a returned check is that, also when it is matched to an invoice: the match is
             // left alone (nothing is un-matched or marked paid here), but the deposit is not counted as a customer payment.
+            var ap6 = (!isTrf && !isContraCat(t6.classification)) ? (autoPair.byDeposit[t6.id] || null) : null;
+            if (ap6) {
+              // ZO — the part of this deposit the bank returned: not income, taken off the Returned checks category. Any rest of the
+              // deposit (a deposit of several checks, one returned) carries on below under the line's own category.
+              var kA = ap6.category; var amtA = Math.min(amt6, r2(ap6.amount)); var whoA = (t6.merchant_name || t6.name || '') + ' — matched automatically to the bank return of ' + ap6.return_date;
+              if (inRows.length < 3000) { inRows.push({ id: t6.id, date: d6, who: whoA, amount: amtA, category: kA, paired: false, returned_deposit: true, auto_paired: true, bank_category: t6.classification || '', matched_invoice: t6.matched_invoice_id ? true : undefined }); }
+              if (!byCatIn[kA]) { byCatIn[kA] = { key: kA, label: (catLabels[kA] || kA) + ' — deposits later returned (netted against the return; not income)', kind: 'not_pnl', count: 0, total: 0 }; }
+              byCatIn[kA].count++; byCatIn[kA].total = r2(byCatIn[kA].total + amtA);
+              if (!byCat[kA]) { byCat[kA] = { key: kA, label: catLabels[kA] || kA, kind: kindOf(kA), count: 0, total: 0 }; }
+              byCat[kA].count++; byCat[kA].total = r2(byCat[kA].total - amtA); byCat[kA].net = true;
+              byCat[kA].credits = r2((byCat[kA].credits || 0) + amtA); byCat[kA].credit_count = (byCat[kA].credit_count || 0) + 1;
+              contra.credit_count++; contra.credits = r2(contra.credits + amtA); if (t6.matched_invoice_id) { contra.matched_invoice_credits++; }
+              contra.auto_paired_count = (contra.auto_paired_count || 0) + 1; contra.auto_paired_total = r2((contra.auto_paired_total || 0) + amtA);
+              if (spRows.length < 3000) { spRows.push({ id: t6.id, date: d6, who: whoA, amount: r2(0 - amtA), category: kA, paired: false, money_in: true, auto_paired: true, bank_category: t6.classification || '', matched_invoice: t6.matched_invoice_id ? true : undefined }); }
+              amt6 = r2(amt6 - amtA); if (!(amt6 > 0)) { return; }
+            }
             var contraIn = !isTrf && isContraCat(t6.classification);
             var keyI = isTrf ? 'transfer' : (contraIn ? t6.classification : (t6.matched_invoice_id ? 'customer_payment' : (t6.classification || null)));
             if (inRows.length < 500 || ((!keyI || contraIn) && inRows.length < 3000)) { inRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: keyI || '', paired: !!t6.transfer_group_id, returned_deposit: contraIn ? true : undefined, matched_invoice: contraIn && t6.matched_invoice_id ? true : undefined }); } // v55.83-TS — id lets Stats save a category right on the row; uncategorized rows are never cut by the cap
@@ -2214,7 +2235,7 @@ export async function POST(req) {
         }
         spend = { rtm: rtmBlk, paid_through: ptBlocks, party_funds: partyFunds, categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,
           real_spending: r2(totOut - trf.total), rows: spRows,
-          returned_checks: contra, // WO — returns (money out) and the deposits netted against them (money in); categories carry the NET
+          returned_checks: contra, // ZO: also carries not_paired (returns naming a deposit that could not be matched) and the auto_paired figures. WO — returns (money out) and the deposits netted against them (money in); categories carry the NET
           deductible_spending: mbUnavailable ? null : deductible, not_pnl_out: notPnlOut,
           in_categories: catRowsIn, in_transfers: trfIn, in_uncategorized: uncIn, total_in: totIn,
           real_income: r2(totIn - trfIn.total), in_rows: inRows,
