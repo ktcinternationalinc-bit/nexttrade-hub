@@ -43,6 +43,12 @@ export function feeLooksLikePartnerBill(fee, partnerBills) {
   return hit;
 }
 
+// v55.83-ZP rev2 (Codex 26 Nov HOLD) — EVERY open partner-fee bill whose open amount equals the fee (recurring bills share one amount)
+export function feeMatchesPartnerBills(fee, partnerBills) {
+  var f = cents(fee); if (f <= 0) { return []; }
+  return (partnerBills || []).filter(function (b) { return isPartnerFee(b) && openCents(b) === f; });
+}
+
 // A bill with NO category whose vendor and exact total match a partner-fee bill already on file (e.g. NexPac's monthly $45,250):
 // flagged so a person can file it in the right column. Never applied by itself. bills = the other bills of the company.
 // → { like: <the matching partner-fee bill> } or null

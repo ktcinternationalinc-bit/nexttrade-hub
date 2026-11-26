@@ -1,6 +1,6 @@
 // v55.83-ZP — the partner-fee bills still open, for the service-fee guard (wires to RTM / NextTrade, "services rendered" in the
 // funds). Server only. A failed read is NEVER "no partner-fee bills": the caller refuses the fee and says why (fail closed).
-import { isPartnerFee, feeLooksLikePartnerBill } from './partner-fee';
+import { isPartnerFee, feeMatchesPartnerBills } from './partner-fee';
 import { loadBillCredits } from './vendor-credits-server';
 
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -32,8 +32,11 @@ export async function partnerFeeGuard(db, fee, onThisWire, override) {
   if (!(Number(fee) > 0)) { return null; }
   var ob = await openPartnerFeeBills(db);
   if (ob.error) { return { status: 503, error: ob.error + ' The service fee was not saved: it could not be checked against the partner-fee bills.' }; }
-  var hit = feeLooksLikePartnerBill(fee, ob.bills);
-  if (!hit) { return null; }
+  // rev2: ALL matches; a match that is ON this wire wins (never overridable), whatever order the bills come in
+  var hits = feeMatchesPartnerBills(fee, ob.bills);
+  if (!hits.length) { return null; }
+  var onW = (onThisWire || []).map(String);
+  var hit = hits.filter(function (h) { return onW.indexOf(String(h.id)) >= 0; })[0] || hits[0];
   var label = '#' + (hit.bill_number || '?') + ' (' + (hit.vendor_name || 'vendor') + ')';
   var billOut = { id: hit.id, bill_number: hit.bill_number || null, vendor_name: hit.vendor_name || null, open: r2(Number(hit.total_amount) - (hit.paid || 0) - (hit.credited || 0)) };
   if ((onThisWire || []).map(String).indexOf(String(hit.id)) >= 0) {

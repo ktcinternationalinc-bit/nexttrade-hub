@@ -114,6 +114,13 @@ console.log('ZP — partner-fee bills in their own column, counted once; RTM fun
   var gC = await PFS.partnerFeeGuard(db, 100, [], {});
   check('the shared guard: refused / allowed-as-override with the bill / nothing to say', gA && !gA.allowed && gA.status === 409 && gB && gB.allowed && gB.overridden && gB.bill.id === PF2 && gC === null, [gA, gB, gC]);
 
+  // ── rev2 (Codex 26 Nov HOLD): two open recurring fee bills of the SAME amount — the second one is on the wire → never overridable
+  db.t.vendor_bills.push(bill('b0000000-0000-0000-0000-0000000000e1', 'NexPac Corporation', 'R-OCT', 45250, 'partner_fees'));
+  db.t.vendor_bills.push(bill('b0000000-0000-0000-0000-0000000000e2', 'NexPac Corporation', 'R-NOV', 45250, 'partner_fees'));
+  var gR = await PFS.partnerFeeGuard(db, 45250, ['b0000000-0000-0000-0000-0000000000e2'], { yes: true, reason: 'claims a different fee' });
+  var gR2 = await PFS.partnerFeeGuard(db, 45250, ['b0000000-0000-0000-0000-0000000000e1'], { yes: true, reason: 'claims a different fee' });
+  check('rev2: two open $45,250 fee bills, the one ON the wire listed second (or first) → refused partner_fee_on_wire either way, override ignored', gR && !gR.allowed && gR.code === 'partner_fee_on_wire' && gR.bill.id === 'b0000000-0000-0000-0000-0000000000e2' && gR2 && !gR2.allowed && gR2.code === 'partner_fee_on_wire', [gR, gR2]);
+
   // ── the routes and screens
   var pfRoute = fs.readFileSync(path.join(root, 'src/app/api/accounting/party-funds/route.js'), 'utf8');
   var iGuard = pfRoute.indexOf("pfM = await partnerFeeGuard(db, amount, []"); var iRpc = pfRoute.indexOf("var rf = await db.rpc('hub_party_fee'");
