@@ -22,6 +22,7 @@ import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 import WireInboxPanel from './WireInboxPanel'; // v55.83-XC — 📥 Bank confirmations
+import { isPartnerFee, feeLooksLikePartnerBill } from '../lib/partner-fee'; // v55.83-ZP — partner-fee bills in their own column, counted once
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function d16(x) { return String(x || '').substring(0, 16).replace('T', ' '); }
@@ -506,6 +507,8 @@ export default function WirePackagesPanel(props) {
     var feeV = String(ed.fee || '').replace(/,/g, '').trim();
     if (ed.kind === 'service_provider' && feeV && !(Number(feeV) >= 0)) { toast.error('The fee is not a number — type it like 250.00, or leave it empty.'); return; }
     var payload = { action: 'save_draft', id: ed.id, payee_kind: ed.kind, payee_name: ed.payee, fee_amount: ed.kind !== 'vendor' ? (Number(feeV) || 0) : 0, fee_note: ed.fee_note, memo: ed.memo, lines: lines };
+    // v55.83-ZP — a service fee equal to an open partner-fee bill is refused unless the person says it is a different fee, and why
+    if (ed.pfAsk && ed.pfAsk.diff === true) { if (String(ed.pfAsk.reason || '').trim().length < 5) { toast.error('Say why this fee is not the partner-fee bill (at least 5 characters), or add the bill instead.'); return; } payload.it_is_a_different_fee = true; payload.different_fee_reason = ed.pfAsk.reason; }
     if (ed.planned || ed.id) { payload.planned_send_date = ed.planned || null; } // v55.83-WV — the wire date, for every wire (was requests only)
     if (ed.kind !== 'vendor') { // v55.83-SP — only sent when it applies, so ordinary wires are saved exactly as before
       if (ed.fundId || ed.id) { payload.funding_txn_id = ed.fundId || null; }
@@ -515,7 +518,9 @@ export default function WirePackagesPanel(props) {
     }
     act(payload,
       function (j) { return j.audit ? (j.audit.pass ? '✅ Saved and checked — it is ready for the 1st signature.' : '⛔ Saved — the check found ' + j.audit.blocks + ' problem(s) to fix. See the red box.') : 'Saved.'; },
-      function (j) { setEd(null); open(j.id); });
+      function (j) { setEd(null); open(j.id); }).then(function (j) {
+        if (j && !j.ok && j.partner_fee_bill && j.code === 'partner_fee_as_fee') { setEd(function (e0) { return e0 ? Object.assign({}, e0, { pfAsk: { bill: j.partner_fee_bill, diff: false, reason: '' } }) : e0; }); }
+      });
   }
   // ── wire actions
   function recheck() { return act({ action: 'run_check', id: det.package.id }, function (j) { return j.pass ? '✅ Check passed.' : '⛔ Still ' + j.blocks + ' problem(s).'; }); }
@@ -840,6 +845,20 @@ export default function WirePackagesPanel(props) {
           {ed.kind !== 'vendor' && <span className="flex gap-1 items-center"><span className="text-[12px] font-bold" style={{ color: SUB }}>+ {ed.payee} service fee (optional) $</span>
             <input value={ed.fee} onChange={function (e) { setEd(Object.assign({}, ed, { fee: e.target.value })); }} placeholder="0" className={inp} style={Object.assign({ width: 90 }, inpS)} />
             {feeN > 0 && <input value={ed.fee_note} onChange={function (e) { setEd(Object.assign({}, ed, { fee_note: e.target.value })); }} placeholder="what the fee is for" className={inp} style={Object.assign({ width: 170 }, inpS)} />}</span>}
+          {/* v55.83-ZP — a fee of exactly an open partner-fee bill would count that partner fee twice: offer the bill instead */}
+          {ed.kind !== 'vendor' && feeN > 0 && (function () {
+            var pb = (ed.pfAsk && ed.pfAsk.bill) || feeLooksLikePartnerBill(feeN, ed.bills || []); if (!pb) { return null; }
+            var cand = (ed.bills || []).filter(function (x) { return x.id === pb.id; })[0];
+            var ask = ed.pfAsk || { bill: pb, diff: false, reason: '' };
+            return <div className="w-full rounded-lg p-2 text-[12px]" style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#7c2d12' }}>
+              <div className="font-extrabold">{'⚠ $' + fmt(feeN) + ' is the amount still open on partner-fee bill #' + (pb.bill_number || '?') + ' (' + (pb.vendor_name || 'vendor') + '). Typed as a fee it would count that partner fee twice — once as the fee and again when the bill is paid.'}</div>
+              <div className="flex gap-2 items-center flex-wrap mt-1">
+                {cand ? <Btn color="#c2410c" onClick={function () { var pk = Object.assign({}, ed.picks); pk[cand.id] = String(cand.open); setEd(Object.assign({}, ed, { picks: pk, fee: '', fee_note: '', pfAsk: null })); }}>{'＋ Add bill #' + (pb.bill_number || '') + ' instead (fee back to 0)'}</Btn>
+                  : <span className="font-bold">{'Bill #' + (pb.bill_number || '') + ' is not offered for this wire — open it in 💸 Bills to see why.'}</span>}
+                <label className="flex items-center gap-1 font-bold"><input type="checkbox" checked={ask.diff === true} onChange={function (e) { setEd(Object.assign({}, ed, { pfAsk: Object.assign({}, ask, { diff: e.target.checked }) })); }} /> It is a different fee</label>
+                {ask.diff === true && <input value={ask.reason} onChange={function (e) { setEd(Object.assign({}, ed, { pfAsk: Object.assign({}, ask, { reason: e.target.value }) })); }} placeholder="why it is not that bill (kept in the history)" className={inp} style={Object.assign({ width: 260 }, inpS)} />}
+              </div></div>;
+          })()}
           {/* v55.83-WV (Max 21 Nov) — the real date of the wire, which may not be today; any date (a wire already sent, or a plan) */}
           <label className="text-[12px] font-bold flex items-center gap-1" style={{ color: SUB }}>{ed.fundId ? '📅 Date funds used' : '📅 Wire date'}
             <input type="date" value={ed.planned || ''} onChange={function (e) { setEd(Object.assign({}, ed, { planned: e.target.value })); }} className={inp} style={inpS} />
@@ -1078,14 +1097,16 @@ export default function WirePackagesPanel(props) {
       </div>}
 
       {/* the bills */}
-      <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{'Bills on this wire (' + det.lines.length + ') · bills $' + fmt(P.bills_total) + (P.fee_amount > 0 ? ' + ' + P.payee_name + ' fee $' + fmt(P.fee_amount) + (P.fee_note ? ' (' + P.fee_note + ')' : '') : '')}
+      {/* v55.83-ZP — the partner-fee share is shown apart (its own column) but is the SAME bill lines: never added a second time */}
+      <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{'Bills on this wire (' + det.lines.length + ') · bills $' + fmt(P.partner_fee > 0 ? P.other_bills : P.bills_total) + (P.partner_fee > 0 ? ' + partner fee $' + fmt(P.partner_fee) : '') + (P.fee_amount > 0 ? ' + ' + P.payee_name + ' fee $' + fmt(P.fee_amount) + (P.fee_note ? ' (' + P.fee_note + ')' : '') : '') + (P.partner_fee > 0 || P.fee_amount > 0 ? ' = $' + fmt(P.total) : '')}
         {perms.warehouse && det.lines.length ? <button type="button" onClick={function () { try { window.dispatchEvent(new CustomEvent('hub-open-warehouse-check', { detail: { wire_id: P.id, seq: P.seq } })); } catch (eW) {} }} className="ml-2 px-2 py-0.5 text-[11px] font-extrabold" style={{ background: '#000000', color: '#ffffff', border: '1px solid #000000', borderRadius: 2, letterSpacing: '0.04em' }} title="Opens Bills → Warehouse check showing ONLY the bills on this wire: billed vs scanned into the warehouse, PASS or FAIL per bill">🏭 Check these bills against the warehouse</button> : null}{/* v55.83-ZL (Max 26 Nov) */}</div>
+      {P.partner_fee > 0 && <div className="text-[11px] mb-1" style={{ color: SUB }}>The partner fee is the partner-fee bill’s share of this wire. It is counted once, as that bill (in C · Partner fee in the P&L), never also as a fee or a second bill.</div>}
       <div className="overflow-x-auto rounded-lg mb-3" style={{ border: '1px solid #e2e8f0' }}><table className="w-full text-[12px]">
         <thead><tr style={{ background: '#f1f5f9', color: SUB }}>
           {canTick ? <th className="px-2 py-1.5"></th> : null}
           <th className="px-2 py-1.5 text-left">Bill</th><th className="px-2 py-1.5 text-left">Vendor</th><th className="px-2 py-1.5 text-left">Bill #</th><th className="px-2 py-1.5 text-left">In / Out · Release # · Reference</th>
           <th className="px-2 py-1.5 text-left">Bill date</th><th className="px-2 py-1.5 text-left">Due</th><th className="px-2 py-1.5 text-left">Category</th>
-          <th className="px-2 py-1.5 text-right">Bill total</th><th className="px-2 py-1.5 text-right">This wire</th><th className="px-2 py-1.5 text-left">Paid before</th>
+          <th className="px-2 py-1.5 text-right">Bill total</th><th className="px-2 py-1.5 text-right">This wire</th>{P.partner_fee > 0 ? <th className="px-2 py-1.5 text-right" title="The partner-fee bill’s share of this wire — the same money as its line, shown in its own column, counted once">Partner fee</th> : null}<th className="px-2 py-1.5 text-left">Paid before</th>
           <th className="px-2 py-1.5 text-left">Notes</th>{P.paid_through ? <th className="px-2 py-1.5 text-left">{P.payee_name} proof</th> : null}</tr></thead>
         <tbody style={{ color: INK }}>
           {det.lines.map(function (l) {
@@ -1099,7 +1120,10 @@ export default function WirePackagesPanel(props) {
               <td className="px-2 py-1.5"><BillFields bill={b} editable={P.raw_status === 'draft' && !!perms.prepare} busy={busy} releaseOptional={P.payee_kind === 'affiliate'} onSave={function (field, value, done) { saveField(l.bill_id, field, value, done); }} /></td>
               <td className="px-2 py-1.5 whitespace-nowrap">{b.bill_date || <span style={{ color: '#b91c1c', fontWeight: 800 }}>missing</span>}</td><td className="px-2 py-1.5 whitespace-nowrap">{b.due_date || '—'}</td>
               <td className="px-2 py-1.5">{b.category ? String(b.category).replace(/_/g, ' ') : '—'}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums">${fmt(b.total_amount)}</td><td className="px-2 py-1.5 text-right tabular-nums font-extrabold">${fmt(l.amount)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">${fmt(b.total_amount)}</td>
+              {/* v55.83-ZP — each line's money sits in exactly ONE of the two columns: This wire (other bills) or Partner fee */}
+              {P.partner_fee > 0 && isPartnerFee(b) ? <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: MUTED }}>—</td> : <td className="px-2 py-1.5 text-right tabular-nums font-extrabold">${fmt(l.amount)}</td>}
+              {P.partner_fee > 0 ? <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: '#7c2d12' }}>{isPartnerFee(b) ? '$' + fmt(l.amount) : ''}</td> : null}
               <td className="px-2 py-1.5" style={{ color: before.length ? '#b45309' : MUTED }}>{before.length ? before.map(function (o) { return '$' + fmt(o.amount) + ' ' + (o.paid_date || '') + ' (' + o.label + ')'; }).join('; ') : 'none'}</td>
               <td className="px-2 py-1.5" style={{ maxWidth: 240, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{b.notes || ''}</td>
               {P.paid_through ? <td className="px-2 py-1.5 text-[11px]">{l.rtm.confirmed_at ? <span style={{ color: '#065f46' }}>✓ paid {l.rtm.paid_date}{l.rtm.reference ? ' · ' + l.rtm.reference : ''}</span> : <span style={{ color: MUTED }}>—</span>}</td> : null}
@@ -1184,7 +1208,7 @@ export default function WirePackagesPanel(props) {
         {perms.prepare ? <div className="text-[12px] mb-3" style={{ color: SUB }}>Click “＋ New wire” to prepare one.</div> : <div className="text-[12px]" style={{ color: SUB }}>Preparing a wire needs “Wires: Prepare”.</div>}
         {perms.prepare && <Btn big color="#0f766e" onClick={startNew}>＋ New wire</Btn>}</div>
       : <div className="overflow-x-auto rounded-lg" style={{ border: '1px solid #e2e8f0' }}><table className="w-full text-[12px]">
-        <thead><tr style={{ background: '#f1f5f9', color: SUB }}><th className="px-2 py-2 text-left">Wire</th><th className="px-2 py-2 text-left whitespace-nowrap">Created in the Hub</th><th className="px-2 py-2 text-left whitespace-nowrap" title="The date the wire was sent, as confirmed when it was marked sent. Not sent yet: the planned wire date, in grey.">Sent (bank confirmation)</th><th className="px-2 py-2 text-left">To</th><th className="px-2 py-2 text-left">Vendors</th><th className="px-2 py-2 text-right">Amount</th><th className="px-2 py-2 text-left">Next step</th><th></th></tr></thead>
+        <thead><tr style={{ background: '#f1f5f9', color: SUB }}><th className="px-2 py-2 text-left">Wire</th><th className="px-2 py-2 text-left whitespace-nowrap">Created in the Hub</th><th className="px-2 py-2 text-left whitespace-nowrap" title="The date the wire was sent, as confirmed when it was marked sent. Not sent yet: the planned wire date, in grey.">Sent (bank confirmation)</th><th className="px-2 py-2 text-left">To</th><th className="px-2 py-2 text-left">Vendors</th><th className="px-2 py-2 text-right">Amount</th><th className="px-2 py-2 text-right whitespace-nowrap" title="The partner-fee bills' share of the amount — part of it, counted once (as those bills), never added on top">of which partner fee</th><th className="px-2 py-2 text-left">Next step</th><th></th></tr></thead>
         <tbody style={{ color: INK }}>
           {rows.map(function (p) {
             return <tr key={p.id} onClick={function () { open(p.id); }} style={{ borderTop: '1px solid #f1f5f9', cursor: 'pointer' }}>
@@ -1195,6 +1219,7 @@ export default function WirePackagesPanel(props) {
               <td className="px-2 py-2 font-bold">{p.payee_name}</td>
               <td className="px-2 py-2">{p.vendors.join(', ')}<span style={{ color: MUTED }}>{' · ' + p.bills + ' bill(s)'}</span></td>
               <td className="px-2 py-2 text-right tabular-nums font-extrabold">${fmt(p.total)}</td>
+              <td className="px-2 py-2 text-right tabular-nums" style={{ color: p.partner_fee > 0 ? '#7c2d12' : MUTED }}>{p.partner_fee == null ? '—' : p.partner_fee > 0 ? '$' + fmt(p.partner_fee) : ''}</td>
               <td className="px-2 py-2"><span className="px-2 py-1 rounded text-[11px] font-extrabold whitespace-nowrap" style={PST[p.status]}>{(PRE_WIRE[p.status] ? 'PRE-WIRE · ' : '') + (p.status === 'ready_to_send' ? sendWords(p) : NEXT_WORDS[p.status])}</span></td>
               <td className="px-2 py-2 text-right font-extrabold whitespace-nowrap" style={{ color: '#1d4ed8' }}>
                 {perms.prepare && OPEN_ST[p.status] && p.status !== 'sent' && p.status !== 'awaiting_proof' && (p.status !== 'ready_to_send' || perms.superAdmin) ? <button onClick={function (e) { e.stopPropagation(); open(p.id); setDelAsk({ mode: 'erase', reason: '' }); }} title="Delete this wire (not sent yet)" className="mr-2 px-1.5 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#fee2e2', color: '#b91c1c' }}>🗑</button> : null}

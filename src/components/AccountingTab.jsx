@@ -43,6 +43,7 @@ import ClickBooksUSCutover from './ClickBooksUSCutover';
 import AuditTrailTab from './AuditTrailTab'; // v55.83-QI
 import WiresTab from './WiresTab'; // v55.83-RG
 import { useBankVisibility } from '../lib/use-bank-visibility';
+import { OPEN_PARTY_FUNDS_EVENT } from '../lib/partner-fee'; // v55.83-ZP
 
 export default function AccountingTab(props) {
   var financialAccess = useBankVisibility();
@@ -104,6 +105,15 @@ export default function AccountingTab(props) {
     try { window.addEventListener('hub-open-warehouse-check', onOpenWc); } catch (e0) { return undefined; }
     return function () { try { window.removeEventListener('hub-open-warehouse-check', onOpenWc); } catch (e1) {} };
   }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-ZP — "🔗 Link the bills it paid" (P&L funds box) asks (window event hub-open-party-funds) for Bills → 🏦 Funds with RTM /
+  // NextTrade, opened at that company's transfers. Nothing is written by opening it; the person ticks the bills.
+  var [fundsTarget, setFundsTarget] = useState(null); // { party, transfer_id, n } | null
+  useEffect(function () {
+    function onOpenFunds(e) { var d = (e && e.detail) || {}; if (!d.party) { return; } setFundsTarget({ party: d.party, transfer_id: d.transfer_id || null, n: Date.now() }); goFrom('bills'); }
+    try { window.addEventListener(OPEN_PARTY_FUNDS_EVENT, onOpenFunds); } catch (e0) { return undefined; }
+    return function () { try { window.removeEventListener(OPEN_PARTY_FUNDS_EVENT, onOpenFunds); } catch (e1) {} };
+  }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(function () { if (sub !== 'bills' && fundsTarget) { setFundsTarget(null); } }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps -- leaving Bills forgets it
   function alive(k) { return sub === k || (back && back.sub === k); }
   function shown(k) { return { display: sub === k ? 'block' : 'none' }; }
   var [waveKey, setWaveKey] = useState('');
@@ -255,7 +265,7 @@ export default function AccountingTab(props) {
       {sub === 'journals' && <div className="p-3"><JournalEntriesTab /></div>}
       {sub === 'nextrade' && <div className="p-3"><CompanyBooksTab key="nextrade" company="nextrade" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.nextrade.manage'] === true} /></div>}
       {sub === 'rtm' && <div className="p-3"><CompanyBooksTab key="rtm" company="rtm" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.rtm.manage'] === true} /></div>}
-      {sub === 'bills' && <div className="p-3"><BillsTab {...props} warehousePreset={wcPreset} openBillTarget={back && back.sub === 'waiting' ? billTarget : null} onBackFromBill={back && back.sub === 'waiting' ? goBack : null} /></div>}
+      {sub === 'bills' && <div className="p-3"><BillsTab {...props} warehousePreset={wcPreset} openBillTarget={back && back.sub === 'waiting' ? billTarget : null} onBackFromBill={back && back.sub === 'waiting' ? goBack : null} fundsTarget={fundsTarget} /></div>}
       {sub === 'wires' && <div className="p-3"><WiresTab {...props} wirePreset={wirePreset} /></div>}
       {alive('forecast') && <div className="p-3" style={shown('forecast')}><CashForecastTab {...props} onGo={goFrom} /></div>}
       {alive('period_stats') && <div className="p-3" style={shown('period_stats')}><PeriodStatsTab {...props} onGo={goFrom} /></div>}

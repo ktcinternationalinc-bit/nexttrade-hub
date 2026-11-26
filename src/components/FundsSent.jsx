@@ -6,6 +6,10 @@
 //   PERIOD  held at the start + funds sent − applied to bills − services rendered = held at the end   (flows of these dates)
 //   TODAY   said separately, never as the period's balance (reservations exist only today)
 import React from 'react';
+import { periodNoBillsLinked, partnerFeeOfRows, OPEN_PARTY_FUNDS_EVENT } from '../lib/partner-fee'; // v55.83-ZP
+
+// v55.83-ZP — Bills → 🏦 Funds with RTM / NextTrade, opened at this company's transfers (the Accounting screen catches the event)
+function openFundsToLink(party) { try { window.dispatchEvent(new CustomEvent(OPEN_PARTY_FUNDS_EVENT, { detail: { party: party } })); } catch (e) { /* old browser */ } }
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 function money(c) { if (c === null || c === undefined) { return '—'; } var v = c / 100; return (v < 0 ? '−$' : '$') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -24,10 +28,16 @@ export default function FundsSent(props) {
       {p.starting_balance_added_cents ? row('+ Starting balance (held before the Hub, not money sent)', money(p.starting_balance_added_cents), 'NOT an expense. Recorded as of a date in these dates.') : null}
       {p.from_starting_balance_cents ? row('− Bills paid from the starting balance', money(p.from_starting_balance_cents), 'NOT deducted here (the bills count in their own categories). Tax report: a new expense when used, from 1 June 2026' + (p.tax_from_starting_balance_cents !== p.from_starting_balance_cents ? ' (' + money(p.tax_from_starting_balance_cents) + ' of it)' : '') + '.') : null}
       {row('− Applied to underlying bills', money(p.applied_cents), 'NOT deducted here. Listed below, bill by bill.')}
+      {/* v55.83-ZP — the partner-fee bills inside that line: shown apart, counted ONCE (as the bill, in C · Partner fee), never again here */}
+      {partnerFeeOfRows(f.applied_rows) > 0 ? row('    of which partner fee', money(partnerFeeOfRows(f.applied_rows)), 'Part of the line above, not added to it. Counted once, as the partner-fee bill, in C · Partner fee.') : null}
       {row('− Explicitly marked as services rendered (their fee)', money(p.fee_cents), 'DEDUCTED here, in A · Warehouse / Office.', '#7f1d1d')}
       {row('= Held with ' + f.payer + ' at the end', money(p.closing_held_cents), p.closing_held_cents >= 0 ? 'NOT an expense. It stays with them for future bills, or until someone marks it as services rendered.' : 'More was used than was sent — needs reconciliation.', p.closing_held_cents >= 0 ? '#065f46' : '#b91c1c', true)}
       {row('Professional-fee deduction included here', money(p.fee_deduction_cents), 'Only this amount reduces profit.', '#7f1d1d', true)}
     </tbody></table>
+    {/* v55.83-ZP (Max 26 Nov: "isnt the 76000 linked to bills so it was sent and spent toward ktc bills") */}
+    {periodNoBillsLinked(p) && <div className="px-2 py-1.5 font-bold flex gap-2 items-center flex-wrap" style={{ background: '#fef3c7', color: '#92400e' }}>
+      <span>{'These transfers to ' + f.payer + ' are not linked to any bills yet, so all of it shows as held. If ' + f.payer + ' already paid KTC bills with it, link those bills to the transfer and they will show here.'}</span>
+      <button type="button" onClick={function (ev) { ev.preventDefault(); ev.stopPropagation(); openFundsToLink(f.payer); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#92400e', color: '#ffffff' }}>🔗 Link the bills it paid</button></div>}
     <div className="px-2 py-1.5" style={{ background: '#f8fafc' }}>{f.explanation}</div>
     <div className="px-2 py-1" style={{ color: SUB }}>{f.today_words}</div>
     {f.unlinked_as_of_cents > 0 && <div className="px-2 py-1.5" style={{ background: '#fef3c7', color: '#92400e' }}>{'The held figure is overstated by ' + money(f.unlinked_as_of_cents) + ': that much of bills was paid through ' + f.payer + ' without naming which transfer it came from. Link those payments to their transfer and the held figure comes down.'}</div>}

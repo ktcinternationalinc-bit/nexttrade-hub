@@ -21,6 +21,8 @@ import { privateScope, isPrivateRow } from '../../../../lib/private-accounts-ser
 import { loadPartyFunds } from '../../../../lib/party-funds-server';
 import { feeExplanation, currentFundsWords, canSeeStartingBalance, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds';
 import { nextradeBillIds } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills are paid only through NextTrade
+import { partnerFeeGuard } from '../../../../lib/partner-fee-server'; // v55.83-ZP — "services rendered" never doubles a partner-fee bill
+import { audit } from '../../../../lib/audit-server';
 
 // v55.83-XO (Max 21-22 Nov) — STARTING BALANCES: money a company already held for KTC before the Hub ("a previous balance to
 // nextrade that we will pay bills from"), and paying KTC bills from it ("b- NEW EXPENSE WHEN USED AFTER 6/1/2026").
@@ -369,11 +371,19 @@ export async function POST(req) {
       if (rr.error) { return guardFail(rr, canTotalsW); }
       return NextResponse.json(ack(action, rr.data));
     }
+    // v55.83-ZP — "services rendered" of exactly the open amount of an unpaid partner-fee bill would count that partner fee twice
+    // (once here as their fee, again when the bill is paid): refused unless the person says it is a different fee and why
+    var pfM = null;
+    if (action === 'fee_mark') {
+      pfM = await partnerFeeGuard(db, amount, [], { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason });
+      if (pfM && !pfM.allowed) { return NextResponse.json({ ok: false, error: pfM.error, code: pfM.code || null, partner_fee_bill: pfM.bill || null, api_build_marker: API_BUILD_MARKER }, { status: pfM.status }); }
+    }
     var rf = await db.rpc('hub_party_fee', { p: { action: action === 'fee_mark' ? 'mark' : 'reverse', party: party.name, bank_transaction_id: line.id, amount: amount, entry_date: body.entry_date || null, reason: reason,
       fee_id: action === 'fee_reverse' ? String(body.fee_id).replace(/^entry:/, '') : null, actor: userId, request_id: rid, allow_closed: isSuper && body.allow_closed === true } });
     if (rf.error && rf.error.code === '23505') { rf = await db.rpc('hub_party_fee', { p: { action: action === 'fee_mark' ? 'mark' : 'reverse', party: party.name, bank_transaction_id: line.id, amount: amount, entry_date: body.entry_date || null, reason: reason,
       fee_id: action === 'fee_reverse' ? String(body.fee_id).replace(/^entry:/, '') : null, actor: userId, request_id: rid, allow_closed: isSuper && body.allow_closed === true } }); }
     if (rf.error) { return guardFail(rf, canTotalsW); }
+    if (pfM && pfM.overridden) { await audit(db, userId, 'party_fee_not_partner_fee', 'bank_transaction', line.id, { party: party.name, amount: amount, looked_like_bill: pfM.bill, reason: pfM.reason }); }
     return NextResponse.json(ack(action, rf.data));
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || 'error', api_build_marker: API_BUILD_MARKER }, { status: 500 });

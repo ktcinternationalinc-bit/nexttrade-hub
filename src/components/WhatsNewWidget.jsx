@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZP',
+    date: '2026-11-26',
+    title: 'Partner fee in its own column, counted once — and RTM money that is not linked to bills yet',
+    items: [
+      { text: '**Wires: the partner fee has its own column.** A bill whose category is partner fee (NexPac’s monthly Operational Fee) shows in a **Partner fee** column on the wire, in the wire list (“of which partner fee”) and in the summary line: bills $X + partner fee $Y = total. It is the same money as that bill’s line, so the total does not change and nothing is counted twice.' },
+      { text: '**A service fee that is really the partner-fee bill is stopped.** On a wire or request to RTM / NextTrade, or when marking “services rendered” in 🏦 Funds, a fee of exactly the amount still open on an unpaid partner-fee bill is refused, with **＋ Add bill #… instead** (the fee goes back to 0). If it really is a different fee, tick **It is a different fee** and say why; that is kept in the history. When the partner-fee bill is already on the same wire, a fee of its amount is never allowed.' },
+      { text: '**A $45,250 NexPac bill with no category is flagged.** In 💸 Bills, a bill with no category whose vendor and amount match a partner-fee bill says “⚠ Looks like the monthly partner fee”, with **Set as partner fee…** (opens the bill with the category filled in; you press Save) and **Make it a rule…** (opens 🏷 Category rules with the vendor, the exact amount and partner fee filled in, so next month’s bill gets it too). Nothing changes until you save.' },
+      { text: '**RTM / NextTrade money with no bills linked is said plainly.** When money was sent and none of it is linked to a bill, 🏦 Funds and the P&L funds box say “These transfers are not linked to any bills yet, so all of it shows as held”, with **🔗 Link the bills it paid**. It opens the transfer’s “📎 Record bills already paid” (or, for a confirmed transfer, says to press Undo confirm first). Nothing is linked by itself.' },
+      { superAdminOnly: true, text: 'Technical: no SQL. lib/partner-fee.js (pure): isPartnerFee = pnl-expenses letterOf → C; splitWireLines; feeLooksLikePartnerBill (open = total − paid − credited, to the cent); looksLikePartnerFee / partnerFeeLookalikes (vendorKey + exact total of an ACTIVE partner-fee bill, uncategorized active bills only); noBillsLinked / periodNoBillsLinked / linkTarget; OPEN_PARTY_FUNDS_EVENT. lib/partner-fee-server.js partnerFeeGuard: fail-closed 503, 409 partner_fee_as_fee (override it_is_a_different_fee + different_fee_reason ≥ 5, audited wire_fee_not_partner_fee / party_fee_not_partner_fee), 409 partner_fee_on_wire (never overridable). Used by wire-packages save_draft (before any write) and change_fee, party-funds fee_mark (before hub_party_fee). list / get return partner_fee + other_bills; categories read separately — WIRE_FINGERPRINT_BILL_FIELDS unchanged. Test: zp-partner-fee (26).' }
+    ]
+  },
+  {
     version: 'v55.83-ZL',
     date: '2026-11-26',
     title: 'Warehouse check: check one wire, and each bill as a closed card with PASS or FAIL',

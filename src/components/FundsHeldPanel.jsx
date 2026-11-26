@@ -7,6 +7,7 @@
 // Inline colours on white panels (the dark theme repaints bg-white).
 import React, { useState, useEffect } from 'react';
 import { hubFetch } from '../lib/hub-fetch';
+import { noBillsLinked, linkTarget } from '../lib/partner-fee'; // v55.83-ZP — transfers with no bills linked, said plainly
 import { startingBalanceToPay, openingPickAmount, NEXTRADE_OPEN_WIRE_EVENT, NEXTRADE_PAY_OPENING_EVENT } from '../lib/nextrade-bill-groups'; // v55.83-XX
 
 function fmt(n) { return n == null ? '—' : '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -54,6 +55,36 @@ export default function FundsHeldPanel(props) {
   var s5 = useState(null); var form = s5[0]; var setForm = s5[1]; // { kind: 'mark' | 'reverse', party, id, fee, amount, date, reason }
   var s6 = useState(false); var shown = s6[0]; var setShown = s6[1];
   var s7 = useState(null); var payAsk = s7[0]; var setPayAsk = s7[1]; // v55.83-XX — { bill_id, bill_number, party, text, bad, offerWire } from 🟦 Nextrade bills → Pay ▸
+  var s8 = useState(null); var linkMsg = s8[0]; var setLinkMsg = s8[1]; // v55.83-ZP — { party, text } after “🔗 Link the bills it paid”
+  // v55.83-ZP (Max 26 Nov: "isnt the 76000 linked to bills so it was sent and spent toward ktc bills") — open the right place to link
+  // the bills a transfer paid: its “📎 Record bills already paid” form when that is open for it, otherwise say plainly what to do first.
+  // Nothing is written by this; the person ticks the bills and saves as before.
+  function linkBills(p, transferId, d) {
+    var dd = d || data || {};
+    var lt = linkTarget(p.transfers, transferId, function (t) { return transferActions(t, { canManage: dd.can_manage, installed: dd.installed }).recordPaid; });
+    if (!lt) { setLinkMsg({ party: p.party, text: 'Every transfer to ' + p.party + ' shown here already has bills linked to it.' }); return; }
+    var t = lt.transfer; setOpen(function (o0) { var o = Object.assign({}, o0); o[t.id] = true; return o; });
+    if (lt.how === 'record') { openRecordPaid(p, t); setLinkMsg({ party: p.party, text: 'Tick the bills ' + p.party + ' already paid out of the transfer of ' + t.date + ' (' + fmt(t.sent) + '), the date it paid them and the proof — below.' }); }
+    else if (lt.how === 'confirmed') { setLinkMsg({ party: p.party, text: 'The transfer of ' + t.date + ' is confirmed. To record bills ' + p.party + ' ALREADY paid from it, press “Undo confirm” on its row first (it goes back to “needs reconciliation”). New bills paid from it go through Wires → ＋ New wire → ' + p.party + '.' }); }
+    else { var why = transferActions(t, { canManage: dd.can_manage, installed: dd.installed }).why; setLinkMsg({ party: p.party, text: 'The transfer of ' + t.date + ' cannot take bills yet' + (why ? ': ' + why : '') + '.' }); }
+    setTimeout(function () { try { var el = document.getElementById('nt-funds-transfer-' + t.id); if (el && el.scrollIntoView) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } } catch (eS) { /* old browser */ } }, 80);
+  }
+  // opened from the P&L funds box (Accounting → Bills): load, find the company, open its first transfer with nothing linked
+  var tgN = props.openTarget && props.openTarget.n;
+  useEffect(function () {
+    var tg = props.openTarget; if (!tg || !tg.n) { return; }
+    setShown(true); setForm(null); setLinkMsg({ party: tg.party, text: 'Opening the transfers to ' + tg.party + '…' });
+    try { var el = document.getElementById('nt-funds-held'); if (el && el.scrollIntoView) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } catch (eS) { /* old browser */ }
+    setBusy(true);
+    api({ action: 'funds' }).then(function (j) {
+      if (!(j && j.ok)) { setErr((j && j.error) || 'Could not load the funds.'); setLinkMsg({ party: tg.party, text: 'The funds did not load, so nothing was opened. Press ↻ Refresh and try again.' }); return; }
+      setData(j); setErr('');
+      var key = String(tg.party).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      var pp = (j.parties || []).filter(function (x) { return String(x.party).toUpperCase().replace(/[^A-Z0-9]/g, '') === key; })[0];
+      if (!pp) { setLinkMsg({ party: tg.party, text: 'No transfers to ' + tg.party + ' are shown here (they may be in a private account, or outside the history you may see).' }); return; }
+      linkBills(pp, tg.transfer_id, j);
+    }).finally(function () { setBusy(false); });
+  }, [tgN]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function api(payload) {
     return hubFetch('/api/accounting/party-funds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
@@ -194,6 +225,11 @@ export default function FundsHeldPanel(props) {
             {T.starting_balance > 0.005 ? <span>· plus starting balance left <b style={{ color: '#075985' }}>{fmt(T.starting_balance_left)}</b></span> : null}
           </div> : <div className="text-[11px]" style={{ color: MUTED }}>{'Totals hidden — ' + (p.totals_hidden || 'no permission') + '.'}</div>}
         </div>
+                {/* v55.83-ZP — money sent and nothing linked: it all shows as held. Say so, and offer the place to link. */}
+        {T && noBillsLinked(T) && <div className="text-[12px] mt-1 font-bold rounded px-2 py-1 flex gap-2 items-center flex-wrap" style={{ background: '#fef3c7', color: '#92400e' }}>
+          <span>{'These transfers to ' + p.party + ' are not linked to any bills yet, so all of it shows as held. If ' + p.party + ' already paid KTC bills with it, link them to the transfer.'}</span>
+          <button type="button" disabled={busy} onClick={function () { linkBills(p, null); }} className="px-2 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#92400e', color: '#ffffff' }}>🔗 Link the bills it paid</button></div>}
+        {linkMsg && linkMsg.party === p.party && <div className="text-[11px] mt-1 rounded px-2 py-1 flex gap-2 items-center" style={{ background: '#eff6ff', color: '#1e3a8a' }}><span>{linkMsg.text}</span><button type="button" onClick={function () { setLinkMsg(null); }} className="px-1.5 rounded text-[10px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕</button></div>}
         {p.needs_reconciliation && <div className="text-[11px] mt-1 font-bold" style={{ color: '#b45309' }}>{'⚠ Needs reconciliation' + (p.paid_without_a_transfer_count ? ': ' + p.paid_without_a_transfer_count + ' bill payment(s) made through ' + p.party + ' name no transfer' + (T ? ' (' + fmt(T.paid_without_a_transfer) + ') — held funds are overstated by that until they are linked' : '') : ': the records disagree on a transfer') + '.'}</div>}
         {p.hidden_private_transfers > 0 && <div className="text-[11px] mt-1" style={{ color: MUTED }}>{p.hidden_private_transfers + ' transfer(s) from a private account are not shown.'}</div>}
         {/* v55.83-XO — the starting balance(s) with this company: money it already held for KTC before the Hub. Never money sent. */}
@@ -264,7 +300,7 @@ export default function FundsHeldPanel(props) {
           <tbody>{p.transfers.map(function (t) {
             var a = transferActions(t, { canManage: data.can_manage, installed: data.installed }); var isOpen = !!open[t.id];
             return <React.Fragment key={t.id}>
-              <tr style={{ borderTop: '1px solid #e2e8f0' }}>
+              <tr id={'nt-funds-transfer-' + t.id} style={{ borderTop: '1px solid #e2e8f0' }}>
                 <td className="p-1"><button type="button" onClick={function () { var o = Object.assign({}, open); o[t.id] = !isOpen; setOpen(o); }} className="font-bold text-left" style={{ color: '#1d4ed8' }}>{(isOpen ? '▾ ' : '▸ ') + t.date}</button><div className="text-[10px]" style={{ color: MUTED }}>{String(t.reference || '').substring(0, 60)}</div></td>
                 <td className="p-1">{chip(t.status)}{t.database_agrees === false ? <div className="text-[10px] font-bold" style={{ color: '#b91c1c' }}>the database and the report disagree — tell Claude</div> : null}</td>
                 <td className="p-1 text-right tabular-nums">{fmt(t.sent)}{t.refunded > 0.005 ? <div className="text-[10px]" style={{ color: MUTED }}>{'− ' + fmt(t.refunded) + ' back'}</div> : null}</td><td className="p-1 text-right tabular-nums">{fmt(t.to_bills)}</td><td className="p-1 text-right tabular-nums">{fmt(t.services_rendered)}</td>

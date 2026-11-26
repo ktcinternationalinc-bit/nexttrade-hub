@@ -32,6 +32,7 @@ import WeightCheckPanel from './WeightCheckPanel'; // v55.83-XB — the warehous
 import { statementMoney } from '../lib/vendor-statement'; // v55.83-WT
 import { allocateBankLine } from '../lib/bill-bank-pay'; // v55.83-TH
 import { describeAudit, niceWhen, niceDate } from '../lib/audit-words'; // v55.83-TH
+import { partnerFeeLookalikes } from '../lib/partner-fee'; // v55.83-ZP — a bill that looks like the monthly partner fee but has no category
 // v55.83-RP — where an imported value came from, said plainly to the person validating it
 var SRC_WORDS = { vendor_default: '🏷 this vendor’s bills are always this way', read_from_bill: '🤖 read from the bill', vendor_history: '🧠 from this vendor’s past bills', release_number: '🤖 release # on the bill → outbound', validator: '✓ set at validation', manual: '✍ set by hand' };
 
@@ -84,6 +85,7 @@ export default function BillsTab(props) {
   function sortOn(k) { if (sortBy === k) { setSortDir(sortDir === 'asc' ? 'desc' : 'asc'); } else { setSortBy(k); setSortDir(k === 'amount' || k === 'open' ? 'desc' : 'asc'); } }
   var s21 = useState(null); var panel = s21[0]; var setPanel = s21[1]; // 'rules' | 'reports'
   useEffect(function () { if (wcWire && wcWire.wire_id && canWeightCheck) { setPanel('weightcheck'); } }, [wcWire && wcWire.n]); // eslint-disable-line react-hooks/exhaustive-deps -- v55.83-ZL: opened from a wire
+  var s21b = useState(null); var rulePrefill = s21b[0]; var setRulePrefill = s21b[1]; // v55.83-ZP — { vendor_match, amount_exact, category, name, n }
   var s22 = useState(''); var priceF = s22[0]; var setPriceF = s22[1];
   var s22v = useState(''); var valF = s22v[0]; var setValF = s22v[1]; // v55.83-UB: validated / not validated
   // v55.83-RU (Max, Nov 9 21:48: "please save entries when we validate even if we have not yet fully validated. such as just
@@ -350,6 +352,7 @@ export default function BillsTab(props) {
 
   var catLabelOf = {}; (cats || []).forEach(function (c) { catLabelOf[c.key] = c.label; }); // v55.83-PJ
   var bills = (data && data.bills) || [];
+  var pfLike = partnerFeeLookalikes(bills); // v55.83-ZP — bill id → the partner-fee bill (same vendor, same total) it looks like
   var payments = (data && data.payments) || [];
   var totals = (data && data.totals) || { open: 0, overdue: 0, open_count: 0 };
   var dupN = bills.filter(function (b) { return b.record_status === 'active' && !!b.dup_flag; }).length; // v55.83-SV
@@ -597,7 +600,7 @@ export default function BillsTab(props) {
       <span className="text-[10px] font-bold" style={{ color: '#475569' }}>{shown.length + (shown.length === 1 ? ' bill' : ' bills') + ' · ' + vendorGroups.length + (vendorGroups.length === 1 ? ' vendor' : ' vendors') + (searching ? ' match the search (of ' + beforeSearch + ')' : '')}</span>
     </div>
     {canView && <AdvancesPanel userProfile={userProfile} toast={toast} onChanged={load} />}{/* v55.83-TX — advance balances, always visible */}
-    {canView && <FundsHeldPanel userProfile={userProfile} toast={toast} onChanged={load} />}{/* v55.83-WF — funds held, per transfer (closed until opened; reads only when opened) */}
+    {canView && <FundsHeldPanel userProfile={userProfile} toast={toast} onChanged={load} openTarget={props.fundsTarget || null} />}{/* v55.83-WF — funds held, per transfer (closed until opened; reads only when opened) */}
     {panel === 'nextrade' && <NextradeBillsPanel userProfile={userProfile} isSuperAdmin={isSuperAdmin} cats={cats} onClose={function () { setPanel(null); }} />}{/* v55.83-XX — grouped by the Bills categories; Pay ▸ chooser */}
     {panel === 'repeating' && <RepeatingBillsPanel userProfile={userProfile} canManage={canManage} cats={cats} toast={toast} onClose={function () { setPanel(null); }} onChanged={load} />}
     {panel === 'rules' && <PriceRulesPanel api={api} toast={toast} onClose={function () { setPanel(null); }} onChanged={load} />}
@@ -606,7 +609,7 @@ export default function BillsTab(props) {
     {panel === 'reports' && <BillReportsPanel api={api} onClose={function () { setPanel(null); }} />}
     {/* v55.83-WT — read-only: it is given the list already loaded here and opens bills / wires with the read-only viewers */}
     {panel === 'vcredits' && canView && <VendorCreditsPanel userProfile={userProfile} toast={toast} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}{/* v55.83-YD */}
-    {panel === 'catrules' && canView && <BillCategoryRulesPanel userProfile={userProfile} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}
+    {panel === 'catrules' && canView && <BillCategoryRulesPanel userProfile={userProfile} prefill={rulePrefill} onClose={function () { setPanel(null); setRulePrefill(null); }} onChanged={function () { load(); }} />}
     {panel === 'duplicates' && canView && <DuplicateBillsPanel userProfile={userProfile} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}
     {panel === 'weightcheck' && canWeightCheck && <WeightCheckPanel bills={bills} toast={toast} openDoc={openDoc} wirePreset={wcWire} onClose={function () { setPanel(null); }} />}{/* v55.83-XB */}
     {panel === 'statement' && canView && <VendorStatementPanel bills={bills} payments={payments} enrichWarnings={(data && data.enrich_warnings) || []} userProfile={userProfile} onClose={function () { setPanel(null); }}
@@ -771,7 +774,12 @@ export default function BillsTab(props) {
                 <td className="py-1.5 pr-2 text-right">${fmt(b.total_amount)}</td>
                 <td className="py-1.5 pr-2 text-right">${fmt(b.paid)}</td>
                 <td className="py-1.5 pr-2 text-right font-extrabold">${fmt(b.open)}</td>
-                <td className="py-1.5 pr-2">{b.category ? (catLabelOf[b.category] || b.category) : '—'}{b.category && b.category_source === 'rule' ? <span title="Set by a bill category rule (Bills → 🏷 Category rules). Change it on the bill and it becomes yours." className="ml-1 px-1 rounded text-[9px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81' }}>rule</span> : null}{!b.category && b.category_source === 'rule_conflict' ? <span title="Bill category rules disagree for this bill (or the rule would count it twice) — pick the category by hand" className="ml-1 px-1 rounded text-[9px] font-extrabold" style={{ background: '#fef2f2', color: '#991b1b' }}>rules disagree</span> : null}</td>
+                <td className="py-1.5 pr-2">{b.category ? (catLabelOf[b.category] || b.category) : '—'}{/* v55.83-ZP (Max 26 Nov: "if we find a charge for 45250 that is a bill for partner fee. should be placed in the correct column") — said, never set by itself */}
+{pfLike[b.id] ? <div className="mt-0.5 text-[10px] font-bold rounded px-1 py-0.5" style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74' }}>
+  {'⚠ Looks like the monthly partner fee: same vendor and amount as bill #' + (pfLike[b.id].bill_number || '?') + ', which is a partner fee. This one has no category, so it is not in the partner-fee column.'}
+  {canManage ? <button onClick={function () { var lk = pfLike[b.id]; closePanels(); setEditing(Object.assign({}, b, { category: lk.category, category_rule_id: null })); toast.success('Category set to “' + (catLabelOf[lk.category] || lk.category) + '” in the editor — check it and press Save.'); setTimeout(function () { try { var ed3 = document.getElementById('nt-bill-editor'); if (ed3) { ed3.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } catch (eS3) {} }, 60); }} className="ml-1 px-1.5 rounded text-[10px] font-extrabold" style={{ background: '#c2410c', color: '#ffffff' }}>Set as partner fee…</button> : null}
+  {canView ? <button onClick={function () { var lk = pfLike[b.id]; setRulePrefill({ name: (b.vendor_name || 'Vendor') + ' monthly partner fee', vendor_match: b.vendor_name || '', amount_exact: Number(b.total_amount) || null, category: lk.category, n: Date.now() }); setPanel('catrules'); }} title="Opens 🏷 Category rules with this vendor, this exact amount and the partner-fee category filled in — nothing is saved until you press Save rule" className="ml-1 px-1.5 rounded text-[10px] font-bold" style={{ background: '#e0e7ff', color: '#312e81' }}>Make it a rule…</button> : null}
+</div> : null}{b.category && b.category_source === 'rule' ? <span title="Set by a bill category rule (Bills → 🏷 Category rules). Change it on the bill and it becomes yours." className="ml-1 px-1 rounded text-[9px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81' }}>rule</span> : null}{!b.category && b.category_source === 'rule_conflict' ? <span title="Bill category rules disagree for this bill (or the rule would count it twice) — pick the category by hand" className="ml-1 px-1 rounded text-[9px] font-extrabold" style={{ background: '#fef2f2', color: '#991b1b' }}>rules disagree</span> : null}</td>
                 <td className="py-1.5 pr-2">{b.wire_state && b.status === 'OPEN' && b.wire_state.state !== 'on_wire' ? null : chip(b.status)}{wireChip(b)}{paidByChips(b)}</td>
                 <td className="py-1.5 pr-2">{b.record_status === 'active' ? valChip(b) : '—'}{b.price_check_status === 'flagged' ? <div title={((b.price_check && b.price_check.flags) || []).map(function (f) { return f.text; }).join('\n')} className="mt-0.5 text-[9px] font-extrabold" style={{ color: b.price_resolved_note ? '#065f46' : '#b91c1c' }}>{b.price_resolved_note ? '✓ price issue resolved' : '⚠ price check'}</div> : b.price_check_status === 'ok' ? <div className="mt-0.5 text-[9px] font-extrabold" style={{ color: '#065f46' }}>✅ prices OK</div> : null}</td>
                 <td className="py-1.5 whitespace-nowrap">

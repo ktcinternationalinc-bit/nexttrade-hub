@@ -32,6 +32,8 @@ import { todayET } from '../../../../lib/et-time';
 import { handleInbox, inboxPathLinkedTo, linkedConfirmation } from '../../../../lib/wire-inbox-server'; // v55.83-XC — the bank-confirmation inbox
 import { nextradeBillIds, markNextradeBills } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills: no validation step on a NextTrade wire
 import { loadBillCredits } from '../../../../lib/vendor-credits-server'; // v55.83-YD — vendor credits applied lower what a bill still owes
+import { splitWireLines } from '../../../../lib/partner-fee'; // v55.83-ZP — partner-fee bills in their own column, counted once
+import { partnerFeeGuard } from '../../../../lib/partner-fee-server';
 var SP_HINT = ' — run sql/v55-83-SP-funded-requests.sql in Supabase first.';
 function spMissing(m) { return /funding_txn_id|planned_send_date|wire_request_|wire_funding_|schema cache/i.test(String(m || '')); }
 
@@ -217,6 +219,9 @@ export async function POST(req) {
       // NOT-VALIDATED here, the list's fingerprint never matched the signed one, and a fully signed wire showed 'PRE-WIRE · Check it'.
       var bl = bIds.length ? await inChunks(db, 'vendor_bills', WIRE_FINGERPRINT_BILL_FIELDS, 'id', bIds) : [];
       var bBy = {}; bl.forEach(function (b) { bBy[b.id] = b; });
+      // v55.83-ZP — each bill's category, read on its own: it is NOT part of the signed fingerprint and must never be added to it
+      var catBy = {};
+      try { (bIds.length ? await inChunks(db, 'vendor_bills', 'id, category', 'id', bIds) : []).forEach(function (b) { catBy[b.id] = b.category || null; }); } catch (eCat) { catBy = null; }
       // v55.83-XX — the same Nextrade-bill mark the opened wire uses, so a signed NextTrade wire's fingerprint matches here too
       var ntPk = {}; pkgs.forEach(function (p) { if (p.payee_kind === 'affiliate') { ntPk[p.id] = true; } });
       var ntBills = []; allL.forEach(function (l) { if (ntPk[l.package_id] && bBy[l.bill_id] && ntBills.indexOf(bBy[l.bill_id]) < 0) { ntBills.push(bBy[l.bill_id]); } });
@@ -230,8 +235,11 @@ export async function POST(req) {
         var pend = pt ? ls.filter(function (l) { return !l.rtm.confirmed_at; }).length : 0;
         var vend = []; ls.forEach(function (l) { var v = l.bill.vendor_name || '?'; if (vend.indexOf(v) < 0) { vend.push(v); } });
         var t = packageTotals(p, ls);
+        // ZP — the partner-fee share of these bill lines (null when the categories could not be read: the screen then shows "—", never 0)
+        var sp = catBy ? splitWireLines(ls.map(function (l) { return { amount: l.amount, bill: { category: catBy[l.bill_id] } }; })) : null;
         return { id: p.id, label: packageLabel(p), payee_name: p.payee_name, payee_kind: p.payee_kind, created_at: p.created_at, created_by: nm[p.created_by] || null,
           bills: ls.length, vendors: vend, bills_total: t.bills, fee: t.fee, total: p.approved_total != null ? r2(p.approved_total) : t.total,
+          partner_fee: sp ? sp.partner_fee_cents / 100 : null, other_bills: sp ? sp.bills_cents / 100 : null,
           status: packageStatus(p, h, pend), rtm_pending: pend, overridden: 0, sent_date: p.sent_date, bank_reference: p.bank_reference,
           signers: [nm[p.signoff1_by], nm[p.signoff2_by]].filter(Boolean), signer_ids: [p.signoff1_by, p.signoff2_by].filter(Boolean) /* v55.83-SI — for the “Waiting for me” list */, bank_transaction_id: p.bank_transaction_id,
           funding_txn_id: p.funding_txn_id || null, planned_send_date: p.planned_send_date || null /* v55.83-SP */ };
@@ -350,6 +358,15 @@ export async function POST(req) {
           return fail((bj.vendor_name || 'A bill') + ' ' + (bj.bill_number || '') + ': only $' + Math.max(0, leftJ).toFixed(2) + ' is left for this wire — $' + resvS[bj.id].toFixed(2) + ' of it is already on wire ' + (labs || 'another wire') + '. Lower the amount here (or change that wire).', 409);
         }
       }
+      // v55.83-ZP (Max 26 Nov: the partner fee "sould not count twice") — a service fee equal to the open amount of an unpaid
+      // partner-fee bill is that bill typed as a fee: refused before anything is written (add the bill instead), unless the person
+      // says it is a different fee and why. The bill already on this wire can never be overridden. A failed check refuses (503).
+      var pfOverrideS = null;
+      if (feeS > 0) {
+        var pfG = await partnerFeeGuard(db, feeS, clean.map(function (c) { return c.bill_id; }), { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason });
+        if (pfG && !pfG.allowed) { return NextResponse.json({ ok: false, error: pfG.error, code: pfG.code || null, partner_fee_bill: pfG.bill || null }, { status: pfG.status }); }
+        if (pfG && pfG.overridden) { pfOverrideS = pfG; } // audited once the draft is saved
+      }
       var headS = { payee_kind: kindS, payee_name: payeeS, fee_amount: feeS, fee_note: String(body.fee_note || '').trim().substring(0, 300) || null, memo: String(body.memo || '').trim().substring(0, 500) || null };
       if (fundS !== undefined) { headS.funding_txn_id = fundS; }      // only touched when the screen sent it (works before the SP SQL is run)
       if (planS !== undefined) { headS.planned_send_date = planS; }
@@ -400,6 +417,8 @@ export async function POST(req) {
         }
       }
       var totS = packageTotals({ fee_amount: feeS }, clean);
+      // v55.83-ZP — a service fee kept although it equals an open partner-fee bill: who, why, and the bill it looked like
+      if (pfOverrideS) { await audit(db, userId, 'wire_fee_not_partner_fee', 'wire_package', pkgId, { fee: feeS, looked_like_bill: pfOverrideS.bill, reason: pfOverrideS.reason, payee: payeeS }); }
       // the 🤖 check runs by itself on every save (the AI part is limited to 20 seconds)
       var autoA = null;
       try {
@@ -630,6 +649,8 @@ export async function POST(req) {
         id: pkg.id, label: packageLabel(pkg), payee_kind: pkg.payee_kind, payee_name: pkg.payee_name, fee_amount: r2(pkg.fee_amount), fee_note: pkg.fee_note, memo: pkg.memo,
         status: P.status, raw_status: pkg.status, created_at: pkg.created_at, created_by: nmG[pkg.created_by] || null,
         bills_total: t.bills, total: t.total, approved_total: pkg.approved_total != null ? r2(pkg.approved_total) : null,
+        // v55.83-ZP — the bills split in two columns that add up to bills_total: other bills + the partner-fee share (counted once)
+        partner_fee: splitWireLines(P.ctx.lines).partner_fee_cents / 100, other_bills: splitWireLines(P.ctx.lines).bills_cents / 100,
         sent: pkg.sent_by ? { by: nmG[pkg.sent_by] || 'user', at: pkg.sent_at, date: pkg.sent_date, reference: pkg.bank_reference, after_the_fact: pkg.after_the_fact === true, after_the_fact_note: pkg.after_the_fact_note || null } : null,
         // RZ — a wire the Hub matched by itself has no person on it: say so
         attached: (pkg.attached_by || pkg.attached_at) ? { by: pkg.attached_by ? (nmG[pkg.attached_by] || 'user') : 'the Hub (automatically)', at: pkg.attached_at, note: pkg.attach_note, bank: bank, bank_fee: r2(pkg.bank_fee), auto: pkg.matched_auto === true } : null,
@@ -978,11 +999,15 @@ export async function POST(req) {
       if (!(/^\d+(\.\d+)?$/.test(feeTyped) || /^\d{1,3}(,\d{3})+(\.\d+)?$/.test(feeTyped))) { return fail('The fee "' + feeTyped + '" is not a valid number — type it like 1500.00 or 1,500.00.'); }
       var whyF = String(body.reason || '').trim();
       if (whyF.length < 5) { return fail('Say why the service fee changes.'); }
+      // v55.83-ZP — the same partner-fee guard as a draft (the bills of this request count as "on this wire")
+      var pfC = await partnerFeeGuard(db, r2(feeTyped.replace(/,/g, '')), P.rawLines.map(function (l) { return l.bill_id; }), { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason });
+      if (pfC && !pfC.allowed) { return NextResponse.json({ ok: false, error: pfC.error, code: pfC.code || null, partner_fee_bill: pfC.bill || null }, { status: pfC.status }); }
       var cf = await db.rpc('wire_request_fee_change', { p_pkg: pkg.id, p_fee: r2(feeTyped.replace(/,/g, '')), p_actor: userId });
       if (cf.error) { return fail(cf.error.message + (spMissing(cf.error.message) ? SP_HINT : ''), 400); }
       var cfD = cf.data || {};
       if (cfD.ok !== true) { return fail(cfD.why || 'The fee was not changed.', 409); }
       await audit(db, userId, 'wire_request_fee_changed', 'wire_package', pkg.id, { from: cfD.from, to: cfD.to, total: cfD.total, left_on_transfer: cfD.remaining_after, reason: whyF.substring(0, 300) });
+      if (pfC && pfC.overridden) { await audit(db, userId, 'wire_fee_not_partner_fee', 'wire_package', pkg.id, { fee: cfD.to, looked_like_bill: pfC.bill, reason: pfC.reason, payee: pkg.payee_name }); }
       return NextResponse.json({ ok: true, from: cfD.from, to: cfD.to, total: cfD.total, left_on_transfer: cfD.remaining_after });
     }
 

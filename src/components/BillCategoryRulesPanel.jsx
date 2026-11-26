@@ -45,6 +45,14 @@ export default function BillCategoryRulesPanel(props) {
     });
   }
   useEffect(function () { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-ZP — opened from a bill flagged "looks like the monthly partner fee": the new-rule form starts filled in (vendor, exact
+  // amount, category). Nothing is saved or applied until the person presses Save rule, then Preview / Apply as usual.
+  var pfN = props.prefill && props.prefill.n;
+  useEffect(function () {
+    var p0 = props.prefill; if (!p0) { return; }
+    setPv(null); setMsg(null);
+    setForm(Object.assign({}, EMPTY, { name: p0.name || '', vendor_match: p0.vendor_match || '', amount_mode: p0.amount_exact ? 'exact' : 'any', amount_exact: p0.amount_exact ? String(p0.amount_exact) : '', category: p0.category || '' }));
+  }, [pfN]); // eslint-disable-line react-hooks/exhaustive-deps
   var catLabel = {}; st.categories.forEach(function (c) { catLabel[c.key] = c.label; });
   function edit(r) {
     setPv(null); setMsg(null);
