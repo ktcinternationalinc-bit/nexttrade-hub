@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZK',
+    date: '2026-11-26',
+    title: 'Profitability: changing a line’s category now shows what it was and where it went',
+    items: [
+      { text: '**The category menu on a bank line now shows the category the line is in**, instead of always reading “change category…”. So you can see what it is before you change it, and see the new one after.' },
+      { text: '**Picking the same category again no longer says “saved”.** It tells you the line is already there and that nothing changed.' },
+      { text: '**A real change says where the line went** (“moved from … to …”), the numbers are worked out again, and the line moves to its new category in the breakdown.' },
+      { superAdminOnly: true, text: 'Technical: 26 Nov 19:46 UTC audit rows showed bulk_classify saving returned_checks over returned_checks twice with “Category saved”. pnl-expense-detail rows now carry category; cat-picker-state: currentCategoryOf, categoryLabel, samePick; the select is controlled by the line’s category. No server or SQL change.' },
+    ]
+  },
+  {
     version: 'v55.83-ZH',
     date: '2026-11-25',
     title: 'Reminders: one button to send all the ready reminders',

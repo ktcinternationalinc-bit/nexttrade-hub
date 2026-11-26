@@ -20,7 +20,7 @@ export function expenseDetail(spending, rc) {
   var sp = spending || {}; var out = { byKey: {}, not_pnl: [], transfers_cents: cents(sp.transfers && sp.transfers.total), rows_listed: Array.isArray(sp.rows) };
   var blocks = sp.paid_through || (sp.rtm ? [sp.rtm] : []);
   var orig = {}; (sp.categories || []).forEach(function (c) { orig[c.key] = c; });
-  var rowsBy = {}; (sp.rows || []).forEach(function (r) { var k = r.category || 'uncategorized'; (rowsBy[k] = rowsBy[k] || []).push({ id: r.id || null, date: r.date || '', who: r.who || '', cents: cents(r.amount), money_in: r.money_in === true, matched_invoice: r.matched_invoice === true }); });
+  var rowsBy = {}; (sp.rows || []).forEach(function (r) { var k = r.category || 'uncategorized'; (rowsBy[k] = rowsBy[k] || []).push({ id: r.id || null, category: k /* v55.83-ZK: the line's own category, so the menu can show it */, date: r.date || '', who: r.who || '', cents: cents(r.amount), money_in: r.money_in === true, matched_invoice: r.matched_invoice === true }); });
   var remOf = {}; blocks.forEach(function (b) { remainderRows(b).forEach(function (rw) { remOf[rw.key] = { block: b, row: rw }; });
     // v55.83-VY — the company's three possible rows always belong to it, also a fee row P&L by period made itself (explicitFeeRows)
     var base = '__pt_' + String(b.key || b.payer || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_'); [base, base + '_fee', base + '_waiting', base + '_unconfirmed'].forEach(function (k) { if (!remOf[k]) { remOf[k] = { block: b, row: null }; } }); });

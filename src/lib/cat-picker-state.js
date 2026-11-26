@@ -21,3 +21,11 @@ export function pickerState(catList, catErr) {
 export function pickableCategories(list) {
   return (list || []).filter(function (c) { return c && c.active !== false && c.key !== 'needs_clarification'; });
 }
+// v55.83-ZK (Max, Nov 26) — what the menu shows as selected for one line: its own category when that is one of the choices, else ''
+export function currentCategoryOf(row, list) {
+  var k = row && (row.category || row.bank_category || ''); if (!k) { return ''; }
+  return pickableCategories(list).some(function (c) { return c.key === k; }) ? k : '';
+}
+export function categoryLabel(key, list) { var c = (list || []).filter(function (x) { return x && x.key === key; })[0]; return (c && c.label) || key || ''; }
+// same category picked again = nothing to save (said plainly, never 'saved')
+export function samePick(row, key, list) { var cur = currentCategoryOf(row, list); return !!cur && cur === key; }

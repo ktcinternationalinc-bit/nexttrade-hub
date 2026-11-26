@@ -13,7 +13,7 @@ import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from 
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
 import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, addPeriodCell, blankPeriodRow, settlePeriodRow, avgProfitPerUnit } from '../lib/pnl-period';
 import FixChips from './FixChips'; // v55.83-WN — each missing thing on a line is a button that jumps to where it is fixed
-import { needCategoryList, pickerState, pickableCategories } from '../lib/cat-picker-state'; // v55.83-WR — the category menu loads in the pop-up too
+import { needCategoryList, pickerState, pickableCategories, currentCategoryOf, categoryLabel, samePick } from '../lib/cat-picker-state'; // v55.83-WR — the category menu loads in the pop-up too
 import AvgProfitCell from './AvgProfitCell'; // v55.83-WK — average profit per unit, never from an unknown profit
 import CustomerBalances, { BalanceCell } from './CustomerBalances'; // v55.83-WY — held for / still owed by each customer, today, not in profit
 import { balanceOfCustomer } from '../lib/customer-balances';
@@ -175,9 +175,12 @@ export default function ProfitabilityTab(props) {
       }).finally(function () { setCatSaving(function (m) { var n = Object.assign({}, m); delete n[row.id]; return n; }); });
       return;
     }
+    // v55.83-ZK — the same category again: nothing is sent, and the screen says so instead of 'saved'
+    if (samePick(row, key, catList)) { toast.error('This line is already under “' + categoryLabel(key, catList) + '”. Nothing was changed — pick a different category to move it.', { duration: 9000 }); return; }
+    var fromLbl = categoryLabel(currentCategoryOf(row, catList), catList); var toLbl = categoryLabel(key, catList);
     setCatSaving(function (m) { var n = Object.assign({}, m); n[row.id] = true; return n; });
     erApi('bulk_classify', { ids: [row.id], classification: key, single_pick: true }).then(function (j) {
-      if (j && j.ok && j.updated > 0) { setUndoPt(j.undo_id ? { id: j.undo_id, who: row.who, label: ((catList || []).filter(function (cU) { return cU.key === key; })[0] || {}).label || key, hours: j.undo_hours, ready: j.undo_ready !== false } : null); var more = Number(j.look_alikes_updated) || 0; toast.success('Category saved' + (more ? ' — ' + more + ' more line(s) with the same description filled in' : '') + '. The expenses are loaded again.'); startExpenses({ ignoreCache: true }); }
+      if (j && j.ok && j.updated > 0) { setUndoPt(j.undo_id ? { id: j.undo_id, who: row.who, label: ((catList || []).filter(function (cU) { return cU.key === key; })[0] || {}).label || key, hours: j.undo_hours, ready: j.undo_ready !== false } : null); var more = Number(j.look_alikes_updated) || 0; toast.success('Saved: moved ' + (fromLbl ? 'from “' + fromLbl + '” ' : '') + 'to “' + toLbl + '”' + (more ? ' — ' + more + ' more line(s) with the same description went with it' : '') + '. The numbers are being worked out again; the line now sits under “' + toLbl + '”.', { duration: 9000 }); startExpenses({ ignoreCache: true }); }
       else { toast.error((j && j.error) || 'Nothing was saved — reload the page and try again.'); }
     }).finally(function () { setCatSaving(function (m) { var n = Object.assign({}, m); delete n[row.id]; return n; }); });
   }
@@ -214,8 +217,9 @@ export default function ProfitabilityTab(props) {
     var pst = pickerState(catList, catErr);
     if (pst === 'error') { return <button type="button" title={catErr} onClick={function (e) { e.stopPropagation(); loadCats(); }} className="text-[10px] font-extrabold rounded px-1.5 py-0.5" style={{ border: '1px solid #fca5a5', background: '#fef2f2', color: '#991b1b' }}>categories not loaded — try again</button>; }
     if (pst === 'loading') { return <select value="" disabled aria-label="Loading the categories" onClick={function (e) { e.stopPropagation(); }} onFocus={function () { loadCats(); }} className="nt-light text-[11px] font-semibold rounded px-1 py-0.5" style={{ border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b', maxWidth: 180 }}><option value="">loading…</option></select>; }
-    return <select value="" aria-label={'Change the category of ' + row.who} onClick={function (e) { e.stopPropagation(); }} onChange={function (e) { pickCat(row, e.target.value); }} className="nt-light text-[11px] font-semibold rounded px-1 py-0.5" style={{ border: '1px solid #fdba74', background: '#ffffff', color: '#0f172a', maxWidth: 180 }}>
-      <option value="">change category…</option>
+    var curK = currentCategoryOf(row, catList);
+    return <select value={curK} title={curK ? 'Now under: ' + categoryLabel(curK, catList) : 'No category chosen yet'} aria-label={'Change the category of ' + row.who} onClick={function (e) { e.stopPropagation(); }} onChange={function (e) { pickCat(row, e.target.value); }} className="nt-light text-[11px] font-semibold rounded px-1 py-0.5" style={{ border: '1px solid #fdba74', background: '#ffffff', color: '#0f172a', maxWidth: 180 }}>
+      {!curK && <option value="">change category…</option>}
       {pickableCategories(catList).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
       <option value="__remove__">✕ remove category (back to Uncategorized)</option>
     </select>;
