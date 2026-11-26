@@ -1078,7 +1078,8 @@ export default function WirePackagesPanel(props) {
       </div>}
 
       {/* the bills */}
-      <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{'Bills on this wire (' + det.lines.length + ') · bills $' + fmt(P.bills_total) + (P.fee_amount > 0 ? ' + ' + P.payee_name + ' fee $' + fmt(P.fee_amount) + (P.fee_note ? ' (' + P.fee_note + ')' : '') : '')}</div>
+      <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{'Bills on this wire (' + det.lines.length + ') · bills $' + fmt(P.bills_total) + (P.fee_amount > 0 ? ' + ' + P.payee_name + ' fee $' + fmt(P.fee_amount) + (P.fee_note ? ' (' + P.fee_note + ')' : '') : '')}
+        {perms.warehouse && det.lines.length ? <button type="button" onClick={function () { try { window.dispatchEvent(new CustomEvent('hub-open-warehouse-check', { detail: { wire_id: P.id, seq: P.seq } })); } catch (eW) {} }} className="ml-2 px-2 py-0.5 text-[11px] font-extrabold" style={{ background: '#000000', color: '#ffffff', border: '1px solid #000000', borderRadius: 2, letterSpacing: '0.04em' }} title="Opens Bills → Warehouse check showing ONLY the bills on this wire: billed vs scanned into the warehouse, PASS or FAIL per bill">🏭 Check these bills against the warehouse</button> : null}{/* v55.83-ZL (Max 26 Nov) */}</div>
       <div className="overflow-x-auto rounded-lg mb-3" style={{ border: '1px solid #e2e8f0' }}><table className="w-full text-[12px]">
         <thead><tr style={{ background: '#f1f5f9', color: SUB }}>
           {canTick ? <th className="px-2 py-1.5"></th> : null}

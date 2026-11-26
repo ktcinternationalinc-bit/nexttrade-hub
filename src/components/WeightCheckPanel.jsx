@@ -26,6 +26,7 @@ function csvRows(rows, reportNo) {
 
 export default function WeightCheckPanel(props) {
   var _t = useState('invoices'); var tab = _t[0], setTab = _t[1];
+  useEffect(function () { if (props.wirePreset && props.wirePreset.wire_id) { setTab('invoices'); } }, [props.wirePreset && props.wirePreset.n]); // eslint-disable-line react-hooks/exhaustive-deps -- v55.83-ZL
   var mr = monthRange();
   var _f = useState({ date_from: mr[0], date_to: mr[1], vendor: '', reference: '', warehouse: '', status: '', reviewer: '', unresolved: false, all: false }); var flt = _f[0], setFlt = _f[1];
   var _d = useState(null); var data = _d[0], setData = _d[1];
@@ -64,7 +65,7 @@ export default function WeightCheckPanel(props) {
       say(props.toast, 'Decision saved.', 'success');
     }} />}
 
-    {tab === 'invoices' && <WeightCheckInvoices toast={props.toast} />}
+    {tab === 'invoices' && <WeightCheckInvoices toast={props.toast} wirePreset={props.wirePreset || null} />}
     {tab === 'report' && <div>
       <div className="flex flex-wrap gap-2 items-end text-[11px] font-bold" style={{ color: SUB }}>
         <label>Bill date from<br /><input type="date" value={flt.date_from} onChange={function (e) { set('date_from', e.target.value); }} className={inp} /></label>

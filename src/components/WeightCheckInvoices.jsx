@@ -20,6 +20,35 @@ var LABEL = { display: 'block', fontSize: 11, fontWeight: 700, color: SUB, textT
 function btn(bg, fg, outline) { return { background: outline ? '#ffffff' : bg, color: outline ? bg : fg, border: '1px solid ' + bg, borderRadius: 8, padding: '7px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }; }
 function pill(color, bg) { return { display: 'inline-block', padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 800, letterSpacing: '0.04em', color: color, background: bg, border: '1px solid ' + color }; }
 
+// v55.83-ZL (Max 26 Nov: "default to each bill check to be closed with a pass or fail showing..user can click on drill down"):
+// the status block of a COLLAPSED card — the real state, never dressed up as a pass. Approved Hub look: solid block, black text.
+var Z_GREEN = '#22c55e'; var Z_RED = '#ef4444'; var Z_AMBER = '#f59e0b'; var Z_BLUE = '#3b82f6'; var Z_GREY = '#a3a3a3'; var Z_GOLD = '#facc15';
+var NOT_COMPARED = { cannot_compare: 1, warehouse_unavailable: 1, limited_access: 1, mapping_conflict: 1, no_receipt: 1 };
+export function cardStatus(inv) {
+  var rows = (inv && inv.rows) || []; var prods = (inv && inv.products) || [];
+  function why() { return ((inv && inv.why) || [])[0] || null; }
+  if (inv.disputed) { return { key: 'disputed', label: 'DISPUTED', bg: Z_RED, why: 'an issue was reported' }; }
+  if (rows.some(function (r) { return r.state === 'needs_revalidation'; })) { return { key: 'recheck', label: 'RECHECK', bg: Z_AMBER, why: 'the figures changed after it was decided — decide again' }; }
+  if (inv.approved) { return rows.some(function (r) { return r.state === 'accepted'; }) ? { key: 'accepted', label: 'ACCEPTED', bg: Z_AMBER, why: 'a difference was accepted (it did not pass)' } : { key: 'approved', label: 'APPROVED', bg: Z_GREEN, why: 'checked and approved' }; }
+  if (inv.previewed) { return { key: 'confirm', label: 'CONFIRM RECEIPT', bg: Z_BLUE, why: 'preview ' + (inv.pass ? 'within tolerance' : 'not within tolerance') + ' — a person confirms the warehouse receipt first' }; }
+  if (rows.some(function (r) { return r.provisional || r.outcome === 'incomplete'; })) { return { key: 'provisional', label: 'PROVISIONAL', bg: Z_AMBER, why: 'the warehouse receipt is still a draft' }; }
+  if (prods.some(function (r) { return r.outcome === 'discrepancy' || r.outcome === 'product_missing'; })) { return { key: 'fail', label: 'FAIL', bg: Z_RED, why: why() }; }
+  if (inv.pass) { return { key: 'pass', label: 'PASS', bg: Z_GREEN, why: null }; }
+  return { key: 'not_checked', label: 'NOT CHECKED', bg: Z_GREY, why: why() || 'nothing could be compared yet' };
+}
+export function cardLine(inv) {
+  var prods = ((inv && inv.products) || []).filter(function (r) { return r.figures && (r.figures.billed != null || r.figures.received != null); });
+  var parts = prods.slice(0, 2).map(function (r) { var f = r.figures; return (r.product_label || 'product') + ': billed ' + (f.billed != null ? num(f.billed) + ' ' + (f.unit || '') : '—') + ' · warehouse ' + (f.received != null ? num(f.received) + ' ' + (f.unit || '') : '—'); });
+  if (prods.length > 2) { parts.push('+' + (prods.length - 2) + ' more'); }
+  return parts.join('   ·   ') || 'no product compared yet';
+}
+export function wireTally(invs) {
+  var t = { bills: 0, pass: 0, fail: 0, not_checked: 0, other: 0 };
+  (invs || []).forEach(function (inv) { var k = cardStatus(inv).key; t.bills += (inv.bills || []).length || 1; var n = (inv.bills || []).length || 1; if (k === 'pass' || k === 'approved') { t.pass += n; } else if (k === 'fail' || k === 'disputed') { t.fail += n; } else if (k === 'not_checked') { t.not_checked += n; } else { t.other += n; } });
+  return t;
+}
+function zBlock(bg) { return { display: 'inline-block', minWidth: 96, textAlign: 'center', padding: '4px 10px', background: bg, color: '#000000', fontSize: 11, fontWeight: 900, letterSpacing: '0.08em', borderRadius: 2 }; }
+
 function lastDays(n) { var b = new Date(); var a = new Date(Date.now() - n * 86400000); return [a.toISOString().substring(0, 10), b.toISOString().substring(0, 10)]; }
 
 // rows (report_preview, all:true) → one entry per invoice (rows sharing the same bill set)
@@ -176,14 +205,27 @@ export default function WeightCheckInvoices(props) {
   var _v = useState(null); var vendorEdit = _v[0], setVendorEdit = _v[1];
   var _m = useState({}); var mapEdit = _m[0], setMapEdit = _m[1];
   var _ch = useState({}); var changing = _ch[0], setChanging = _ch[1]; // v55.83-ZF: product line → the mapping being changed
+  var _w = useState(null); var wires = _w[0], setWires = _w[1]; // v55.83-ZL: { list, note }
+  var _wi = useState((props.wirePreset && props.wirePreset.wire_id) || ''); var wireId = _wi[0], setWireId = _wi[1];
+  var _op = useState({}); var openCards = _op[0], setOpenCards = _op[1]; // v55.83-ZL: cards are CLOSED by default
   var [mapError, setMapError] = useState(null);
   var [mapNotice, setMapNotice] = useState(null);
 
   function loadCfg() { return wcApi({ action: 'settings_view' }).then(function (j) { setCfg(j); return j; }); }
   useEffect(function () { loadCfg(); }, []);
-  function readPreview(recheck, dates) {
+  function readPreview(recheck, dates, wid) {
+    var w = wid === undefined ? wireId : wid;
+    if (w) { return wcApi({ action: 'report_preview', wire_id: w, all: true, recheck: !!recheck }); } // ZL: a wire ignores the dates
     return wcApi({ action: 'report_preview', date_from: dates.date_from, date_to: dates.date_to, all: true, recheck: !!recheck });
   }
+  useEffect(function () { wcApi({ action: 'wires_for_check' }).then(function (j) { setWires(j && j.ok ? { list: j.wires || [], note: j.note || null } : { list: [], note: (j && j.error) || null }); }); }, []);
+  // ZL: opened from a wire ("Check these bills against the warehouse") → that wire, shown straight away
+  useEffect(function () {
+    var wp = props.wirePreset; if (!wp || !wp.wire_id) { return; }
+    setWireId(wp.wire_id); setOpenCards({}); setBusy('load');
+    readPreview(false, flt, wp.wire_id).then(function (j) { setMapNotice(null); setBusy(''); setData(j); });
+  }, [props.wirePreset && props.wirePreset.n]); // eslint-disable-line react-hooks/exhaustive-deps
+  function toggleCard(k) { var o = Object.assign({}, openCards); o[k] = !o[k]; setOpenCards(o); }
   function load(recheck) {
     setBusy(recheck ? 'recheck' : 'load');
     return readPreview(recheck, flt).then(function (j) { setMapNotice(null); setBusy(''); setData(j); return j; });
@@ -299,8 +341,12 @@ export default function WeightCheckInvoices(props) {
   return <div style={{ color: INK, fontSize: 13 }}>
     {/* controls */}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
-      <label><span style={LABEL}>Bill date from</span><input type="date" value={flt.date_from} onChange={function (e) { setFlt(Object.assign({}, flt, { date_from: e.target.value })); }} className="nt-light" style={FIELD} /></label>
-      <label><span style={LABEL}>to</span><input type="date" value={flt.date_to} onChange={function (e) { setFlt(Object.assign({}, flt, { date_to: e.target.value })); }} className="nt-light" style={FIELD} /></label>
+      <label><span style={LABEL}>Wire</span><select value={wireId} onChange={function (e) { setWireId(e.target.value); setData(null); setOpenCards({}); }} className="nt-light" style={Object.assign({}, FIELD, { maxWidth: 320 })}>
+        <option value="">All bills (by bill date)</option>
+        {((wires && wires.list) || []).map(function (w) { return <option key={w.id} value={w.id}>{'Wire #' + w.seq + ' — ' + (w.payee || '') + ' (' + w.bills + ' bill' + (w.bills === 1 ? '' : 's') + ', ' + String(w.status || '').replace(/_/g, ' ') + ')'}</option>; })}
+      </select>{wires && wires.note ? <span style={{ display: 'block', fontSize: 11, color: MUTED, marginTop: 2 }}>{wires.note}</span> : null}</label>
+      <label style={{ opacity: wireId ? 0.45 : 1 }}><span style={LABEL}>Bill date from</span><input type="date" disabled={!!wireId} value={flt.date_from} onChange={function (e) { setFlt(Object.assign({}, flt, { date_from: e.target.value })); }} className="nt-light" style={FIELD} /></label>
+      <label style={{ opacity: wireId ? 0.45 : 1 }}><span style={LABEL}>to</span><input type="date" disabled={!!wireId} value={flt.date_to} onChange={function (e) { setFlt(Object.assign({}, flt, { date_to: e.target.value })); }} className="nt-light" style={FIELD} /></label>
       <button disabled={!!busy} onClick={function () { load(true); }} style={Object.assign(btn(BLUE, '#ffffff'), { opacity: busy ? 0.6 : 1 })}>{busy === 'recheck' ? 'Reading the warehouse…' : 'Check against the warehouse'}</button>
       <button disabled={!!busy} onClick={function () { load(false); }} style={btn('#334155', '#ffffff', true)}>{busy === 'load' ? 'Loading…' : 'Show (last reading)'}</button>
     </div>
@@ -348,14 +394,46 @@ export default function WeightCheckInvoices(props) {
     {data && data.ok && !invoices.length ? <div style={{ marginTop: 16, color: SUB }}>No invoices from these vendors in these dates.</div> : null}
     {mapNotice && !shown.some(function (inv) { return inv.key === mapNotice.key; }) && mappingNotice()}
 
-    {/* one card per invoice */}
+    {/* v55.83-ZL: one wire — its bills only, with the overall tally */}
+    {data && data.ok && data.wire ? (function () {
+      var W = data.wire; var t = wireTally(invoices);
+      return <div style={{ marginTop: 14, background: '#000000', color: '#ffffff', border: '1px solid #3f3f46', borderRadius: 2, padding: '10px 12px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.12em', color: '#a3a3a3' }}>WIRE</span>
+          <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: Z_GOLD, fontWeight: 800 }}>{'#' + W.seq}</span>
+          <span style={{ fontWeight: 800 }}>{W.payee || ''}</span>
+          <span style={{ fontSize: 12, color: '#a3a3a3' }}>{String(W.status || '').replace(/_/g, ' ').toUpperCase()}</span>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8, alignItems: 'center' }}>
+          <span style={{ fontWeight: 800 }}>{W.bills_on_wire + ' bill' + (W.bills_on_wire === 1 ? '' : 's') + ' on this wire'}</span>
+          <span style={zBlock(Z_GREEN)}>{t.pass + ' PASS'}</span><span style={zBlock(Z_RED)}>{t.fail + ' FAIL'}</span><span style={zBlock(Z_GREY)}>{t.not_checked + ' NOT CHECKED'}</span>{t.other ? <span style={zBlock(Z_AMBER)}>{t.other + ' OTHER'}</span> : null}
+        </div>
+        {(W.out_of_scope || []).length ? <div style={{ fontSize: 12, color: '#d4d4d4', marginTop: 6 }}>{'Not in the warehouse check (vendor not selected): ' + W.out_of_scope.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' · ')}</div> : null}
+        {(W.no_lines || []).length ? <div style={{ fontSize: 12, color: '#d4d4d4', marginTop: 4 }}>{'Nothing to compare (no product lines): ' + W.no_lines.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' · ')}</div> : null}
+        {W.hidden_count ? <div style={{ fontSize: 12, color: Z_AMBER, marginTop: 4 }}>{W.hidden_count + ' bill' + (W.hidden_count === 1 ? ' is' : 's are') + ' on this wire but outside what you may see — not shown, not counted as checked.'}</div> : null}
+        {!tol ? <div style={{ fontSize: 12, color: Z_AMBER, marginTop: 4, fontWeight: 700 }}>No tolerance is approved yet, so only an exact match can PASS.</div> : null}
+      </div>;
+    })() : null}
+
+    {/* one card per invoice — CLOSED by default (v55.83-ZL); click the bar to open its rows */}
     {shown.map(function (inv) {
       var head = inv.bills.map(function (b) { return (b.vendor || '') + ' · Bill ' + (b.bill_number || '') + ' · ' + (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ');
       var badge = inv.approved ? ['APPROVED', GREEN, '#dcfce7'] : inv.disputed ? ['DISPUTED', RED, '#fee2e2'] : inv.pass ? ['PASS', GREEN, '#dcfce7'] : ['REVIEW', RED, '#fee2e2'];
       var badgeText = badge[0] + (inv.shared ? ' · group of ' + inv.bills.length + ' invoices' : '');
       var receipts = []; inv.rows.forEach(function (r) { (r.receipts || []).forEach(function (x) { var t = 'Receipt ' + (x.reference_number || x.id) + (x.warehouse ? ' · ' + x.warehouse : '') + (x.receipt_date ? ' · received ' + String(x.receipt_date).substring(0, 10) : ''); if (receipts.indexOf(t) < 0) { receipts.push(t); } }); });
       var canDecide = inv.previewed || inv.rows.some(function (r) { return r.needs_decision; });
-      return <div key={inv.key} style={{ marginTop: 12, background: '#ffffff', border: '1px solid ' + LINE, borderLeft: '5px solid ' + badge[1], borderRadius: 12, padding: 14, boxShadow: '0 1px 2px rgba(15,23,42,0.06)' }}>
+      var cs = cardStatus(inv); var isOpen = !!openCards[inv.key] || !!(mapNotice && mapNotice.key === inv.key);
+      var bar = <button type="button" onClick={function () { toggleCard(inv.key); }} aria-expanded={isOpen} style={{ display: 'flex', width: '100%', flexWrap: 'wrap', gap: 10, alignItems: 'center', textAlign: 'left', background: '#000000', color: '#ffffff', border: 'none', borderBottom: isOpen ? '1px solid #3f3f46' : 'none', borderRadius: 0, padding: '9px 12px', cursor: 'pointer' }}>
+        <span style={zBlock(cs.bg)}>{cs.label}</span>
+        <span style={{ fontWeight: 800 }}>{inv.bills.map(function (b) { return b.vendor || ''; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(' + ')}</span>
+        <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: Z_GOLD, fontWeight: 800 }}>{inv.bills.map(function (b) { return 'Bill ' + (b.bill_number || ''); }).join(' + ')}</span>
+        <span style={{ fontSize: 12, color: '#a3a3a3' }}>{inv.bills.map(function (b) { return (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ')}</span>
+        <span style={{ fontSize: 12, color: '#e5e5e5', flex: '1 1 260px' }}>{cardLine(inv)}</span>
+        {cs.why && cs.key !== 'pass' ? <span style={{ fontSize: 11, color: '#d4d4d4', width: '100%' }}>{cs.why}</span> : null}
+        <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.08em', color: '#a3a3a3', marginLeft: 'auto' }}>{isOpen ? 'CLOSE ▲' : 'OPEN ▼'}</span>
+      </button>;
+      if (!isOpen) { return <div key={inv.key} style={{ marginTop: 6, border: '1px solid #3f3f46', borderRadius: 2 }}>{bar}</div>; }
+      return <div key={inv.key} style={{ marginTop: 6, border: '1px solid #3f3f46', borderRadius: 2, background: '#000000' }}>{bar}<div style={{ background: '#ffffff', padding: 14 }}>
         {mapNotice && mapNotice.key === inv.key && mappingNotice()}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <span style={pill(badge[1], badge[2])}>{badgeText}</span>
@@ -394,7 +472,7 @@ export default function WeightCheckInvoices(props) {
           <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'dispute'); }} style={Object.assign(btn(RED, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Disputed</button>
         </div> : null}
         {inv.approved || inv.disputed ? <div style={{ fontSize: 12, marginTop: 8, color: SUB }}>{inv.rows.filter(function (r) { return r.decision; }).slice(0, 1).map(function (r) { return 'Decided by ' + r.decision.actor_name + ' · ' + when(r.decision.at) + ' — “' + r.decision.reason + '”'; }).join('')}</div> : null}
-      </div>;
+      </div></div>;
     })}
   </div>;
 }

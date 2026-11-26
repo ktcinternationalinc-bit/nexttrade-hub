@@ -693,6 +693,37 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   var mapsZ = [{ family: 'f1', version: 3, state: 'active', vendor_key: 'nexpac', item_key: 'texas thirds', bill_unit: 'YDS' }, { family: 'f2', version: 1, state: 'active', vendor_key: 'nexpac', item_key: 'texas thirds', bill_unit: 'LBS' }];
   check('…mappingFor finds the line\'s own mapping by vendor + bill product + unit (YDS line → the YDS mapping, not the LBS one)', (INVZ.mappingFor(mapsZ, 'NexPac Corporation', { description: 'Texas Thirds (YDS)', unit: 'YDS' }) || {}).family === 'f1' && (INVZ.mappingFor(mapsZ, 'NexPac Corporation', { description: 'Texas Thirds (LBS)', unit: 'LBS' }) || {}).family === 'f2' && INVZ.mappingFor(mapsZ, 'Other Vendor', { description: 'Texas Thirds (YDS)', unit: 'YDS' }) === null);
 
+  // ---- v55.83-ZL (Max 26 Nov: "check for a specific wire that was built..only looking at those bills related to the wire")
+  world.maxInLen = 0; world.superAdmin = false; world.feed = 'ok';
+  var BW_OUT = 'b0000000-0000-4000-8000-0000000000w1'; var BW_NOL = 'b0000000-0000-4000-8000-0000000000w2'; var BW_HID = 'b0000000-0000-4000-8000-0000000000w3';
+  addBill(BW_OUT, '2026-10-22', 'W-OUT', [{ description: 'Trucking', qty: 1, unit: 'LOAD' }], { vendor_name: 'Acme Trucking LLC' });
+  addBill(BW_NOL, '2026-10-22', 'W-NOL', [], { bill_type: 'service', shipment_direction: null });
+  addBill(BW_HID, '2026-10-22', 'W-HID', [{ description: 'ZF Widgets (LBS)', qty: 10, unit: 'LBS' }], { wave_business_id: 'some-other-business' });
+  tbl('wire_packages').push({ id: 'wp-41', seq: 41, payee_name: 'NexPac Corporation', status: 'needs_check', created_at: '2026-11-26T10:00:00Z' });
+  [BZ, B1, BW_OUT, BW_NOL, BW_HID, 'b0000000-0000-4000-8000-00000000dead'].forEach(function (bid, i) { tbl('wire_package_lines').push({ id: 'wl-' + i, package_id: 'wp-41', bill_id: bid, amount: 100 + i, is_open: true }); });
+  tbl('wire_packages').push({ id: 'wp-42', seq: 42, payee_name: 'Other payee', status: 'complete', created_at: '2026-11-20T10:00:00Z' });
+  world.perms = Object.assign({}, STAFF);
+  var zw0 = await call({ action: 'report_preview', wire_id: 'wp-41', all: true });
+  var zwl0 = await call({ action: 'wires_for_check' });
+  check('ZL: WITHOUT a Wires permission, a wire cannot be checked (403) and the wire list is empty with a plain sentence', zw0.status === 403 && /needs a Wires permission/.test(zw0.body.error) && zwl0.status === 200 && zwl0.body.wires.length === 0 && /Wires permission/.test(zwl0.body.note), [zw0.body, zwl0.body]);
+  world.perms = Object.assign({}, STAFF, { 'wires.view': 1 });
+  var zwl = await call({ action: 'wires_for_check' });
+  var w41 = (zwl.body.wires || []).filter(function (w) { return w.seq === 41; })[0];
+  check('ZL: with "Wires: view" the picker lists recent wires (number, payee, status, bill count) — no amounts', zwl.status === 200 && w41 && w41.bills === 6 && w41.payee === 'NexPac Corporation' && w41.status === 'needs_check' && JSON.stringify(zwl.body).indexOf('amount') < 0, zwl.body);
+  var zw = await call({ action: 'report_preview', wire_id: 'wp-41', all: true, date_from: '2030-01-01', date_to: '2030-01-02' });
+  var wireBills = {}; [BZ, B1].forEach(function (b) { wireBills[b] = true; });
+  var zwRows = (zw.body.rows || []);
+  check('ZL: a wire shows ONLY its bills (the dates are not used): every row belongs to a bill on the wire, and both checkable bills are there', zw.status === 200 && zwRows.length > 0 && zwRows.every(function (r) { return (r.bill_ids || []).some(function (b) { return wireBills[b]; }); }) && zwRows.some(function (r) { return (r.bill_ids || []).indexOf(BZ) >= 0; }) && zwRows.some(function (r) { return (r.bill_ids || []).indexOf(B1) >= 0; }), [zw.status, zw.body.error, zwRows.map(function (r) { return r.bill_ids; })]);
+  var Wi = zw.body.wire || {};
+  check('ZL: the wire summary is honest — 6 lines: 2 checked, 1 not in the check (vendor not selected), 1 with nothing to compare, 2 outside your access (another business + a bill that cannot be read) — never counted as checked', Wi.seq === 41 && Wi.bills_on_wire === 6 && Wi.checked === 2 && Wi.out_of_scope.length === 1 && Wi.out_of_scope[0].bill_id === BW_OUT && Wi.no_lines.length === 1 && Wi.no_lines[0].bill_id === BW_NOL && Wi.hidden_count === 2, Wi);
+  check('…and the wire answer carries no money (no amounts from the wire lines)', JSON.stringify(Wi).indexOf('amount') < 0 && JSON.stringify(Wi).indexOf('100') < 0);
+  var zwr = await call({ action: 'run_report', wire_id: 'wp-41', date_from: '2026-10-01', date_to: '2026-10-31' });
+  check('ZL: a numbered (saved) report stays by bill dates — a wire is a view only (400)', zwr.status === 400 && /a wire is checked as a view/.test(zwr.body.error), zwr.body);
+  var zwn = await call({ action: 'report_preview', wire_id: 'wp-nope', all: true });
+  check('…an unknown wire → 404', zwn.status === 404, zwn.body);
+  var zwd = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true });
+  check('…and without a wire the date-range check is unchanged (no wire block in the answer)', zwd.status === 200 && zwd.body.wire === null, zwd.body.wire);
+
   module.exports = { pass: pass, fail: failN };
   if (require.main === module) { console.log('\nXB route: ' + pass + ' passed, ' + failN + ' failed'); process.exit(failN ? 1 : 0); }
 })().catch(function (e) { console.log('  ✗ FAIL: crashed ' + (e && e.stack)); failN++; module.exports = { pass: pass, fail: failN }; if (require.main === module) { process.exit(1); } });

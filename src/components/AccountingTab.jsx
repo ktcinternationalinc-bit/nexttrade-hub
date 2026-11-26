@@ -95,6 +95,15 @@ export default function AccountingTab(props) {
     return function () { try { window.removeEventListener('hub-open-nextrade-wire', onOpenWire); } catch (e1) {} };
   }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(function () { if (sub !== 'wires' && wirePreset) { setWirePreset(null); } }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps -- leaving Wires forgets the preset (a later visit opens nothing by itself)
+  // v55.83-ZL (Max 26 Nov: "check for a specific wire that was built..only looking at those bills"): a wire's "Check these bills against the
+  // warehouse" asks (window event hub-open-warehouse-check) for Bills → Warehouse check with that wire chosen. Nothing is written by opening it.
+  var [wcPreset, setWcPreset] = useState(null); // { wire_id, seq, n } | null
+  useEffect(function () { if (sub !== 'bills' && wcPreset) { setWcPreset(null); } }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps -- leaving Bills forgets the wire (a later visit opens nothing by itself)
+  useEffect(function () {
+    function onOpenWc(e) { var d = (e && e.detail) || {}; if (!d.wire_id) { return; } setWcPreset({ wire_id: d.wire_id, seq: d.seq || null, n: Date.now() }); goFrom('bills'); }
+    try { window.addEventListener('hub-open-warehouse-check', onOpenWc); } catch (e0) { return undefined; }
+    return function () { try { window.removeEventListener('hub-open-warehouse-check', onOpenWc); } catch (e1) {} };
+  }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps
   function alive(k) { return sub === k || (back && back.sub === k); }
   function shown(k) { return { display: sub === k ? 'block' : 'none' }; }
   var [waveKey, setWaveKey] = useState('');
@@ -246,7 +255,7 @@ export default function AccountingTab(props) {
       {sub === 'journals' && <div className="p-3"><JournalEntriesTab /></div>}
       {sub === 'nextrade' && <div className="p-3"><CompanyBooksTab key="nextrade" company="nextrade" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.nextrade.manage'] === true} /></div>}
       {sub === 'rtm' && <div className="p-3"><CompanyBooksTab key="rtm" company="rtm" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.rtm.manage'] === true} /></div>}
-      {sub === 'bills' && <div className="p-3"><BillsTab {...props} openBillTarget={back && back.sub === 'waiting' ? billTarget : null} onBackFromBill={back && back.sub === 'waiting' ? goBack : null} /></div>}
+      {sub === 'bills' && <div className="p-3"><BillsTab {...props} warehousePreset={wcPreset} openBillTarget={back && back.sub === 'waiting' ? billTarget : null} onBackFromBill={back && back.sub === 'waiting' ? goBack : null} /></div>}
       {sub === 'wires' && <div className="p-3"><WiresTab {...props} wirePreset={wirePreset} /></div>}
       {alive('forecast') && <div className="p-3" style={shown('forecast')}><CashForecastTab {...props} onGo={goFrom} /></div>}
       {alive('period_stats') && <div className="p-3" style={shown('period_stats')}><PeriodStatsTab {...props} onGo={goFrom} /></div>}

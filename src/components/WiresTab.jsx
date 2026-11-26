@@ -245,6 +245,7 @@ export default function WiresTab(props) {
   var boss = isSuperAdmin;
   var perms = { view: boss || mp['wires.view'] === true, prepare: boss || mp['wires.prepare'] === true, signoff: boss || mp['wires.signoff'] === true, send: boss || mp['wires.send'] === true,
     override: boss || mp['wires.override'] === true, // v55.83-RL
+    warehouse: boss || ((mp['bills.view'] === true || mp['bills.manage'] === true) && mp['bills.weight_check.view'] === true), // v55.83-ZL — may open Bills → Warehouse check
     undo: isSuperAdmin === true, /* v55.83-SB — the super admin only (Max Nov 12) */ // v55.83-RL — undoing a SENT wire: super admin / owner only
     bills: boss || mp['bills.manage'] === true, // v55.83-SA — owner / admin too ("always (admin)")
     superAdmin: isSuperAdmin }; // v55.83-RZ — after both signatures only the super admin deletes / cancels; recording a past wire // v55.83-RV (review #3) — validating a bill from the wire screen = Bills: Manage, like the server

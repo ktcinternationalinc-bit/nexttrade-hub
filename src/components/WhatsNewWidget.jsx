@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZL',
+    date: '2026-11-26',
+    title: 'Warehouse check: check one wire, and each bill as a closed card with PASS or FAIL',
+    items: [
+      { text: 'In **Wires**, a wire now has **🏭 Check these bills against the warehouse** next to “Bills on this wire”. It opens **Bills → 🏭 Warehouse check → Invoices** showing ONLY that wire’s bills, with a line on top such as “5 bills on this wire · 4 PASS · 1 FAIL · 0 NOT CHECKED”. **Back** returns to the wire.' },
+      { text: 'On the Invoices screen you can also pick a wire in the new **Wire** box (or keep “All bills (by bill date)”).' },
+      { text: 'Every bill now opens **closed**: one black bar with its result — **PASS**, **FAIL**, **NOT CHECKED**, **CONFIRM RECEIPT**, **PROVISIONAL**, **APPROVED**, **ACCEPTED**, **DISPUTED** or **RECHECK** — the bill number and “billed … · warehouse …”. Click the bar to open its rows (each product, weight and yards, the receipt, Approved / Disputed).' },
+      { text: 'A difference you accepted shows as ACCEPTED, never as PASS. Bills on the wire that are not in the warehouse check, have nothing to compare, or are outside what you may see are named on top and never counted as checked.' },
+      { superAdminOnly: true, text: 'Technical: weight-check route report_preview + wire_id (needs any wires.* permission; bills = wire_package_lines of that package; billAllowed / vendor scope / no-lines listed in wire{}; unreadable lines count as hidden; no amounts; run_report stays date-only) and wires_for_check (last 100, gated). Same assemble()/compareGroup — no new calculation. Screen: cardStatus / cardLine / wireTally (pure, tested), openCards (closed by default), approved black look on the bars and wire bar; drill-down unchanged. Chain: WirePackagesPanel → event hub-open-warehouse-check → AccountingTab (goFrom bills, forgotten on leaving) → BillsTab (opens the panel) → WeightCheckPanel (Invoices) → WeightCheckInvoices (wirePreset). No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-ZO',
     date: '2026-11-26',
     title: 'Profitability: a returned check now cancels its own deposit automatically',

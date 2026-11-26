@@ -41,7 +41,7 @@ function bad(msg, status) { return out({ ok: false, error: msg }, status || 400)
 function isoDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? String(s) : null; }
 function clean(s, n) { return String(s == null ? '' : s).replace(/[\u0000-\u001f]+/g, ' ').trim().substring(0, n || 2000); }
 
-var VIEW_ACTIONS = { bill: 1, report_preview: 1, reports: 1, report: 1, settings_view: 1, people: 1, evidence_url: 1 };
+var VIEW_ACTIONS = { bill: 1, report_preview: 1, reports: 1, report: 1, settings_view: 1, people: 1, evidence_url: 1, wires_for_check: 1 };
 var VALIDATE_ACTIONS = { recheck: 1, link: 1, run_report: 1 };
 var SETTINGS_ACTIONS = { map_save: 1, map_retire: 1, tolerance_save: 1, scope_save: 1 };
 
@@ -67,6 +67,8 @@ export async function POST(req) {
     var ctx = gV.ctx || g0.ctx || {};
     var isSuper = gV.via === 'super_admin' || ctx.isSuperAdmin === true;
     async function can(perm) { var g = await assertPermission(db, userId, perm, req); return !!(g && g.ok === true); }
+    // v55.83-ZL: a wire's bills may be checked by someone who may see wires (any Wires permission) — on top of the gates above
+    async function canWire() { var ks = ['wires.view', 'wires.prepare', 'wires.signoff', 'wires.send']; for (var wk = 0; wk < ks.length; wk++) { if (await can(ks[wk])) { return true; } } return false; }
     if (VALIDATE_ACTIONS[action] && !(await can('bills.weight_check.validate'))) { return bad('This needs "Warehouse check: Validate".', 403); }
     if (SETTINGS_ACTIONS[action] && !(await can('bills.weight_check.settings'))) { return bad('This needs "Warehouse check: Settings".', 403); }
     var win = await windowFloorFor(db, ctx);
@@ -210,19 +212,53 @@ export async function POST(req) {
     }
 
     // ---------------------------------------------------------------- the exception report (preview, or run + save)
+    // v55.83-ZL (Max 26 Nov: "check for a specific wire that was built..only looking at those bills related to the wire"): the
+    // wires a person may pick — needs a Wires permission as well (a wire's existence and payee are wire information)
+    if (action === 'wires_for_check') {
+      if (!(await canWire())) { return out({ ok: true, wires: [], note: 'Picking a wire needs a Wires permission (view, prepare, sign off or send).' }); }
+      var wl0 = await db.from('wire_packages').select('id, seq, payee_name, status, created_at').order('created_at', { ascending: false }).limit(100);
+      if (wl0.error) { throw new Error(dbReadError({ url: { pathname: '/wire_packages' } }, wl0)); }
+      var wpIds = (wl0.data || []).map(function (w) { return w.id; });
+      var cnt = {}; if (wpIds.length) { (await allRows(function () { return db.from('wire_package_lines').select('package_id, bill_id').in('package_id', wpIds); })).forEach(function (l) { cnt[l.package_id] = (cnt[l.package_id] || 0) + 1; }); }
+      return out({ ok: true, wires: (wl0.data || []).map(function (w) { return { id: w.id, seq: w.seq, payee: w.payee_name, status: w.status, created_at: w.created_at, bills: cnt[w.id] || 0 }; }) });
+    }
     if (action === 'report_preview' || action === 'run_report') {
-      var f0 = isoDate(body.date_from); var f1 = isoDate(body.date_to);
-      if (!f0 || !f1 || f1 < f0) { return bad('Choose a bill date range (from – to).'); }
-      var from = clampFrom(f0, floor);
-      var bl = await allRows(function () {
-        return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, other_reference, release_number, record_status, wave_business_id, bill_type, shipment_direction, attachment_path')
-          .gte('bill_date', from).lte('bill_date', f1).order('bill_date', { ascending: true });
-      });
-      bl = bl.filter(function (b) { return billAllowed(b, floor) && inVendorScope(scope, b.vendor_name); });
+      var BILL_SEL = 'id, vendor_name, bill_number, bill_date, other_reference, release_number, record_status, wave_business_id, bill_type, shipment_direction, attachment_path';
+      var wireInfo = null; var bl; var from = null; var f1 = null;
+      if (body.wire_id) {
+        // ZL: ONE wire's bills — the same calculation, only the bill list differs (and the dates are not used)
+        if (action !== 'report_preview') { return bad('A saved report is by bill dates; a wire is checked as a view (Show / Check against the warehouse).'); }
+        if (!(await canWire())) { return bad('Checking a wire needs a Wires permission (view, prepare, sign off or send).', 403); }
+        var wid = clean(body.wire_id, 60);
+        var wpq = await db.from('wire_packages').select('id, seq, payee_name, status').eq('id', wid).maybeSingle();
+        if (wpq.error) { throw new Error(dbReadError({ url: { pathname: '/wire_packages' } }, wpq)); }
+        if (!wpq.data) { return bad('That wire was not found.', 404); }
+        var wIds = []; (await allRows(function () { return db.from('wire_package_lines').select('bill_id').eq('package_id', wid); })).forEach(function (l) { if (l.bill_id && wIds.indexOf(l.bill_id) < 0) { wIds.push(l.bill_id); } });
+        var wb = []; var wBatches = chunksByLength(wIds, MAX_IN_CHARS);
+        for (var wbi = 0; wbi < wBatches.length; wbi++) { var wbB = wBatches[wbi]; wb = wb.concat(await allRows(function () { return db.from('vendor_bills').select(BILL_SEL).in('id', wbB); })); }
+        wireInfo = { id: wpq.data.id, seq: wpq.data.seq, payee: wpq.data.payee_name, status: wpq.data.status, bills_on_wire: wIds.length, hidden_count: 0, out_of_scope: [], no_lines: [], checked: 0 };
+        bl = [];
+        wb.forEach(function (b) {
+          if (!billAllowed(b, floor)) { wireInfo.hidden_count++; return; }
+          if (!inVendorScope(scope, b.vendor_name)) { wireInfo.out_of_scope.push({ bill_id: b.id, vendor: b.vendor_name, bill_number: b.bill_number }); return; }
+          bl.push(b);
+        });
+        wireInfo.hidden_count += Math.max(0, wIds.length - wb.length); // a line whose bill is not readable here counts as outside access, never as checked
+      } else {
+        var f0 = isoDate(body.date_from); f1 = isoDate(body.date_to);
+        if (!f0 || !f1 || f1 < f0) { return bad('Choose a bill date range (from – to).'); }
+        from = clampFrom(f0, floor);
+        bl = await allRows(function () {
+          return db.from('vendor_bills').select(BILL_SEL).gte('bill_date', from).lte('bill_date', f1).order('bill_date', { ascending: true });
+        });
+        bl = bl.filter(function (b) { return billAllowed(b, floor) && inVendorScope(scope, b.vendor_name); });
+      }
       var withItems = {};
       var idsAll = bl.map(function (b) { return b.id; });
       for (var ci = 0; ci < idsAll.length; ci += 200) { (await allRows(function () { return db.from('vendor_bill_lines').select('bill_id').eq('line_kind', 'item').in('bill_id', idsAll.slice(ci, ci + 200)); })).forEach(function (l) { withItems[l.bill_id] = true; }); }
+      if (wireInfo) { bl.forEach(function (b) { if (!(withItems[b.id] || (b.bill_type === 'supplier' && b.shipment_direction === 'inbound'))) { wireInfo.no_lines.push({ bill_id: b.id, vendor: b.vendor_name, bill_number: b.bill_number }); } }); }
       bl = bl.filter(function (b) { return withItems[b.id] || (b.bill_type === 'supplier' && b.shipment_direction === 'inbound'); });
+      if (wireInfo) { wireInfo.checked = bl.length; }
       var vq = clean(body.vendor, 80).toLowerCase(); var rq = normRef(body.reference);
       if (vq) { bl = bl.filter(function (b) { return String(b.vendor_name || '').toLowerCase().indexOf(vq) >= 0; }); }
       if (bl.length > MAX_BILLS_PER_REPORT) { return bad(bl.length + ' bills in that range — narrow it (at most ' + MAX_BILLS_PER_REPORT + ' per report).'); }
@@ -264,7 +300,7 @@ export async function POST(req) {
       function defaultRows() { return rows.filter(function (r) { return r.outstanding || (r.stale && r.needs_attention); }); }
       if (action === 'report_preview') {
         var shown = body.all === true ? rows : defaultRows();
-        return out({ ok: true, scope: scopePublic(scope), recheck: rr, rows: shown, all_count: rows.length, summary: summary, freshness: freshWords(fresh, rows, runs), bills_checked: ids.length, from: from, to: f1, window_floor: floor, feed: feedInfo, tolerance: tolPublic(R.tolerance), permissions: perms });
+        return out({ ok: true, scope: scopePublic(scope), wire: wireInfo, recheck: rr, rows: shown, all_count: rows.length, summary: summary, freshness: freshWords(fresh, rows, runs), bills_checked: ids.length, from: from, to: f1, window_floor: floor, feed: feedInfo, tolerance: tolPublic(R.tolerance), permissions: perms });
       }
       // run_report: save it, numbered, frozen as it stands (every item, not only the outstanding ones)
       var status = reportStatus(rows.map(function (r) { return { needs_attention: r.needs_attention, state: r.state }; }));

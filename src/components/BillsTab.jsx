@@ -48,6 +48,7 @@ export default function BillsTab(props) {
   var canView = bossB || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true;
   var canManage = bossB || modulePerms['bills.manage'] === true;
   var canWeightCheck = canView && (bossB || modulePerms['bills.weight_check.view'] === true); // v55.83-XB (the server checks again)
+  var wcWire = props.warehousePreset || null; // v55.83-ZL: { wire_id, seq, n } from a wire's "Check these bills against the warehouse"
   var toast = props.toast || { success: function () {}, error: function () {} };
 
   var s1 = useState(null); var data = s1[0]; var setData = s1[1];
@@ -82,6 +83,7 @@ export default function BillsTab(props) {
   var sVo = useState({}); var openVendors = sVo[0]; var setOpenVendors = sVo[1];
   function sortOn(k) { if (sortBy === k) { setSortDir(sortDir === 'asc' ? 'desc' : 'asc'); } else { setSortBy(k); setSortDir(k === 'amount' || k === 'open' ? 'desc' : 'asc'); } }
   var s21 = useState(null); var panel = s21[0]; var setPanel = s21[1]; // 'rules' | 'reports'
+  useEffect(function () { if (wcWire && wcWire.wire_id && canWeightCheck) { setPanel('weightcheck'); } }, [wcWire && wcWire.n]); // eslint-disable-line react-hooks/exhaustive-deps -- v55.83-ZL: opened from a wire
   var s22 = useState(''); var priceF = s22[0]; var setPriceF = s22[1];
   var s22v = useState(''); var valF = s22v[0]; var setValF = s22v[1]; // v55.83-UB: validated / not validated
   // v55.83-RU (Max, Nov 9 21:48: "please save entries when we validate even if we have not yet fully validated. such as just
@@ -606,7 +608,7 @@ export default function BillsTab(props) {
     {panel === 'vcredits' && canView && <VendorCreditsPanel userProfile={userProfile} toast={toast} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}{/* v55.83-YD */}
     {panel === 'catrules' && canView && <BillCategoryRulesPanel userProfile={userProfile} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}
     {panel === 'duplicates' && canView && <DuplicateBillsPanel userProfile={userProfile} onClose={function () { setPanel(null); }} onChanged={function () { load(); }} />}
-    {panel === 'weightcheck' && canWeightCheck && <WeightCheckPanel bills={bills} toast={toast} openDoc={openDoc} onClose={function () { setPanel(null); }} />}{/* v55.83-XB */}
+    {panel === 'weightcheck' && canWeightCheck && <WeightCheckPanel bills={bills} toast={toast} openDoc={openDoc} wirePreset={wcWire} onClose={function () { setPanel(null); }} />}{/* v55.83-XB */}
     {panel === 'statement' && canView && <VendorStatementPanel bills={bills} payments={payments} enrichWarnings={(data && data.enrich_warnings) || []} userProfile={userProfile} onClose={function () { setPanel(null); }}
       onOpenBill={function (f) { setPeekBill(f); }} onOpenWire={function (w) { setWireQuick(w); }} />}
 
