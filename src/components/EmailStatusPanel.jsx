@@ -8,6 +8,7 @@
 // ============================================================
 import { useState, useEffect, useCallback } from 'react';
 import { fmtET } from '../lib/et-time';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-ZM
 
 export default function EmailStatusPanel({ userId, userEmail, userName }) {
   var [status, setStatus] = useState(null);
@@ -24,7 +25,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
   var loadStatus = useCallback(async function () {
     setError(null);
     try {
-      var res = await fetch('/api/notify/test');
+      var res = await hubFetch('/api/notify/test');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       setStatus(data);
@@ -42,7 +43,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
     setTesting(true);
     setTestResult(null);
     try {
-      var res = await fetch('/api/notify/test', {
+      var res = await hubFetch('/api/notify/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: userId }),
@@ -64,7 +65,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
     setBulkTesting(true);
     setBulkResult(null);
     try {
-      var res = await fetch('/api/notify/test', {
+      var res = await hubFetch('/api/notify/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ all: true, triggered_by_user_id: userId || null }),

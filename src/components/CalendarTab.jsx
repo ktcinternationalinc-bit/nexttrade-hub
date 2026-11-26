@@ -7,6 +7,7 @@ import { newUUID, VALID_PATTERNS } from '../lib/recurrence';
 import { scheduleEventReminders, rescheduleEventReminders, cancelEventReminders, cancelEventRemindersBulk } from '../lib/reminders';
 import { ToastContext } from '../lib/toast-context';
 import { fmtET, todayET } from '../lib/et-time';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-ZM
 
 const EVENT_TYPES = [{v:'task',l:'Task / مهمة',c:'#3b82f6'},{v:'meeting',l:'Meeting / اجتماع',c:'#8b5cf6'},{v:'call',l:'Call / مكالمة',c:'#f59e0b'},{v:'visit',l:'Visit / زيارة',c:'#10b981'}];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -1054,7 +1055,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         if (creator && creator.id) {
           // /api/notify supports recipientIds targeting; it looks up the
           // email from users table server-side.
-          await fetch('/api/notify', {
+          await hubFetch('/api/notify', { // v55.83-ZM — signed-in sender
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

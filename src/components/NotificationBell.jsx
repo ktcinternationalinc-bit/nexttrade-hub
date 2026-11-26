@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-ZM — the bell goes through /api/notifications (signed-in person, own rows only)
 
 export default function NotificationBell({ userId, users }) {
   const [notifications, setNotifications] = useState([]);
@@ -10,27 +10,27 @@ export default function NotificationBell({ userId, users }) {
   const load = useCallback(async () => {
     if (!userId) return;
     try {
-      const { data } = await supabase.from('notifications')
-        .select('*')
-        .eq('user_id', userId) // v55.83-ZE — the live table has user_id (no target_user, no "all" rows); the old filter answered 400 every minute
-        .order('created_at', { ascending: false })
-        .limit(30);
-      setNotifications(data || []);
-      setUnread((data || []).filter(n => n.read !== true).length);
+      // v55.83-ZM — read through the server: the browser no longer touches public.notifications (its allow_all policy is being closed)
+      const res = await hubFetch('/api/notifications');
+      const j = await res.json().catch(() => null);
+      if (!res.ok || !j || !j.ok) return; // keep what is shown; the next minute tries again
+      const data = j.notifications || [];
+      setNotifications(data);
+      setUnread(data.filter(n => n.read !== true).length);
     } catch (e) { /* table may not exist yet */ }
   }, [userId]);
 
   useEffect(() => { load(); const iv = setInterval(load, 60000); return () => clearInterval(iv); }, [load]);
 
   const markRead = async (id) => {
-    await supabase.from('notifications').update({ read: true }).eq('id', id).eq('user_id', userId); // ZE: the table has read (true / false), not read_at
+    await hubFetch('/api/notifications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'mark_read', ids: [id] }) }).catch(() => null); // ZM: own rows only, on the server
     load();
   };
 
   const markAllRead = async () => {
     const ids = notifications.filter(n => n.read !== true).map(n => n.id);
     if (ids.length > 0) {
-      await supabase.from('notifications').update({ read: true }).in('id', ids).eq('user_id', userId);
+      await hubFetch('/api/notifications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'mark_read', ids: ids }) }).catch(() => null);
       load();
     }
   };

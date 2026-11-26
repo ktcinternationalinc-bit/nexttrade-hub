@@ -148,7 +148,7 @@ test('DC4 performDecline stores reason in decline_reasons JSONB', function() {
 test('DC5 performDecline emails the creator via /api/notify', function() {
   var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
-  assert(/fetch\('\/api\/notify'/.test(m[0]),
+  assert(/[fF]etch\('\/api\/notify'/.test(m[0]),
     'hits the notify endpoint');
   // Correct payload shape for /api/notify
   assert(/recipientIds: \[creator\.id\]/.test(m[0]),

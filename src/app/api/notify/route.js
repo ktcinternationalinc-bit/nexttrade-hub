@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { notifySender, recipientProblem, isUuid } from '../../../lib/notify-auth'; // v55.83-ZM — only a verified signed-in Hub person (or the server secret) may send
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -74,10 +75,26 @@ function formatBodyAsHtml(raw) {
 // POST /api/notify
 export async function POST(req) {
   try {
-    const { type, recipientIds, subject, body, triggeredBy, to, html } = await req.json();
+    const { type, recipientIds, subject, body, triggeredBy: triggeredByBody, to, html } = await req.json();
+    // v55.83-ZM (Codex 25 Nov; Max 26 Nov) — WHO is sending is checked first. Until now anyone on the internet could post here and the
+    // route mailed (and, once the bell columns were right, would have written bell rows for) any Hub user. Now: a verified signed-in
+    // Hub person, or an internal server call with CRON_SECRET. The sender is the verified person, never the triggeredBy in the body.
+    var sender = await notifySender(req, createClient, process.env);
+    if (sender.error) { return Response.json({ sent: 0, error: sender.error }, { status: sender.status }); }
+    var triggeredBy = sender.internal ? (isUuid(triggeredByBody) ? triggeredByBody : null) : sender.userId;
 
     // Legacy support: direct email send (used by announcements)
     if (to && html) {
+      // v55.83-ZM — the direct send only mails Hub people: every address must be an active Hub user's own e-mail (it was an open relay).
+      var toList = (Array.isArray(to) ? to : [to]).map(function (e) { return String(e || '').trim().toLowerCase(); }).filter(Boolean);
+      if (!sender.internal) {
+        if (!toList.length || toList.length > 200) { return Response.json({ sent: 0, error: 'A message goes to 1 to 200 Hub people.' }, { status: 400 }); }
+        var hubRes = await supabase.from('users').select('email, active');
+        if (hubRes.error) { return Response.json({ sent: 0, error: 'The Hub could not check who the message is for — not sent.' }, { status: 503 }); }
+        var hubEmails = {}; (hubRes.data || []).forEach(function (u) { if (u && u.email && u.active !== false && u.active !== null) { hubEmails[String(u.email).trim().toLowerCase()] = true; } });
+        var outsiders = toList.filter(function (e) { return !hubEmails[e]; });
+        if (outsiders.length) { return Response.json({ sent: 0, error: 'This message can only go to active Hub people — ' + outsiders.length + ' address(es) are not one.' }, { status: 403 }); }
+      }
       const RESEND_API_KEY = process.env.RESEND_API_KEY;
       // v55.46 — Soft-degrade when Resend not configured. Previously returned
       // 500 which broke announcements entirely; now we return 200 with a
@@ -110,6 +127,8 @@ export async function POST(req) {
     if (!type || !recipientIds || !subject || !body) {
       return Response.json({ error: 'Missing required fields: type, recipientIds, subject, body' }, { status: 400 });
     }
+    var whoProblem = recipientProblem(sender, recipientIds); // v55.83-ZM — 'all' is admins only; a list is 1-200 real Hub ids
+    if (whoProblem) { return Response.json({ sent: 0, error: whoProblem }, { status: 403 }); }
 
     const RESEND_API_KEY = process.env.RESEND_API_KEY;
     // v55.44 — Resend is now OPTIONAL. If it isn't configured, we skip the
@@ -248,11 +267,11 @@ export async function POST(req) {
     try {
       const stripHtml = (s) => String(s || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
       const bellRows = bellTargetUsers.map(u => ({
-        target_user: u.id,
+        user_id: u.id, // v55.83-ZM — the live table has user_id / read (target_user / created_by never existed, so this insert always failed)
         type: type,
         title: subject,
         body: stripHtml(body).slice(0, 300),
-        created_by: triggeredBy || null,
+        read: false,
       }));
       const { error: bellErr } = await supabase.from('notifications').insert(bellRows);
       if (bellErr) {

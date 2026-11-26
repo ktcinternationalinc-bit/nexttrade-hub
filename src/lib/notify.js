@@ -1,8 +1,9 @@
 // Fire-and-forget notification sender
+import { hubFetch } from './hub-fetch'; // v55.83-ZM — /api/notify now needs the signed-in person's verified token
 // Usage: notify('ticket_assigned', [userId1, userId2], 'New Ticket #123', '<p>You were assigned...</p>', currentUserId)
 export function notify(type, recipientIds, subject, body, triggeredBy) {
   if (!recipientIds?.length) return;
-  fetch('/api/notify', {
+  hubFetch('/api/notify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, recipientIds, subject, body, triggeredBy }),

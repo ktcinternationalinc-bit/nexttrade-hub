@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, c
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { filterActiveUsers } from '../lib/active-users';
 import { useBankVisibility } from '../lib/use-bank-visibility';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-ZM — /api/notify needs the signed-in person's token
 import { dashboardCashFlow, dashboardCurrencyRows } from '../lib/dashboard-financial-data';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, stripBankMatchMetadata, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META, parseAmount, isValidAmount } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
@@ -5615,7 +5616,7 @@ function HubApp() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-ZE</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-ZM</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -11157,7 +11158,7 @@ function HubApp() {
                             const shortSubject = (formData.reminderPriority === 'urgent' ? '🔴 URGENT: ' : '📢 ')
                               + fullBody.split('\n')[0].substring(0, 80)
                               + (fullBody.split('\n')[0].length > 80 || fullBody.indexOf('\n') >= 0 ? '…' : '');
-                            await fetch('/api/notify', {
+                            await hubFetch('/api/notify', { // v55.83-ZM - signed-in sender
                               method: 'POST', headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 type: 'reminder', recipientIds: targetIds,
@@ -11308,7 +11309,7 @@ function HubApp() {
                           };
                           for (const r of recipients) {
                             if (r.email) {
-                              await fetch('/api/notify', {
+                              await hubFetch('/api/notify', { // v55.83-ZM - signed-in sender
                                 method: 'POST', headers: {'Content-Type':'application/json'},
                                 body: JSON.stringify({ to: r.email, subject: (priority === 'urgent' ? '🚨 URGENT: ' : priority === 'warning' ? '⚠️ ':'') + title, html: '<div style="font-family:sans-serif;padding:20px;'+(priority==='urgent'?'background:#fef2f2;border:3px solid #ef4444;':priority==='warning'?'background:#fffbeb;border:2px solid #f59e0b;':'background:#eff6ff;border:1px solid #3b82f6;')+'border-radius:12px;"><h2 style="margin:0 0 10px;font-size:18px;">'+(priority==='urgent'?'🚨':'⚠️')+' '+title+'</h2>'+(body?'<div style="font-size:14px;color:#333;">'+formatBody(body)+'</div>':'')+'<hr style="margin:15px 0;border-color:#eee;"/><p style="font-size:11px;color:#999;">From KTC Hub — '+(userProfile?.name||'Admin')+'</p></div>' })
                               });

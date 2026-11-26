@@ -37,6 +37,7 @@ import { isActiveUser } from '../lib/active-users';
 // self-harm, threat, or severe distress, and tags the submission
 // urgent so admins see it elevated.
 import { detectCrisisLanguage, crisisResources } from '../lib/crisis-detection';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-ZM
 
 // v55.69 — Each category now has a `routing` field that determines where
 // the request lands automatically:
@@ -309,7 +310,7 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
             (form.starts_on ? 'Dates: ' + form.starts_on + (form.ends_on && form.ends_on !== form.starts_on ? ' to ' + form.ends_on : '') + '\n' : '') +
             (form.description ? '\nDetails:\n' + form.description.trim() + '\n' : '') +
             '\nReview it in KTC Hub → Admin → HR Inbox.';
-          fetch('/api/notify', {
+          hubFetch('/api/notify', { // v55.83-ZM — signed-in sender
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -402,7 +403,7 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
             'Severity: ' + form.severity + '\n' +
             (form.description ? '\nDetails:\n' + form.description.trim() + '\n' : '') +
             '\nReview it in KTC Hub → Admin → HR Inbox (Concerns tab).';
-          fetch('/api/notify', {
+          hubFetch('/api/notify', { // v55.83-ZM — signed-in sender
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

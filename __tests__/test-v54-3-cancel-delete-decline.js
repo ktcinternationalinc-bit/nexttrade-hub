@@ -173,7 +173,7 @@ test('De3 performDecline records reason in decline_reasons{} if provided', funct
 test('De4 performDecline sends email to creator via /api/notify', function() {
   var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
-  assert(/fetch\('\/api\/notify'/.test(m[0]),
+  assert(/[fF]etch\('\/api\/notify'/.test(m[0]),
     'calls notify API');
   assert(/recipientIds: \[creator\.id\]/.test(m[0]),
     'email goes to the event creator specifically');

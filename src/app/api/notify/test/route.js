@@ -20,6 +20,16 @@
 // ============================================================
 
 import { createClient } from '@supabase/supabase-js';
+import { notifySender } from '../../../../lib/notify-auth'; // v55.83-ZM — admins only (it mails any address / every teammate)
+
+// v55.83-ZM — the Email Status panel is an admin tool. Until now anyone could call it with no sign-in and have it mail a typed address
+// or every teammate. Now: a verified signed-in Hub admin / super admin, or the server secret.
+async function adminOnly(req) {
+  var who = await notifySender(req, createClient, process.env);
+  if (who.error) { return { res: Response.json({ ok: false, sent: false, error: who.error }, { status: who.status }) }; }
+  if (!who.isAdmin) { return { res: Response.json({ ok: false, sent: false, error: 'Only an admin can use the e-mail test.' }, { status: 403 }) }; }
+  return { who: who };
+}
 
 function getSupabase() {
   return createClient(
@@ -29,7 +39,8 @@ function getSupabase() {
 }
 
 // GET /api/notify/test — health check, never sends anything
-export async function GET() {
+export async function GET(req) {
+  var gate = await adminOnly(req); if (gate.res) { return gate.res; }
   try {
     var keySet = !!process.env.RESEND_API_KEY;
     var fromEmail = process.env.NOTIFICATION_FROM_EMAIL || 'notifications@ktcus.com';
@@ -84,12 +95,13 @@ export async function GET() {
 //                                                   (super admin only — guarded by user_id)
 //   { all: true, triggered_by_user_id: '<uuid>' } — same, with audit
 export async function POST(req) {
+  var gate = await adminOnly(req); if (gate.res) { return gate.res; }
   try {
     var body = await req.json();
     var userId = body && body.user_id;
     var emailOverride = body && body.email;
     var sendAll = body && body.all === true;
-    var triggeredBy = (body && body.triggered_by_user_id) || userId || null;
+    var triggeredBy = (gate.who && gate.who.userId) || (body && body.triggered_by_user_id) || userId || null; // ZM: the verified admin
 
     var keySet = !!process.env.RESEND_API_KEY;
     if (!keySet) {

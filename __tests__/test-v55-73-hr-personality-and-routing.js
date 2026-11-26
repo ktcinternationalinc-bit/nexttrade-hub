@@ -177,7 +177,7 @@ check('4.6 Defensive: users prop null → safeUsers = []',
 group('5. submitRequest actually dispatches /api/notify (was missing!)');
 
 check('5.1 submitRequest has a fetch(\'/api/notify\') call',
-  /var submitRequest = async function \(\)[\s\S]*?fetch\('\/api\/notify'/.test(hr));
+  /var submitRequest = async function \(\)[\s\S]*?[fF]etch\('\/api\/notify'/.test(hr));
 check('5.2 Notification recipientIds array is BUILT from form.recipient choice',
   /if \(form\.recipient === 'manager' && managerId\) recipientIds\.push\(managerId\)/.test(hr));
 check('5.3 super_admin is ALWAYS CC\'d on requests (so nothing falls through)',
@@ -197,8 +197,8 @@ check('5.8 Notification body includes description when set',
   /form\.description \? '\\nDetails:\\n'/.test(hr));
 check('5.9 Notification dispatch is fire-and-forget (no await blocking the submit)',
   // The pattern: fetch(...).catch(...) — no await in front
-  /fetch\('\/api\/notify'[\s\S]{0,500}\}\)\.catch\(function \(e\)/.test(hr)
-  && !/await fetch\('\/api\/notify'/.test(hr));
+  /[fF]etch\('\/api\/notify'[\s\S]{0,500}\}\)\.catch\(function \(e\)/.test(hr)
+  && !/await [fF]etch\('\/api\/notify'/.test(hr));
 check('5.10 Notification errors are caught silently (don\'t block the user)',
   /\.catch\(function \(e\) \{ console\.warn\('\[hr_request notify\]/.test(hr));
 check('5.11 type field set to \'hr_request\' in notify payload',
@@ -212,7 +212,7 @@ check('5.12 Visibility is now derived from RECIPIENT (not category) — user\'s 
 group('6. submitComplaint dispatches to super_admin');
 
 check('6.1 submitComplaint has a fetch(\'/api/notify\') call',
-  /var submitComplaint = async function \(\)[\s\S]*?fetch\('\/api\/notify'/.test(hr));
+  /var submitComplaint = async function \(\)[\s\S]*?[fF]etch\('\/api\/notify'/.test(hr));
 check('6.2 Complaint recipient is ALWAYS super_admin only (no manager)',
   /recipientIds: \[superAdminId\]/.test(hr));
 check('6.3 Complaint dispatch type is \'hr_complaint\'',
