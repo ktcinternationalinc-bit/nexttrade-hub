@@ -8,7 +8,7 @@ import { searchBills, sortBills, groupByVendor, BILL_SORTS } from '../lib/bill-g
 import { supabase } from '../lib/supabase';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
-import { BILL_TYPES, BILL_TYPE_LABEL, BILL_DIRECTIONS, BILL_DIRECTION_LABEL, isServiceOnlyBill } from '../lib/bill-extract'; // ZY + directions
+import { BILL_TYPES, BILL_TYPE_LABEL, BILL_DIRECTIONS, BILL_DIRECTION_LABEL, isServiceOnlyBill, isPayrollAutoValidated } from '../lib/bill-extract'; // ZY + directions
 import { importPagesState, pickedPages, problemsBesidesPages, notesWithReleaseSource, importSaveGate } from '../lib/bill-pages-ui'; // v55.83-VV
 import BillPagesBox from './BillPagesBox'; // v55.83-VV
 import { pdfPageCountFromBase64 } from '../lib/pdf-page-count-browser'; // v55.83-VV — real page count of an imported PDF
@@ -425,7 +425,7 @@ export default function BillsTab(props) {
   function openValidationFor(b) { closePanels(); var dr = b.validation_draft || {}; var v0 = { bill: b, checks: dr.checks || {}, notes: dr.notes || '', price_resolution: dr.price_resolution || '', warehouse_reference: dr.warehouse_reference || '', dir: (b.shipment_direction === 'inbound' || b.shipment_direction === 'outbound') ? b.shipment_direction : (b.default_direction || ''), dirDefault: !b.shipment_direction && !!b.default_direction, btype: BILL_TYPE_LABEL[b.bill_type] ? b.bill_type : '' }; vRef.current = v0; setVSaved(dr.at ? 'Picked up where ' + (dr.by_name || 'someone') + ' left off (' + String(dr.at).substring(0, 16).replace('T', ' ') + ')' : ''); setValidating(v0); }
   function valChip(b) {
     if (b.validation_status === 'validated') {
-      return <span><span className="px-2 py-0.5 rounded text-[10px] font-extrabold" title={'Validated ' + (b.validated_at ? String(b.validated_at).substring(0, 10) : '') + (b.validation_notes ? ' — ' + b.validation_notes : '')} style={{ background: '#d1fae5', color: '#065f46' }}>✓ VALIDATED</span>{canManage && b.record_status === 'active' && <button onClick={function () { closePanels(); setRowAsk({ kind: 'reopen', bill: b, text: '' }); }} title="Reopen the validation to fix this bill (it must be validated again before it can be wired)" className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>↩ Reopen</button>}</span>;
+      return <span><span className="px-2 py-0.5 rounded text-[10px] font-extrabold" title={'Validated ' + (b.validated_at ? String(b.validated_at).substring(0, 10) : '') + (b.validation_notes ? ' — ' + b.validation_notes : '')} style={{ background: '#d1fae5', color: '#065f46' }}>{isPayrollAutoValidated(b) ? '✓ VALIDATED · auto (payroll rule)' : '✓ VALIDATED'}</span>{canManage && b.record_status === 'active' && <button onClick={function () { closePanels(); setRowAsk({ kind: 'reopen', bill: b, text: '' }); }} title="Reopen the validation to fix this bill (it must be validated again before it can be wired)" className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>↩ Reopen</button>}</span>;
     }
     return <button onClick={function () { if (canManage) { openValidationFor(b); } }}
       className="px-2 py-0.5 rounded text-[10px] font-extrabold" title="Click to run the validation checks"

@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AAD',
+    date: '2026-11-27',
+    title: 'Bills: payroll bills validate themselves',
+    items: [
+      { text: '**Payroll bills are validated automatically.** When the super admin enters a payroll bill, when a repeating payroll bill is made, or when a KTC bill is made from a Nextrade payroll line, the Hub marks it validated at once — no type, direction, ticks or “how verified” needed.' },
+      { text: 'It reads **✓ VALIDATED · auto (payroll rule)**. The record says which rule matched, where the bill came from, when, and that the system did it (no person’s name).' },
+      { text: 'For safety a payroll bill still **waits for validation by hand** when it arrives by **e-mail or file import**, or when it was saved anyway as a **possible copy** of another bill.' },
+      { text: 'Payroll bills are still shown to the super admin only. Payroll bills already waiting are not changed.' },
+      { superAdminOnly: true, text: 'Run sql/v55-83-ZY-other-services-operational.sql first, then sql/v55-83-AAD-payroll-auto-validate.sql (refuses to run without ZY). Adds hub_bill_auto_validate_payroll(jsonb) — service_role only; requires reasons + source; active and not-validated bills only; validated_by NULL; note “Auto-validated: payroll (rule) — reasons · source”; fills type / direction only when empty (Other services / Operational); a flagged price check is answered in plain words by the rule; audit bill_auto_validated_payroll actor NULL with rule, reasons, source. Trusted sources (src/lib/payroll-auto-validate-server.js): super_admin_entry (save_bill create, super admin, no duplicate warning), repeating_bill (not forced past a duplicate), nextrade_payroll_line (company-books created). Import / e-mail doors never call it. No back-fill: the 5 payroll bills already waiting stay as they are until Max decides.' },
+    ]
+  },
+  {
     version: 'v55.83-ZY',
     date: '2026-11-27',
     title: 'Bills: “Other services” bill type and “Operational” bills (not for a shipment)',

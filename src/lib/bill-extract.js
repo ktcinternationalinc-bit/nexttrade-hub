@@ -76,6 +76,8 @@ export var BILL_DIRECTIONS = ['inbound', 'outbound', 'operational'];
 export var BILL_DIRECTION_LABEL = { inbound: '⬅ Inbound', outbound: 'Outbound ➡', operational: '🏢 Operational' };
 export function isOperationalBill(b) { return !!b && b.shipment_direction === 'operational'; }
 // never goods, never in the warehouse weight check, never a cost of goods
+// v55.83-AAD — a payroll bill the system validated (validated_by empty, the note starts with the rule words)
+export function isPayrollAutoValidated(b) { return !!b && b.validation_status === 'validated' && !b.validated_by && /^Auto-validated: payroll \(rule\)/.test(String(b.validation_notes || '')); }
 export function isServiceOnlyBill(b) { return !!b && (b.shipment_direction === 'operational' || b.bill_type === 'other_services'); }
 // a release number on the bill = an OUTBOUND bill; no release = left blank for the validator (never guessed inbound)
 export function autoDirection(releaseNumber) {
