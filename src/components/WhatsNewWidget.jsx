@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AAB',
+    date: '2026-11-27',
+    title: 'Profitability: a discount or cash line on an invoice no longer hides its shipping',
+    items: [
+      { text: '**Invoice AMERICA 1846 now shows its $5,900 shipping charged.** It showed “unknown” because the line “Discount cash on hand to Mr. Kandil” (−$30,325) was read as a product with no weight. That stopped the shipping from being shared between the goods.' },
+      { text: '**A minus line on an invoice is never a product now.** It keeps its meaning: it lowers that invoice’s goods revenue like a discount, spread over its goods lines by their value. If a minus line is really money already received, correct it on the invoice (for 1846 this is being done).' },
+      { superAdminOnly: true, text: 'Technical: buildCells (src/lib/profitability.js) sets a negative non-transport line aside as an adjustment, never a goods cell (ln.goods === true keeps the old behaviour). Every adjustment is a discount, with no reading of its words (Max 27 Nov). It is spread with allocate() over the goods lines by value, cent-exact, flag discount_shared_over_goods; with no goods line, discount_without_goods plus an unallocated entry. Shipping credits stay transport lines (unchanged). No SQL. Test: test-v55-83-aab-discount-lines.js.' },
+    ]
+  },
+  {
     version: 'v55.83-AAD',
     date: '2026-11-27',
     title: 'Bills: payroll bills validate themselves',

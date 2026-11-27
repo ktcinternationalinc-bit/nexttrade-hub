@@ -311,11 +311,15 @@ export function buildCells(input) {
     var basis = PRICING_BASES.indexOf(inv.basis) >= 0 ? inv.basis : null;
     if (!basis) { flag('basis_missing', inv); }
 
-    var goods = []; var tLines = 0;
+    var goods = []; var tLines = 0; var adjust = [];
     (inv.lines || []).forEach(function (ln) {
       var amt = ln.amount !== null && ln.amount !== undefined ? Number(ln.amount) || 0 : (Number(ln.qty) || 0) * (Number(ln.unit_price) || 0);
       var isT = ln.transport === true || (ln.transport !== false && isTransportLine(ln.description));
       if (isT) { tLines += cents(amt); return; }
+      // v55.83-AAB (Max, 27 Nov, AMERICA 1846: "why is this unknown when the shipping line is clear in the invoice") — a NEGATIVE line that
+      // is not shipping (a discount, a deduction, a credit, cash received) is never a goods line: it is not a product, it has no weight,
+      // and it must not block sharing the shipping charged. It was pushed as a goods line with no unit, which left 1846's $5,900 unknown.
+      if (amt < 0 && ln.goods !== true) { adjust.push({ ln: ln, amt: amt }); return; }
       var g = input.groupOf ? input.groupOf(ln.description) : null;
       var pKey = g ? 'g:' + g.id : 'n:' + nameKey(ln.description);
       // v55.83-UZ — foam: the line's own name, the text passed by the caller (ln.foam) or the merged product's name says foam
@@ -331,6 +335,22 @@ export function buildCells(input) {
       if (lb === null) { flag('unit_unknown', inv, { line: ln.description, unit: ln.unit || null }); }
       goods.push({ ln: ln, amt: amt, lb: lb, g: g, pKey: pKey, foam: foam, headliner: headliner, fx: fx, keep: ln.keep_unit === true && isSoldByLength(ln.unit) });
     });
+
+    // v55.83-AAB — every negative line keeps its revenue meaning: it lowers the goods revenue of THIS invoice, shared over its goods lines
+    //    by their value (cent-exact), so the goods add up to what the invoice charges. No reading of its words (Max 27 Nov: a line that is
+    //    really money received is corrected on the invoice by staff). Flagged, with each line, so it can be checked.
+    var discC = 0; var discLines = [];
+    adjust.forEach(function (a) {
+      discC += cents(a.amt); discLines.push({ line: a.ln.description || '', amount: r2(a.amt) });
+    });
+    if (discC < 0) {
+      var gW = goods.map(function (g0) { return Math.max(0, cents(g0.amt)); });
+      if (goods.length && gW.some(function (x) { return x > 0; })) {
+        var dShares = allocate(money(discC), gW);
+        goods.forEach(function (g0, ix) { g0.amt = r2(g0.amt + dShares[ix]); });
+        flag('discount_shared_over_goods', inv, { lines: discLines, amount: money(discC) });
+      } else { flag('discount_without_goods', inv, { lines: discLines, amount: money(discC) }); unallocated.push({ what: 'discount', invoice_id: inv.id, invoice: inv.number, amount: money(discC), why: 'the invoice has no goods line to take the discount off' }); }
+    }
 
     // each goods line on its release(s)
     var mine = [];
