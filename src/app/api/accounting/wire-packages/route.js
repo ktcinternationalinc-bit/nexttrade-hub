@@ -363,7 +363,8 @@ export async function POST(req) {
       // says it is a different fee and why. The bill already on this wire can never be overridden. A failed check refuses (503).
       var pfOverrideS = null;
       if (feeS > 0) {
-        var pfG = await partnerFeeGuard(db, feeS, clean.map(function (c) { return c.bill_id; }), { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason });
+        var pfG = await partnerFeeGuard(db, feeS, clean.map(function (c) { return c.bill_id; }), { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason },
+          { businessId: US_WAVE_BUSINESS_ID, currency: (fundInfo && fundInfo.currency) || 'USD', canSeeBills: !!(await perm(db, userId, ['bills.view', 'bills.manage', 'wires.prepare'], req)) });
         if (pfG && !pfG.allowed) { return NextResponse.json({ ok: false, error: pfG.error, code: pfG.code || null, partner_fee_bill: pfG.bill || null }, { status: pfG.status }); }
         if (pfG && pfG.overridden) { pfOverrideS = pfG; } // audited once the draft is saved
       }
@@ -1000,7 +1001,9 @@ export async function POST(req) {
       var whyF = String(body.reason || '').trim();
       if (whyF.length < 5) { return fail('Say why the service fee changes.'); }
       // v55.83-ZP — the same partner-fee guard as a draft (the bills of this request count as "on this wire")
-      var pfC = await partnerFeeGuard(db, r2(feeTyped.replace(/,/g, '')), P.rawLines.map(function (l) { return l.bill_id; }), { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason });
+      var fxC = null; try { var flC = await fundingLines(db, { ids: [pkg.funding_txn_id] }); fxC = flC && flC.lines && flC.lines[0]; } catch (eFc) { fxC = null; }
+      var pfC = await partnerFeeGuard(db, r2(feeTyped.replace(/,/g, '')), P.rawLines.map(function (l) { return l.bill_id; }), { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason },
+        { businessId: US_WAVE_BUSINESS_ID, currency: (fxC && fxC.currency) || 'USD', canSeeBills: !!(await perm(db, userId, ['bills.view', 'bills.manage', 'wires.prepare'], req)) });
       if (pfC && !pfC.allowed) { return NextResponse.json({ ok: false, error: pfC.error, code: pfC.code || null, partner_fee_bill: pfC.bill || null }, { status: pfC.status }); }
       var cf = await db.rpc('wire_request_fee_change', { p_pkg: pkg.id, p_fee: r2(feeTyped.replace(/,/g, '')), p_actor: userId });
       if (cf.error) { return fail(cf.error.message + (spMissing(cf.error.message) ? SP_HINT : ''), 400); }

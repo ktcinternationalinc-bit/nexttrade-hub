@@ -519,7 +519,8 @@ export default function WirePackagesPanel(props) {
     act(payload,
       function (j) { return j.audit ? (j.audit.pass ? '✅ Saved and checked — it is ready for the 1st signature.' : '⛔ Saved — the check found ' + j.audit.blocks + ' problem(s) to fix. See the red box.') : 'Saved.'; },
       function (j) { setEd(null); open(j.id); }).then(function (j) {
-        if (j && !j.ok && j.partner_fee_bill && j.code === 'partner_fee_as_fee') { setEd(function (e0) { return e0 ? Object.assign({}, e0, { pfAsk: { bill: j.partner_fee_bill, diff: false, reason: '' } }) : e0; }); }
+        // ZP rev2 — the server names the bill only to someone who may see bills; otherwise the choice still opens, without the bill
+        if (j && !j.ok && j.code === 'partner_fee_as_fee') { setEd(function (e0) { return e0 ? Object.assign({}, e0, { pfAsk: { bill: j.partner_fee_bill || { hidden: true, text: j.error }, diff: false, reason: '' } }) : e0; }); }
       });
   }
   // ── wire actions
@@ -851,9 +852,9 @@ export default function WirePackagesPanel(props) {
             var cand = (ed.bills || []).filter(function (x) { return x.id === pb.id; })[0];
             var ask = ed.pfAsk || { bill: pb, diff: false, reason: '' };
             return <div className="w-full rounded-lg p-2 text-[12px]" style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#7c2d12' }}>
-              <div className="font-extrabold">{'⚠ $' + fmt(feeN) + ' is the amount still open on partner-fee bill #' + (pb.bill_number || '?') + ' (' + (pb.vendor_name || 'vendor') + '). Typed as a fee it would count that partner fee twice — once as the fee and again when the bill is paid.'}</div>
+              <div className="font-extrabold">{pb.hidden ? '⚠ ' + (pb.text || 'That is the amount still open on a partner-fee bill you cannot see.') : '⚠ $' + fmt(feeN) + ' is the amount still open on partner-fee bill #' + (pb.bill_number || '?') + ' (' + (pb.vendor_name || 'vendor') + '). Typed as a fee it would count that partner fee twice — once as the fee and again when the bill is paid.'}</div>
               <div className="flex gap-2 items-center flex-wrap mt-1">
-                {cand ? <Btn color="#c2410c" onClick={function () { var pk = Object.assign({}, ed.picks); pk[cand.id] = String(cand.open); setEd(Object.assign({}, ed, { picks: pk, fee: '', fee_note: '', pfAsk: null })); }}>{'＋ Add bill #' + (pb.bill_number || '') + ' instead (fee back to 0)'}</Btn>
+                {pb.hidden ? null : cand ? <Btn color="#c2410c" onClick={function () { var pk = Object.assign({}, ed.picks); pk[cand.id] = String(cand.open); setEd(Object.assign({}, ed, { picks: pk, fee: '', fee_note: '', pfAsk: null })); }}>{'＋ Add bill #' + (pb.bill_number || '') + ' instead (fee back to 0)'}</Btn>
                   : <span className="font-bold">{'Bill #' + (pb.bill_number || '') + ' is not offered for this wire — open it in 💸 Bills to see why.'}</span>}
                 <label className="flex items-center gap-1 font-bold"><input type="checkbox" checked={ask.diff === true} onChange={function (e) { setEd(Object.assign({}, ed, { pfAsk: Object.assign({}, ask, { diff: e.target.checked }) })); }} /> It is a different fee</label>
                 {ask.diff === true && <input value={ask.reason} onChange={function (e) { setEd(Object.assign({}, ed, { pfAsk: Object.assign({}, ask, { reason: e.target.value }) })); }} placeholder="why it is not that bill (kept in the history)" className={inp} style={Object.assign({ width: 260 }, inpS)} />}

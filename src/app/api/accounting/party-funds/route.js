@@ -319,7 +319,7 @@ export async function POST(req) {
     if (!installed) { return fail(SQL_MISSING_WF, 409); }
     var party = parties.filter(function (p) { return p.name === body.party; })[0];
     if (!party) { return fail('Pick NextTrade or RTM.'); }
-    var lq = await db.from('bank_transactions').select('id, wave_business_id, direction, account_id, third_party_payer').eq('id', body.bank_transaction_id || '').maybeSingle();
+    var lq = await db.from('bank_transactions').select('id, wave_business_id, direction, account_id, third_party_payer, iso_currency').eq('id', body.bank_transaction_id || '').maybeSingle(); // ZP rev2: + iso_currency (the fee's currency)
     if (lq.error) { return readFail('the transfer', lq.error); }
     var line = lq.data;
     if (!line || isPrivateRow(line, scope) || (!scope.all && !line.account_id)) { return fail('Transfer not found.', 404); }
@@ -375,7 +375,9 @@ export async function POST(req) {
     // (once here as their fee, again when the bill is paid): refused unless the person says it is a different fee and why
     var pfM = null;
     if (action === 'fee_mark') {
-      pfM = await partnerFeeGuard(db, amount, [], { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason });
+      var gBv = isSuper ? { ok: true } : (await assertPermission(db, userId, 'bills.view', req)); if (!(gBv && gBv.ok === true) && !isSuper) { gBv = await assertPermission(db, userId, 'bills.manage', req); }
+      pfM = await partnerFeeGuard(db, amount, [], { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason },
+        { businessId: US_WAVE_BUSINESS_ID, currency: line.iso_currency || 'USD', canSeeBills: !!(gBv && gBv.ok === true) });
       if (pfM && !pfM.allowed) { return NextResponse.json({ ok: false, error: pfM.error, code: pfM.code || null, partner_fee_bill: pfM.bill || null, api_build_marker: API_BUILD_MARKER }, { status: pfM.status }); }
     }
     var rf = await db.rpc('hub_party_fee', { p: { action: action === 'fee_mark' ? 'mark' : 'reverse', party: party.name, bank_transaction_id: line.id, amount: amount, entry_date: body.entry_date || null, reason: reason,

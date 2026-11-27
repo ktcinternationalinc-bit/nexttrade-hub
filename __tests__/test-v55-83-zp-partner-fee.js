@@ -18,7 +18,8 @@ var FR1 = 'b0000000-0000-0000-0000-0000000000f2'; // freight
 var PF0 = 'b0000000-0000-0000-0000-0000000000f3'; // same vendor + amount, NO category
 var PF2 = 'b0000000-0000-0000-0000-0000000000f4'; // partner fee, half paid already
 var FR2 = 'b0000000-0000-0000-0000-0000000000f5'; // RTM bill
-function bill(id, vendor, num, total, cat, extra) { return Object.assign({ id: id, vendor_name: vendor, bill_number: num, release_number: '1002-' + num, total_amount: total, record_status: 'active', paid_via: null, validation_status: 'validated', bill_date: '2026-09-30', shipment_direction: 'outbound', category: cat }, extra || {}); }
+var US = 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk'; // KTC's US books (business-of US_WAVE_BUSINESS_ID)
+function bill(id, vendor, num, total, cat, extra) { return Object.assign({ wave_business_id: US, currency: 'USD', id: id, vendor_name: vendor, bill_number: num, release_number: '1002-' + num, total_amount: total, record_status: 'active', paid_via: null, validation_status: 'validated', bill_date: '2026-09-30', shipment_direction: 'outbound', category: cat }, extra || {}); }
 var db = new MemDB({
   users: [{ id: 'u1', name: 'Preparer', role: 'staff', active: true }, { id: 'u2', name: 'Viewer', role: 'staff', active: true }],
   module_permissions: [].concat(
@@ -109,22 +110,51 @@ console.log('ZP — partner-fee bills in their own column, counted once; RTM fun
   check('the partner-fee bills cannot be read → 503 "the service fee was not saved", nothing guessed', !r6.ok && r6._status === 503 && /could not be checked/.test(r6.error), r6);
 
   // ── the same guard on its own (the funds box "services rendered" calls exactly this)
-  var gA = await PFS.partnerFeeGuard(db, 25250, [], {});
-  var gB = await PFS.partnerFeeGuard(db, 25250, [], { yes: true, reason: 'a real separate fee' });
-  var gC = await PFS.partnerFeeGuard(db, 100, [], {});
+  var OPT = { businessId: US, currency: 'USD', canSeeBills: true };
+  var gA = await PFS.partnerFeeGuard(db, 25250, [], {}, OPT);
+  var gB = await PFS.partnerFeeGuard(db, 25250, [], { yes: true, reason: 'a real separate fee' }, OPT);
+  var gC = await PFS.partnerFeeGuard(db, 100, [], {}, OPT);
   check('the shared guard: refused / allowed-as-override with the bill / nothing to say', gA && !gA.allowed && gA.status === 409 && gB && gB.allowed && gB.overridden && gB.bill.id === PF2 && gC === null, [gA, gB, gC]);
 
   // ── rev2 (Codex 26 Nov HOLD): two open recurring fee bills of the SAME amount — the second one is on the wire → never overridable
   db.t.vendor_bills.push(bill('b0000000-0000-0000-0000-0000000000e1', 'NexPac Corporation', 'R-OCT', 45250, 'partner_fees'));
   db.t.vendor_bills.push(bill('b0000000-0000-0000-0000-0000000000e2', 'NexPac Corporation', 'R-NOV', 45250, 'partner_fees'));
-  var gR = await PFS.partnerFeeGuard(db, 45250, ['b0000000-0000-0000-0000-0000000000e2'], { yes: true, reason: 'claims a different fee' });
-  var gR2 = await PFS.partnerFeeGuard(db, 45250, ['b0000000-0000-0000-0000-0000000000e1'], { yes: true, reason: 'claims a different fee' });
+  var gR = await PFS.partnerFeeGuard(db, 45250, ['b0000000-0000-0000-0000-0000000000e2'], { yes: true, reason: 'claims a different fee' }, OPT);
+  var gR2 = await PFS.partnerFeeGuard(db, 45250, ['b0000000-0000-0000-0000-0000000000e1'], { yes: true, reason: 'claims a different fee' }, OPT);
   check('rev2: two open $45,250 fee bills, the one ON the wire listed second (or first) → refused partner_fee_on_wire either way, override ignored', gR && !gR.allowed && gR.code === 'partner_fee_on_wire' && gR.bill.id === 'b0000000-0000-0000-0000-0000000000e2' && gR2 && !gR2.allowed && gR2.code === 'partner_fee_on_wire', [gR, gR2]);
+
+  // ── rev2 through the REAL route: an RTM wire carrying the SECOND of two open recurring $45,250 partner-fee bills + a $45,250 fee
+  db.t.vendor_bills.push(bill('b0000000-0000-0000-0000-0000000000e3', 'NexPac Corporation', 'R-DEC', 45250, 'partner_fees', { paid_via: 'RTM Capital' }));
+  db.t.vendor_bills.push(bill('b0000000-0000-0000-0000-0000000000e4', 'NexPac Corporation', 'R-JAN', 45250, 'partner_fees', { paid_via: 'RTM Capital' }));
+  var pk0 = db.t.wire_packages.length;
+  var rr = await call('u1', { action: 'save_draft', payee_kind: 'service_provider', payee_name: 'RTM Capital', fee_amount: 45250, it_is_a_different_fee: true, different_fee_reason: 'says it is another fee', lines: [{ bill_id: 'b0000000-0000-0000-0000-0000000000e4', amount: '45250' }] });
+  check('rev2 route: two open $45,250 fee bills (one off the wire, one ON it) + a $45,250 fee with "different fee" → 409 partner_fee_on_wire, nothing saved', !rr.ok && rr._status === 409 && rr.code === 'partner_fee_on_wire' && db.t.wire_packages.length === pk0, rr);
+  // another company, another currency: never counted
+  db.t.vendor_bills.push(bill('b0000000-0000-0000-0000-0000000000e5', 'Other Co', 'X-1', 777, 'partner_fees', { wave_business_id: 'OTHER-BOOKS' }));
+  db.t.vendor_bills.push(bill('b0000000-0000-0000-0000-0000000000e6', 'NexPac Corporation', 'EUR-1', 888, 'partner_fees', { currency: 'EUR' }));
+  var gX = await PFS.partnerFeeGuard(db, 777, [], {}, OPT); var gE = await PFS.partnerFeeGuard(db, 888, [], {}, OPT); var gE2 = await PFS.partnerFeeGuard(db, 888, [], {}, { businessId: US, currency: 'EUR', canSeeBills: true });
+  check('rev2: a partner-fee bill of another company, or in another currency than the fee, is not counted; the same bill counts for a fee in its own currency', gX === null && gE === null && gE2 && gE2.code === 'partner_fee_as_fee', [gX, gE, gE2]);
+  // no company given → refused (fail closed), never "no bills"
+  var gN = await PFS.partnerFeeGuard(db, 45250, [], {}, { currency: 'USD' });
+  check('rev2: without the accounting company the check refuses (503), never "nothing found"', gN && gN.status === 503, gN);
+  // paged: the match sits after 1,100 other partner-fee bills
+  for (var pi = 0; pi < 1100; pi++) { db.t.vendor_bills.push(bill('a' + String(pi).padStart(7, '0') + '-0000-0000-0000-000000000000', 'NexPac Corporation', 'P' + pi, 10, 'partner_fees')); }
+  db.t.vendor_bills.push(bill('zzzzzzzz-0000-0000-0000-000000000001', 'NexPac Corporation', 'LAST', 31337, 'partner_fees'));
+  // like PostgREST: one request returns at most 1,000 rows, so only a paged read can reach the last one
+  var fromP = db.from.bind(db); db.from = function (name) { var q = fromP(name); var r0 = q.run; q.run = function () { var out = r0.call(this); if (out && Array.isArray(out.data) && out.data.length > 1000) { out = Object.assign({}, out, { data: out.data.slice(0, 1000) }); } return out; }; return q; };
+  var gP = await PFS.partnerFeeGuard(db, 31337, [], {}, OPT);
+  db.from = fromP;
+  check('rev2: the bills are read page by page — a match after the first 1,000 partner-fee bills is still found', gP && gP.code === 'partner_fee_as_fee' && gP.bill && gP.bill.bill_number === 'LAST', gP && gP.code);
+  // a person who may not see bills: still refused, but no bill named
+  var gV = await PFS.partnerFeeGuard(db, 31337, [], {}, { businessId: US, currency: 'USD', canSeeBills: false });
+  var gV2 = await PFS.partnerFeeGuard(db, 31337, ['zzzzzzzz-0000-0000-0000-000000000001'], {}, { businessId: US, currency: 'USD', canSeeBills: false });
+  check('rev2: someone who may not see bills is refused without the bill (no id, number or vendor in the answer)', gV && gV.code === 'partner_fee_as_fee' && gV.bill === null && !/LAST|NexPac/.test(gV.error) && gV2 && gV2.code === 'partner_fee_on_wire' && gV2.bill === null && !/LAST|NexPac/.test(gV2.error), [gV, gV2]);
+  db.t.vendor_bills = db.t.vendor_bills.filter(function (b) { return !/^ad{7}-|^zzzzzzzz-/.test(b.id); }); // back to the small fixture
 
   // ── the routes and screens
   var pfRoute = fs.readFileSync(path.join(root, 'src/app/api/accounting/party-funds/route.js'), 'utf8');
-  var iGuard = pfRoute.indexOf("pfM = await partnerFeeGuard(db, amount, []"); var iRpc = pfRoute.indexOf("var rf = await db.rpc('hub_party_fee'");
-  check('funds box "services rendered": the guard runs BEFORE the fee is written, only for marking (not for reversing), and an override is audited', iGuard > 0 && iRpc > iGuard && /if \(action === 'fee_mark'\) \{\s*\r?\n\s*pfM = await partnerFeeGuard/.test(pfRoute) && /party_fee_not_partner_fee/.test(pfRoute), [iGuard, iRpc]);
+  var iGuard = pfRoute.indexOf("pfM = await partnerFeeGuard(db, amount, []"); var hasScope = /businessId: US_WAVE_BUSINESS_ID, currency: line.iso_currency/.test(pfRoute); var iRpc = pfRoute.indexOf("var rf = await db.rpc('hub_party_fee'");
+  check('funds box "services rendered": the guard runs BEFORE the fee is written, only for marking (not for reversing), scoped to KTC books + the line currency, and an override is audited', hasScope && iGuard > 0 && iRpc > iGuard && /if \(action === 'fee_mark'\) \{/.test(pfRoute) && /party_fee_not_partner_fee/.test(pfRoute), [iGuard, iRpc]);
   var wr = fs.readFileSync(path.join(root, 'src/app/api/accounting/wire-packages/route.js'), 'utf8');
   check('change_fee (a sent request) uses the same guard, with the request\'s own bills as "on this wire"', /var pfC = await partnerFeeGuard\(db, r2\(feeTyped/.test(wr) && /P\.rawLines\.map/.test(wr.substring(wr.indexOf('var pfC'), wr.indexOf('var pfC') + 200)), null);
   var wp = fs.readFileSync(path.join(root, 'src/components/WirePackagesPanel.jsx'), 'utf8');
