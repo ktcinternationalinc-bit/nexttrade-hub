@@ -27,6 +27,7 @@ import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
 import { readBillFromBase64, insertImportedBill, vendorBillType, findExactSameBill, exactDupMessage } from '../../../../lib/bill-extract-server';
 import { exactSameWords } from '../../../../lib/bill-dup-scan'; // v55.83-UQ
 import { importSort, BILL_TYPE_LABEL, BILL_DIRECTIONS } from '../../../../lib/bill-extract';
+import { autoValidatePayroll } from '../../../../lib/payroll-auto-validate-server'; // v55.83-AAD
 import { saveBillLines, runPriceCheck, loadLines, loadPriceRules, loadCommissionRules, recheckOpenBills } from '../../../../lib/bill-lines-server'; // v55.83-RQ
 import { commissionRuleFor, productInventory, spendReport, periodRange, normText, shapeLine, priceCheck as priceCheckPure, defaultDirectionFor } from '../../../../lib/bill-lines';
 import { billDupVerdict } from '../../../../lib/bill-dup-server'; // v55.83-QH
@@ -628,7 +629,10 @@ export async function POST(req) {
       if (fields.category && !autoCat) { learnedB = await learnRule(db, vendor, fields.category, userId); }
       await audit(db, userId, 'bill_created', 'vendor_bill', ins.data && ins.data.id, { vendor: vendor, amount: amt, category: fields.category || null, paid_via: fields.paid_via || null }); // v55.83-QI
       var lnC = ins.data && ins.data.id ? await linesAfterSave(ins.data.id, bl) : {};
-      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_category: autoCat, category_source: fields.category_source || null, category_prefill_removed: wxPrefillDropped ? ('The category pre-filled by a rule was not kept: ' + ((wxPick && wxPick.blocked) || 'that rule no longer gives it for this bill') + '. Pick the category on the bill if it is right.') : undefined, category_conflict: wxPick && wxPick.source === 'rule_conflict' ? (wxPick.blocked || ('rules disagree: ' + (wxPick.conflict || []).map(function (r) { return r.name; }).join(' / '))) : undefined, rule_learned: learnedB, warning: lnC.warning || undefined, duplicate_warning: dupWarn || undefined, price_check: lnC.check || undefined });
+      // v55.83-AAD (Max 27 Nov: "payroll is automatically validated") — after the lines are saved (a line can make it payroll). Only the
+      // super admin can make a payroll bill (ZD), so a payroll bill entered here is the super admin's own entry; a duplicate warning stops it.
+      var aadPay = ins.data && ins.data.id && payZD && payZD.isSuper === true ? await autoValidatePayroll(db, ins.data.id, { source: 'super_admin_entry', duplicateWarning: !!dupWarn }) : null;
+      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_validated_payroll: aadPay && aadPay.validated ? true : undefined, payroll_warning: aadPay && aadPay.warning ? aadPay.warning : undefined, auto_category: autoCat, category_source: fields.category_source || null, category_prefill_removed: wxPrefillDropped ? ('The category pre-filled by a rule was not kept: ' + ((wxPick && wxPick.blocked) || 'that rule no longer gives it for this bill') + '. Pick the category on the bill if it is right.') : undefined, category_conflict: wxPick && wxPick.source === 'rule_conflict' ? (wxPick.blocked || ('rules disagree: ' + (wxPick.conflict || []).map(function (r) { return r.name; }).join(' / '))) : undefined, rule_learned: learnedB, warning: lnC.warning || undefined, duplicate_warning: dupWarn || undefined, price_check: lnC.check || undefined });
     }
 
     // ── void_bill (reversible record_status; nothing is deleted)

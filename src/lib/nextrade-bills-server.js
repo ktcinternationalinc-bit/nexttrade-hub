@@ -14,6 +14,7 @@
 import { US_WAVE_BUSINESS_ID } from './business-of';
 import { NEXTRADE_COMPANY_ID, isExpenseKind, endOfMonth } from './companies';
 import { normVendor, checkOne } from './bill-dup-scan';
+import { autoValidatePayroll } from './payroll-auto-validate-server'; // v55.83-AAD
 
 var ATTACH_DAYS = 10;
 var DEFAULT_PARTY = 'NextTrade Industries';
@@ -144,5 +145,7 @@ export async function categorizeLine(db, line, cat, ctx) {
     return { ok: false, error: 'Not saved (' + (m || 'database error') + '). Nothing was changed.' };
   }
   var d = r.data || {};
+  // v55.83-AAD — a NEW KTC bill made from a Nextrade payroll line (Warehouse staff) is validated by the system
+  if (d.action === 'created' && d.bill_id) { await autoValidatePayroll(db, d.bill_id, { source: 'nextrade_payroll_line' }); }
   return { ok: true, action: d.action || 'none', bill_id: d.bill_id || null, bill_number: d.bill_number || null };
 }

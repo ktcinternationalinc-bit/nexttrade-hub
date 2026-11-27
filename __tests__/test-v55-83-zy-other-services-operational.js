@@ -166,14 +166,15 @@ var CHECKS = { matches_records: true, goods_received: true, charges_accurate: tr
   var pa = fs.readFileSync(path.join(root, 'src/lib/profitability-assemble.js'), 'utf8');
   check('profitability: Other services / Operational lines are never a cost of goods; Operational transport never on a release', /if \(b\.bill_type === 'other_services' \|\| b\.shipment_direction === 'operational'\) \{ return; \}/.test(pa) && /if \(b\.shipment_direction === 'operational'\) \{ return; \} \/\/ v55\.83-ZY/.test(pa));
   var bt = fs.readFileSync(path.join(root, 'src/components/BillsTab.jsx'), 'utf8');
-  check('the bill card hides the Warehouse check for Other services / Operational bills', /canWeightCheck && !isServiceOnlyBill\(b\) && <WarehouseCheckBox/.test(bt) && /isServiceOnlyBill \} from '..\/lib\/bill-extract'/.test(bt));
+  check('the bill card hides the Warehouse check for Other services / Operational bills', /canWeightCheck && !isServiceOnlyBill\(b\) && <WarehouseCheckBox/.test(bt) && /isServiceOnlyBill[^}]*\} from '..\/lib\/bill-extract'/.test(bt));
   check('every BillsTab "this bill is for" picker offers Operational (no two-choice lists left)', bt.indexOf("[['inbound', '⬅ Inbound'], ['outbound', 'Outbound ➡']]") < 0 && (bt.match(/BILL_DIRECTIONS\.map/g) || []).length >= 4);
   var s1 = BX.importSort({ bill_type: 'other_services' }, null, 'operational');
   check('import: Other services read from the bill is kept; a vendor default of Operational is used', s1.bill_type === 'other_services' && s1.bill_type_source === 'read_from_bill' && s1.shipment_direction === 'operational' && s1.direction_source === 'vendor_default', s1);
   var ex = fs.readFileSync(path.join(root, 'src/lib/bill-extract-server.js'), 'utf8');
   var api = fs.readFileSync(path.join(root, 'src/app/api/accounting/bills/route.js'), 'utf8');
   check('SWC-safe: the new route helpers use var + concatenation only', /var ZY_SQL_WORDS = 'The new choices Other services \/ Operational need sql\/v55-83-ZY-other-services-operational\.sql — /.test(api) && /function zyNeedsSql\(err\) \{ return !!err && /.test(api));
-  check('ZY carries no payroll auto-validation (that is AAD, reviewed separately)', !/autoValidatePayroll|hub_bill_auto_validate_payroll/.test(api) && !fs.existsSync(path.join(root, 'src/lib/payroll-auto-validate-server.js')));
+  // v55.83-AAD (on top of ZY): payroll auto-validation is AAD's — the bills route calls it only as the super admin's own entry
+  check('payroll auto-validation is not part of ZY: absent, or (AAD) only for the super admin\'s own entry', (!/autoValidatePayroll/.test(api) && !fs.existsSync(path.join(root, 'src/lib/payroll-auto-validate-server.js'))) || ((api.match(/autoValidatePayroll\(/g) || []).length === 1 && /autoValidatePayroll\(db, ins\.data\.id, \{ source: 'super_admin_entry', duplicateWarning: !!dupWarn \}\)/.test(api)));
 
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);

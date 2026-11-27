@@ -12,6 +12,7 @@
 import { dueDates, autoBillNumber, scheduleWords, MAX_PER_RUN } from './repeating-bills';
 import { checkOne } from './bill-dup-scan';
 import { audit } from './audit-server';
+import { autoValidatePayroll } from './payroll-auto-validate-server'; // v55.83-AAD
 import { categoryForNewBill, loadBillRules, provenanceFields } from './bill-rules-server'; // v55.83-WX — bill rules, then the vendor memory
 
 var PAGE = 1000;
@@ -106,6 +107,7 @@ async function makeBill(db, rb, date, runId, bills, actorId, forced, reasons) {
   }
   if (ins.error) { await finish(db, runId, 'failed', null, ins.error.message); return { date: date, outcome: 'failed', message: ins.error.message }; }
   var billId = ins.data && ins.data.id;
+  await autoValidatePayroll(db, billId, { source: 'repeating_bill', duplicateWarning: !!forced }); // v55.83-AAD — a repeating payroll bill is validated by the system (never throws)
   await finish(db, runId, 'created', billId, forced ? 'Made anyway by a person (looked like a duplicate).' : null);
   bills.push({ id: billId, vendor_name: row.vendor_name, bill_number: row.bill_number, bill_date: row.bill_date, total_amount: row.total_amount, release_number: row.release_number || null, other_reference: null, bill_type: null, record_status: 'active' });
   await audit(db, actorId || rb.created_by || null, forced ? 'bill_duplicate_override' : 'bill_created', 'vendor_bill', billId,
