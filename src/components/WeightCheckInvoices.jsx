@@ -143,9 +143,20 @@ export function groupActionWarning(inv, wireBillIds) {
 function zBlock(bg) { return { display: 'inline-block', minWidth: 96, textAlign: 'center', padding: '4px 10px', background: bg, color: '#000000', fontSize: 11, fontWeight: 900, letterSpacing: '0.08em', borderRadius: 2 }; }
 
 // v55.83-ZT: the answer to Approved / Disputed, shown ON the card next to the buttons (the corner message alone was missed)
+// the exact comparison an answer was given for (each line's key + fingerprint + decision state)
+export function fpKey(inv) { return ((inv && inv.rows) || []).map(function (r) { return String(r.item_key) + ':' + String(r.comparison_fp || '') ; }).sort().join('|'); }
+// Codex 27 Nov (ZT hold): a card answer is shown only while the card still shows the SAME comparison; a green "Saved" only while it is
+// still decided — after a recheck that changed the figures (reopened / needs revalidation) the old answer is not shown any more
+export function cardMsgFor(msg, inv) {
+  if (!msg || !msg.text || msg.kind === 'busy') { return null; }
+  if (msg.fp !== fpKey(inv)) { return null; }
+  if (msg.kind === 'ok' && !(inv.approved || inv.disputed)) { return null; }
+  return msg;
+}
 export function CardMessage(props) {
   var m = props.msg; if (!m || !m.text) { return null; }
-  var ok = m.kind === 'ok';
+  var ok = m.kind === 'ok'; var warn = m.kind === 'warn';
+  if (warn) { return <div role="alert" data-testid="card-message" style={{ width: '100%', marginTop: 10, padding: '8px 10px', borderRadius: 2, fontSize: 13, fontWeight: 700, background: '#fffbeb', color: '#92400e', border: '1px solid #f59e0b' }}>{'⚠ ' + m.text}</div>; }
   return <div role={ok ? 'status' : 'alert'} data-testid="card-message" style={{ width: '100%', marginTop: 10, padding: '8px 10px', borderRadius: 2, fontSize: 13, fontWeight: 700, background: ok ? '#f0fdf4' : '#fef2f2', color: ok ? '#14532d' : '#991b1b', border: '1px solid ' + (ok ? '#22c55e' : '#ef4444') }}>{(ok ? '✓ ' : '✗ ') + m.text}</div>;
 }
 
@@ -310,7 +321,8 @@ export default function WeightCheckInvoices(props) {
   var _w = useState(null); var wires = _w[0], setWires = _w[1]; // v55.83-ZL: { list, note }
   var _wi = useState((props.wirePreset && props.wirePreset.wire_id) || ''); var wireId = _wi[0], setWireId = _wi[1];
   var _op = useState({}); var openCards = _op[0], setOpenCards = _op[1]; // v55.83-ZL: cards are CLOSED by default
-  var _cm = useState({}); var cardMsg = _cm[0], setCardMsg = _cm[1]; // v55.83-ZT: card key → { kind: 'ok' | 'err', text, needNote }
+  var _cm = useState({}); var cardMsg = _cm[0], setCardMsg = _cm[1]; // v55.83-ZT: card key → { kind: 'ok' | 'warn' | 'err', text, fp, needNote }
+  var _la = useState(null); var lastAction = _la[0], setLastAction = _la[1]; // v55.83-ZT: the last Approved / Disputed answer, kept above the list (a decided card can leave a filtered view)
   var [mapError, setMapError] = useState(null);
   var [mapNotice, setMapNotice] = useState(null);
 
@@ -333,6 +345,8 @@ export default function WeightCheckInvoices(props) {
     setBusy(recheck ? 'recheck' : 'load');
     return readPreview(recheck, flt).then(function (j) { setMapNotice(null); setBusy(''); setData(j); return j; });
   }
+  // v55.83-ZT: after a decision, refresh WITHOUT throwing the list away when the refresh itself fails (the answer says so instead)
+  function refreshKeep() { return readPreview(false, flt).then(function (j) { if (j && j.ok) { setData(j); } return j; }, function () { return { ok: false, error: 'the Hub could not be reached' }; }); }
   var perms = (cfg && cfg.permissions) || (data && data.permissions) || {};
   var tol = cfg && cfg.ok ? (cfg.tolerances || [])[0] || null : null;
   var scope = (cfg && cfg.scope) || (data && data.scope) || null;
@@ -414,15 +428,25 @@ export default function WeightCheckInvoices(props) {
 
   function putCardMsg(k, m) { setCardMsg(function (prev) { var o = Object.assign({}, prev); if (m) { o[k] = m; } else { delete o[k]; } return o; }); }
   async function decideAll(inv, mode) {
-    putCardMsg(inv.key, { kind: 'busy', text: '' });
+    var fpk = fpKey(inv); var label = inv.bills.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' + ');
+    putCardMsg(inv.key, { kind: 'busy', text: '', fp: fpk });
     setBusy(inv.key);
-    var res;
-    try { res = await runInvoiceDecision({ inv: inv, mode: mode, reason: reasons[inv.key], api: wcApi, reload: function () { return load(false).then(function (j) { return (j && j.rows) || []; }); } }); }
-    catch (eD) { res = { ok: false, error: 'Not saved: ' + ((eD && eD.message) || 'the Hub could not be reached') + ' — try again.' }; }
-    if (res.wrote || res.linked) { await load(false); }
+    var res; var unknown = false;
+    try { res = await runInvoiceDecision({ inv: inv, mode: mode, reason: reasons[inv.key], api: wcApi, reload: function () { return refreshKeep().then(function (j) { return (j && j.ok && j.rows) || []; }); } }); }
+    catch (eD) { unknown = true; res = { ok: false, wrote: 0, error: 'Could not confirm whether this was saved (' + ((eD && eD.message) || 'no answer') + ') — press Show (last reading) to see what is saved now.' }; }
+    var refreshed = null;
+    if (res.wrote || res.linked || unknown) { refreshed = await refreshKeep(); }
     setBusy('');
-    var needNote = !res.ok && /type (a note|what is wrong) in the box/.test(res.error || '');
-    putCardMsg(inv.key, res.ok ? { kind: 'ok', text: 'Saved — ' + res.message + ' (' + res.wrote + ' line' + (res.wrote === 1 ? '' : 's') + ').' } : { kind: 'err', text: res.error || 'Not saved.', needNote: needNote });
+    var refreshFailed = !!(refreshed && !refreshed.ok);
+    var n = res.wrote || 0; var lines = n + ' line' + (n === 1 ? '' : 's');
+    var m;
+    if (res.ok) { m = { kind: refreshFailed ? 'warn' : 'ok', text: 'Saved — ' + res.message + ' (' + lines + ').' + (refreshFailed ? ' The list could not be refreshed — press Show (last reading) to see it.' : '') }; }
+    else if (unknown) { m = { kind: 'warn', text: res.error }; }
+    else if (n > 0) { m = { kind: 'warn', text: 'Partly saved: ' + lines + ' saved; ' + String(res.error || '').replace(/^Some lines were not saved — /, 'not saved: ') + ' — press Show (last reading), then decide the rest.' }; }
+    else { m = { kind: 'err', text: res.error || 'Not saved.', needNote: /type (a note|what is wrong) in the box/.test(res.error || '') }; }
+    m.fp = fpk;
+    putCardMsg(inv.key, m);
+    setLastAction({ kind: m.kind, text: label + ': ' + m.text, at: new Date().toISOString() });
     if (res.ok) { say(props.toast, res.message, 'success'); } else { say(props.toast, res.error, 'error'); }
   }
 
@@ -506,6 +530,7 @@ export default function WeightCheckInvoices(props) {
     {/* v55.83-ZL: one wire — its bills only, with the overall tally */}
     {data && data.ok && data.wire ? <WireSummaryBar wire={data.wire} invoices={invoices} tol={tol} /> : null}
 
+    {lastAction ? <div role="status" data-testid="last-action" style={{ marginTop: 10, padding: '6px 10px', borderRadius: 2, fontSize: 12, fontWeight: 700, background: lastAction.kind === 'ok' ? '#f0fdf4' : (lastAction.kind === 'warn' ? '#fffbeb' : '#fef2f2'), color: lastAction.kind === 'ok' ? '#14532d' : (lastAction.kind === 'warn' ? '#92400e' : '#991b1b'), border: '1px solid ' + (lastAction.kind === 'ok' ? '#22c55e' : (lastAction.kind === 'warn' ? '#f59e0b' : '#ef4444')) }}>{'Last action (' + when(lastAction.at) + '): ' + lastAction.text}</div> : null}
     {/* one card per invoice — CLOSED by default (v55.83-ZL); click the bar to open its rows */}
     {shown.map(function (inv) {
       var head = inv.bills.map(function (b) { return (b.vendor || '') + ' · Bill ' + (b.bill_number || '') + ' · ' + (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ');
@@ -552,11 +577,11 @@ export default function WeightCheckInvoices(props) {
 
         {gWarn && canDecide && (perms.validate || perms.accept) && !inv.approved && !inv.disputed ? <div role="note" style={{ fontSize: 12, marginTop: 10, padding: '6px 10px', borderRadius: 2, background: '#fffbeb', color: '#92400e', border: '1px solid #f59e0b', fontWeight: 700 }}>{gWarn}</div> : null}
         {canDecide && (perms.validate || perms.accept) && !inv.approved && !inv.disputed ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: '1px solid ' + LINE }}>
-          <input value={reasons[inv.key] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[inv.key] = e.target.value; setReasons(o); }} placeholder={inv.pass ? 'Note (optional)' : 'Note — REQUIRED to approve this ' + cardResult(inv).label + ' (a few words why), or to dispute'} aria-label="Note for Approved or Disputed" className="nt-light" style={Object.assign({}, FIELD, { flex: '1 1 260px' }, cardMsg[inv.key] && cardMsg[inv.key].needNote && String(reasons[inv.key] || '').trim().length < 5 ? { border: '2px solid #ef4444' } : {})} />
+          <input value={reasons[inv.key] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[inv.key] = e.target.value; setReasons(o); }} placeholder={inv.pass ? 'Note (optional)' : 'Note — REQUIRED to approve this ' + cardResult(inv).label + ' (a few words why), or to dispute'} aria-label="Note for Approved or Disputed" className="nt-light" style={Object.assign({}, FIELD, { flex: '1 1 260px' }, cardMsgFor(cardMsg[inv.key], inv) && cardMsg[inv.key].needNote && String(reasons[inv.key] || '').trim().length < 5 ? { border: '2px solid #ef4444' } : {})} />
           <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'approve'); }} style={Object.assign(btn(GREEN, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>{busy === inv.key ? 'Saving…' : 'Approved'}</button>
           <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'dispute'); }} style={Object.assign(btn(RED, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Disputed</button>
         </div> : null}
-        <CardMessage msg={cardMsg[inv.key] && cardMsg[inv.key].kind !== 'busy' ? cardMsg[inv.key] : null} />
+        <CardMessage msg={cardMsgFor(cardMsg[inv.key], inv)} />
         {inv.approved || inv.disputed ? <div style={{ fontSize: 12, marginTop: 8, color: SUB }}>{inv.rows.filter(function (r) { return r.decision; }).slice(0, 1).map(function (r) { return 'Decided by ' + r.decision.actor_name + ' · ' + when(r.decision.at) + ' — “' + r.decision.reason + '”'; }).join('')}</div> : null}
       </div></div>;
     })}
