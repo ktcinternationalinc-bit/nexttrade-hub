@@ -1,6 +1,6 @@
 {
-  "updated": "2026-11-24",
-  "updatedBy": "release-governance session",
+  "updated": "2026-11-27",
+  "updatedBy": "order-research session (warehouse Order Queue)",
   "intro": "What's live on production, what's waiting on fix staging, and what each change still needs before it moves. Production currently holds the baseline plus the Hub-embed change only. This file is hand-editable — edit it directly, or the deploy/rollback scripts append to it. The Change Schedule screen in the Hub reads this file.",
   "legend": [
     {
@@ -146,6 +146,52 @@
         "kind": "behavioral",
         "result": "PASS",
         "summary": "Staging MariaDB tests passed for the two migrations, USA/Canada availability, picked weight, saved PDF lines, and releasing one reservation or an explicitly selected whole order."
+      }
+    },
+    {
+      "id": "wh-oq-rolls",
+      "title": "Order Queue and stock cards: Rolls / Not rolls (boxes, bales), version history",
+      "repo": "nextrade_WAREHOUSE",
+      "build": "b5bdd6356cc608b438a9f6fe34b26ff489d1f4d6",
+      "date": "2026-11-26",
+      "where": "staging",
+      "status": "queued",
+      "needsCodex": true,
+      "needsMax": true,
+      "dataChange": true,
+      "routesChanged": false,
+      "configChanged": false,
+      "dependsOn": [
+        "wh-order-queue"
+      ],
+      "meta": "26 Nov · Max: \"install on staging now\" · fix staging build 2026.11.26-e (b5bdd63); staging has since moved to 2026.11.26-f (Canada cards 0bb6c5c, built on it) · production: not installed",
+      "desc": "The Order Queue shows Rolls and Not rolls (boxes, bales) separately and reserves them separately; reservations made before the split stay \"not yet split\" (held in both) until a person splits them, and a split must keep the reserved weight. The Dashboard and Inventory Summary cards show the same split and open to the grades inside each card. The warehouse footer shows the installed build and its version history.",
+      "files": "26 files, each listed with its SHA-256 in nextrade-app/build-manifest.php of b5bdd63 (Order Queue service, controller, model, screen, picking PDF, CGT grade form, Dashboard / Inventory controllers and card views, StockBlocks service, build-info.php, tools/verify-build.php, three migrations)",
+      "backup": "Staging, before each install: ~/code-backups/oq-rolls-20261126, oq-rolls-rev2-20261126, oq-rolls-part2-20261126, oq-rolls-part3-20261126, oq-rolls-rev3-20261126; tables zz_oqrolls_c_g_t_grades_before_20261126, zz_oqrolls_order_queues_before_20261126, zz_oqrolls2_order_queues_before_20261126. Production: none yet (nothing installed there).",
+      "rollback": "Among the builds of this change (2026.11.26-b and later): copy that build's files back from its backup folder, php artisan view:clear, php tools/verify-build.php, add a version saying so. Back to 2026.11.26-a: not allowed (it reads \"not yet split\" reservations as rolls). Below 2026.11.26-a (the pre-split Order Queue): a data step must come first, because the old code knows one reservation per order + colour + grade (fold the open lines of each order + colour + grade into one, kept as history, and mark them not yet split). That step is a PROPOSAL only: it must first be proven on a disposable restored copy with the old code (read, edit and pick, including partly picked and mixed holds), and a real run needs its own approval, a durable backup and a freeze of allocation and scanning. See CHANGE-MANAGEMENT.md section G in nextrade_WAREHOUSE. The added columns stay.",
+      "releaseSteps": [
+        "Production preflight (read-only): no duplicate open reservation rows by order / colour / grade; the production schema of order_queues and c_g_t_grades.",
+        "Signed-in walk on fix staging (reserve rolls, reserve boxes, split an older reservation, release one line, release all, download the picking PDF; open the Dashboard and Inventory Summary cards and their drill-down; date and past-year filters; a yards case with real stock) - not done yet.",
+        "Codex production review of the exact build and its manifest; Max's named go here.",
+        "Back up the production order_queues and c_g_t_grades tables and the replaced files; run the three migrations (2026_11_25_000001, 2026_11_25_000002, 2026_11_26_000001), then move the files; php artisan view:clear.",
+        "Write production's OWN build-info.php version and manifest (never copied from staging), run php tools/verify-build.php there, and record the result here.",
+        "Older reservations on production stay \"not yet split\" until a person splits each one with the order's real contents; the 18 splits made on fix staging on 26 Nov are not production data."
+      ],
+      "environments": {
+        "staging": {
+          "buildLabel": "2026.11.26-e",
+          "sha": "b5bdd6356cc608b438a9f6fe34b26ff489d1f4d6",
+          "installed": "2026-11-26",
+          "verification": "php tools/verify-build.php: ALL 26 FILES MATCH build 2026.11.26-e (26 Nov). Staging now runs 2026.11.26-f (0bb6c5c, built on this): ALL 27 FILES MATCH build 2026.11.26-f.",
+          "review": "Codex staging sign-off 26 Nov (Order Queue b5bdd63; stock cards 3a40bbe / d99c072; picking PDF sample)"
+        },
+        "production": {
+          "buildLabel": null,
+          "sha": null,
+          "installed": null,
+          "verification": null,
+          "review": "not requested; signed-in walk and PDF download still pending"
+        }
       }
     },
     {
