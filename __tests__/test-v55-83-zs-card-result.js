@@ -22,8 +22,9 @@ var cases = [
   ['a plain pass', inv([prod('A', 'matched')]), 'PASS'],
   ['a difference outside the tolerance', inv([prod('A', 'discrepancy')]), 'FAIL'],
   ['billed more than scanned', inv([prod('A', 'discrepancy', { reasons: ['billed MORE than was scanned'] })]), 'FAIL'],
-  ['an approved pass', inv([prod('A', 'matched', { state: 'validated' })]), 'PASS + APPROVED'],
-  ['an ACCEPTED difference (never a pass)', inv([prod('A', 'discrepancy', { state: 'accepted' })]), 'FAIL + ACCEPTED'],
+  // v55.83-ZU (Max 27 Nov: "if all approved the entire grouping should get a passing status … PASSING - REVIEWED")
+  ['an approved pass (every line reviewed)', inv([prod('A', 'matched', { state: 'validated' })]), 'PASS — REVIEWED'],
+  ['an ACCEPTED difference (every line reviewed; the difference stays tagged)', inv([prod('A', 'discrepancy', { state: 'accepted' })]), 'PASS — REVIEWED + DIFFERENCE ACCEPTED'],
   ['a disputed difference', inv([prod('A', 'discrepancy', { state: 'issue_open' })]), 'FAIL + DISPUTED'],
   ['figures changed after approval', inv([prod('A', 'matched', { state: 'needs_revalidation', needs_decision: true })]), 'PASS + RECHECK'],
   ['a draft warehouse receipt', inv([prod('A', 'incomplete', { provisional: true })]), 'REVIEW + PROVISIONAL'],
@@ -34,7 +35,7 @@ var cases = [
 cases.forEach(function (c) { check(c[0] + ' → "' + c[2] + '"', show(c[1]) === c[2], show(c[1])); });
 check('REVIEW is amber and says why (e.g. no receipt, a draft); FAIL is red; the second tags are outlined, never a solid result block', INV.cardResult(cases[8][1]).bg === '#f59e0b' && /no warehouse receipt/.test(INV.cardResult(cases[8][1]).why) && /draft/.test(INV.cardResult(cases[7][1]).why) && INV.cardResult(cases[1][1]).bg === '#ef4444');
 var t = INV.wireTally([b14657, cases[1][1], cases[4][1], cases[8][1], cases[3][1]]);
-check('the wire tally counts by RESULT: 5 bills → 2 PASS (14657 + approved) · 2 FAIL (fail + accepted) · 1 REVIEW', t.bills === 5 && t.pass === 2 && t.fail === 2 && t.review === 1, t);
+check('the wire tally counts by RESULT (ZU): 5 bills → 3 PASS (14657 + approved + reviewed-and-accepted) · 1 FAIL · 1 REVIEW', t.bills === 5 && t.pass === 3 && t.fail === 1 && t.review === 1, t);
 var src = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
 check('SCREEN: the bar shows the RESULT block first, then each state as a smaller outlined tag beside it', /var cs = cardResult\(inv\); var tags = cardTags\(inv\);/.test(src) && /<span style=\{zBlock\(cs\.bg\)\}>\{cs\.label\}<\/span>\{tags\.map\(function \(tg\) \{ return <span key=\{tg\.key\} style=\{zTag\(tg\.color\)\}>\{tg\.label\}<\/span>; \}\)\}/.test(src) && /function zTag\(color\) \{ return \{[^}]*background: '#000000', color: color, border: '1px solid ' \+ color/.test(src));
 check('SCREEN: the wire bar counts PASS · FAIL · REVIEW', /t\.pass \+ ' PASS'/.test(src) && /t\.fail \+ ' FAIL'/.test(src) && /t\.review \+ ' REVIEW'/.test(src) && !/NOT CHECKED'\}<\/span>/.test(src));
@@ -53,7 +54,7 @@ var shared = inv([prod('A', 'matched', { preview: true, bill_ids: ['b1', 'b2'], 
 var hSh = wireHtml([shared], ['b1']); var barSh = barHtml(shared, ['b1']);
 check('RENDERED: a receipt-shared group (one bill on this wire, one not), preview → counts ONE bill: "1 PASS", "1 to CONFIRM RECEIPT"; its card marks the other bill "(not on this wire)"', /1 bill on this wire/.test(hSh) && /1 PASS 0 FAIL 0 REVIEW/.test(hSh) && /1 to CONFIRM RECEIPT/.test(hSh) && /Bill 14700 \(not on this wire\)/.test(barSh) && /^ ?PASS CONFIRM RECEIPT /.test(barSh), [hSh, barSh]);
 var hDone = wireHtml([inv([prod('A', 'matched', { state: 'validated' })]), inv([prod('B', 'discrepancy', { state: 'accepted', bill_ids: ['b3'], bills: [{ id: 'b3', vendor: 'NexPac Corporation', bill_number: '14800' }] })])], ['b1', 'b3']);
-check('RENDERED: every bill compared, decided and visible → "nothing waiting — every bill on this wire was compared and decided" and "decided: 1 approved · 1 accepted (a difference)"; the accepted one is a FAIL', /1 PASS 1 FAIL 0 REVIEW/.test(hDone) && /nothing waiting — every bill on this wire was compared and decided/.test(hDone) && /decided: 1 approved · 1 accepted \(a difference\)/.test(hDone), hDone);
+check('RENDERED: every bill compared, decided and visible → "nothing waiting — every bill on this wire was compared and decided" and "decided: 1 approved · 1 accepted (a difference)"; both reviewed bills PASS (ZU)', /2 PASS 0 FAIL 0 REVIEW/.test(hDone) && /nothing waiting — every bill on this wire was compared and decided/.test(hDone) && /decided: 1 approved · 1 accepted \(a difference\)/.test(hDone), hDone);
 // ---- Codex 27 Nov (ZS rev3): never "nothing waiting" while work is open, not compared, or not visible
 function notFinal(h) { return !/nothing waiting/.test(h); }
 var hUnrev = wireHtml([inv([prod('A', 'matched', { state: 'unreviewed', needs_decision: true, outstanding: true })])], ['b1']);

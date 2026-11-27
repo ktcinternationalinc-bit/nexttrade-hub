@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZU',
+    date: '2026-11-27',
+    title: 'Warehouse check: a fully reviewed bill shows PASS — REVIEWED',
+    items: [
+      { text: 'When every line of a bill has been reviewed — approved, or a difference accepted (like Fabrics on bill 14746) — the bill now reads **PASS — REVIEWED**. A bill that simply passes on the first run still reads **PASS**.' },
+      { text: 'If a difference was accepted, a small **DIFFERENCE ACCEPTED** tag stays next to PASS — REVIEWED, and the line itself keeps its own FAIL with “discrepancy accepted”, so nothing is hidden.' },
+      { text: 'At the **bottom of the opened bill card** there is now a **Review history**: who reviewed it, the date and time, how many lines were validated or accepted, and the note. If the figures changed after a review it reads **Previously reviewed by …** in amber, so you know to decide again.' },
+      { text: 'Fixed: after approving, a bill could keep showing Approved; pressing it again re-sent lines that were already decided and every one came back “already decided”. Approved now only sends lines that are still open, and a fully decided bill shows no buttons.' },
+      { superAdminOnly: true, text: 'Technical: screen only. openForDecision(r) = needs_decision && state not validated / accepted / resolved (the route marks needs_decision by outcome, also after a decision); used by groupInvoices (approved), runInvoiceDecision (todo), canDecide and wireTally. cardResult: inv.approved → PASS — REVIEWED (Max overrides the ZS FAIL + ACCEPTED rule); cardTags: DIFFERENCE ACCEPTED only; wire tally counts it as PASS. No route, calculation or SQL change.' }
+    ]
+  },
+  {
     version: 'v55.83-ZT',
     date: '2026-11-27',
     title: 'Warehouse check: Approved always answers on the card',

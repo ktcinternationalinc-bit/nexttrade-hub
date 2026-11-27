@@ -14,6 +14,9 @@ var INK = '#0f172a'; var SUB = '#475569'; var MUTED = '#64748b'; var LINE = '#e2
 var GREEN = '#15803d'; var RED = '#b91c1c'; var AMBER = '#b45309'; var BLUE = '#1d4ed8';
 var PASS_OUTCOMES = ['matched', 'equal'];
 var DONE_STATES = ['validated', 'accepted', 'resolved'];
+// v55.83-ZU (Max 27 Nov, bill 14746: all 5 lines were already decided, the card still offered Approved and re-sent them): a line is
+// still OPEN for a decision only when the server allows one AND it is not already validated / accepted / resolved
+export function openForDecision(r) { return !!(r && r.needs_decision) && DONE_STATES.indexOf(r.state) < 0; }
 // explicit colours: the Hub's dark theme must never make these boxes unreadable (Max 25 Nov "you can't see the fonts")
 var FIELD = { background: '#ffffff', color: INK, border: '1px solid #cbd5e1', borderRadius: 8, padding: '6px 10px', fontSize: 13, lineHeight: '18px' };
 var LABEL = { display: 'block', fontSize: 11, fontWeight: 700, color: SUB, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 };
@@ -46,8 +49,30 @@ export function cardLine(inv) {
 // v55.83-ZS (Max 27 Nov: "if something is full passing then there should be a status of Pass or Fail or Review in the top layer near
 // confirm receipt"): the MAIN block is always what the comparison says — PASS, FAIL, or REVIEW (anything not clearly pass or fail).
 // Confirm receipt / provisional / approved / accepted / disputed / recheck are a SECOND tag beside it (cardTags), never the result.
+// v55.83-ZU (Max 27 Nov: "a status of whether it was previously validated should be inside that card on the bottom, and by who and what
+// date"): one line per review (same person, same note, same minute), current or — when the figures changed since — previous
+export function reviewSummary(inv) {
+  var groups = {}; var order = [];
+  ((inv && inv.rows) || []).forEach(function (r) {
+    var d = r.decision; if (!d || !d.kind) { return; }
+    var stale = r.state === 'needs_revalidation' || r.state === 'reopened';
+    var k = [d.actor_name || 'someone', String(d.at || '').substring(0, 16), d.reason || '', stale ? 'stale' : 'now'].join('|');
+    if (!groups[k]) { groups[k] = { who: d.actor_name || 'someone', at: d.at || null, note: d.reason || '', stale: stale, validated: 0, accepted: 0, issue: 0 }; order.push(k); }
+    var g = groups[k]; if (d.kind === 'validate_match') { g.validated++; } else if (d.kind === 'accept_discrepancy') { g.accepted++; } else if (d.kind === 'report_issue') { g.issue++; }
+  });
+  return order.map(function (k) {
+    var g = groups[k]; var what = [];
+    if (g.validated) { what.push(g.validated + ' line' + (g.validated === 1 ? '' : 's') + ' validated'); }
+    if (g.accepted) { what.push(g.accepted + ' difference' + (g.accepted === 1 ? '' : 's') + ' accepted'); }
+    if (g.issue) { what.push(g.issue + ' issue' + (g.issue === 1 ? '' : 's') + ' reported'); }
+    return { stale: g.stale, who: g.who, at: g.at, note: g.note, text: (g.stale ? 'Previously reviewed by ' : 'Reviewed by ') + g.who + ' · ' + when(g.at) + ' · ' + what.join(', ') + (g.note ? ' · note: “' + g.note + '”' : '') + (g.stale ? ' — the figures changed since; decide again' : '') };
+  });
+}
 export function cardResult(inv) {
   var prods = (inv && inv.products) || [];
+  // Max 27 Nov: "if all approved the entire grouping should get a passing status … if it was reviewed it would say PASSING - REVIEWED,
+  // different from something just Passing on the first run". The lines inside keep their own results; an accepted difference is tagged.
+  if (inv && inv.approved) { var acc = (inv.rows || []).filter(function (r) { return r.state === 'accepted'; }).length; return { key: 'pass', reviewed: true, label: 'PASS — REVIEWED', bg: Z_GREEN, why: acc ? 'reviewed: a difference on ' + acc + ' line' + (acc === 1 ? ' was' : 's was') + ' checked and accepted' : 'every line checked and approved' }; }
   if (prods.some(function (r) { return r.outcome === 'discrepancy' || r.outcome === 'product_missing'; })) { return { key: 'fail', label: 'FAIL', bg: Z_RED, why: ((inv && inv.why) || [])[0] || 'billed and warehouse do not agree within the tolerance' }; }
   if (inv && inv.pass) { return { key: 'pass', label: 'PASS', bg: Z_GREEN, why: null }; }
   var why = ((inv && inv.why) || [])[0] || null;
@@ -58,7 +83,8 @@ export function cardTags(inv) {
   var rows = (inv && inv.rows) || []; var tags = [];
   if (inv.disputed) { tags.push({ key: 'disputed', label: 'DISPUTED', color: Z_RED, why: 'an issue was reported' }); }
   if (rows.some(function (r) { return r.state === 'needs_revalidation'; })) { tags.push({ key: 'recheck', label: 'RECHECK', color: Z_AMBER, why: 'the figures changed after it was decided — decide again' }); }
-  if (inv.approved) { tags.push(rows.some(function (r) { return r.state === 'accepted'; }) ? { key: 'accepted', label: 'ACCEPTED', color: Z_AMBER, why: 'a difference was accepted (it did not pass)' } : { key: 'approved', label: 'APPROVED', color: Z_GREEN, why: 'checked and approved' }); }
+  // v55.83-ZU: the result block already says PASS — REVIEWED; only an accepted difference gets its own tag
+  if (inv.approved && rows.some(function (r) { return r.state === 'accepted'; })) { tags.push({ key: 'accepted', label: 'DIFFERENCE ACCEPTED', color: Z_AMBER, why: 'a difference was accepted after review' }); }
   if (inv.previewed) { tags.push({ key: 'confirm', label: 'CONFIRM RECEIPT', color: Z_BLUE, why: 'matched by reference — a person confirms the warehouse receipt before it can be approved' }); }
   if (rows.some(function (r) { return r.provisional || r.outcome === 'incomplete'; })) { tags.push({ key: 'provisional', label: 'PROVISIONAL', color: Z_AMBER, why: 'the warehouse receipt is still a draft' }); }
   return tags;
@@ -72,8 +98,9 @@ export function wireTally(invs, wireBillIds) {
     t.bills += n; t[k] += n;
     var tagsW = cardTags(inv); var hasWaitTag = false;
     tagsW.forEach(function (tg) { if (t.waiting[tg.key] != null) { t.waiting[tg.key] += n; hasWaitTag = true; } else if (t.decided[tg.key] != null) { t.decided[tg.key] += n; } });
+    if (inv.approved && !tagsW.some(function (tg) { return tg.key === 'accepted'; })) { t.decided.approved += n; }
     // Codex 27 Nov (ZS rev3): a bill not yet approved / disputed (unreviewed, reopened, no receipt, …) is still open work — never "final"
-    if (!hasWaitTag && (inv.rows || []).some(function (r) { return r.outstanding === true || r.needs_decision === true; })) { t.to_decide += n; }
+    if (!hasWaitTag && (inv.rows || []).some(function (r) { return openForDecision(r) || (r.outstanding === true && DONE_STATES.indexOf(r.state) < 0); })) { t.to_decide += n; }
   });
   return t;
 }
@@ -180,7 +207,7 @@ export function groupInvoices(rows) {
     // the "confirm the receipt" line is not a REVIEW reason when its comparison is already shown as a preview
     var others = g.rows.filter(function (r) { return r.kind !== 'product' && r.kind !== 'line' && r.outcome !== 'warehouse_only' && !(previewed && r === linkRow); });
     var pass = products.length > 0 && others.length === 0 && products.every(function (r) { return PASS_OUTCOMES.indexOf(r.outcome) >= 0; });
-    var decidable = g.rows.filter(function (r) { return r.needs_decision; });
+    var decidable = g.rows.filter(openForDecision);
     var approved = !previewed && decidable.length === 0 && g.rows.some(function (r) { return DONE_STATES.indexOf(r.state) >= 0; }) && !g.rows.some(function (r) { return r.state === 'issue_open'; });
     var disputed = g.rows.some(function (r) { return r.state === 'issue_open'; });
     var why = [];
@@ -331,7 +358,7 @@ export async function runInvoiceDecision(o) {
     problem = reasonProblem(inv, mode, reason); if (problem) { return { ok: false, stopped: true, linked: true, error: problem, wrote: 0, inv: inv }; }
   }
   if (mode === 'approve' && inv.pass && reason.length < 5) { reason = autoReason(inv); }
-  var todo = inv.rows.filter(function (r) { return r.needs_decision; });
+  var todo = inv.rows.filter(openForDecision); // never re-send a line that is already decided
   if (!todo.length) { return { ok: false, error: 'Nothing left to decide on this invoice.', wrote: 0, linked: !!o.inv.previewed }; }
   var blocked = todo.filter(function (r) { var a = r.allowed || []; return mode === 'dispute' ? a.indexOf('report_issue') < 0 : (a.indexOf('validate_match') < 0 && a.indexOf('accept_discrepancy') < 0); });
   if (blocked.length) { return { ok: false, error: 'Not possible yet: ' + blocked.map(function (r) { return r.product_label || r.outcome_words || r.outcome; }).join(', ') + ' — see the note on the card.', wrote: 0, linked: !!o.inv.previewed }; }
@@ -579,10 +606,10 @@ export default function WeightCheckInvoices(props) {
     {/* one card per invoice — CLOSED by default (v55.83-ZL); click the bar to open its rows */}
     {shown.map(function (inv) {
       var head = inv.bills.map(function (b) { return (b.vendor || '') + ' · Bill ' + (b.bill_number || '') + ' · ' + (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ');
-      var badge = inv.approved ? ['APPROVED', GREEN, '#dcfce7'] : inv.disputed ? ['DISPUTED', RED, '#fee2e2'] : inv.pass ? ['PASS', GREEN, '#dcfce7'] : (cardResult(inv).key === 'fail' ? ['FAIL', RED, '#fee2e2'] : ['REVIEW', AMBER, '#fffbeb']); // v55.83-ZT: same result word as the bar
+      var badge = inv.approved ? ['PASS — REVIEWED', GREEN, '#dcfce7'] : inv.disputed ? ['DISPUTED', RED, '#fee2e2'] : inv.pass ? ['PASS', GREEN, '#dcfce7'] : (cardResult(inv).key === 'fail' ? ['FAIL', RED, '#fee2e2'] : ['REVIEW', AMBER, '#fffbeb']); // v55.83-ZT: same result word as the bar
       var badgeText = badge[0] + (inv.shared ? ' · group of ' + inv.bills.length + ' invoices' : '');
       var receipts = []; inv.rows.forEach(function (r) { (r.receipts || []).forEach(function (x) { var t = 'Receipt ' + (x.reference_number || x.id) + (x.warehouse ? ' · ' + x.warehouse : '') + (x.receipt_date ? ' · received ' + String(x.receipt_date).substring(0, 10) : ''); if (receipts.indexOf(t) < 0) { receipts.push(t); } }); });
-      var canDecide = inv.previewed || inv.rows.some(function (r) { return r.needs_decision; });
+      var canDecide = inv.previewed || inv.rows.some(openForDecision);
       var isOpen = !!openCards[inv.key] || !!(mapNotice && mapNotice.key === inv.key);
       var wireIds = data && data.wire ? (data.wire.bill_ids || []) : null; var outside = outsideWire(inv, wireIds); var gWarn = groupActionWarning(inv, wireIds);
       var bar = <BillCardBar inv={inv} wireIds={wireIds} isOpen={isOpen} onToggle={function () { toggleCard(inv.key); }} />;
@@ -627,7 +654,7 @@ export default function WeightCheckInvoices(props) {
           <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'dispute'); }} style={Object.assign(btn(RED, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Disputed</button>
         </div> : null}
         <CardMessage msg={cardMsgFor(cardMsg[inv.key], inv)} />
-        {inv.approved || inv.disputed ? <div style={{ fontSize: 12, marginTop: 8, color: SUB }}>{inv.rows.filter(function (r) { return r.decision; }).slice(0, 1).map(function (r) { return 'Decided by ' + r.decision.actor_name + ' · ' + when(r.decision.at) + ' — “' + r.decision.reason + '”'; }).join('')}</div> : null}
+        {reviewSummary(inv).length ? <div data-testid="review-history" style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid ' + LINE }}><span style={LABEL}>Review history</span>{reviewSummary(inv).map(function (h, i) { return <div key={i} style={{ fontSize: 12, fontWeight: 600, color: h.stale ? AMBER : GREEN, marginTop: 2 }}>{(h.stale ? '↺ ' : '✓ ') + h.text}</div>; })}</div> : null}
       </div></div>;
     })}
   </div>;
