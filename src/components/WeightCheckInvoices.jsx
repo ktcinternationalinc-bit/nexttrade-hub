@@ -17,6 +17,11 @@ var DONE_STATES = ['validated', 'accepted', 'resolved'];
 // v55.83-ZU (Max 27 Nov, bill 14746: all 5 lines were already decided, the card still offered Approved and re-sent them): a line is
 // still OPEN for a decision only when the server allows one AND it is not already validated / accepted / resolved
 export function openForDecision(r) { return !!(r && r.needs_decision) && DONE_STATES.indexOf(r.state) < 0; }
+// v55.83-ZU rev2 (Codex 12:36 ZU-01): FULLY reviewed = EVERY review-relevant row (all but information-only warehouse_only rows) is done
+// (validated / accepted / resolved) and no issue is open — a blocked, limited, not-checked, recheck, reopened or untouched row never is.
+// A previously reviewed line can never certify another line that is still blocked.
+export function reviewRelevant(r) { return !!r && r.outcome !== 'warehouse_only' && r.kind !== 'warehouse_only'; }
+export function fullyReviewed(rows) { var rr = (rows || []).filter(reviewRelevant); return rr.length > 0 && rr.every(function (r) { return DONE_STATES.indexOf(r.state) >= 0; }) && !(rows || []).some(function (r) { return r.state === 'issue_open'; }); }
 // explicit colours: the Hub's dark theme must never make these boxes unreadable (Max 25 Nov "you can't see the fonts")
 var FIELD = { background: '#ffffff', color: INK, border: '1px solid #cbd5e1', borderRadius: 8, padding: '6px 10px', fontSize: 13, lineHeight: '18px' };
 var LABEL = { display: 'block', fontSize: 11, fontWeight: 700, color: SUB, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 };
@@ -47,26 +52,39 @@ export function cardLine(inv) {
 }
 // Codex 26 Nov (ZL hold): with a wire, count ONLY the wire's own bills (a related bill sharing the receipt is context, not counted)
 // v55.83-ZS (Max 27 Nov: "if something is full passing then there should be a status of Pass or Fail or Review in the top layer near
-// confirm receipt"): the MAIN block is always what the comparison says — PASS, FAIL, or REVIEW (anything not clearly pass or fail).
-// Confirm receipt / provisional / approved / accepted / disputed / recheck are a SECOND tag beside it (cardTags), never the result.
-// v55.83-ZU (Max 27 Nov: "a status of whether it was previously validated should be inside that card on the bottom, and by who and what
-// date"): one line per review (same person, same note, same minute), current or — when the figures changed since — previous
-export function reviewSummary(inv) {
-  var groups = {}; var order = [];
-  ((inv && inv.rows) || []).forEach(function (r) {
-    var d = r.decision; if (!d || !d.kind) { return; }
-    var stale = r.state === 'needs_revalidation' || r.state === 'reopened';
-    var k = [d.actor_name || 'someone', String(d.at || '').substring(0, 16), d.reason || '', stale ? 'stale' : 'now'].join('|');
-    if (!groups[k]) { groups[k] = { who: d.actor_name || 'someone', at: d.at || null, note: d.reason || '', stale: stale, validated: 0, accepted: 0, issue: 0 }; order.push(k); }
-    var g = groups[k]; if (d.kind === 'validate_match') { g.validated++; } else if (d.kind === 'accept_discrepancy') { g.accepted++; } else if (d.kind === 'report_issue') { g.issue++; }
+// confirm receipt"): the MAIN block is what the comparison says — PASS, FAIL, or REVIEW (anything not clearly pass or fail) — EXCEPT
+// (v55.83-ZU, Max's revised rule 27 Nov) a FULLY reviewed bill (fullyReviewed: every relevant line validated / accepted / resolved, no
+// open issue) reads PASS — REVIEWED, apart from a plain first-run PASS. Confirm receipt / provisional / accepted / disputed / recheck are tags.
+// v55.83-ZU rev2 — the REVIEW RECORD at the bottom of the opened card (Max 27 Nov: "a status of whether it was previously validated should be
+// inside that card on the bottom, and by who and what date"). Read from the route's FULL per-line history (Codex 12:36 ZU-02): every
+// decision kind is named for what it is (validated / difference accepted / issue reported / issue resolved / reopened, with its reason).
+// Grouping by person (actor id) + minute + note + kind is PRESENTATION only, never proof of one event; each line keeps its own exact
+// decision under the product (lineApproval). 'The figures changed' is said only for a real recheck (needs_revalidation), never a reopen.
+var KIND_WORDS = { validate_match: ['line validated', 'lines validated'], accept_discrepancy: ['difference accepted', 'differences accepted'], report_issue: ['issue reported', 'issues reported'], resolve: ['issue resolved', 'issues resolved'], reopen: ['line reopened', 'lines reopened'] };
+var KIND_ORDER = ['validate_match', 'accept_discrepancy', 'report_issue', 'resolve', 'reopen'];
+export function reviewRecord(inv) {
+  var rows = ((inv && inv.rows) || []).filter(reviewRelevant); var all = []; var idx = {}; var out = [];
+  rows.forEach(function (r) { (r.history && r.history.length ? r.history : (r.decision ? [r.decision] : [])).forEach(function (d) { if (d && KIND_WORDS[d.kind]) { all.push(d); } }); });
+  all.sort(function (x, y) { return String(x.at || '').localeCompare(String(y.at || '')) || String(x.id || '').localeCompare(String(y.id || '')); });
+  all.forEach(function (d) {
+    var fam = d.kind === 'validate_match' || d.kind === 'accept_discrepancy' ? 'pass' : d.kind;
+    var k = [d.actor || d.actor_name || 'someone', String(d.at || '').substring(0, 16), d.reason || '', fam].join('|');
+    if (!idx[k]) { idx[k] = { fam: fam, who: d.actor_name || 'someone', at: d.at || null, note: d.reason || '', n: {} }; out.push(idx[k]); }
+    idx[k].n[d.kind] = (idx[k].n[d.kind] || 0) + 1;
   });
-  return order.map(function (k) {
-    var g = groups[k]; var what = [];
-    if (g.validated) { what.push(g.validated + ' line' + (g.validated === 1 ? '' : 's') + ' validated'); }
-    if (g.accepted) { what.push(g.accepted + ' difference' + (g.accepted === 1 ? '' : 's') + ' accepted'); }
-    if (g.issue) { what.push(g.issue + ' issue' + (g.issue === 1 ? '' : 's') + ' reported'); }
-    return { stale: g.stale, who: g.who, at: g.at, note: g.note, text: (g.stale ? 'Previously reviewed by ' : 'Reviewed by ') + g.who + ' · ' + when(g.at) + ' · ' + what.join(', ') + (g.note ? ' · note: “' + g.note + '”' : '') + (g.stale ? ' — the figures changed since; decide again' : '') };
+  var entries = out.map(function (g) {
+    var what = KIND_ORDER.filter(function (kk) { return g.n[kk]; }).map(function (kk) { var c = g.n[kk]; return c + ' ' + KIND_WORDS[kk][c === 1 ? 0 : 1]; });
+    var head = g.fam === 'pass' ? 'Passed by approval — ' : g.fam === 'reopen' ? 'Reopened by ' : g.fam === 'resolve' ? 'Issue resolved by ' : 'Issue reported by ';
+    return { fam: g.fam, icon: g.fam === 'pass' || g.fam === 'resolve' ? '✓' : g.fam === 'reopen' ? '↺' : '⚑', who: g.who, at: g.at, text: head + g.who + ' · ' + when(g.at) + ' · ' + what.join(', ') + (g.note ? ' · ' + (g.fam === 'reopen' ? 'reason' : 'note') + ': “' + g.note + '”' : '') };
   });
+  return { entries: entries, changed: rows.filter(function (r) { return r.state === 'needs_revalidation'; }).length, fully: fullyReviewed((inv && inv.rows) || []) };
+}
+// one line under each product: who passed THIS line and when (Max: "some sort of note that passed by approval on … so they are not just all passing")
+export function lineApproval(r) {
+  if (!r || DONE_STATES.indexOf(r.state) < 0 || !r.decision) { return null; }
+  var d = r.decision;
+  var head = d.kind === 'accept_discrepancy' ? '✓ Difference accepted by approval — ' : d.kind === 'resolve' ? '✓ Issue resolved — ' : d.kind === 'validate_match' ? '✓ Passed by approval — ' : null;
+  return head ? head + (d.actor_name || 'someone') + ' · ' + when(d.at) + (d.reason ? ' · “' + d.reason + '”' : '') : null;
 }
 export function cardResult(inv) {
   var prods = (inv && inv.products) || [];
@@ -208,7 +226,7 @@ export function groupInvoices(rows) {
     var others = g.rows.filter(function (r) { return r.kind !== 'product' && r.kind !== 'line' && r.outcome !== 'warehouse_only' && !(previewed && r === linkRow); });
     var pass = products.length > 0 && others.length === 0 && products.every(function (r) { return PASS_OUTCOMES.indexOf(r.outcome) >= 0; });
     var decidable = g.rows.filter(openForDecision);
-    var approved = !previewed && decidable.length === 0 && g.rows.some(function (r) { return DONE_STATES.indexOf(r.state) >= 0; }) && !g.rows.some(function (r) { return r.state === 'issue_open'; });
+    var approved = !previewed && decidable.length === 0 && fullyReviewed(g.rows); // Codex 12:36 ZU-01: EVERY relevant row, not ANY done row
     var disputed = g.rows.some(function (r) { return r.state === 'issue_open'; });
     var why = [];
     g.rows.forEach(function (r) { if (previewed && r === linkRow) { return; } if (r.kind === 'warehouse_only' || r.outcome === 'warehouse_only') { return; } if ((r.kind !== 'product' && r.kind !== 'line') || PASS_OUTCOMES.indexOf(r.outcome) < 0) { (r.reasons && r.reasons.length ? r.reasons : [r.outcome_words || r.outcome]).forEach(function (w) { if (w && why.indexOf(w) < 0) { why.push(w); } }); } });
@@ -635,7 +653,7 @@ export default function WeightCheckInvoices(props) {
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{f.billed != null ? num(f.billed) + ' ' + (f.unit || '') : (bl.qty != null ? num(bl.qty) + ' ' + (bl.unit || '') : '—')}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{f.received != null ? num(f.received) + ' ' + (f.unit || '') : '—'}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: f.diff < 0 ? RED : INK, fontWeight: 700 }}>{f.diff != null ? (f.diff > 0 ? '+' : '') + num(f.diff) + (f.pct != null ? '  (' + (f.pct > 0 ? '+' : '') + f.pct + '%)' : '') : '—'}</td>
-              <td style={{ padding: '7px 8px' }}><span style={pill(ok ? GREEN : RED, ok ? '#f0fdf4' : '#fef2f2')}>{ok ? passWords(f.diff, ((f.checks || {})[f.basis === 'yd' ? 'yards' : 'weight'] || {}).tol || tol, f.basis) : (r.outcome === 'discrepancy' || r.outcome === 'product_missing' ? 'FAIL' : 'REVIEW')}</span><span style={{ fontSize: 12, color: MUTED, marginLeft: 6 }}>{r.outcome_words || r.outcome}{r.state && DONE_STATES.indexOf(r.state) >= 0 ? ' · ' + (r.state_words || r.state) : r.state === 'issue_open' ? ' · disputed' : ''}</span></td>
+              <td style={{ padding: '7px 8px' }}><span style={pill(ok ? GREEN : RED, ok ? '#f0fdf4' : '#fef2f2')}>{ok ? passWords(f.diff, ((f.checks || {})[f.basis === 'yd' ? 'yards' : 'weight'] || {}).tol || tol, f.basis) : (r.outcome === 'discrepancy' || r.outcome === 'product_missing' ? 'FAIL' : 'REVIEW')}</span><span style={{ fontSize: 12, color: MUTED, marginLeft: 6 }}>{r.outcome_words || r.outcome}{r.state && DONE_STATES.indexOf(r.state) >= 0 ? ' · ' + (r.state_words || r.state) : r.state === 'issue_open' ? ' · disputed' : ''}</span>{lineApproval(r) ? <div data-testid="line-approval" style={{ fontSize: 11, fontWeight: 600, color: GREEN, marginTop: 3 }}>{lineApproval(r)}</div> : null}</td>
             </tr>
             {f.checks ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{checksBlock(f.checks)}</td></tr> : null}
             {r.needs_mapping || changing[r.item_key] ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{MapForm({ row: r, inv: inv })}</td></tr> : null}
@@ -654,7 +672,7 @@ export default function WeightCheckInvoices(props) {
           <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'dispute'); }} style={Object.assign(btn(RED, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Disputed</button>
         </div> : null}
         <CardMessage msg={cardMsgFor(cardMsg[inv.key], inv)} />
-        {reviewSummary(inv).length ? <div data-testid="review-history" style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid ' + LINE }}><span style={LABEL}>Review history</span>{reviewSummary(inv).map(function (h, i) { return <div key={i} style={{ fontSize: 12, fontWeight: 600, color: h.stale ? AMBER : GREEN, marginTop: 2 }}>{(h.stale ? '↺ ' : '✓ ') + h.text}</div>; })}</div> : null}
+        {inv.rows.some(reviewRelevant) ? (function () { var q = reviewRecord(inv); return <div data-testid="review-record" style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid ' + LINE }}><span style={LABEL}>Review record</span>{q.entries.length ? q.entries.map(function (h, i) { return <div key={i} style={{ fontSize: 12, fontWeight: 600, color: h.fam === 'pass' || h.fam === 'resolve' ? GREEN : h.fam === 'reopen' ? AMBER : RED, marginTop: 2 }}>{h.icon + ' ' + h.text}</div>; }) : <div style={{ fontSize: 12, fontWeight: 600, color: AMBER, marginTop: 2 }}>Not reviewed yet</div>}{q.changed ? <div style={{ fontSize: 12, fontWeight: 700, color: AMBER, marginTop: 6 }}>{'↺ The figures changed after the last review on ' + q.changed + ' line' + (q.changed === 1 ? '' : 's') + ' — decide again'}</div> : null}</div>; })() : null}
       </div></div>;
     })}
   </div>;
