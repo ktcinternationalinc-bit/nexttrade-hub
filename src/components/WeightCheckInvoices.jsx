@@ -66,26 +66,33 @@ export function cardTags(inv) {
 // the wire tally counts by RESULT (PASS / FAIL / REVIEW) and only the wire's own bills (Codex 26 Nov)
 export function wireTally(invs, wireBillIds) {
   // Codex 27 Nov (ZS hold): the result counts alone hid what is still pending — count the workflow tags too (same bills)
-  var t = { bills: 0, pass: 0, fail: 0, review: 0, waiting: { confirm: 0, recheck: 0, disputed: 0, provisional: 0 }, decided: { approved: 0, accepted: 0 } };
+  var t = { bills: 0, pass: 0, fail: 0, review: 0, waiting: { confirm: 0, recheck: 0, disputed: 0, provisional: 0 }, decided: { approved: 0, accepted: 0 }, to_decide: 0 };
   (invs || []).forEach(function (inv) {
     var k = cardResult(inv).key; var bs = (inv.bills || []).filter(function (b) { return !wireBillIds || wireBillIds.indexOf(b.id) >= 0; }); var n = wireBillIds ? bs.length : (bs.length || 1); if (!n) { return; }
     t.bills += n; t[k] += n;
-    cardTags(inv).forEach(function (tg) { if (t.waiting[tg.key] != null) { t.waiting[tg.key] += n; } else if (t.decided[tg.key] != null) { t.decided[tg.key] += n; } });
+    var tagsW = cardTags(inv); var hasWaitTag = false;
+    tagsW.forEach(function (tg) { if (t.waiting[tg.key] != null) { t.waiting[tg.key] += n; hasWaitTag = true; } else if (t.decided[tg.key] != null) { t.decided[tg.key] += n; } });
+    // Codex 27 Nov (ZS rev3): a bill not yet approved / disputed (unreviewed, reopened, no receipt, …) is still open work — never "final"
+    if (!hasWaitTag && (inv.rows || []).some(function (r) { return r.outstanding === true || r.needs_decision === true; })) { t.to_decide += n; }
   });
   return t;
 }
 // the words of the wire summary (rendered by WireSummaryBar; tested as rendered text)
-export function wireWaitingWords(t) {
-  var w = t.waiting; var parts = [];
+export function wireWaitingWords(t, W) {
+  var w = t.waiting; var parts = []; W = W || {};
+  if (t.to_decide) { parts.push(t.to_decide + ' to DECIDE (approve or dispute)'); }
+  if (t.review) { parts.push(t.review + ' REVIEW — not compared yet'); }
   if (w.confirm) { parts.push(w.confirm + ' to CONFIRM RECEIPT'); }
   if (w.recheck) { parts.push(w.recheck + ' to RECHECK'); }
   if (w.disputed) { parts.push(w.disputed + ' DISPUTED'); }
   if (w.provisional) { parts.push(w.provisional + ' PROVISIONAL (draft receipt)'); }
+  if (W.hidden_count) { parts.push(W.hidden_count + ' outside your access (not counted)'); }
+  if ((W.out_of_scope || []).length || (W.no_lines || []).length) { parts.push(((W.out_of_scope || []).length + (W.no_lines || []).length) + ' not in the check (see below)'); }
   return parts;
 }
 // v55.83-ZL/ZS: the black wire bar — exported so it can be rendered on its own (tests, screenshots)
 export function WireSummaryBar(props) {
-  var W = props.wire; var t = wireTally(props.invoices || [], W.bill_ids || []); var waiting = wireWaitingWords(t);
+  var W = props.wire; var t = wireTally(props.invoices || [], W.bill_ids || []); var waiting = wireWaitingWords(t, W);
   return <div data-testid="wire-summary" style={{ marginTop: 14, background: '#000000', color: '#ffffff', border: '1px solid #3f3f46', borderRadius: 2, padding: '10px 12px' }}>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
       <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.12em', color: '#a3a3a3' }}>WIRE</span>
@@ -100,7 +107,7 @@ export function WireSummaryBar(props) {
     </div>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6, alignItems: 'center' }}>
       <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.1em', color: '#a3a3a3' }}>WAITING ON THIS WIRE:</span>
-      {waiting.length ? waiting.map(function (w, i) { return <span key={i} style={zTag(Z_BLUE)}>{w}</span>; }) : <span style={{ fontSize: 12, color: '#d4d4d4' }}>nothing — every result above is final</span>}
+      {waiting.length ? waiting.map(function (w, i) { return <span key={i} style={zTag(Z_BLUE)}>{w}</span>; }) : <span style={{ fontSize: 12, color: '#d4d4d4' }}>nothing waiting — every bill on this wire was compared and decided</span>}
       {t.decided.approved || t.decided.accepted ? <span style={{ fontSize: 12, color: '#d4d4d4' }}>{'decided: ' + t.decided.approved + ' approved · ' + t.decided.accepted + ' accepted (a difference)'}</span> : null}
     </div>
     {(W.out_of_scope || []).length ? <div style={{ fontSize: 12, color: '#d4d4d4', marginTop: 6 }}>{'Not in the warehouse check (vendor not selected): ' + W.out_of_scope.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' · ')}</div> : null}
@@ -232,8 +239,10 @@ function checksBlock(ch) {
 // the automatic approval reason names the evidence actually compared (Codex 25 Nov, ZB): pounds on the scale, receipt yards, or both
 export function autoReason(inv) {
   var bases = {}; (inv.products || []).forEach(function (r) { var f = r.figures || {}; if (f.basis) { bases[f.basis] = true; } });
-  var what = bases.lb && bases.yd ? 'billed weight vs scanned weight and billed yards vs receipt yards' : (bases.yd ? 'billed yards vs receipt yards' : 'billed weight vs scanned weight');
-  return 'Approved: ' + what + ' within the approved tolerance';
+  // v55.83-ZS: yards have no tolerance — the note says what was actually applied
+  if (bases.lb && bases.yd) { return 'Approved: billed weight vs scanned weight within the approved tolerance; billed yards vs receipt yards an exact match'; }
+  if (bases.yd) { return 'Approved: billed yards vs receipt yards — an exact match'; }
+  return 'Approved: billed weight vs scanned weight within the approved tolerance';
 }
 function reasonProblem(inv, mode, reason) {
   if (mode === 'approve' && !inv.pass && reason.length < 5) { return 'This invoice is REVIEW — write why you approve it anyway (at least a few words).'; }

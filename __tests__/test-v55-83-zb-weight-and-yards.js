@@ -138,7 +138,8 @@ var b14 = run({ lines: [line(30000, 'LBS')], receipt: dr });
 check('…the same for weight on a draft (provisional), and a side "not on the bill" stays as it is', b14.figures.checks.weight.result === 'provisional' && b14.figures.checks.yards.result === 'not_recorded');
 
 // 13. the automatic approval reason names what was compared
-check('AUTO REASON: a yards-only invoice is approved as "billed yards vs receipt yards", a pounds one as "billed weight vs scanned weight", both when both', INV.autoReason({ products: [a] }) === 'Approved: billed yards vs receipt yards within the approved tolerance' && INV.autoReason({ products: [b2] }) === 'Approved: billed weight vs scanned weight within the approved tolerance' && /weight vs scanned weight and billed yards vs receipt yards/.test(INV.autoReason({ products: [a, b2] })), [INV.autoReason({ products: [a] })]);
+// v55.83-ZS (Codex 27 Nov): the approval note names the rule applied — yards an EXACT match (no tolerance), weight within the tolerance
+check('AUTO REASON: yards-only → "billed yards vs receipt yards — an exact match"; pounds → "… within the approved tolerance"; both → weight within tolerance AND yards exact (never "yards within tolerance")', INV.autoReason({ products: [a] }) === 'Approved: billed yards vs receipt yards — an exact match' && INV.autoReason({ products: [b2] }) === 'Approved: billed weight vs scanned weight within the approved tolerance' && INV.autoReason({ products: [a, b2] }) === 'Approved: billed weight vs scanned weight within the approved tolerance; billed yards vs receipt yards an exact match' && [INV.autoReason({ products: [a] }), INV.autoReason({ products: [a, b2] })].every(function (x) { return x.split(';').every(function (part) { return !(/yards/.test(part) && /within the approved tolerance/.test(part)); }); }), [INV.autoReason({ products: [a] }), INV.autoReason({ products: [a, b2] })]);
 
 // 14. v55.83-ZS (Max 27 Nov: "yards should always be the same as yards.. no tolerance")
 var T15 = { id: 't15', version: 2, pct: 15, lb: null };
@@ -154,6 +155,22 @@ check('ZS: WEIGHT is unchanged — 30,000 lb vs 31,333 lb is within 15% → PASS
 var preZS = runWith(OLD, { lines: [line(999, 'YDS')], receipt: receipt({ yd: 1000, declared: '1000' }), tolerance: T15 });
 var stY = W.decisionState([{ id: 'dz', kind: 'validate_match', comparison_fp: fp(preZS.inputs), at: '2026-11-26T10:00:00Z' }], fp(y999.inputs));
 check('ZS: a 999-yd bill approved before (Matched under the old % rule) now needs REVALIDATION (its fingerprint changed); an exact 1,000-yd approval keeps its fingerprint', preZS.outcome === 'matched' && stY.state === 'needs_revalidation' && fp(runWith(OLD, { lines: [line(1000, 'YDS')], receipt: receipt({ yd: 1000, declared: '1000' }), tolerance: T15 }).inputs) === fp(y1000.inputs), [preZS.outcome, stY.state]);
+
+// 15. Codex 27 Nov (ZS rev2 caution): compare with the rules DEPLOYED right now (main bdd772ad), not only the older pre-ZB source —
+// exactly which existing decisions the yards change re-opens, and which it leaves alone
+var liveSrc = cp.execFileSync('git', ['-C', root, 'show', 'bdd772ad:src/lib/weight-check.js'], { encoding: 'utf8' });
+var liveDir = fs.mkdtempSync(path.join(process.env.TMP || os.tmpdir(), 'zs-live-')); var liveFile = path.join(liveDir, 'weight-check-live-bdd772ad.js'); fs.writeFileSync(liveFile, liveSrc);
+var LIVE = require(liveFile); try { fs.rmSync(liveDir, { recursive: true, force: true }); } catch (e) { /* temp copy only */ }
+function liveVsNew(o) { var l = runWith(LIVE, o); var n = run(o); return { live: l.outcome, now: n.outcome, same: fp(l.inputs) === fp(n.inputs), state: W.decisionState([{ id: 'dl', kind: l.outcome === 'discrepancy' ? 'accept_discrepancy' : 'validate_match', comparison_fp: fp(l.inputs), at: '2026-11-27T10:00:00Z' }], fp(n.inputs)).state }; }
+var R1 = { id: 'r', receipt: receipt({ yd: 1000, declared: '1000' }) };
+var c999 = liveVsNew({ lines: [line(999, 'YDS')], receipt: R1.receipt, tolerance: T15 });
+var c1000 = liveVsNew({ lines: [line(1000, 'YDS')], receipt: R1.receipt, tolerance: T15 });
+var c11500 = liveVsNew({ lines: [line(11500, 'YDS')], tolerance: { id: 't2', version: 1, pct: 10, lb: 5000 } });
+var c9000 = liveVsNew({ lines: [line(9000, 'YDS')], tolerance: { id: 't2', version: 1, pct: 10, lb: 5000 } });
+var cW = liveVsNew({ lines: [line(30000, 'LBS')], tolerance: T15 });
+check('vs DEPLOYED (bdd772ad): a 999-yd bill Matched today (within 15%) becomes a discrepancy — its fingerprint changes, a saved approval needs revalidation', c999.live === 'matched' && c999.now === 'discrepancy' && !c999.same && c999.state === 'needs_revalidation', c999);
+check('vs DEPLOYED: 11,500 yd vs 12,231.64 (within 10% today) — re-opened the same way', c11500.live === 'matched' && c11500.now === 'discrepancy' && !c11500.same && c11500.state === 'needs_revalidation', c11500);
+check('vs DEPLOYED: unchanged where the result does not change — an exact 1,000-yd match, a 9,000-yd discrepancy already, and any WEIGHT bill keep their fingerprints and decisions', c1000.same && c1000.state === 'validated' && c9000.live === 'discrepancy' && c9000.now === 'discrepancy' && c9000.same && c9000.state === 'accepted' && cW.same && cW.state === 'validated', [c1000, c9000, cW]);
 
 // 10. screen + version
 var src = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
