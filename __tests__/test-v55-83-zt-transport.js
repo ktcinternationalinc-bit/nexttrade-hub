@@ -1,6 +1,8 @@
 // v55.83-ZT rev3 (Codex 27 Nov 07:12 HOLD) — a lost or unreadable server answer is UNKNOWN, never "not saved". The REAL Invoices
 // component + the REAL WarehouseCheckBox wcApi; only hubFetch (the network) is faked. Each request can be: answered, lost AFTER the
-// server saved it, lost BEFORE, answered unreadably (502, no JSON), or refused (409 JSON). Run: node __tests__/test-v55-83-zt-transport.js
+// server saved it, lost BEFORE, answered unreadably (502, no JSON), answered with a readable 500 AFTER saving (Codex 07:19), saved LATER
+// than the re-read (delayed commit), or refused (409 JSON). A re-read can prove "saved"; without a 4xx refusal nothing is called "not
+// saved" — it is "not yet confirmed". Run: node __tests__/test-v55-83-zt-transport.js
 var path = require('path'); var Module = require('module');
 var root = path.join(__dirname, '..');
 require(path.join(root, 'node_modules/sucrase/register'));
@@ -30,7 +32,7 @@ function rows() {
 function answer(body) {
   if (body.action === 'settings_view') { return { ok: true, permissions: { validate: true, accept: true, settings: true, super_admin: true }, tolerances: [{ pct: 15 }], lookups: {}, scope: { vendor_names: ['NexPac Corporation'] }, maps: [], vendor_choices: [] }; }
   if (body.action === 'wires_for_check') { return { ok: true, wires: [] }; }
-  if (body.action === 'report_preview') { return { ok: true, rows: rows(), feed: { staging: false }, wire: null }; }
+  if (body.action === 'report_preview') { var out = { ok: true, rows: rows(), feed: { staging: false }, wire: null }; if (srv.delayed) { var d0 = srv.delayed; srv.delayed = null; answer(d0); } return out; } // a delayed write lands just AFTER this read
   if (body.action === 'link') { srv.linked = true; return { ok: true }; }
   if (body.action === 'decide') { srv.notes[body.item_key] = body.reason; srv.decided[body.item_key] = body.kind === 'validate_match' ? 'validated' : (body.kind === 'accept_discrepancy' ? 'accepted' : 'issue_open'); return { ok: true }; }
   return { ok: false, error: 'not in the fake' };
@@ -40,6 +42,8 @@ stub(path.join(root, 'src/lib/hub-fetch.js'), { hubFetch: function (url, opts) {
   var body = JSON.parse(opts.body); srv.calls.push(body);
   var key = body.action === 'decide' ? 'decide:' + body.item_key : body.action; var how = srv.plan[key] || 'ok';
   if (how === 'lost-after') { answer(body); return Promise.reject(new TypeError('Failed to fetch')); }
+  if (how === 'json500-after') { answer(body); return Promise.resolve(respond(500, { ok: false, error: 'The warehouse check failed: post-write read failed' })); }
+  if (how === 'delayed') { srv.delayed = body; return Promise.reject(new TypeError('Failed to fetch')); }
   if (how === 'lost-before') { return Promise.reject(new TypeError('Failed to fetch')); }
   if (how === 'unreadable') { return Promise.resolve({ status: 502, json: function () { return Promise.reject(new SyntaxError('Unexpected token <')); } }); }
   if (how === 'refuse') { return Promise.resolve(respond(409, { ok: false, error: 'The figures changed since you opened this — look at them again before deciding.' })); }
@@ -73,56 +77,67 @@ async function approve(plan) { srv.plan = plan; await type(note(), 'checked agai
   // 0. the real wcApi itself
   srv.plan = { report_preview: 'down' }; var w1 = await BOX.wcApi({ action: 'report_preview' });
   srv.plan = { report_preview: 'unreadable' }; var w2 = await BOX.wcApi({ action: 'report_preview' });
-  srv.plan = { report_preview: 'refuse' }; var w3 = await BOX.wcApi({ action: 'report_preview' }); srv.plan = {};
-  check('REAL wcApi: server unreachable → { ok:false, uncertain:true }; unreadable 502 → uncertain; an explicit 409 refusal → NOT uncertain (a real "no")', w1.ok === false && w1.uncertain === true && /Could not reach the Hub server/.test(w1.error) && w2.uncertain === true && w2.http_status === 502 && w3.ok === false && !w3.uncertain && w3.http_status === 409, [w1, w2, w3]);
+  srv.plan = { report_preview: 'refuse' }; var w3 = await BOX.wcApi({ action: 'report_preview' });
+  srv.plan = { link: 'json500-after' }; var w4 = await BOX.wcApi({ action: 'link', bill_id: bill.id, receipt_id: '2216' }); srv.linked = false; srv.plan = {};
+  check('REAL wcApi: unreachable → uncertain; unreadable 502 → uncertain; a readable 500 JSON (can come AFTER the write) → uncertain; an explicit 409 refusal → NOT uncertain (a real "no")', w1.uncertain === true && w2.uncertain === true && w2.http_status === 502 && w4.ok === false && w4.uncertain === true && w4.http_status === 500 && w3.ok === false && !w3.uncertain && w3.http_status === 409, [w1, w2, w3, w4]);
   render(); await flush();
-  // 1. response lost AFTER the server saved line 2
+  var CHECK = 'Wait a moment, press Show (last reading) and check the card before pressing Approved again.';
+  // 1. lost AFTER the server saved line 2 → the re-read proves it
   await fresh(); await approve({ 'decide:k-Texas Third Folds': 'lost-after' });
-  check('answer LOST after the server saved it → re-read → "Saved — Approved: NexPac Corporation 14756 (2 lines), confirmed after a connection problem." (never "not saved")', cardMsg() === '✓ Saved — Approved: NexPac Corporation 14756 (2 lines), confirmed after a connection problem.' && srv.decided['k-Texas Third Folds'] === 'accepted', cardMsg());
-  // 2. unreadable answer on line 1 (not saved) → stop; line 2 never sent
+  check('answer LOST after the server saved it → re-read proves it: "Saved — Approved: NexPac Corporation 14756 (2 lines), confirmed after a connection problem."', cardMsg() === '✓ Saved — Approved: NexPac Corporation 14756 (2 lines), confirmed after a connection problem.', cardMsg());
+  // 2. a readable 500 AFTER the server saved line 2 (Codex 07:19) → uncertain → re-read proves it; the loop had stopped there
+  await fresh(); await approve({ 'decide:k-Texas Thirds': 'json500-after' });
+  check('a readable 500 JSON AFTER saving line 1 → treated as UNKNOWN (stop: line 2 not sent), re-read proves line 1: "1 line saved; not sent: Texas Third Folds. Press Approved again for the rest."', decides() === 1 && cardMsg() === '⚠ Connection problem — checked again: 1 line saved; not sent: Texas Third Folds. Press Approved again for the rest.', [decides(), cardMsg()]);
+  // 3. unreadable on line 1, NOT saved → never "not saved": "not yet confirmed", check before retrying
   await fresh(); await approve({ 'decide:k-Texas Thirds': 'unreadable' });
-  check('UNREADABLE answer (502, no JSON) on line 1 → it stops (1 decide sent, line 2 not sent), re-reads: "not saved: Texas Thirds; not sent: Texas Third Folds. Press Approved again for the rest."', decides() === 1 && cardMsg() === '⚠ Connection problem — checked again: not saved: Texas Thirds; not sent: Texas Third Folds. Press Approved again for the rest.', [decides(), cardMsg()]);
-  // 3. partial known success + an uncertain remainder (lost before saving)
-  await fresh(); await approve({ 'decide:k-Texas Third Folds': 'lost-before' });
-  check('PARTIAL: line 1 saved, line 2 lost BEFORE saving → "1 line saved; not saved: Texas Third Folds"', cardMsg() === '⚠ Connection problem — checked again: 1 line saved; not saved: Texas Third Folds. Press Approved again for the rest.', cardMsg());
-  // 4. an ordinary explicit refusal stays a refusal (no "connection problem")
+  check('UNREADABLE answer on line 1 (not saved) → stops, re-reads: "not yet confirmed: Texas Thirds; not sent: Texas Third Folds. Wait a moment, press Show … before pressing Approved again." — never "not saved"', decides() === 1 && cardMsg() === '⚠ Connection problem — checked again: not yet confirmed: Texas Thirds; not sent: Texas Third Folds. ' + CHECK && !/not saved/.test(cardMsg() || ''), [decides(), cardMsg()]);
+  // 4. DELAYED commit: the re-read still shows it open, the write lands just after → still "not yet confirmed", then Show proves it
+  await fresh(); await approve({ 'decide:k-Texas Third Folds': 'delayed' });
+  check('DELAYED commit: the immediate re-read still shows line 2 open → "1 line saved; not yet confirmed: Texas Third Folds … check … before pressing Approved again" (no "not saved", no blind retry)', cardMsg() === '⚠ Connection problem — checked again: 1 line saved; not yet confirmed: Texas Third Folds. ' + CHECK, cardMsg());
+  await click(button('Show (last reading)'));
+  check('…and pressing Show a moment later shows it saved (the write had landed): the line is accepted, nothing left to decide', srv.decided['k-Texas Third Folds'] === 'accepted' && !button('Approved'), [srv.decided, !!button('Approved')]);
+  // 5. an ordinary explicit refusal (409) stays a refusal
   await fresh(); await approve({ 'decide:k-Texas Third Folds': 'refuse' });
   check('an EXPLICIT refusal (409 JSON) is a refusal: "Partly saved: 1 line saved; not saved: Texas Third Folds: The figures changed…" — no "connection problem"', /^⚠ Partly saved: 1 line saved; not saved: Texas Third Folds: The figures changed since you opened this/.test(cardMsg() || '') && !/Connection problem/.test(cardMsg() || ''), cardMsg());
-  // 5. the answer is lost AND the re-read fails → say it cannot be confirmed, check before retrying
+  // 6. lost AND the re-read fails
   await fresh(); srv.plan = { 'decide:k-Texas Thirds': 'lost-after' }; await type(note(), 'checked against the scale tickets');
   var realPlan = srv.plan; srv.plan = new Proxy(realPlan, { get: function (t, k) { if (k === 'report_preview' && srv.calls.some(function (c) { return c.action === 'decide'; })) { return 'down'; } return t[k]; } });
   await click(button('Approved'));
-  check('answer lost AND the re-read fails → "Connection problem: could not confirm whether Texas Thirds was saved … Press Show (last reading) and check the card before pressing Approved again." — never "not saved", never a blind retry', /^⚠ Connection problem: could not confirm whether Texas Thirds was saved \(Could not reach the Hub server\.\)\. Press Show \(last reading\) and check the card before pressing Approved again\.$/.test(cardMsg() || ''), cardMsg());
+  check('answer lost AND the re-read fails → "Connection problem: could not confirm whether Texas Thirds was saved (…). Wait a moment, press Show … before pressing Approved again."', cardMsg() === '⚠ Connection problem: could not confirm whether Texas Thirds was saved (Could not reach the Hub server.). ' + CHECK, cardMsg());
   srv.plan = {};
-  // 6. the RECEIPT confirm (link POST) on a preview card: answer lost after it was saved
+  // 7. the RECEIPT confirm (link POST) on a preview card
   await fresh({ preview: true });
   check('(set-up) a preview card (receipt not confirmed yet) shows Approved', !!button('Approved') && srv.preview && !srv.linked);
   await approve({ link: 'lost-after' });
-  check('the receipt-confirm answer LOST after saving → re-read → "warehouse receipt 2216 WAS confirmed, but nothing was approved yet. Look at the card and press Approved again." — no decision sent', /^⚠ Connection problem — checked again: warehouse receipt 2216 WAS confirmed, but nothing was approved yet\. Look at the card and press Approved again\.$/.test(cardMsg() || '') && decides() === 0 && srv.linked === true, [cardMsg(), decides()]);
+  check('receipt confirm LOST after saving → re-read: "warehouse receipt 2216 now shows as confirmed, but nothing was approved yet …" — no decision sent', cardMsg() === '⚠ Connection problem — checked again: warehouse receipt 2216 now shows as confirmed, but nothing was approved yet. Look at the card and press Approved again.' && decides() === 0, [cardMsg(), decides()]);
+  await fresh({ preview: true }); await approve({ link: 'json500-after' });
+  check('receipt confirm answered with a readable 500 AFTER saving (Codex 07:19) → reconciled the same way (never "could not be confirmed")', cardMsg() === '⚠ Connection problem — checked again: warehouse receipt 2216 now shows as confirmed, but nothing was approved yet. Look at the card and press Approved again.' && decides() === 0, cardMsg());
   await fresh({ preview: true }); await approve({ link: 'lost-before' });
-  check('…lost BEFORE saving → "warehouse receipt 2216 was NOT confirmed. Nothing was saved — press Approved again."', /^⚠ Connection problem — checked again: warehouse receipt 2216 was NOT confirmed\. Nothing was saved — press Approved again\.$/.test(cardMsg() || ''), cardMsg());
-  // ---- Codex 07:14 caution: no conclusion from absence — only affirmative evidence of THIS line / receipt
+  check('receipt confirm lost BEFORE saving → "not yet confirmed whether warehouse receipt 2216 was confirmed … check before …" — never "Nothing was saved — press Approved again"', /^⚠ Connection problem: not yet confirmed whether warehouse receipt 2216 was confirmed \(Could not reach the Hub server\.\)\. Wait a moment/.test(cardMsg() || '') && !/Nothing was saved/.test(cardMsg() || ''), cardMsg());
+  // ---- pure reconcileWords: only affirmative evidence proves "saved"; nothing proves "not saved"
   var R = INV.reconcileWords; var invB = { bills: [bill] };
   var unc = { uncertain: true, wrote: 0, error: 'Could not reach the Hub server.', uncertainLines: [{ key: 'k-A', label: 'Line A', fp: 'fp-A', kind: 'validate_match', reason: 'my note' }], notSent: [], failed: [] };
   var lnk = { uncertain: true, linkUnknown: true, receipt: '2216', wrote: 0, uncertainLines: [], notSent: [], failed: [], error: 'Could not reach the Hub server.' };
   function rowA(o) { return Object.assign({ item_key: 'k-A', bill_ids: [bill.id], comparison_fp: 'fp-A', state: 'validated', decision: { kind: 'validate_match', reason: 'my note' }, links: [] }, o || {}); }
   var cases = [
-    ['EMPTY re-read (no rows at all)', R(unc, { ok: true, rows: [] }, invB, 'approve', 'X')],
+    ['EMPTY re-read', R(unc, { ok: true, rows: [] }, invB, 'approve', 'X')],
     ['FILTERED re-read (the line is not in it)', R(unc, { ok: true, rows: [rowA({ item_key: 'k-OTHER' })] }, invB, 'approve', 'X')],
-    ['CHANGED fingerprint (the figures moved)', R(unc, { ok: true, rows: [rowA({ comparison_fp: 'fp-A2' })] }, invB, 'approve', 'X')],
-    ['decided, but by a DIFFERENT note (another person / an earlier decision)', R(unc, { ok: true, rows: [rowA({ decision: { kind: 'validate_match', reason: 'someone else' } })] }, invB, 'approve', 'X')],
-    ['decided, but a different KIND', R(unc, { ok: true, rows: [rowA({ state: 'accepted', decision: { kind: 'accept_discrepancy', reason: 'my note' } })] }, invB, 'approve', 'X')]
+    ['CHANGED fingerprint', R(unc, { ok: true, rows: [rowA({ comparison_fp: 'fp-A2' })] }, invB, 'approve', 'X')],
+    ['decided with a DIFFERENT note', R(unc, { ok: true, rows: [rowA({ decision: { kind: 'validate_match', reason: 'someone else' } })] }, invB, 'approve', 'X')],
+    ['decided with a different KIND', R(unc, { ok: true, rows: [rowA({ state: 'accepted', decision: { kind: 'accept_discrepancy', reason: 'my note' } })] }, invB, 'approve', 'X')],
+    ['the same line still OPEN (may still be finishing)', R(unc, { ok: true, rows: [rowA({ state: 'unreviewed', decision: null })] }, invB, 'approve', 'X')]
   ];
-  cases.forEach(function (c) { check('reconcile, decision — ' + c[0] + ' → "cannot tell" (never "saved", never "not saved")', /cannot tell: Line A/.test(c[1].text) && !/not saved: Line A/.test(c[1].text) && !/^Saved/.test(c[1].text) && c[1].kind === 'warn', c[1].text); });
-  var proved = R(unc, { ok: true, rows: [rowA()] }, invB, 'approve', 'NexPac 14756'); var provedNot = R(unc, { ok: true, rows: [rowA({ state: 'unreviewed', decision: null })] }, invB, 'approve', 'X');
-  check('reconcile, decision — SAME line + fingerprint decided by THIS kind + note → "Saved … confirmed after a connection problem"; the same line still unreviewed → "not saved"', proved.kind === 'ok' && /^Saved — Approved: NexPac 14756 \(1 line\), confirmed after a connection problem\.$/.test(proved.text) && /not saved: Line A/.test(provedNot.text), [proved, provedNot]);
+  cases.forEach(function (c) { check('reconcile, decision — ' + c[0] + ' → "not yet confirmed: Line A" + check before retrying (never "saved", never "not saved")', /not yet confirmed: Line A\. Wait a moment, press Show \(last reading\)/.test(c[1].text) && !/not saved|^Saved/.test(c[1].text), c[1].text); });
+  var proved = R(unc, { ok: true, rows: [rowA()] }, invB, 'approve', 'NexPac 14756');
+  check('reconcile, decision — the SAME line + fingerprint decided by THIS kind + note → "Saved — Approved: NexPac 14756 (1 line), confirmed after a connection problem."', proved.kind === 'ok' && proved.text === 'Saved — Approved: NexPac 14756 (1 line), confirmed after a connection problem.', proved);
   var lcases = [
     ['EMPTY re-read', R(lnk, { ok: true, rows: [] }, invB, 'approve', 'X')],
-    ['a preview of ANOTHER receipt', R(lnk, { ok: true, rows: [rowA({ preview: true, proposed_receipt: { receipt_id: '9999' }, links: [] })] }, invB, 'approve', 'X')],
+    ['still a PREVIEW of this receipt (may still be finishing)', R(lnk, { ok: true, rows: [rowA({ preview: true, proposed_receipt: { receipt_id: '2216' } })] }, invB, 'approve', 'X')],
+    ['a preview of ANOTHER receipt', R(lnk, { ok: true, rows: [rowA({ preview: true, proposed_receipt: { receipt_id: '9999' } })] }, invB, 'approve', 'X')],
     ['a confirmed link to ANOTHER receipt', R(lnk, { ok: true, rows: [rowA({ links: [{ bill_id: bill.id, receipt_id: '9999', state: 'confirmed' }] })] }, invB, 'approve', 'X')],
     ['a REJECTED link to this receipt', R(lnk, { ok: true, rows: [rowA({ links: [{ bill_id: bill.id, receipt_id: '2216', state: 'rejected' }] })] }, invB, 'approve', 'X')]
   ];
-  lcases.forEach(function (c) { check('reconcile, receipt — ' + c[0] + ' → "cannot tell whether warehouse receipt 2216 was confirmed"', /cannot tell whether warehouse receipt 2216 was confirmed/.test(c[1].text), c[1].text); });
+  lcases.forEach(function (c) { check('reconcile, receipt — ' + c[0] + ' → "not yet confirmed whether warehouse receipt 2216 was confirmed" (never "NOT confirmed" / "Nothing was saved")', /not yet confirmed whether warehouse receipt 2216 was confirmed/.test(c[1].text) && !/Nothing was saved|was NOT confirmed/.test(c[1].text), c[1].text); });
   console.log('\nZT transport: ' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('  ✗ FAIL: crashed ' + (e && e.stack)); process.exit(1); });

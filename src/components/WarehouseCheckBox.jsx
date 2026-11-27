@@ -20,8 +20,9 @@ export function say(t, msg, kind) { if (!t) { return; } if (typeof t === 'functi
 export function wcApi(payload) {
   return hubFetch('/api/accounting/weight-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     // v55.83-ZT (Codex 27 Nov): an explicit server refusal stays a refusal; an unreachable server or an unreadable answer is UNCERTAIN —
-    // the request may have been saved, so callers must check before saying "not saved" or offering a retry
-    .then(function (r) { return r.json().then(function (j) { if (!j || typeof j !== 'object') { return { ok: false, uncertain: true, error: 'The server answer (' + r.status + ') could not be read.', http_status: r.status }; } j.http_status = r.status; return j; }, function () { return { ok: false, uncertain: true, error: 'The server answered ' + r.status + ' without a readable answer.', http_status: r.status }; }); })
+    // the request may have been saved, so callers must check before saying "not saved" or offering a retry. Codex 07:19: a readable
+    // 5xx (or any non-4xx failure) can come AFTER the write (the route saves, then re-reads) — uncertain too; only a 4xx is a refusal.
+    .then(function (r) { return r.json().then(function (j) { if (!j || typeof j !== 'object' || typeof j.ok !== 'boolean') { return { ok: false, uncertain: true, error: 'The server answer (' + r.status + ') could not be read.', http_status: r.status }; } j.http_status = r.status; if (j.ok !== true && (r.status >= 500 || r.status < 400)) { j.uncertain = true; } return j; }, function () { return { ok: false, uncertain: true, error: 'The server answered ' + r.status + ' without a readable answer.', http_status: r.status }; }); })
     .catch(function () { return { ok: false, uncertain: true, error: 'Could not reach the Hub server.' }; });
 }
 export function warehouseMappingLabel(map, lookups) {

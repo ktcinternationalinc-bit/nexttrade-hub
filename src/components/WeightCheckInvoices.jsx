@@ -273,45 +273,40 @@ function reasonProblem(inv, mode, reason) {
 // v55.83-ZT (Codex 27 Nov): after an UNCERTAIN answer (server unreachable / unreadable), re-read and say per line what is actually saved —
 // never "not saved" on a guess, never "try again" before checking. refreshed = the report_preview answer after the problem (or null).
 export function reconcileWords(res, refreshed, inv, mode, label) {
+  // Codex 27 Nov 07:19: a re-read can PROVE a line is saved (the same line + comparison now shows this decision and note); it can never
+  // prove "not saved" — an unanswered request may still be finishing. Without an explicit refusal the answer is "not yet confirmed".
   var verb = mode === 'dispute' ? 'Disputed' : 'Approved';
+  var checkFirst = 'Wait a moment, press Show (last reading) and check the card before pressing ' + verb + ' again.';
   if (!refreshed || !refreshed.ok) {
     var what = res.linkUnknown ? 'whether warehouse receipt ' + res.receipt + ' was confirmed' : 'whether ' + res.uncertainLines.map(function (x) { return x.label; }).join(', ') + ' ' + (res.uncertainLines.length === 1 ? 'was' : 'were') + ' saved';
-    return { kind: 'warn', text: 'Connection problem: could not confirm ' + what + ' (' + (res.error || 'no answer') + ')' + (res.wrote ? '; ' + res.wrote + ' line' + (res.wrote === 1 ? ' was' : 's were') + ' saved before it' : '') + '. Press Show (last reading) and check the card before pressing ' + verb + ' again.' };
+    return { kind: 'warn', text: 'Connection problem: could not confirm ' + what + ' (' + (res.error || 'no answer') + ')' + (res.wrote ? '; ' + res.wrote + ' line' + (res.wrote === 1 ? ' was' : 's were') + ' saved before it' : '') + '. ' + checkFirst };
   }
   var rows = refreshed.rows || []; var billId = inv.bills[0].id;
   var billRows = rows.filter(function (r) { return (r.bill_ids || []).indexOf(billId) >= 0; });
   if (res.linkUnknown) {
-    // proved confirmed: a CONFIRMED link to exactly that receipt on this bill; proved not: still a preview of exactly that receipt
     var confirmed = billRows.some(function (r) { return (r.links || []).some(function (l) { return String(l.receipt_id) === String(res.receipt) && String(l.bill_id || billId) === String(billId) && l.state === 'confirmed'; }); });
     var stillPreview = billRows.some(function (r) { return r.preview && r.proposed_receipt && String(r.proposed_receipt.receipt_id) === String(res.receipt); });
-    if (confirmed && !stillPreview) { return { kind: 'warn', text: 'Connection problem — checked again: warehouse receipt ' + res.receipt + ' WAS confirmed, but nothing was ' + verb.toLowerCase() + ' yet. Look at the card and press ' + verb + ' again.' }; }
-    if (stillPreview && !confirmed) { return { kind: 'warn', text: 'Connection problem — checked again: warehouse receipt ' + res.receipt + ' was NOT confirmed. Nothing was saved — press ' + verb + ' again.' }; }
-    return { kind: 'warn', text: 'Connection problem: the Hub looked again but cannot tell whether warehouse receipt ' + res.receipt + ' was confirmed. Press Show (last reading), open the card and check before pressing ' + verb + ' again.' };
+    if (confirmed && !stillPreview) { return { kind: 'warn', text: 'Connection problem — checked again: warehouse receipt ' + res.receipt + ' now shows as confirmed, but nothing was ' + verb.toLowerCase() + ' yet. Look at the card and press ' + verb + ' again.' }; }
+    return { kind: 'warn', text: 'Connection problem: not yet confirmed whether warehouse receipt ' + res.receipt + ' was confirmed (' + (res.error || 'no answer') + '). ' + checkFirst };
   }
   var done = mode === 'dispute' ? ['issue_open'] : ['validated', 'accepted'];
-  // per uncertain line: the SAME line (key), the SAME comparison (fingerprint), decided by THIS decision (kind + note) → saved;
-  // the same line + comparison still undecided → not saved; anything else (missing, filtered, changed, decided otherwise) → unknown
-  function verdict(x) {
+  function provedSaved(x) {
     var r = billRows.filter(function (y) { return y.item_key === x.key; })[0];
-    if (!r || String(r.comparison_fp || '') !== String(x.fp || '')) { return 'unknown'; }
+    if (!r || String(r.comparison_fp || '') !== String(x.fp || '')) { return false; }
     var d = mode === 'dispute' ? (r.issue || r.decision) : r.decision;
-    if (done.indexOf(r.state) >= 0 && d && d.kind === x.kind && String(d.reason || '') === String(x.reason || '')) { return 'saved'; }
-    if (r.state === 'unreviewed' || r.state === 'reopened' || r.state === 'needs_revalidation') { return 'not_saved'; }
-    return 'unknown';
+    return done.indexOf(r.state) >= 0 && !!d && d.kind === x.kind && String(d.reason || '') === String(x.reason || '');
   }
-  var savedU = [], notSavedU = [], unknownU = [];
-  res.uncertainLines.forEach(function (x) { var v = verdict(x); (v === 'saved' ? savedU : v === 'not_saved' ? notSavedU : unknownU).push(x); });
+  var savedU = res.uncertainLines.filter(provedSaved); var pendingU = res.uncertainLines.filter(function (x) { return !provedSaved(x); });
   var total = (res.wrote || 0) + savedU.length;
-  if (!notSavedU.length && !unknownU.length && !(res.notSent || []).length && !(res.failed || []).length) {
+  if (!pendingU.length && !(res.notSent || []).length && !(res.failed || []).length) {
     return { kind: 'ok', text: 'Saved — ' + verb + ': ' + label + ' (' + total + ' line' + (total === 1 ? '' : 's') + '), confirmed after a connection problem.' };
   }
   var parts = [];
   if (total) { parts.push(total + ' line' + (total === 1 ? '' : 's') + ' saved'); }
-  if (notSavedU.length) { parts.push('not saved: ' + notSavedU.map(function (x) { return x.label; }).join(', ')); }
-  if (unknownU.length) { parts.push('cannot tell: ' + unknownU.map(function (x) { return x.label; }).join(', ')); }
+  if (pendingU.length) { parts.push('not yet confirmed: ' + pendingU.map(function (x) { return x.label; }).join(', ')); }
   if ((res.notSent || []).length) { parts.push('not sent: ' + res.notSent.map(function (x) { return x.label; }).join(', ')); }
   if ((res.failed || []).length) { parts.push('refused: ' + res.failed.join(' · ')); }
-  return { kind: 'warn', text: 'Connection problem — checked again: ' + parts.join('; ') + '. ' + (unknownU.length ? 'Press Show (last reading), open the card and check before pressing ' + verb + ' again.' : 'Press ' + verb + ' again for the rest.') };
+  return { kind: 'warn', text: 'Connection problem — checked again: ' + parts.join('; ') + '. ' + (pendingU.length ? checkFirst : 'Press ' + verb + ' again for the rest.') };
 }
 
 export async function runInvoiceDecision(o) {
