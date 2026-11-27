@@ -8,7 +8,7 @@ import { searchBills, sortBills, groupByVendor, BILL_SORTS } from '../lib/bill-g
 import { supabase } from '../lib/supabase';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
-import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
+import { BILL_TYPES, BILL_TYPE_LABEL, BILL_DIRECTIONS, BILL_DIRECTION_LABEL, isServiceOnlyBill } from '../lib/bill-extract'; // ZY + directions
 import { importPagesState, pickedPages, problemsBesidesPages, notesWithReleaseSource, importSaveGate } from '../lib/bill-pages-ui'; // v55.83-VV
 import BillPagesBox from './BillPagesBox'; // v55.83-VV
 import { pdfPageCountFromBase64 } from '../lib/pdf-page-count-browser'; // v55.83-VV — real page count of an imported PDF
@@ -582,7 +582,7 @@ export default function BillsTab(props) {
       <select className={inp} value={typeF} onChange={function (e) { setTypeF(e.target.value); }} title="Type of bill">
         <option value="">every type</option>{BILL_TYPES.map(function (t) { return <option key={t} value={t}>{BILL_TYPE_LABEL[t]}</option>; })}<option value="none">❔ type not set</option></select>
       <select className={inp} value={dirF} onChange={function (e) { setDirF(e.target.value); }} title="Inbound / outbound">
-        <option value="">inbound + outbound</option><option value="inbound">⬅ Inbound</option><option value="outbound">Outbound ➡</option><option value="none">❔ direction not set</option></select>
+        <option value="">inbound + outbound + operational</option>{BILL_DIRECTIONS.map(function (k) { return <option key={k} value={k}>{BILL_DIRECTION_LABEL[k]}</option>; })}<option value="none">❔ direction not set</option></select>
       <select className={inp} value={priceF} onChange={function (e) { setPriceF(e.target.value); }} title="Hub price check">
         <option value="">any price check</option><option value="flagged">⚠ price flagged</option><option value="ok">✅ prices OK</option><option value="no_rules">— no rule</option><option value="not_checked">not checked</option></select>
       <select className={inp} value={valF} onChange={function (e) { setValF(e.target.value); }} title="Validated or not">
@@ -715,7 +715,7 @@ export default function BillsTab(props) {
         {/* v55.83-RL (Max, Nov 9 12:20: "check box if outbound or inbound -- if inbound release number not necessary but a reference
             number is necessary. if outbound then release number is necessary and reference number is not") */}
         <span className="flex gap-1 items-center" title="Outbound needs the release #; inbound needs the reference">
-          {[['inbound', '⬅ Inbound'], ['outbound', 'Outbound ➡']].map(function (d0) {
+          {BILL_DIRECTIONS.map(function (k) { return [k, BILL_DIRECTION_LABEL[k]]; }).map(function (d0) {
             var onD = editing.shipment_direction === d0[0];
             return <button key={d0[0]} type="button" onClick={function () { setEditing(Object.assign({}, editing, { shipment_direction: onD ? null : d0[0], direction_source: 'manual' })); }} className="px-2 py-1 rounded text-[10px] font-extrabold"
               style={onD ? { background: '#1e293b', color: '#ffffff' } : { background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>{d0[1]}</button>;
@@ -830,7 +830,7 @@ export default function BillsTab(props) {
       {/* v55.83-RO (Max 20:54: "we need to know whether a bill is for inbound or outbound and it should be marked during validation") */}
       <div className="flex gap-2 items-center mb-1 flex-wrap">
         <span className="text-[12px] font-extrabold" style={{ color: '#431407' }}>This bill is for:</span>
-        {[['inbound', '⬅ Inbound'], ['outbound', 'Outbound ➡']].map(function (o) { var on = validating.dir === o[0]; return <button key={o[0]} onClick={function () { setV({ dir: o[0] }, true); }} className="px-3 py-1 rounded-lg text-[12px] font-extrabold" style={{ background: on ? '#1d4ed8' : '#ffffff', color: on ? '#ffffff' : '#1e3a8a', border: '1px solid ' + (on ? '#1d4ed8' : (validating.dir ? '#cbd5e1' : '#f87171')) }}>{o[1]}</button>; })}
+        {BILL_DIRECTIONS.map(function (k) { return [k, BILL_DIRECTION_LABEL[k]]; }).map(function (o) { var on = validating.dir === o[0]; return <button key={o[0]} onClick={function () { setV({ dir: o[0] }, true); }} className="px-3 py-1 rounded-lg text-[12px] font-extrabold" style={{ background: on ? '#1d4ed8' : '#ffffff', color: on ? '#ffffff' : '#1e3a8a', border: '1px solid ' + (on ? '#1d4ed8' : (validating.dir ? '#cbd5e1' : '#f87171')) }}>{o[1]}</button>; })}
         <span className="text-[10px]" style={{ color: '#92400e' }}>{'(required' + (validating.dirDefault ? ' — pre-picked: ' + validating.bill.vendor_name + ' bills are always ' + validating.dir + ' — click the other one to change it' : (validating.bill.shipment_direction && SRC_WORDS[validating.bill.direction_source] ? ' — pre-picked: ' + SRC_WORDS[validating.bill.direction_source] : '')) + ' — inbound needs a reference #, outbound a release # before it is wired)'}</span>
       </div>
       {[['matches_records', 'The bill matches our system records (PO/shipment/order)'], ['goods_received', 'The goods or services were actually received'], ['charges_accurate', 'The charges are accurate and legitimate']].map(function (c) {
@@ -861,7 +861,7 @@ export default function BillsTab(props) {
         {(function () {
           var ck0 = validating.checks || {};
           var needRes = (validating.bill.price_check_status === 'flagged' || !!validating.flags) && !validating.bill.price_resolved_note && String(validating.price_resolution || '').trim().length < 10;
-          var missing = !validating.btype ? 'pick the TYPE of bill' : !validating.dir ? 'mark it Inbound or Outbound' : !(ck0.matches_records && ck0.goods_received && ck0.charges_accurate) ? 'tick all three checks' : (String(validating.notes || '').trim().length < 10 ? 'write HOW you verified it (10+ characters)' : (needRes ? 'write how the price issue was resolved (10+ characters)' : ''));
+          var missing = !validating.btype ? 'pick the TYPE of bill' : !validating.dir ? 'mark what it is for: Inbound, Outbound or Operational' : !(ck0.matches_records && ck0.goods_received && ck0.charges_accurate) ? 'tick all three checks' : (String(validating.notes || '').trim().length < 10 ? 'write HOW you verified it (10+ characters)' : (needRes ? 'write how the price issue was resolved (10+ characters)' : ''));
           return <button onClick={function () {
             if (missing) { setValidating(Object.assign({}, validating, { err: 'To validate: ' + missing + '.' })); return; }
             setBusy(true);
@@ -970,7 +970,7 @@ export default function BillsTab(props) {
         {/* v55.83-RL (Max, Nov 9 12:20: "check box if outbound or inbound -- if inbound release number not necessary but a reference
             number is necessary. if outbound then release number is necessary and reference number is not") */}
         <span className="flex gap-1 items-center" title="Outbound needs the release #; inbound needs the reference">
-          {[['inbound', '⬅ Inbound'], ['outbound', 'Outbound ➡']].map(function (d0) {
+          {BILL_DIRECTIONS.map(function (k) { return [k, BILL_DIRECTION_LABEL[k]]; }).map(function (d0) {
             var onD = editing.shipment_direction === d0[0];
             return <button key={d0[0]} type="button" onClick={function () { setEditing(Object.assign({}, editing, { shipment_direction: onD ? null : d0[0], direction_source: 'manual' })); }} className="px-2 py-1 rounded text-[10px] font-extrabold"
               style={onD ? { background: '#1e293b', color: '#ffffff' } : { background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>{d0[1]}</button>;
@@ -1052,7 +1052,7 @@ export default function BillsTab(props) {
                 <div><BillDocViewer bill={b} api={api} toast={toast} canManage={canManage} onChanged={load} /></div>
                 <div>
                 <BillLinesPanel bill={b} api={api} toast={toast} canManage={canManage} onChanged={load} onRules={function () { setPanel('rules'); }} />
-                {canWeightCheck && <WarehouseCheckBox bill={b} toast={toast} />}{/* v55.83-XB */}
+                {canWeightCheck && !isServiceOnlyBill(b) && <WarehouseCheckBox bill={b} toast={toast} />}{/* ZY: never for a service / operational bill */}{/* v55.83-XB */}
                 {b.notes && <div className="text-[11px] mb-1"><b>Notes:</b> {b.notes}</div>}
                 {paysOf(b.id).length === 0 ? <span className="text-[11px]">No payments yet.</span> :
                   paysOf(b.id).map(function (p) {

@@ -18,7 +18,7 @@ import { todayET, fmtET } from '../lib/et-time';
 import { applyConfirmationAnswer, startConfirmationFile, confirmationSendProblem } from '../lib/wire-confirmation';
 import { PKG_STATUS_LABEL, wireReady, validationExempt, NEXTRADE_BILL_NOTE } from '../lib/wire-audit';
 import { presetPick } from '../lib/wire-bill-tree'; // v55.83-XX — "Pay ▸ From a KTC transfer to NextTrade" ticks that one bill
-import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
+import { BILL_TYPES, BILL_TYPE_LABEL, BILL_DIRECTIONS, BILL_DIRECTION_LABEL } from '../lib/bill-extract'; // ZY + directions
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 import WireInboxPanel from './WireInboxPanel'; // v55.83-XC — 📥 Bank confirmations
@@ -95,7 +95,7 @@ function BillFields(p) {
   var s1 = useState(null); var relD = s1[0]; var setRelD = s1[1];
   var s2 = useState(null); var refD = s2[0]; var setRefD = s2[1];
   var dir = String(b.shipment_direction || '').toLowerCase();
-  var needRel = !p.releaseOptional && dir !== 'inbound';
+  var needRel = !p.releaseOptional && dir !== 'inbound' && dir !== 'operational'; // ZY — operational needs neither
   var needRef = dir === 'inbound';
   function save(field, value, done) { p.onSave(field, value, function (ok) { if (ok && done) { done(); } }); }
   function chip(v, label) {
@@ -116,7 +116,7 @@ function BillFields(p) {
   }
   return <div onClick={function (e) { e.stopPropagation(); }}>
     {b.bill_type ? <div className="text-[10px] font-extrabold mb-0.5" style={{ color: '#7c2d12' }}>{BILL_TYPE_LABEL[b.bill_type] || b.bill_type}</div> : null}
-    <div className="flex gap-1 items-center">{chip('inbound', '⬅ Inbound')}{chip('outbound', 'Outbound ➡')}{!dir && !p.releaseOptional ? <span className="text-[10px] font-bold" style={{ color: '#b91c1c' }}>tick one</span> : null}</div>
+    <div className="flex gap-1 items-center">{chip('inbound', '⬅ Inbound')}{chip('outbound', 'Outbound ➡')}{chip('operational', BILL_DIRECTION_LABEL.operational)}{!dir && !p.releaseOptional ? <span className="text-[10px] font-bold" style={{ color: '#b91c1c' }}>tick one</span> : null}</div>
     {field('Release #', b.release_number, relD, setRelD, 'release_number', needRel)}
     {field('Reference', b.other_reference, refD, setRefD, 'other_reference', needRef)}
   </div>;
@@ -130,7 +130,7 @@ function ValidateInline(p) {
   var s3 = useState(''); var how = s3[0]; var setHow = s3[1];
   var s4 = useState(''); var err = s4[0]; var setErr = s4[1];
   var s5 = useState(false); var busy = s5[0]; var setBusy = s5[1];
-  var s6 = useState(p.dir === 'inbound' || p.dir === 'outbound' ? p.dir : ''); var dir = s6[0]; var setDir = s6[1]; // Max 20:54: in / out marked during validation
+  var s6 = useState(BILL_DIRECTIONS.indexOf(p.dir) >= 0 ? p.dir : ''); var dir = s6[0]; var setDir = s6[1]; // Max 20:54: in / out marked during validation
   var s7 = useState(BILL_TYPE_LABEL[p.btype] ? p.btype : ''); var btype = s7[0]; var setBtype = s7[1]; // Max 21:04: the TYPE too
   // v55.83-RV (review #3) — the same rules as 💸 Bills: the price check is shown, a flagged bill needs a written resolution,
   // and every entry is saved as it is made (type / direction on the bill, ticks / notes as a draft)
@@ -189,7 +189,7 @@ function ValidateInline(p) {
       {BILL_TYPES.map(function (t) { var on = btype === t; return <button key={t} onClick={function () { setBtype(t); setErr(''); keep({ fields: { bill_type: t } }, true); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: on ? '#7c2d12' : '#ffffff', color: on ? '#ffffff' : '#7c2d12', border: '1px solid ' + (on ? '#7c2d12' : (btype ? '#cbd5e1' : '#f87171')) }}>{BILL_TYPE_LABEL[t]}</button>; })}
     </div>
     <div className="flex gap-1 my-1">
-      {[['inbound', '⬅ Inbound'], ['outbound', 'Outbound ➡']].map(function (o) { var on = dir === o[0]; return <button key={o[0]} onClick={function () { setDir(o[0]); setErr(''); keep({ fields: { shipment_direction: o[0] } }, true); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: on ? '#1d4ed8' : '#ffffff', color: on ? '#ffffff' : '#1e3a8a', border: '1px solid ' + (on ? '#1d4ed8' : (dir ? '#cbd5e1' : '#f87171')) }}>{o[1]}</button>; })}
+      {BILL_DIRECTIONS.map(function (k) { return [k, BILL_DIRECTION_LABEL[k]]; }).map(function (o) { var on = dir === o[0]; return <button key={o[0]} onClick={function () { setDir(o[0]); setErr(''); keep({ fields: { shipment_direction: o[0] } }, true); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: on ? '#1d4ed8' : '#ffffff', color: on ? '#ffffff' : '#1e3a8a', border: '1px solid ' + (on ? '#1d4ed8' : (dir ? '#cbd5e1' : '#f87171')) }}>{o[1]}</button>; })}
       <span className="text-[10px] self-center" style={{ color: '#78350f' }}>(required)</span>
     </div>
     {box('matches_records', 'Matches our records (PO / shipment / order)')}{box('goods_received', 'Goods or services were received')}{box('charges_accurate', 'Charges are accurate and legitimate')}
@@ -252,7 +252,7 @@ function BillReviewModal(p) {
         <div>
           <div className="rounded-xl p-3 mb-2" style={{ border: '1px solid #e2e8f0', background: '#ffffff' }}>
             {fact('Vendor', b.vendor_name || '—')}{fact('Bill #', b.bill_number || 'missing', !b.bill_number)}{fact('Bill date', b.bill_date || 'missing', !b.bill_date)}{fact('Due', b.due_date || '—')}
-            {fact('Type', BILL_TYPE_LABEL[b.bill_type] || 'not set', !b.bill_type)}{fact('In / Out', b.shipment_direction === 'inbound' ? '⬅ Inbound' : b.shipment_direction === 'outbound' ? 'Outbound ➡' : 'not set', !b.shipment_direction)}
+            {fact('Type', BILL_TYPE_LABEL[b.bill_type] || 'not set', !b.bill_type)}{fact('In / Out', BILL_DIRECTION_LABEL[b.shipment_direction] ? BILL_DIRECTION_LABEL[b.shipment_direction] : 'not set', !b.shipment_direction)}
             {fact('Release #', b.release_number || (b.shipment_direction === 'outbound' ? 'MISSING (outbound needs one)' : '—'), b.shipment_direction === 'outbound' && !b.release_number)}
             {fact('Reference', b.other_reference || (b.shipment_direction === 'inbound' ? 'MISSING (inbound needs one)' : '—'), b.shipment_direction === 'inbound' && !b.other_reference)}
             {fact('Bill total', '$' + fmt(b.total_amount))}{fact('Paid before', before.length ? before.map(function (o) { return '$' + fmt(o.amount) + ' ' + (o.paid_date || '') + ' (' + o.label + ')'; }).join('; ') : 'nothing', before.length > 0)}
@@ -475,7 +475,7 @@ export default function WirePackagesPanel(props) {
     setBusy(true);
     api(payload).then(function (j) {
       if (j && j.ok) {
-        toast.success((field === 'shipment_direction' ? (v === 'inbound' ? 'Marked INBOUND' : 'Marked OUTBOUND') : (field === 'other_reference' ? 'Reference ' : 'Release ') + j.value + ' saved') + ' on the bill.');
+        toast.success((field === 'shipment_direction' ? (v === 'inbound' ? 'Marked INBOUND' : v === 'operational' ? 'Marked OPERATIONAL' : 'Marked OUTBOUND') : (field === 'other_reference' ? 'Reference ' : 'Release ') + j.value + ' saved') + ' on the bill.');
         setEd(function (e) { return (e && e.bills) ? Object.assign({}, e, { bills: e.bills.map(function (x) { if (x.id !== billId) { return x; } var y = Object.assign({}, x); y[field] = j.value; return y; }) }) : e; });
         if (det && det.package && det.package.raw_status === 'draft') { recheck(); }
         if (done) { done(true); }

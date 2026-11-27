@@ -67,7 +67,7 @@ console.log('RO — validate first, then wire; delete a wire in progress');
   var v0b = await call(bills, 'u1', { action: 'validate_bill', id: B1, checks: { matches_records: true, goods_received: true }, notes: 'checked the delivery receipt', shipment_direction: 'outbound', bill_type: 'trucking' });
   check('2b: a missing tick → refused', !v0b.ok && /three checks/.test(v0b.error), v0b);
   var v0c = await call(bills, 'u1', { action: 'validate_bill', id: B1, checks: CK, notes: 'matched to PO 4411 and the delivery receipt', bill_type: 'trucking' });
-  check('2c: inbound / outbound not marked → refused ("it is part of validating it")', !v0c.ok && /Inbound or Outbound/.test(v0c.error) && db.t.vendor_bills[0].validation_status === null, v0c);
+  check('2c: inbound / outbound not marked → refused ("it is part of validating it")', !v0c.ok && /Inbound, Outbound or Operational/.test(v0c.error) /* v55.83-ZY */ && db.t.vendor_bills[0].validation_status === null, v0c);
   var v1 = await call(bills, 'u1', { action: 'validate_bill', id: B1, checks: CK, notes: 'matched to PO 4411 and the delivery receipt', shipment_direction: 'outbound', bill_type: 'trucking' });
   check('2d: direction + 3 checks + HOW → validated; Outbound saved on the bill; who / when / direction on the audit trail',
     v1.ok && db.t.vendor_bills[0].validation_status === 'validated' && db.t.vendor_bills[0].shipment_direction === 'outbound' && db.t.vendor_bills[0].validated_by === 'u1' &&
@@ -124,7 +124,7 @@ console.log('RO — validate first, then wire; delete a wire in progress');
     U.indexOf("'mark it Inbound or Outbound'") > 0 && U.indexOf("bills: (e.bills || []).concat([nb])") > 0);
   check('5c: a bill on a draft wire can be validated from the wire too, then the wire re-checks itself', U.indexOf("onDone={function () { toast.success('✓ Validated.'); recheck(); }}") > 0);
   check('5d: in 💸 Bills, validating asks Inbound / Outbound first; "Mark validated" says what is still missing and a refusal shows in red (no silent fail)',
-    BT.indexOf('This bill is for:') > 0 && BT.indexOf("shipment_direction: validating.dir") > 0 && BT.indexOf("'mark it Inbound or Outbound'") > 0 &&
+    BT.indexOf('This bill is for:') > 0 && BT.indexOf("shipment_direction: validating.dir") > 0 && BT.indexOf("'mark what it is for: Inbound, Outbound or Operational'") > 0 /* v55.83-ZY */ &&
     BT.indexOf('Still needed: ') > 0 && BT.indexOf('validating.err') > 0 && BT.indexOf("write HOW you verified it (10+ characters)") > 0);
   check('5e: delete / undo ask right on the screen (no browser pop-up that can be blocked), with the reason, and a 🗑 on each wire in progress in the list',
     U.indexOf('window.prompt') < 0 && U.indexOf("setDelAsk({ mode: 'erase', reason: '' })") > 0 && U.indexOf("setDelAsk({ mode: 'undo', reason: '' })") > 0 && U.indexOf('title="Delete this wire (not sent yet)"') > 0);

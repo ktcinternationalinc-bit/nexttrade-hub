@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZY',
+    date: '2026-11-27',
+    title: 'Bills: “Other services” bill type and “Operational” bills (not for a shipment)',
+    items: [
+      { text: 'New bill type **🧾 Other services** — software, subscriptions, office and professional services (for example the QuickBooks subscription). It is a service, never goods: it never counts as a product cost and never goes into the Warehouse check.' },
+      { text: 'New choice under **This bill is for: 🏢 Operational** — a bill that is not for a shipment. It needs **no release # and no reference**. An Operational bill never carries a release #, so it is never attached to a shipment or its profit.' },
+      { text: 'The choices show everywhere you mark a bill: adding / editing a bill, validating it, the wire screens, and the filters in 💸 Bills.' },
+      { superAdminOnly: true, text: 'Run sql/v55-83-ZY-other-services-operational.sql (one transaction, only widens): vendor_bills bill_type + other_services, shipment_direction + operational; same on bill_price_rules.bill_type / bill_commission_rules.default_direction; the validation trigger message names Operational; hub_bill_other_services_installed(). Until it is run the new choices are refused with a plain message (nothing saved). Operational: refused with a release #, no release / reference needed on wires; never on a release or shipment profit (still in company spending). Other services / Operational lines are charges; never in the Warehouse check or cost of goods.' },
+    ]
+  },
+  {
     version: 'v55.83-ZW',
     date: '2026-11-27',
     title: 'Warehouse check: a note and Approved / Disputed on each failing line, and the invoice in a pop-up',

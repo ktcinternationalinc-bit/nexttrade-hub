@@ -50,12 +50,12 @@ console.log('RP — bill type + direction on import; both required to validate')
 (async function () {
   // ── 1. the reader
   check('1a: the reader is asked for the TYPE (trucking / shipping / bonded-brokerage / supplier), the release # and a reference — and told: unclear = null, never guess',
-    ['"trucking"|"shipping"|"bonded_brokerage"|"supplier"|null', 'release_number', 'other_reference', 'If it is not clear, use null — NEVER guess.', 'Never use the bill/invoice number, a PO, a BOL or a container number as the release.'].every(function (k) { return X.BILL_EXTRACT_PROMPT.indexOf(k) >= 0; }));
+    ['"trucking"|"shipping"|"bonded_brokerage"|"supplier"|"other_services"|null' /* v55.83-ZY */, 'release_number', 'other_reference', 'If it is not clear, use null — NEVER guess.', 'Never use the bill/invoice number, a PO, a BOL or a container number as the release.'].every(function (k) { return X.BILL_EXTRACT_PROMPT.indexOf(k) >= 0; }));
   var p1 = X.parseBillExtraction('{"vendor_name":"Fast Trucking","bill_number":"T-9","bill_date":"2026-11-01","total_amount":450,"release_number":"1003-077","bill_type":"TRUCKING"}');
   check('1b: a release # on the bill → OUTBOUND automatically; the type read is kept', p1.draft.release_number === '1003-077' && p1.draft.shipment_direction === 'outbound' && p1.draft.bill_type === 'trucking', p1.draft);
   var p2 = X.parseBillExtraction('{"vendor_name":"Customs Pro","bill_number":"C-1","bill_date":"2026-11-01","total_amount":80,"release_number":null,"bill_type":"taxi","other_reference":"bol 5512"}');
   check('1c: no release # → direction left BLANK (never guessed inbound); a type outside the four → blank', p2.draft.shipment_direction === null && p2.draft.bill_type === null && p2.draft.other_reference === 'BOL 5512', p2.draft);
-  check('1d: the four types, plainly named', X.BILL_TYPES.join() === 'trucking,shipping,bonded_brokerage,supplier' && /Bonded/.test(X.BILL_TYPE_LABEL.bonded_brokerage));
+  check('1d: the types, plainly named (v55.83-ZY: + other services)', X.BILL_TYPES.join() === 'trucking,shipping,bonded_brokerage,supplier,other_services' && /Bonded/.test(X.BILL_TYPE_LABEL.bonded_brokerage));
   // ── 2. what an import puts on the bill, and where it came from
   var hist = await XS.vendorBillType(db, 'atlantic ocean lines');
   var none = await XS.vendorBillType(db, 'Mixed Co');
@@ -100,7 +100,7 @@ console.log('RP — bill type + direction on import; both required to validate')
   var v0 = await call(bills, 'u1', { action: 'validate_bill', id: nb2.id, checks: CK, notes: 'checked against the customs entry', shipment_direction: 'inbound' });
   check('5a: no type → validation refused', !v0.ok && /bill TYPE/.test(v0.error) && nb2.validation_status === 'pending', v0);
   var v1 = await call(bills, 'u1', { action: 'validate_bill', id: nb2.id, checks: CK, notes: 'checked against the customs entry', bill_type: 'bonded_brokerage' });
-  check('5b: type but no direction → refused', !v1.ok && /Inbound or Outbound/.test(v1.error), v1);
+  check('5b: type but no direction → refused', !v1.ok && /Inbound, Outbound or Operational/.test(v1.error) /* v55.83-ZY */, v1);
   var v2 = await call(bills, 'u1', { action: 'validate_bill', id: nb2.id, checks: CK, notes: 'checked against the customs entry', bill_type: 'bonded_brokerage', shipment_direction: 'inbound' });
   var au = db.t.hub_audit_log.filter(function (h) { return h.action === 'bill_validated' && h.entity_id === nb2.id; })[0];
   check('5c: type + direction + checks + HOW → validated; both stored as "set at validation"; the audit trail has them', v2.ok && nb2.validation_status === 'validated' && nb2.bill_type === 'bonded_brokerage' && nb2.bill_type_source === 'validator' &&

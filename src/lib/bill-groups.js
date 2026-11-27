@@ -30,10 +30,10 @@ function numberCompare(a, b) {
   if (!x && !y) { return 0; } if (!x) { return 1; } if (!y) { return -1; }
   return x.localeCompare(y, undefined, { numeric: true, sensitivity: 'base' });
 }
-var TYPE_ORDER = { trucking: 1, shipping: 2, bonded_brokerage: 3, supplier: 4 };
+var TYPE_ORDER = { trucking: 1, shipping: 2, bonded_brokerage: 3, supplier: 4, other_services: 5 }; // ZY + other services
 export var BILL_SORTS = [
   { key: 'due', label: 'due date' }, { key: 'bill_date', label: 'bill date' }, { key: 'bill_number', label: 'bill number' }, { key: 'vendor', label: 'vendor' },
-  { key: 'amount', label: 'amount' }, { key: 'open', label: 'open balance' }, { key: 'type', label: 'type of bill' }, { key: 'direction', label: 'inbound / outbound' }
+  { key: 'amount', label: 'amount' }, { key: 'open', label: 'open balance' }, { key: 'type', label: 'type of bill' }, { key: 'direction', label: 'inbound / outbound / operational' }
 ];
 // sortBy = one of BILL_SORTS; dir = 'asc' | 'desc'. A missing date goes last in both directions. Ties: due date, then bill number.
 export function sortBills(bills, sortBy, dir) {

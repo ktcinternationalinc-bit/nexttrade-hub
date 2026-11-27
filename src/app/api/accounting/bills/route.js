@@ -26,7 +26,7 @@ import { loadBillCredits } from '../../../../lib/vendor-credits-server'; // v55.
 import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
 import { readBillFromBase64, insertImportedBill, vendorBillType, findExactSameBill, exactDupMessage } from '../../../../lib/bill-extract-server';
 import { exactSameWords } from '../../../../lib/bill-dup-scan'; // v55.83-UQ
-import { importSort, BILL_TYPE_LABEL } from '../../../../lib/bill-extract';
+import { importSort, BILL_TYPE_LABEL, BILL_DIRECTIONS } from '../../../../lib/bill-extract';
 import { saveBillLines, runPriceCheck, loadLines, loadPriceRules, loadCommissionRules, recheckOpenBills } from '../../../../lib/bill-lines-server'; // v55.83-RQ
 import { commissionRuleFor, productInventory, spendReport, periodRange, normText, shapeLine, priceCheck as priceCheckPure, defaultDirectionFor } from '../../../../lib/bill-lines';
 import { billDupVerdict } from '../../../../lib/bill-dup-server'; // v55.83-QH
@@ -50,6 +50,9 @@ export const maxDuration = 60;
 import { learnRule } from '../../../../lib/expense-rules-server'; // v55.83-PJ — bills remember vendor categories
 import { PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
 import { categoryForNewBill, loadBillRules, provenanceFields } from '../../../../lib/bill-rules-server'; // v55.83-WX — bill category rules first, then the vendor memory
+// v55.83-ZY — "Other services" / "Operational" need the widened checks; a refusal by the OLD check is said plainly (never saved without them)
+var ZY_SQL_WORDS = 'The new choices Other services / Operational need sql/v55-83-ZY-other-services-operational.sql — run it in Supabase, then save again. Nothing was saved.';
+function zyNeedsSql(err) { return !!err && /vendor_bills_bill_type_check|vendor_bills_shipment_direction_check|bill_commission_rules_default_direction_check/.test(String(err.message || '')); }
 
 var API_BUILD_MARKER = 'v55.83-PB-bills';
 var PAGE = 1000; var MAX_ROWS = 20000;
@@ -460,7 +463,7 @@ export async function POST(req) {
       // v55.83-RP (Max, Nov 9 21:04) — the TYPE of bill; a release # with no direction picked = OUTBOUND
       if (Object.prototype.hasOwnProperty.call(bl, 'bill_type')) {
         var btB = String(bl.bill_type || '').toLowerCase();
-        if (btB && !BILL_TYPE_LABEL[btB]) { return NextResponse.json({ error: 'Pick the bill type: trucking, shipping, bonded / brokerage or supplier.' }, { status: 400 }); }
+        if (btB && !BILL_TYPE_LABEL[btB]) { return NextResponse.json({ error: 'Pick the bill type: trucking, shipping, bonded / brokerage, supplier or other services.' }, { status: 400 }); }
         fields.bill_type = btB || null;
         if (Object.prototype.hasOwnProperty.call(bl, 'bill_type_source')) { fields.bill_type_source = btB ? (bl.bill_type_source === 'read_from_bill' || bl.bill_type_source === 'vendor_history' ? bl.bill_type_source : 'manual') : null; }
       }
@@ -468,11 +471,13 @@ export async function POST(req) {
       else if (!String(bl.shipment_direction || '').trim() && !bl.id) { var ddN = defaultDirectionFor(await loadCommissionRules(db), vendor); if (ddN) { bl.shipment_direction = ddN; bl.direction_source = 'vendor_default'; } } // RW — e.g. NexPac → inbound
       if (Object.prototype.hasOwnProperty.call(bl, 'shipment_direction')) {
         var dirB = String(bl.shipment_direction || '').toLowerCase();
-        if (dirB && dirB !== 'inbound' && dirB !== 'outbound') { return NextResponse.json({ error: 'Pick inbound or outbound.' }, { status: 400 }); }
+        if (dirB && BILL_DIRECTIONS.indexOf(dirB) < 0) { return NextResponse.json({ error: 'Pick what the bill is for: inbound, outbound or operational.' }, { status: 400 }); }
         fields.shipment_direction = dirB || null;
         if (dirB === 'outbound' && bl.direction_source === 'release_number' && fields.release_number) { fields.direction_source = 'release_number'; } // RP — imported: release # on the bill
         else if (bl.direction_source === 'manual') { fields.direction_source = dirB ? 'manual' : null; }
         else if (bl.direction_source === 'vendor_default' && dirB) { fields.direction_source = 'vendor_default'; } // RW
+        // v55.83-ZY — OPERATIONAL = not for a shipment: no release # and no reference needed, and it never carries a release #
+        if (dirB === 'operational' && (fields.release_number || String(bl.release_number || '').trim())) { return NextResponse.json({ error: 'An OPERATIONAL bill is not for a shipment — remove the release # or pick Outbound.' }, { status: 400 }); }
         if (dirB === 'outbound' && !fields.release_number && !String(bl.release_number || '').trim()) { return NextResponse.json({ error: 'An OUTBOUND bill needs its release #.' }, { status: 400 }); }
         if (dirB === 'inbound' && !fields.other_reference && bl.direction_source !== 'vendor_default') { return NextResponse.json({ error: 'An INBOUND bill needs its reference (BOL / PO / container…).' }, { status: 400 }); } // RW — a pre-picked default never blocks saving (the wire check still asks for the reference)
       }
@@ -552,6 +557,7 @@ export async function POST(req) {
         if (wxReadyU && String(cur.data.category || '') !== String(fields.category || '')) { fields.category_source = fields.category ? 'manual' : null; fields.category_rule_id = null; fields.category_rule_version = null; }
         var up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle();
         var qbWarnU = null;
+        if (zyNeedsSql(up.error)) { return NextResponse.json({ error: ZY_SQL_WORDS }, { status: 409 }); } // v55.83-ZY — never saved without the new choice
         if (up.error && /bill_type|direction_source/.test(up.error.message || '')) { delete fields.bill_type; delete fields.bill_type_source; delete fields.direction_source; up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle(); if (!up.error) { qbWarnU = 'Saved WITHOUT the bill type — run sql/v55-83-RP-bill-type.sql to store it.'; } } // RP SQL not run yet
         if (up.error && /other_reference|shipment_direction/.test(up.error.message || '')) { delete fields.other_reference; delete fields.shipment_direction; up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle(); if (!up.error) { qbWarnU = 'Saved WITHOUT the reference / inbound-outbound — run sql/v55-83-RL-wire-override-delete-reference.sql to store them.'; } } // RL SQL not run yet
         if (up.error && /release_number/.test(up.error.message || '')) { delete fields.release_number; up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle(); if (!up.error) { qbWarnU = 'Saved WITHOUT the release number — run sql/v55-83-RG-wires-recon.sql to store it.'; } } // RG SQL not run yet
@@ -579,7 +585,7 @@ export async function POST(req) {
         bill_type: fields.bill_type || bl.bill_type || null, release_number: Object.prototype.hasOwnProperty.call(fields, 'release_number') ? fields.release_number : (bl.release_number || null), other_reference: fields.other_reference || null };
       // (Codex 22 Nov 08:53 P2) the bill's own lines, as they will be saved, go into the rule check: a supplier line that is a
       // product cost blocks a deducted category, and words that appear only on a line count
-      var wxLines = Array.isArray(bl.lines) ? bl.lines.slice(0, 60).map(function (l, i) { var lx = l || {}; var tB = fields.bill_type || bl.bill_type || ''; var dk = (tB === 'trucking' || tB === 'shipping' || tB === 'bonded_brokerage') ? 'charge' : 'item'; return shapeLine(Object.assign({}, lx, { line_kind: lx.line_kind || (/commission/i.test(String(lx.description || '')) ? 'commission' : dk) }), i); }) : []; // the same shaping saveBillLines uses
+      var wxLines = Array.isArray(bl.lines) ? bl.lines.slice(0, 60).map(function (l, i) { var lx = l || {}; var tB = fields.bill_type || bl.bill_type || ''; var dk = (tB === 'trucking' || tB === 'shipping' || tB === 'bonded_brokerage' || tB === 'other_services') ? 'charge' : 'item'; return shapeLine(Object.assign({}, lx, { line_kind: lx.line_kind || (/commission/i.test(String(lx.description || '')) ? 'commission' : dk) }), i); }) : []; // the same shaping saveBillLines uses
       if (!fields.category || bl.category_rule_id) { wxPick = await categoryForNewBill(db, wxBill, wxLines); }
       // (Codex 22 Nov 09:18 P2) category_rule_id travels ONLY with a category the import screen pre-filled from a rule and the person
       // did not touch (the screen drops it as soon as the category is changed). Such a pre-fill is the rule's, not the person's: when
@@ -600,6 +606,7 @@ export async function POST(req) {
       }
       fields.created_by = userId;
       var ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle();
+      if (zyNeedsSql(ins.error)) { return NextResponse.json({ error: ZY_SQL_WORDS }, { status: 409 }); } // v55.83-ZY
       if (ins.error && /bill_type|direction_source/.test(ins.error.message || '')) { delete fields.bill_type; delete fields.bill_type_source; delete fields.direction_source; ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle(); } // RP SQL not run yet
       if (ins.error && /other_reference|shipment_direction/.test(ins.error.message || '')) { delete fields.other_reference; delete fields.shipment_direction; ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle(); } // RL SQL not run yet
       if (ins.error && /release_number/.test(ins.error.message || '')) { delete fields.release_number; ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle(); } // RG SQL not run yet — save the rest
@@ -1014,8 +1021,9 @@ export async function POST(req) {
       var vDir = String(body.shipment_direction || vb2.data.shipment_direction || '').toLowerCase();
       // v55.83-RP (Max 21:04: "Prior to validation there MUST be a selection of the TYPE of bill and the direction of the bill")
       var vType = String(body.bill_type || vb2.data.bill_type || '').toLowerCase();
-      if (!BILL_TYPE_LABEL[vType]) { return NextResponse.json({ error: 'Pick the bill TYPE (trucking, shipping, bonded / brokerage or supplier) — it is part of validating it.' }, { status: 400 }); }
-      if (vDir !== 'inbound' && vDir !== 'outbound') { return NextResponse.json({ error: 'Mark the bill Inbound or Outbound — it is part of validating it.' }, { status: 400 }); }
+      if (!BILL_TYPE_LABEL[vType]) { return NextResponse.json({ error: 'Pick the bill TYPE (trucking, shipping, bonded / brokerage, supplier or other services) — it is part of validating it.' }, { status: 400 }); }
+      if (BILL_DIRECTIONS.indexOf(vDir) < 0) { return NextResponse.json({ error: 'Mark what the bill is for — Inbound, Outbound or Operational — it is part of validating it.' }, { status: 400 }); }
+      if (vDir === 'operational' && String(vb2.data.release_number || '').trim()) { return NextResponse.json({ error: 'An OPERATIONAL bill is not for a shipment — this bill has release # ' + vb2.data.release_number + '. Remove it or mark the bill Outbound.' }, { status: 400 }); } // v55.83-ZY
       // v55.83-RQ (Max 21:18: "if there is an issue that the HUB sees, then it should flag it for manual intervention") —
       // the price check runs NOW (with the type picked here); a flagged bill is validated only with a written resolution
       var vResolution = String(body.price_resolution || '').trim();
@@ -1024,6 +1032,7 @@ export async function POST(req) {
         // copy of a bill): a refusal stops here with the duplicate message (catch below) and nothing is audited as saved
         var vTU = await db.from('vendor_bills').update({ bill_type: vType, bill_type_source: 'manual' }).eq('id', body.id).select('id').maybeSingle();
         if (vTU.error && /HUB_EXACT_DUPLICATE|HUB_GUARD/.test(vTU.error.message || '')) { throw new Error(vTU.error.message); }
+        if (zyNeedsSql(vTU.error)) { return NextResponse.json({ error: ZY_SQL_WORDS }, { status: 409 }); } // v55.83-ZY
         await audit(db, userId, 'bill_validation_progress_saved', 'vendor_bill', body.id, { bill_type: { from: vb2.data.bill_type || null, to: vType } }); // review #15
       }
       var vPC = await runPriceCheck(db, body.id, null, { actorId: userId });
@@ -1039,6 +1048,7 @@ export async function POST(req) {
       if (String(body.warehouse_reference || '').trim()) { vPatch.warehouse_reference = String(body.warehouse_reference).trim().substring(0, 120); }
       if (String(body.attachment_path || '').trim()) { vPatch.validation_attachment_path = String(body.attachment_path).trim().substring(0, 300); }
       var vUp = await db.from('vendor_bills').update(vPatch).eq('id', body.id).select('id').maybeSingle();
+      if (zyNeedsSql(vUp.error)) { return NextResponse.json({ error: ZY_SQL_WORDS }, { status: 409 }); } // v55.83-ZY
       if (vUp.error && /bill_type|direction_source/.test(vUp.error.message || '')) { return NextResponse.json({ error: 'The bill type cannot be stored yet — run sql/v55-83-RP-bill-type.sql in Supabase, then validate again.' }, { status: 400 }); }
       if (vUp.error) { throw new Error(vUp.error.message); }
       await db.from('vendor_bill_events').insert({ bill_id: body.id, kind: 'validated', actor_id: userId,
@@ -1237,7 +1247,7 @@ export async function POST(req) {
       if (vpT && !BILL_TYPE_LABEL[vpT]) { return NextResponse.json({ error: 'Unknown bill type.' }, { status: 400 }); }
       if (vpT && vpT !== vpB.data.bill_type) { vpPatch.bill_type = vpT; vpPatch.bill_type_source = 'manual'; vpChanged.bill_type = { from: vpB.data.bill_type || null, to: vpT }; }
       var vpD = String(body.shipment_direction || '').toLowerCase();
-      if (vpD && vpD !== 'inbound' && vpD !== 'outbound') { return NextResponse.json({ error: 'Pick inbound or outbound.' }, { status: 400 }); }
+      if (vpD && BILL_DIRECTIONS.indexOf(vpD) < 0) { return NextResponse.json({ error: 'Pick what the bill is for: inbound, outbound or operational.' }, { status: 400 }); }
       if (vpD && vpD !== vpB.data.shipment_direction) { vpPatch.shipment_direction = vpD; vpPatch.direction_source = 'manual'; vpChanged.shipment_direction = { from: vpB.data.shipment_direction || null, to: vpD }; }
       var vpDr = body.draft && typeof body.draft === 'object' ? body.draft : null;
       var vpWarn = null;
@@ -1254,7 +1264,8 @@ export async function POST(req) {
         delete vpPatch.validation_draft; vpWarn = 'type and direction saved; the ticks and notes are kept only after sql/v55-83-RU-validation-progress.sql is run';
         vpUp = Object.keys(vpPatch).length ? await db.from('vendor_bills').update(vpPatch).eq('id', body.id).select('id').maybeSingle() : { data: { id: body.id } };
       }
-      if (vpUp.error && /HUB_EXACT_DUPLICATE/.test(vpUp.error.message || '')) { throw new Error(vpUp.error.message); } // v55.83-WZ — plain 409 (catch below), nothing saved
+      if (vpUp.error && /HUB_EXACT_DUPLICATE/.test(vpUp.error.message || '')) { throw new Error(vpUp.error.message); }
+      if (zyNeedsSql(vpUp.error)) { return NextResponse.json({ error: ZY_SQL_WORDS }, { status: 409 }); } // v55.83-ZY // v55.83-WZ — plain 409 (catch below), nothing saved
       if (vpUp.error) { return NextResponse.json({ error: vpUp.error.message }, { status: 500 }); }
       if (Object.keys(vpChanged).length) {
         await audit(db, userId, 'bill_validation_progress_saved', 'vendor_bill', body.id, vpChanged);
@@ -1330,12 +1341,13 @@ export async function POST(req) {
       var cru = body.rule || {};
       var crRate = Number(String(cru.rate_pct == null ? '' : cru.rate_pct).replace('%', '')) / 100;
       var crF = { vendor_match: String(cru.vendor_match || '').trim().substring(0, 120), rate: crRate, active: cru.active !== false, note: String(cru.note || '').trim().substring(0, 300) || null, updated_by: userId, updated_at: new Date().toISOString() };
-      if (Object.prototype.hasOwnProperty.call(cru, 'default_direction')) { crF.default_direction = cru.default_direction === 'inbound' || cru.default_direction === 'outbound' ? cru.default_direction : null; } // RW
+      if (Object.prototype.hasOwnProperty.call(cru, 'default_direction')) { crF.default_direction = BILL_DIRECTIONS.indexOf(cru.default_direction) >= 0 ? cru.default_direction : null; } // RW
       if (!crF.vendor_match) { return NextResponse.json({ error: 'Which vendor bills cost + a commission?' }, { status: 400 }); }
       if (!(crF.rate > 0 && crF.rate < 1)) { return NextResponse.json({ error: 'The commission % must be between 0 and 100 (e.g. 12.5).' }, { status: 400 }); }
       var crR;
       if (cru.id) { crR = await db.from('bill_commission_rules').update(crF).eq('id', cru.id).select('*').maybeSingle(); }
       else { crR = await db.from('bill_commission_rules').insert(Object.assign({ created_by: userId }, crF)).select('*').maybeSingle(); }
+      if (zyNeedsSql(crR.error)) { return NextResponse.json({ error: ZY_SQL_WORDS }, { status: 409 }); } // v55.83-ZY
       if (crR.error && /default_direction/.test(crR.error.message || '')) { return NextResponse.json({ error: 'The bills-direction setting needs sql/v55-83-RW-vendor-default-direction.sql — run it in Supabase, then save again.' }, { status: 400 }); }
       if (crR.error) { return NextResponse.json({ error: crR.error.message }, { status: 400 }); }
       await audit(db, userId, cru.id ? 'commission_rule_changed' : 'commission_rule_created', 'bill_commission_rule', crR.data && crR.data.id, crF);

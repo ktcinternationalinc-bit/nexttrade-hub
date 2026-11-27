@@ -56,7 +56,7 @@ export default function PriceRulesPanel(p) {
       {(d.commission_rules || []).map(function (c) {
         return <div key={c.id} className="text-[12px] flex gap-2 items-center" style={{ color: INK }}>
           <b>{c.vendor_match}</b><span>{'cost + ' + (Number(c.rate) * 100) + '% commission'}</span>
-          {(c.default_direction || /^nexpac$/i.test(String(c.vendor_match).trim())) && <span className="px-1.5 py-0.5 rounded text-[11px] font-bold" style={{ background: '#e0e7ff', color: '#312e81' }}>{'bills are ' + (c.default_direction === 'outbound' ? 'Outbound ➡' : '⬅ Inbound') + ' (pre-picked, can be changed per bill)'}</span>}{c.active === false && <span style={{ color: MUTED }}>(off)</span>}
+          {(c.default_direction || /^nexpac$/i.test(String(c.vendor_match).trim())) && <span className="px-1.5 py-0.5 rounded text-[11px] font-bold" style={{ background: '#e0e7ff', color: '#312e81' }}>{'bills are ' + (c.default_direction === 'outbound' ? 'Outbound ➡' : c.default_direction === 'operational' ? '🏢 Operational' : '⬅ Inbound') + ' (pre-picked, can be changed per bill)'}</span>}{c.active === false && <span style={{ color: MUTED }}>(off)</span>}
           <span className="text-[11px]" style={{ color: MUTED }}>{c.note || ''}</span>
           {can && <button onClick={function () { setCf({ id: c.id, vendor_match: c.vendor_match, rate_pct: String(Number(c.rate) * 100), note: c.note || '', active: c.active !== false, default_direction: c.default_direction || (/^nexpac$/i.test(String(c.vendor_match).trim()) ? 'inbound' : '') }); }} className="underline text-[11px] font-bold" style={{ color: '#1d4ed8' }}>change</button>}
         </div>;

@@ -562,10 +562,13 @@ export async function POST(req) {
       var relR = fieldR === 'shipment_direction' ? String(body.shipment_direction || '').toLowerCase()
         : String((fieldR === 'other_reference' ? body.other_reference : body.release_number) || '').trim().toUpperCase().substring(0, 60);
       if (!isUuid(bidR)) { return fail('Bill not recognised — reload.'); }
-      if (fieldR === 'shipment_direction' && relR !== 'inbound' && relR !== 'outbound') { return fail('Pick inbound or outbound.'); }
+      if (fieldR === 'shipment_direction' && relR !== 'inbound' && relR !== 'outbound' && relR !== 'operational') { return fail('Pick what the bill is for: inbound, outbound or operational.'); }
       if (fieldR !== 'shipment_direction' && relR.length < 2) { return fail(fieldR === 'other_reference' ? 'Type the reference.' : 'Type the release number.'); }
       var bR = await db.from('vendor_bills').select('*').eq('id', bidR).maybeSingle();
       if (bR.error || !bR.data) { return fail('Bill not found.', 404); }
+      // v55.83-ZY — Operational = not for a shipment: it never carries a release #
+      if (fieldR === 'shipment_direction' && relR === 'operational' && String(bR.data.release_number || '').trim()) { return fail('An OPERATIONAL bill is not for a shipment — this bill has release # ' + bR.data.release_number + '. Remove it in 💸 Bills or mark it Outbound.'); }
+      if (fieldR === 'release_number' && bR.data.shipment_direction === 'operational') { return fail('This bill is OPERATIONAL (not for a shipment) — it takes no release #. Mark it Outbound first if it is for a shipment.'); }
       // review #1 (v55.83-RV) — a VALIDATED bill: a missing release # / reference may be filled in, nothing validated may change
       if (bR.data.validation_status === 'validated') {
         if (fieldR === 'shipment_direction' && bR.data.shipment_direction && bR.data.shipment_direction !== relR) { return fail('This bill is VALIDATED as ' + bR.data.shipment_direction + ' — reopen its validation in 💸 Bills to change that.', 409); }
@@ -579,6 +582,7 @@ export async function POST(req) {
       }
       var updR = {}; updR[fieldR] = relR;
       var uR = await db.from('vendor_bills').update(updR).eq('id', bidR);
+      if (uR.error && /vendor_bills_shipment_direction_check/.test(uR.error.message || '')) { return fail('Operational needs sql/v55-83-ZY-other-services-operational.sql — run it in Supabase first. Nothing was saved.'); } // v55.83-ZY
       if (uR.error) { return fail(/other_reference|shipment_direction/.test(uR.error.message || '') ? 'Run sql/v55-83-RL-wire-override-delete-reference.sql first (reference / inbound-outbound columns).' : uR.error.message); }
       await audit(db, userId, fieldR === 'other_reference' ? 'bill_reference_set' : fieldR === 'shipment_direction' ? 'bill_direction_set' : 'bill_release_set', 'vendor_bill', bidR, { from: bR.data[fieldR] || null, to: relR, via: 'wires', vendor: bR.data.vendor_name, bill_number: bR.data.bill_number });
       return NextResponse.json({ ok: true, release_number: fieldR === 'release_number' ? relR : undefined, other_reference: fieldR === 'other_reference' ? relR : undefined, field: fieldR, value: relR });
