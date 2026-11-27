@@ -1,0 +1,10 @@
+BEGIN;
+DROP POLICY IF EXISTS hub_payroll_lines_pnl_only ON public.bank_transactions;
+DROP POLICY IF EXISTS hub_payroll_lines_pnl_only ON public.bank_transaction_splits;
+DROP FUNCTION IF EXISTS public.hub_payroll_lines_guard_installed();
+DROP FUNCTION IF EXISTS public.wave_cash_payroll_totals(date, date, text);
+DROP FUNCTION IF EXISTS hub_private.bank_line_is_payroll(uuid);
+DROP FUNCTION IF EXISTS hub_private.bank_line_links_payroll(uuid);
+DROP FUNCTION IF EXISTS hub_private.bank_values_are_payroll(text, text, text, text, text, text, text);
+DROP FUNCTION IF EXISTS hub_private.caller_can_see_payroll_lines();
+COMMIT;

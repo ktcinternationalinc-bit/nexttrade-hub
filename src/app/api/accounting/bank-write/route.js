@@ -16,6 +16,7 @@ import { refusePending } from '../../../../lib/pending-guard'; // v55.83-XT
 import { authorizeBankIdentity, bankSuperAdminIds, readBankJson, BankVisibilityError, bankVisibilityErrorResponse } from '../../../../lib/bank-visibility';
 import { classifyApplication, roundMoney, isPaymentVoid, bankAllocationStatus, summarizeBankAllocation } from '../../../../lib/payment-matching';
 import { exclusiveUseOf, withExclusiveUse } from '../../../../lib/bank-line-exclusive'; // v55.83-YD / YF — one bank line, one use
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, payrollLinesNote } from '../../../../lib/payroll-bills'; // v55.83-ZD rev3 — payroll bank lines
 
 var API_BUILD_MARKER = 'v55.83-IP-bank-write';
 var API_ROUTE = '/api/accounting/bank-write';
@@ -134,6 +135,14 @@ export async function POST(req) {
     try { verifiedSuper = bankSuperAdminIds(process.env).includes(access.authUserId); } catch (_) { /* keep ordinary operational grants independent */ }
     var gate = verifiedSuper ? { ok: true } : await assertPermission(db, by, permKey, req);
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, api_build_marker: API_BUILD_MARKER }, { status: gate.status }); }
+    var payZD = await payrollBillScope(db, by); if (payZD.error) { return NextResponse.json({ ok: false, error: payZD.error }, { status: payZD.status }); } // v55.83-ZD rev3 — payroll bank lines: super admin + P&L only
+    if (requestNamesPayroll(payZD, body)) { return NextResponse.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD);
+    // ZD rev3 (Codex 26 Nov HOLD) — moving a whole bank account / connection to another company restamps EVERY line on it, payroll lines
+    // included. Someone who cannot see payroll lines can neither move them nor leave them behind: refused, the same words for everyone.
+    if ((action === 'assign_account_silo' || action === 'assign_connection_silo') && payZD.canSeeLines !== true) {
+      return NextResponse.json({ ok: false, error: 'Moving a bank account or connection to another company needs P&L access or the super admin (some of its lines may be restricted). Nothing was changed.', api_build_marker: API_BUILD_MARKER }, { status: 403 });
+    }
 
     // v55.83-XT — a pending bank line is never categorized, matched, split, parked, reviewed or pushed (Max 22 Nov).
     // Unmatch / duplicate marking / silo moves stay open so a person can always undo.

@@ -10,6 +10,7 @@ import { settlePendingLines, oldestPendingDate } from '../../../../lib/pending-s
 import { runRulesAndRecord } from '../../../../lib/expense-rules-server'; // v55.83-UG — category rules run right after every sync
 import { dedupeImportedRows } from '../../../../lib/bank-import-dedupe';
 import { settlementWarning } from '../../../../lib/bank-sync-health';
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, payrollLinesNote } from '../../../../lib/payroll-bills'; // v55.83-ZD rev3 — payroll bank lines
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
 var PLAID_BASE = {
@@ -305,6 +306,8 @@ export async function GET(req) {
   try {
     var access = await authorizePlaidOperation(req, 'bank_transactions.view', false);
     var supabase = access.db;
+    var payZD = await payrollBillScope(supabase, access.profileId); if (payZD.error) { return plaidJson({ error: payZD.error }, { status: payZD.status }); } // v55.83-ZD rev3 — payroll bank lines: super admin + P&L only
+    supabase = payrollFilteredDb(supabase, payZD);
     var url = new URL(req.url);
     var connectionId = url.searchParams.get('connection_id');
     var reviewStatus = url.searchParams.get('review_status');
@@ -317,7 +320,7 @@ export async function GET(req) {
     var scopeP = await privateScope(supabase, access.profileId);
     if (scopeP.error) return plaidJson({ error: scopeP.error + ' — nothing is shown rather than a private line.' }, { status: 503 });
     r.data = dropPrivate(r.data, scopeP);
-    return plaidJson({ transactions: r.data });
+    return plaidJson({ transactions: r.data, payroll_lines_note: payrollLinesNote(payZD) });
   } catch (e) {
     return plaidError(e);
   }

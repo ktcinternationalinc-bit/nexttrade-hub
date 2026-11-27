@@ -1,5 +1,6 @@
 import { loadUserPermissions, userHasPermission } from './server-permissions.js';
 import { LEDGER_PNL_PERMISSION, MARGIN_PERMISSION } from './margin-visibility.js';
+import { scrubLedgerReport, PAYROLL_REPORT_WITHHELD, PAYROLL_LEDGER_NOTE } from './payroll-ledger.js'; // v55.83-ZD rev3
 
 const REPORTS=new Set(['readiness','profit_loss','balance_sheet','trial_balance','general_ledger','tax_summary','cash_flow','bank_reconciliation','settings']);
 const BANK_REQUIRED=new Set(['trial_balance','general_ledger','cash_flow','bank_reconciliation']);
@@ -30,6 +31,11 @@ export function createReportsHandlers(authorize,env){
     result=await access.db.rpc('clickbooks_us_reporting_settings_read');
    }else result=await access.db.rpc('clickbooks_us_report_read',{p_report:report,p_from:from,p_to:to,p_with_bank:bank});
    if(result.error)fail(/\bCB_[A-Z0-9_]+\b/.exec(result.error.message||'')?.[0]||'Report database request failed.',503);
+   // ZD rev3 (Max 26 Nov) — payroll accounts and lines only for the verified super admin or a person with P&L: View; for anyone else
+   // they are left out, and a report that still holds a payroll amount is withheld (never a total that silently includes payroll)
+   let seePay=superAdmin;
+   if(!seePay&&report!=='settings'){const ctxZD=await loadUserPermissions(access.db,access.profileId);if(ctxZD.readError)fail('Permissions could not be verified — nothing was shown.',503);seePay=userHasPermission({...ctxZD,isSuperAdmin:false},'pnl.view');}
+   if(!seePay){const sc=scrubLedgerReport(result.data);if(sc.withheld)fail(PAYROLL_REPORT_WITHHELD,403);return json({ok:true,data:sc.data,payroll_note:PAYROLL_LEDGER_NOTE,capabilities:{canViewBankBalances:bank,isVerifiedSuperAdmin:superAdmin}});}
    return json({ok:true,data:result.data,capabilities:{canViewBankBalances:bank,isVerifiedSuperAdmin:superAdmin}});
   }catch(e){return json({ok:false,error:e.status?e.message:'The report request failed safely.'},e.status||500);}
  }

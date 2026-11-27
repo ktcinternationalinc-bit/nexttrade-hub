@@ -188,7 +188,7 @@ export default function WaveImportTab(props) {
     if (!bizId) { window.alert('Choose a Wave business first.'); return; }
     if (!String(csvText || '').trim()) { window.alert('Paste the Wave Transactions CSV first. In Wave: Accounting > Transactions > Export.'); return; }
     setCsvBusy(true); setCsvResult(null);
-    fetch('/api/wave/import-transaction-csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, csv: csvText, dry_run: !apply, override_conflicts: csvOverride, user_id: userProfile && userProfile.id, filename: 'wave-transactions-export.csv' }) })
+    hubFetch('/api/wave/import-transaction-csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, csv: csvText, dry_run: !apply, override_conflicts: csvOverride, user_id: userProfile && userProfile.id, filename: 'wave-transactions-export.csv' }) })
       .then(function (r) { return r.json(); })
       .then(function (d) { setCsvResult(d); if (!d || !d.ok) { return; } if (!d.dry_run) { setCsvText(''); } })
       .catch(function (e) { setCsvResult({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })

@@ -20,6 +20,7 @@ import { loadUserPermissions, userHasPermission } from '../../../../lib/server-p
 import { privateScope } from '../../../../lib/private-accounts-server';
 import { audit } from '../../../../lib/audit-server';
 import { autoTwinCheck } from '../../../../lib/duplicates-server';
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, payrollLinesNote } from '../../../../lib/payroll-bills'; // v55.83-ZD rev3 — payroll bank lines
 
 var API_BUILD_MARKER = 'v55.83-TQ-manual-transaction';
 export var ADD_PERMISSION = 'bank.add_transactions';
@@ -55,6 +56,9 @@ export async function POST(req) {
     var userId = who.userId;
     var ctx = await loadUserPermissions(db, userId);
     if (!(ctx.isSuperAdmin === true || userHasPermission(ctx, ADD_PERMISSION))) { return bad('Adding a transaction by hand needs “Bank: Add transactions”, which only the super admin can switch on.', 403); }
+    var payZD = await payrollBillScope(db, userId); if (payZD.error) { return Response.json({ ok: false, error: payZD.error }, { status: payZD.status }); } // v55.83-ZD rev3 — payroll bank lines: super admin + P&L only
+    if (requestNamesPayroll(payZD, body)) { return Response.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD);
     var scope = await privateScope(db, userId);
     if (scope.error) { return bad(scope.error + ' — nothing was added.', 503); }
 

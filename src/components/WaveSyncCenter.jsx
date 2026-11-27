@@ -885,7 +885,7 @@ export default function WaveSyncCenter(props) {
           return null;
         }
         var route = q.action === 'payment' ? '/api/wave/push-payment' : (q.action === 'invoice' ? '/api/wave/push-invoice-v2' : '/api/wave/push-transaction');
-        return fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: true, user_id: userProfile && userProfile.id }) })
+        return hubFetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: true, user_id: userProfile && userProfile.id }) })
           .then(function (r) { return r.json(); })
           .then(function (d) {
             if (d && d.ok && d.dry_run) {
@@ -920,7 +920,7 @@ export default function WaveSyncCenter(props) {
   function runCsvImport(apply) {
     if (!csvText.trim()) { toast.error('Paste the CSV you exported from Wave first.'); return; }
     setCsvBusy(true); setCsvResult(null);
-    fetch('/api/wave/import-transaction-csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, csv: csvText, dry_run: !apply, override_conflicts: csvOverride, user_id: userProfile && userProfile.id }) })
+    hubFetch('/api/wave/import-transaction-csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, csv: csvText, dry_run: !apply, override_conflicts: csvOverride, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         setCsvResult(d); setCsvBusy(false);
@@ -986,7 +986,7 @@ export default function WaveSyncCenter(props) {
     ordered.forEach(function (q) {
       seq = seq.then(function () {
         var route = q.action === 'customer' ? '/api/wave/push-customer' : (q.action === 'invoice' ? '/api/wave/push-invoice-v2' : (q.action === 'transaction' ? '/api/wave/push-transaction' : '/api/wave/push-payment'));
-        return fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: false, user_id: userProfile && userProfile.id }) })
+        return hubFetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: false, user_id: userProfile && userProfile.id }) })
           .then(function (r) { return r.json().then(function (d) { return { http: r.status, d: d }; }); })
           .then(function (x) { var d = x.d || {}; if (d.success || d.ok) { done++; } else { failed++; failedKeys[q.key] = true; errs.push((q.label || q.action) + ': ' + (d.error || ('HTTP ' + x.http))); } })
           .catch(function (e) { failed++; failedKeys[q.key] = true; errs.push((q.label || q.action) + ': ' + ((e && e.message) || 'network error')); });

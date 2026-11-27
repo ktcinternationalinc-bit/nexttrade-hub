@@ -19,9 +19,11 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-ZD rev3 (Codex 26 Nov HOLD) — act only for the verified signed-in person
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { resolveWaveBankAnchor, waveBankCashCandidates, categoryPushSafety } from '../../../../lib/wave-bank-account-resolver';
 import { PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, payrollLinesNote } from '../../../../lib/payroll-bills'; // v55.83-ZD rev3 — payroll bank lines
 
 var API_BUILD_MARKER = 'v55.83-MR-push-transaction-single-anchor';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
@@ -77,7 +79,10 @@ export async function POST(req) {
     var body = await req.json();
     var waveBusinessId = body.wave_business_id;
     var hubId = body.hub_record_id; // bank_transactions.id
-    var by = body.user_id || null;
+    // ZD rev3 (Codex 26 Nov HOLD) — the permission check and the payroll filter use the VERIFIED sign-in, never a user_id in the body
+    var whoZD = await verifiedCaller(req, body, createClient);
+    if (whoZD.error) { return NextResponse.json({ ok: false, error: whoZD.error, api_build_marker: API_BUILD_MARKER }, { status: whoZD.status || 401 }); }
+    var by = whoZD.userId;
     var isDry = body.dry_run === true;
     var token = process.env.WAVE_ACCESS_TOKEN;
     var txCtx = null;
@@ -92,6 +97,9 @@ export async function POST(req) {
 
     var gate = await assertPermission(db, by, 'wave.payments.push', req);
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, api_build_marker: API_BUILD_MARKER }, { status: gate.status }); }
+    var payZD = await payrollBillScope(db, by); if (payZD.error) { return NextResponse.json({ ok: false, error: payZD.error }, { status: payZD.status }); } // v55.83-ZD rev3 — payroll bank lines: super admin + P&L only
+    if (requestNamesPayroll(payZD, body)) { return NextResponse.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD);
     if (!token) { return blocked('Wave token not configured.', 400); }
     if (!waveBusinessId || !hubId) { return NextResponse.json({ ok: false, error: 'wave_business_id and hub_record_id are required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
     if (isPlaceholderWaveBusiness(waveBusinessId)) { return blocked('This silo is not connected to a real Wave business yet (placeholder id). Bind it under Accounting -> Wave Connection first.', 400); }

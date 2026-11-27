@@ -14,6 +14,7 @@ console.log('XR — Wave push holds a money-back deposit unless it uses the Prof
 var state = { db: null, fetches: 0 };
 function stub(rel, exportsObj) { var p = require.resolve(path.join(root, rel)); require.cache[p] = { id: p, filename: p, loaded: true, exports: exportsObj }; }
 stub('src/lib/server-permissions.js', { assertPermission: function () { return Promise.resolve({ ok: true, ctx: { isSuperAdmin: true, mp: {}, deny: {} } }); }, loadUserPermissions: function () { return Promise.resolve({ isSuperAdmin: true, mp: {}, deny: {} }); }, userHasPermission: function () { return true; }, SENSITIVE_PERMS: {} });
+stub('src/lib/verified-caller.js', { verifiedCaller: function () { return Promise.resolve({ userId: 'u1' }); } }); // ZD rev3: the route acts for the VERIFIED sign-in (stand-in: u1)
 var supa = require.resolve('@supabase/supabase-js', { paths: [root] });
 require.cache[supa] = { id: supa, filename: supa, loaded: true, exports: { createClient: function () { return state.db; } } };
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test'; process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://test'; process.env.WAVE_ACCESS_TOKEN = 'test-token';

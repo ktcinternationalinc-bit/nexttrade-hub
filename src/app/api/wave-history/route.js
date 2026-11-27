@@ -4,6 +4,7 @@ import {
   WAVE_HISTORY_BUSINESS, waveHistoryRpc, waveReportParameters,
 } from '../../../lib/wave-history-server';
 import { MAX_WAVE_CSV_BYTES, parseWaveLedger, readWaveMinor, WaveHistoryError, waveCurrency, waveMonth } from '../../../lib/wave-history';
+import { scrubWaveEntries, ledgerWriteTouchesPayroll } from '../../../lib/payroll-ledger'; // v55.83-ZD rev3
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -21,12 +22,12 @@ function fail(error) {
 
 export async function GET(request) {
   try {
-    const { db, mayViewInventory, mayManage } = await authorizeWaveHistory(request);
+    const { db, mayViewInventory, mayManage, mayViewPayroll } = await authorizeWaveHistory(request);
     const search = Object.fromEntries(new URL(request.url).searchParams);
     if (search.action === 'access') return respond({ mayManage });
     const params = waveReportParameters(search);
     if (search.action !== 'entries') {
-      return respond({ comparison: await getWaveHistoryComparison(db, params), mayViewInventory, mayManage });
+      return respond({ comparison: await getWaveHistoryComparison(db, params, mayViewPayroll), mayViewInventory, mayManage });
     }
     const period = search.period === 'prior' ? params.periods.prior : params.periods.current;
     const offset = Number(search.offset || 0);
@@ -37,7 +38,9 @@ export async function GET(request) {
       p_business: WAVE_HISTORY_BUSINESS, p_currency: params.currency, p_from: period.start,
       p_until: period.end, p_account: search.account || null, p_offset: offset,
     });
-    return respond({ rows: rows.slice(0, 100), hasMore: rows.length > 100 });
+    // ZD rev3 — payroll rows only for the super admin / P&L users
+    const shown = mayViewPayroll === true ? rows : scrubWaveEntries(rows);
+    return respond({ rows: shown.slice(0, 100), hasMore: rows.length > 100, payroll_note: mayViewPayroll === true ? undefined : 'excluding payroll (shown to the super admin and people with P&L access)' });
   } catch (error) {
     return fail(error);
   }
@@ -93,7 +96,7 @@ async function importMonth(request, db, actor) {
 
 export async function POST(request) {
   try {
-    const { db, actor, mayManage, mayViewInventory } = await authorizeWaveHistory(request);
+    const { db, actor, mayManage, mayViewInventory, mayViewPayroll } = await authorizeWaveHistory(request);
     if (request.headers.get('content-type')?.startsWith('multipart/form-data')) {
       if (!mayManage) throw new WaveHistoryError('You do not have permission to import Wave History.', 403);
       return await importMonth(request, db, actor);
@@ -102,7 +105,7 @@ export async function POST(request) {
     try { input = await request.json(); }
     catch { throw new WaveHistoryError('Invalid Wave History request.'); }
     if (input?.action === 'compose') {
-      return respond(await composeWaveHistoryReport(db, waveReportParameters(input), input, mayViewInventory));
+      return respond(await composeWaveHistoryReport(db, waveReportParameters(input), input, mayViewInventory, mayViewPayroll));
     }
     if (input?.action === 'category') {
       if (!mayManage) throw new WaveHistoryError('You do not have permission to edit Wave History categories.', 403);
@@ -110,6 +113,7 @@ export async function POST(request) {
       if (typeof account !== 'string' || !account || account.length > 600 || typeof category !== 'string' || category.trim().length > 100) {
         throw new WaveHistoryError('Choose a Wave account and a category of up to 100 characters.');
       }
+      if (mayViewPayroll !== true && ledgerWriteTouchesPayroll(account, [category])) throw new WaveHistoryError('Payroll accounts are categorized by the super admin or someone with P&L access only. Nothing was saved.', 403); // ZD rev3
       await waveHistoryRpc(db, 'wave_history_set_category', {
         p_business: WAVE_HISTORY_BUSINESS, p_account: account, p_category: category.trim() || null,
       });

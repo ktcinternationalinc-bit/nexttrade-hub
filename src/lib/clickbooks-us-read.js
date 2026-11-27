@@ -1,3 +1,5 @@
+import { loadUserPermissions, userHasPermission } from './server-permissions.js';
+import { scrubClickbooksRead } from './payroll-ledger.js'; // v55.83-ZD rev3 — payroll: super admin + P&L only
 // US Accounting only. Inject the existing verified-identity authorization helper.
 // No browser-supplied business ID, banking permission, or posting operation is accepted.
 var HEADERS = { 'Cache-Control': 'private, no-store, max-age=0', Pragma: 'no-cache', Vary: 'Authorization, Origin', 'X-Content-Type-Options': 'nosniff' };
@@ -45,7 +47,11 @@ export function createClickbooksReadHandler(authorize, env) {
       var bank = access.isVerifiedSuperAdmin === true || access.canViewBankBalances === true;
       var result = await access.db.rpc('clickbooks_us_read', { p_with_bank: bank });
       if (result.error) return json({ ok: false, error: 'The ClickBooks US database read could not be completed. Check the migration and permissions.' }, 503);
-      return json({ ok: true, data: projectClickbooksRead(result.data, bank) });
+      var projected = projectClickbooksRead(result.data, bank);
+      // ZD rev3 (Max 26 Nov) — payroll accounts only for the verified super admin or a person with P&L: View (a failed read sees none)
+      var seePay = access.isVerifiedSuperAdmin === true;
+      if (!seePay && access.profileId) { var ctxZD = await loadUserPermissions(access.db, access.profileId); seePay = !ctxZD.readError && userHasPermission(Object.assign({}, ctxZD, { isSuperAdmin: false }), 'pnl.view'); }
+      return json({ ok: true, data: seePay ? projected : scrubClickbooksRead(projected) });
     } catch (error) {
       var status = [401, 403, 503].includes(error?.status) ? error.status : 500;
       return json({ ok: false, error: status === 401 ? 'Sign in again to verify access.' : status === 403 ? 'You do not have access to this view.' : 'ClickBooks US access could not be verified. No financial data was returned.' }, status);

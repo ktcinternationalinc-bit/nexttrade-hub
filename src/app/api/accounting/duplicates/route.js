@@ -19,6 +19,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { audit } from '../../../../lib/audit-server';
 import { findDuplicates, realAccounts, pairKey } from '../../../../lib/duplicate-detect';
 import { loadBankAccounts, loadBankRows, protectedReasons, loadDismissed, DUP_COLS } from '../../../../lib/duplicates-server';
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, payrollLinesNote } from '../../../../lib/payroll-bills'; // v55.83-ZD rev3 — payroll bank lines
 
 var API_BUILD_MARKER = 'v55.83-SO-duplicates';
 export var maxDuration = 60;
@@ -49,6 +50,9 @@ export async function POST(req) {
     var gate = await assertPermission(db, userId, 'bank.classify', req);
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, denied: true, api_build_marker: API_BUILD_MARKER }, { status: gate.status || 403 }); }
     var by = userId;
+    var payZD = await payrollBillScope(db, userId); if (payZD.error) { return NextResponse.json({ ok: false, error: payZD.error }, { status: payZD.status }); } // v55.83-ZD rev3 — payroll bank lines: super admin + P&L only
+    if (requestNamesPayroll(payZD, body)) { return NextResponse.json({ ok: false, error: 'Not found.' }, { status: 404 }); }
+    db = payrollFilteredDb(db, payZD);
 
     // ── scan: propose groups; remove nothing ──
     if (action === 'scan') {

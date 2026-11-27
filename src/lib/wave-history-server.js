@@ -1,7 +1,8 @@
 import 'server-only';
 import { createClient } from '@supabase/supabase-js';
 import { requireUser } from './phone-auth';
-import { loadUserPermissions, revenueSwitchedOff } from './server-permissions'; // v55.83-XK
+import { loadUserPermissions, revenueSwitchedOff, userHasPermission } from './server-permissions'; // v55.83-XK
+import { scrubWaveHistoryData } from './payroll-ledger'; // v55.83-ZD rev3 — payroll: super admin + P&L only
 import { buildWaveComparison, comparisonPeriods, currencyScale, WaveHistoryError, waveCurrency } from './wave-history';
 
 export const WAVE_HISTORY_BUSINESS = 'nextrade';
@@ -24,16 +25,22 @@ export async function authorizeWaveHistory(request) {
   // to the Hub profile; a failed lookup refuses (fails closed); a sign-in with no Hub profile cannot be a researcher.
   const prof = await db.rpc('bank_visibility_profile_for_identity', { p_auth_user_id: user.id });
   if (prof.error) throw new WaveHistoryError('Permissions could not be read right now — nothing was shown.', 503);
+  // v55.83-ZD rev3 (Max 26 Nov) — payroll accounts and rows only for the super admin or a person with P&L: View (a sign-in with no
+  // Hub profile, or a failed read, sees no payroll)
+  let mayViewPayroll = false;
   for (const row of (prof.data || [])) {
     const ctx = await loadUserPermissions(db, row.profile_id);
     if (ctx.readError) throw new WaveHistoryError('Permissions could not be read right now — nothing was shown.', 503);
     if (revenueSwitchedOff(ctx)) throw new WaveHistoryError('Wave History shows income, and "P&L: See sales & revenue" is off for you — ask the super admin.', 403);
+    if (ctx.isSuperAdmin === true || userHasPermission(ctx, 'pnl.view')) mayViewPayroll = true;
   }
+  if ((prof.data || []).length !== 1) mayViewPayroll = false; // one sign-in = one Hub person; anything else is not trusted with payroll
   return {
     db,
     actor: user.id,
     mayManage: grant.can_manage === true,
     mayViewInventory: grant.can_view_inventory === true,
+    mayViewPayroll,
   };
 }
 
@@ -63,17 +70,19 @@ export function waveReportParameters(input) {
   return { currency, periods, dates };
 }
 
-export async function getWaveHistoryComparison(db, params) {
-  const data = await waveHistoryRpc(db, 'wave_history_data', {
+export async function getWaveHistoryComparison(db, params, mayViewPayroll) {
+  const raw = await waveHistoryRpc(db, 'wave_history_data', {
     p_business: WAVE_HISTORY_BUSINESS, p_currency: params.currency, ...params.dates,
   });
+  const data = mayViewPayroll === true ? raw : scrubWaveHistoryData(raw); // ZD rev3 — payroll accounts left out before the totals
   return {
     ...buildWaveComparison(data, params.periods),
+    payroll_note: mayViewPayroll === true ? undefined : 'excluding payroll (shown to the super admin and people with P&L access)',
     business: 'NextTrade', wave_profile: data.wave_profile, currency: params.currency, basis: 'accrual',
   };
 }
 
-export async function composeWaveHistoryReport(db, params, input, mayViewInventory) {
+export async function composeWaveHistoryReport(db, params, input, mayViewInventory, mayViewPayroll) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new WaveHistoryError('Claude is unavailable in this Hub environment.', 503);
 
@@ -84,7 +93,7 @@ export async function composeWaveHistoryReport(db, params, input, mayViewInvento
   if (useInventory && !mayViewInventory) throw new WaveHistoryError('You do not have access to Inventory receipts.', 403);
 
   const [comparison, inventory] = await Promise.all([
-    getWaveHistoryComparison(db, params),
+    getWaveHistoryComparison(db, params, mayViewPayroll),
     useInventory ? waveHistoryRpc(db, 'wave_history_receipt_totals', { ...params.dates, p_product_filter: filter || null }) : null,
   ]);
   if (!comparison.current.imported.length && !comparison.prior.imported.length && !inventory?.months_with_receipts.length) {

@@ -13,8 +13,10 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-ZD rev3 (Codex 26 Nov HOLD) — act only for the verified signed-in person
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { detectAmountCol } from '../../../../lib/wave-csv-columns';
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, payrollLinesNote } from '../../../../lib/payroll-bills'; // v55.83-ZD rev3 — payroll bank lines
 
 var API_BUILD_MARKER = 'v55.83-MS-import-transaction-csv-signed-amount-paged';
 
@@ -98,7 +100,10 @@ export async function POST(req) {
   var db = admin();
   try {
     var body = await req.json();
-    var by = body.user_id || null;
+    // ZD rev3 (Codex 26 Nov HOLD) — the permission check and the payroll filter use the VERIFIED sign-in, never a user_id in the body
+    var whoZD = await verifiedCaller(req, body, createClient);
+    if (whoZD.error) { return NextResponse.json({ ok: false, error: whoZD.error, api_build_marker: API_BUILD_MARKER }, { status: whoZD.status || 401 }); }
+    var by = whoZD.userId;
     var waveBusinessId = body.wave_business_id || null;
     var csv = body.csv || '';
     var isDry = body.dry_run !== false; // default to dry-run for safety; must pass dry_run:false to apply
@@ -106,6 +111,8 @@ export async function POST(req) {
 
     var gate = await assertPermission(db, by, 'bank.classify', req);
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, api_build_marker: API_BUILD_MARKER }, { status: gate.status }); }
+    var payZD = await payrollBillScope(db, by); if (payZD.error) { return NextResponse.json({ ok: false, error: payZD.error }, { status: payZD.status }); } // v55.83-ZD rev3 — payroll bank lines: super admin + P&L only
+    db = payrollFilteredDb(db, payZD);
     if (!waveBusinessId) { return NextResponse.json({ ok: false, error: 'wave_business_id is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
     if (isPlaceholderWaveBusiness(waveBusinessId)) { return NextResponse.json({ ok: false, error: 'This silo is not connected to a real Wave business yet (placeholder id).', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
     if (!String(csv).trim()) { return NextResponse.json({ ok: false, error: 'Paste the CSV exported from Wave (Accounting -> Transactions -> Export).', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }

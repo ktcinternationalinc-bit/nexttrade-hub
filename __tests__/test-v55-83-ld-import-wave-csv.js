@@ -42,7 +42,7 @@ ok('5: apply reflects the Wave category (resolves name->wave_account_id), source
 ok('6: Wave Import has the old Wave transaction category CSV flow wired with preview+apply',
   /Wave -> Hub import map/.test(imp) &&
   /Step 3 - Import old Wave transaction categories/.test(imp) &&
-  /fetch\('\/api\/wave\/import-transaction-csv'/.test(imp) &&
+  /(?:hubFetch|fetch)\('\/api\/wave\/import-transaction-csv'/.test(imp) && /* ZD rev3: hubFetch sends the sign-in */
   /function runCsvImport\(apply\)/.test(imp) &&
   /Preview CSV match/.test(imp) &&
   /Apply \{csvResult && csvResult\.dry_run/.test(imp));

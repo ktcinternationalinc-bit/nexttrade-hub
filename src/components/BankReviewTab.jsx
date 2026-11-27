@@ -82,6 +82,9 @@ export default function BankReviewTab(props) {
   var mayReopen = canReopen(isSuperAdmin, modulePerms, userProfile && userProfile.role);
 
   var [txns, setTxns] = useState([]);
+  // v55.83-ZD rev3 — say "excluding payroll bank lines" only once the database rule that leaves them out is installed (never a false note)
+  var [payrollGuard, setPayrollGuard] = useState(false);
+  useEffect(function () { try { supabase.rpc('hub_payroll_lines_guard_installed').then(function (r) { setPayrollGuard(!!(r && r.data === true)); }, function () {}); } catch (e) {} }, []);
   var [matchesByTxn, setMatchesByTxn] = useState({});
   var [paysByTxn, setPaysByTxn] = useState({});   // v55.83-ID — non-voided payment rows per bank txn (orphan detection)
   var [splitCountByTxn, setSplitCountByTxn] = useState({}); // v55.83-NJ — raw split rows per txn (stale-split unmatch)
@@ -1001,6 +1004,8 @@ export default function BankReviewTab(props) {
             <span>Account: <b className="text-white">{acctName}</b></span>
             <span>Status filter: <b className="text-white">{fStatus === 'all' ? 'All' : fStatus}</b></span>
             <span>Showing: <b className="text-white">{showing}</b></span>
+            {/* v55.83-ZD rev3 — the same words for everyone without P&L access, whether or not payroll lines exist */}
+            {payrollGuard && !isSuperAdmin && modulePerms['pnl.view'] !== true ? <span className="text-amber-200">Excluding payroll bank lines (shown to the super admin and people with P&amp;L access)</span> : null}
             <span>Newest loaded: <b className="text-white">{newestLoaded || '—'}</b></span>
             <span title="How far back history is shown. A super admin can change this in Settings → Accounting visibility.">Visibility: <b className={visFloor ? 'text-sky-300' : 'text-white'}>{winLabel}</b>{visFloor ? <span className="text-slate-400"> (from {visFloor})</span> : null}</span>
             {hidden > 0 && <span className="text-amber-300">Hidden by filters: <b>{hidden}</b>{fAccount !== 'all' ? ' (mostly other accounts — pick All accounts to see them)' : ''}</span>}

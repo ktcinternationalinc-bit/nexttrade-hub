@@ -9,7 +9,7 @@
 // • Cash flow = settled bank reality (money that actually moved) alongside
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
-import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess, payrollBillsNote, SPENDING_WITHHELD } from '../../../../lib/payroll-bills'; // v55.83-ZD
+import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess, payrollBillsNote, payrollLinesNote, SPENDING_WITHHELD } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
 import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
 import { loadPartyFunds, isMissingOpeningsTable, openingsUnavailable } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
@@ -988,7 +988,7 @@ export async function POST(req) {
         due_out: r2(sumBillL), due_out_count: billRowsL.length,
         projected_net: r2(sumExpL - sumBillL) };
       var cfPayload = { transfers_between: trfBetween, transfers_unlinked: trfUnlinked, summary: summary, ahead: aheadL, sales_in: r2(sumSalesL), sales_in_count: salesRowsL.length, bills_due: dueBills, expected_in: expIn, drills: drillsL };
-      cfPayload.payroll_note = payrollBillsNote(payZD); // ZD — bills due here leave payroll bills out for a non-super-admin
+      cfPayload.payroll_note = payrollBillsNote(payZD); cfPayload.payroll_lines_note = payrollLinesNote(payZD); // ZD — bills due here leave payroll bills out for a non-super-admin
       cfPayload = maskCashflow(cfPayload, vis); // v55.83-RE — P2 values masked, P1 cards (expected / bills due) stay
       if (!canTotals) { cfPayload.transfers_between = { count: trfBetween.count, total: null }; cfPayload.transfers_unlinked = { count: trfUnlinked.count, total: null }; } // v55.83-SO — money totals stay behind "See Money Totals"
       cfPayload.ok = true; cfPayload.marker = API_BUILD_MARKER; cfPayload.from = fromD; cfPayload.to = toD;
@@ -1809,7 +1809,7 @@ export async function POST(req) {
       var fcPayload = { buckets: buckets, rows: rows,
         excluded_old: { count: exCount, sum: exSum, before: FORECAST_CREATED_FROM },
         unflagged: { expenses: unrevOut.count || 0, deposits: unmatchedIn.count || 0 } };
-      fcPayload.payroll_note = payrollBillsNote(payZD); // ZD
+      fcPayload.payroll_note = payrollBillsNote(payZD); fcPayload.payroll_lines_note = payrollLinesNote(payZD); // ZD
       fcPayload = maskForecast(fcPayload, vis); // v55.83-RE — expected / late / bills due stay (P1); net + balance need P2
       fcPayload.ok = true; fcPayload.marker = API_BUILD_MARKER; fcPayload.today = todayF; fcPayload.bucket_order = BUCKETS;
       fcPayload.bank_balance = vis.fin ? balF : null; // v55.83-RE/RF — P2 + the Bank Balances switch (decided above)
