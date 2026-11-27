@@ -42,10 +42,20 @@ export function cardLine(inv) {
   if (prods.length > 2) { parts.push('+' + (prods.length - 2) + ' more'); }
   return parts.join('   ·   ') || 'no product compared yet';
 }
-export function wireTally(invs) {
+// Codex 26 Nov (ZL hold): with a wire, count ONLY the wire's own bills (a related bill sharing the receipt is context, not counted)
+export function wireTally(invs, wireBillIds) {
   var t = { bills: 0, pass: 0, fail: 0, not_checked: 0, other: 0 };
-  (invs || []).forEach(function (inv) { var k = cardStatus(inv).key; t.bills += (inv.bills || []).length || 1; var n = (inv.bills || []).length || 1; if (k === 'pass' || k === 'approved') { t.pass += n; } else if (k === 'fail' || k === 'disputed') { t.fail += n; } else if (k === 'not_checked') { t.not_checked += n; } else { t.other += n; } });
+  (invs || []).forEach(function (inv) { var k = cardStatus(inv).key; var bs = (inv.bills || []).filter(function (b) { return !wireBillIds || wireBillIds.indexOf(b.id) >= 0; }); var n = wireBillIds ? bs.length : (bs.length || 1); if (!n) { return; } t.bills += n; if (k === 'pass' || k === 'approved') { t.pass += n; } else if (k === 'fail' || k === 'disputed') { t.fail += n; } else if (k === 'not_checked') { t.not_checked += n; } else { t.other += n; } });
   return t;
+}
+// the bills of a card that are NOT on the selected wire (compared together because they share a receipt) — [] without a wire
+export function outsideWire(inv, wireBillIds) {
+  if (!wireBillIds) { return []; }
+  return ((inv && inv.bills) || []).filter(function (b) { return wireBillIds.indexOf(b.id) < 0; });
+}
+export function groupActionWarning(inv, wireBillIds) {
+  var o = outsideWire(inv, wireBillIds); if (!o.length) { return null; }
+  return 'Approved / Disputed decides this whole group, including ' + o.map(function (b) { return (b.vendor || '') + ' bill ' + (b.bill_number || ''); }).join(' + ') + ' — ' + (o.length === 1 ? 'that bill is' : 'those bills are') + ' NOT on this wire (it shares the warehouse receipt, so the bills are compared together).';
 }
 function zBlock(bg) { return { display: 'inline-block', minWidth: 96, textAlign: 'center', padding: '4px 10px', background: bg, color: '#000000', fontSize: 11, fontWeight: 900, letterSpacing: '0.08em', borderRadius: 2 }; }
 
@@ -396,7 +406,7 @@ export default function WeightCheckInvoices(props) {
 
     {/* v55.83-ZL: one wire — its bills only, with the overall tally */}
     {data && data.ok && data.wire ? (function () {
-      var W = data.wire; var t = wireTally(invoices);
+      var W = data.wire; var t = wireTally(invoices, W.bill_ids || []);
       return <div style={{ marginTop: 14, background: '#000000', color: '#ffffff', border: '1px solid #3f3f46', borderRadius: 2, padding: '10px 12px' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.12em', color: '#a3a3a3' }}>WIRE</span>
@@ -423,10 +433,12 @@ export default function WeightCheckInvoices(props) {
       var receipts = []; inv.rows.forEach(function (r) { (r.receipts || []).forEach(function (x) { var t = 'Receipt ' + (x.reference_number || x.id) + (x.warehouse ? ' · ' + x.warehouse : '') + (x.receipt_date ? ' · received ' + String(x.receipt_date).substring(0, 10) : ''); if (receipts.indexOf(t) < 0) { receipts.push(t); } }); });
       var canDecide = inv.previewed || inv.rows.some(function (r) { return r.needs_decision; });
       var cs = cardStatus(inv); var isOpen = !!openCards[inv.key] || !!(mapNotice && mapNotice.key === inv.key);
+      var wireIds = data && data.wire ? (data.wire.bill_ids || []) : null; var outside = outsideWire(inv, wireIds); var gWarn = groupActionWarning(inv, wireIds);
       var bar = <button type="button" onClick={function () { toggleCard(inv.key); }} aria-expanded={isOpen} style={{ display: 'flex', width: '100%', flexWrap: 'wrap', gap: 10, alignItems: 'center', textAlign: 'left', background: '#000000', color: '#ffffff', border: 'none', borderBottom: isOpen ? '1px solid #3f3f46' : 'none', borderRadius: 0, padding: '9px 12px', cursor: 'pointer' }}>
         <span style={zBlock(cs.bg)}>{cs.label}</span>
         <span style={{ fontWeight: 800 }}>{inv.bills.map(function (b) { return b.vendor || ''; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(' + ')}</span>
-        <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: Z_GOLD, fontWeight: 800 }}>{inv.bills.map(function (b) { return 'Bill ' + (b.bill_number || ''); }).join(' + ')}</span>
+        <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: Z_GOLD, fontWeight: 800 }}>{inv.bills.map(function (b) { return 'Bill ' + (b.bill_number || '') + (outside.indexOf(b) >= 0 ? ' (not on this wire)' : ''); }).join(' + ')}</span>
+        {outside.length ? <span style={{ fontSize: 11, color: Z_AMBER, width: '100%' }}>{'Compared together with ' + outside.length + ' related bill' + (outside.length === 1 ? '' : 's') + ' NOT on this wire (same warehouse receipt) — only this wire’s bill' + (inv.bills.length - outside.length === 1 ? ' is' : 's are') + ' counted on top.'}</span> : null}
         <span style={{ fontSize: 12, color: '#a3a3a3' }}>{inv.bills.map(function (b) { return (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ')}</span>
         <span style={{ fontSize: 12, color: '#e5e5e5', flex: '1 1 260px' }}>{cardLine(inv)}</span>
         {cs.why && cs.key !== 'pass' ? <span style={{ fontSize: 11, color: '#d4d4d4', width: '100%' }}>{cs.why}</span> : null}
@@ -466,6 +478,7 @@ export default function WeightCheckInvoices(props) {
         {!inv.pass && inv.why.length ? <div style={{ fontSize: 12, marginTop: 8, color: RED, fontWeight: 600 }}>{'Why REVIEW: ' + inv.why.slice(0, 4).join(' · ')}</div> : null}
         {inv.linkRow && !inv.previewed ? <div style={{ marginTop: 8 }}><LinkChooser item={inv.linkRow} perms={perms} onLink={function (l) { setBusy(inv.key); wcApi(Object.assign({ action: 'link', bill_id: inv.bills[0].id }, l)).then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); } load(false); }); }} /></div> : null}
 
+        {gWarn && canDecide && (perms.validate || perms.accept) && !inv.approved && !inv.disputed ? <div role="note" style={{ fontSize: 12, marginTop: 10, padding: '6px 10px', borderRadius: 2, background: '#fffbeb', color: '#92400e', border: '1px solid #f59e0b', fontWeight: 700 }}>{gWarn}</div> : null}
         {canDecide && (perms.validate || perms.accept) && !inv.approved && !inv.disputed ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: '1px solid ' + LINE }}>
           <input value={reasons[inv.key] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[inv.key] = e.target.value; setReasons(o); }} placeholder={inv.pass ? 'Note (optional)' : 'Reason — needed to approve a REVIEW or to dispute'} className="nt-light" style={Object.assign({}, FIELD, { flex: '1 1 260px' })} />
           <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'approve'); }} style={Object.assign(btn(GREEN, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Approved</button>

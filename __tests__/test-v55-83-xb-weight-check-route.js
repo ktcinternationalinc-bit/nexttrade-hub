@@ -723,6 +723,24 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('…an unknown wire → 404', zwn.status === 404, zwn.body);
   var zwd = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true });
   check('…and without a wire the date-range check is unchanged (no wire block in the answer)', zwd.status === 200 && zwd.body.wire === null, zwd.body.wire);
+  // Codex 26 Nov (ZL hold): wire A's bill shares a warehouse receipt with a bill on wire B — whole-group arithmetic kept, but
+  // only wire A's own bill is counted, the other is context, and a group action says it affects that bill
+  tbl('wire_packages').push({ id: 'wp-50', seq: 50, payee_name: 'NexPac Corporation', status: 'needs_check', created_at: '2026-11-26T11:00:00Z' });
+  tbl('wire_packages').push({ id: 'wp-51', seq: 51, payee_name: 'NexPac Corporation', status: 'needs_check', created_at: '2026-11-26T11:00:00Z' });
+  tbl('wire_package_lines').push({ id: 'wl-50', package_id: 'wp-50', bill_id: BS1, amount: 1, is_open: true });
+  tbl('wire_package_lines').push({ id: 'wl-51', package_id: 'wp-51', bill_id: BS2, amount: 1, is_open: true });
+  var zA = await call({ action: 'report_preview', wire_id: 'wp-50', all: true });
+  var INVW = require(path.join(root, 'src/components/WeightCheckInvoices.jsx'));
+  var invsA = INVW.groupInvoices(zA.body.rows || []);
+  var grpA = invsA.filter(function (v) { return v.bills.some(function (b) { return b.id === BS1; }); })[0];
+  check('ZL rev2 (fixture): wire A holds only bill S1; its comparison is the WHOLE group S1 + S2 (same receipt) — the arithmetic is kept', zA.status === 200 && zA.body.wire.bill_ids.join() === BS1 && grpA && grpA.bills.length === 2 && grpA.bills.some(function (b) { return b.id === BS2; }), [zA.status, zA.body.wire && zA.body.wire.bill_ids, grpA && grpA.bills.map(function (b) { return b.id; })]);
+  var tA = INVW.wireTally(invsA, zA.body.wire.bill_ids); var tOld = INVW.wireTally(invsA);
+  check('ZL rev2: wire A\'s tally counts ONE bill (its own), not two — the bill on wire B is context (the old count would have said ' + tOld.bills + ')', tA.bills === 1 && tOld.bills === 2 && (tA.pass + tA.fail + tA.not_checked + tA.other) === 1, [tA, tOld]);
+  var outA = INVW.outsideWire(grpA, zA.body.wire.bill_ids); var warnA = INVW.groupActionWarning(grpA, zA.body.wire.bill_ids);
+  check('ZL rev2: the card names S2 as NOT on this wire, and Approved / Disputed says it decides the whole group including that bill', outA.length === 1 && outA[0].id === BS2 && /decides this whole group, including NexPac Corporation bill N0s2/.test(warnA || '') && /NOT on this wire/.test(warnA || ''), [outA, warnA]);
+  check('…without a wire nothing is marked and no warning is shown (date view unchanged)', INVW.outsideWire(grpA, null).length === 0 && INVW.groupActionWarning(grpA, null) === null);
+  var srcW2 = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
+  check('SCREEN: the wire bar tallies with the wire\'s own bill ids; a card marks "(not on this wire)" and shows the group-action warning above Approved / Disputed', /wireTally\(invoices, W\.bill_ids \|\| \[\]\)/.test(srcW2) && /' \(not on this wire\)'/.test(srcW2) && /\{gWarn && canDecide/.test(srcW2));
 
   module.exports = { pass: pass, fail: failN };
   if (require.main === module) { console.log('\nXB route: ' + pass + ' passed, ' + failN + ' failed'); process.exit(failN ? 1 : 0); }

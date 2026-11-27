@@ -236,7 +236,7 @@ export async function POST(req) {
         var wIds = []; (await allRows(function () { return db.from('wire_package_lines').select('bill_id').eq('package_id', wid); })).forEach(function (l) { if (l.bill_id && wIds.indexOf(l.bill_id) < 0) { wIds.push(l.bill_id); } });
         var wb = []; var wBatches = chunksByLength(wIds, MAX_IN_CHARS);
         for (var wbi = 0; wbi < wBatches.length; wbi++) { var wbB = wBatches[wbi]; wb = wb.concat(await allRows(function () { return db.from('vendor_bills').select(BILL_SEL).in('id', wbB); })); }
-        wireInfo = { id: wpq.data.id, seq: wpq.data.seq, payee: wpq.data.payee_name, status: wpq.data.status, bills_on_wire: wIds.length, hidden_count: 0, out_of_scope: [], no_lines: [], checked: 0 };
+        wireInfo = { id: wpq.data.id, seq: wpq.data.seq, payee: wpq.data.payee_name, status: wpq.data.status, bills_on_wire: wIds.length, hidden_count: 0, out_of_scope: [], no_lines: [], checked: 0, bill_ids: [] };
         bl = [];
         wb.forEach(function (b) {
           if (!billAllowed(b, floor)) { wireInfo.hidden_count++; return; }
@@ -258,7 +258,9 @@ export async function POST(req) {
       for (var ci = 0; ci < idsAll.length; ci += 200) { (await allRows(function () { return db.from('vendor_bill_lines').select('bill_id').eq('line_kind', 'item').in('bill_id', idsAll.slice(ci, ci + 200)); })).forEach(function (l) { withItems[l.bill_id] = true; }); }
       if (wireInfo) { bl.forEach(function (b) { if (!(withItems[b.id] || (b.bill_type === 'supplier' && b.shipment_direction === 'inbound'))) { wireInfo.no_lines.push({ bill_id: b.id, vendor: b.vendor_name, bill_number: b.bill_number }); } }); }
       bl = bl.filter(function (b) { return withItems[b.id] || (b.bill_type === 'supplier' && b.shipment_direction === 'inbound'); });
-      if (wireInfo) { wireInfo.checked = bl.length; }
+      // Codex 26 Nov (ZL hold): the comparison may pull in OTHER bills that share a receipt (whole-group arithmetic, kept); the screen
+      // must count only the wire's own bills — these are their ids (visible + checkable ones only; ids, no amounts)
+      if (wireInfo) { wireInfo.checked = bl.length; wireInfo.bill_ids = bl.map(function (b) { return b.id; }); }
       var vq = clean(body.vendor, 80).toLowerCase(); var rq = normRef(body.reference);
       if (vq) { bl = bl.filter(function (b) { return String(b.vendor_name || '').toLowerCase().indexOf(vq) >= 0; }); }
       if (bl.length > MAX_BILLS_PER_REPORT) { return bad(bl.length + ' bills in that range — narrow it (at most ' + MAX_BILLS_PER_REPORT + ' per report).'); }
