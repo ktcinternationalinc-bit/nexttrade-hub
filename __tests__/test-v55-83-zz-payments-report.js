@@ -144,7 +144,7 @@ async function change(el, v) { el.props.onChange({ target: { value: v, checked: 
   check('BILLS: a "💸 Payments" button for anyone who may view bills, opening the report panel', /\{canView && <button data-testid="payments-tab"[^\n]*💸 Payments<\/button>\}/.test(bt) && /\{panel === 'payments' && canView && <BillPaymentsReport api=\{api\}/.test(bt));
   var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
   var topV = (/version: '([^']+)'/.exec(wn.substring(wn.indexOf('BUILD_HISTORY = ['))) || [])[1];
-  check('badge and What\'s New name the newest entry, and the ZZ entry exists', topV === 'v55.83-ZZ' && page.indexOf(topV) >= 0, topV);
+  check('badge and What\'s New name the newest entry, and the ZZ entry exists', wn.indexOf("version: 'v55.83-ZZ'") > 0 && page.indexOf('>' + topV + '</span>') >= 0, topV);
   console.log('\nZZ payments report: ' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('  ✗ FAIL: crashed ' + (e && e.stack)); process.exit(1); });
