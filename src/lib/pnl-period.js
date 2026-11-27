@@ -248,6 +248,18 @@ export function formulaFixes(cells, ot) {
   };
 }
 
+// v55.83-ZN rev2 (Codex 26 Nov) — what the fix list may say after coming back from a fix. ret = { key, seq } (seq = the number of the
+// reload made on the way back); refresh = the last load { seq, state: idle | loading | ok | failed, error }; tasks = openTasks().tasks
+// of the period NOW. A verdict comes only from that reload (or a later one) that finished OK; a failed one is 'failed' (retry), never
+// a conclusion from the figures from before. → { state: 'loading' | 'failed' | 'fixed' | 'still_open', still (the task), none_left }
+export function returnVerdict(ret, refresh, tasks) {
+  var rf = refresh || {}; var done = (rf.seq || 0) >= ((ret && ret.seq) || 0);
+  var st = !done || rf.state === 'loading' || rf.state === 'idle' || !rf.state ? 'loading' : rf.state;
+  if (st !== 'ok') { return { state: st === 'failed' ? 'failed' : 'loading', still: null, none_left: false, error: st === 'failed' ? (rf.error || '') : '' }; }
+  var still = (tasks || []).filter(function (k) { return k.key === (ret && ret.key); })[0] || null;
+  return { state: still ? 'still_open' : 'fixed', still: still, none_left: !still && (tasks || []).length === 0, error: '' };
+}
+
 export var UNIT_NAME = { lb: 'pounds', kg: 'kilos', t: 'tons', yd: 'yards', lm: 'linear metres' };
 var UNIT_IN_NAME = [
   ['kg', /(^|[^A-Z])(KGS?|KILOS?|KILOGRAMS?|KILOGRAMMES?)([^A-Z]|$)/i],

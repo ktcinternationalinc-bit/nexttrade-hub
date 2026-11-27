@@ -11,7 +11,7 @@ import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
-import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, formulaFixes, addPeriodCell, blankPeriodRow, settlePeriodRow, avgProfitPerUnit } from '../lib/pnl-period';
+import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, formulaFixes, returnVerdict, addPeriodCell, blankPeriodRow, settlePeriodRow, avgProfitPerUnit } from '../lib/pnl-period';
 import FixChips from './FixChips'; // v55.83-WN — each missing thing on a line is a button that jumps to where it is fixed
 import { needCategoryList, pickerState, pickableCategories, currentCategoryOf, categoryLabel, samePick } from '../lib/cat-picker-state'; // v55.83-WR — the category menu loads in the pop-up too
 import AvgProfitCell from './AvgProfitCell'; // v55.83-WK — average profit per unit, never from an unknown profit
@@ -215,6 +215,7 @@ export default function ProfitabilityTab(props) {
   var sFF = useState(null); var fixFrom = sFF[0]; var setFixFrom = sFF[1]; // { pOpen, key, title, direction, y }
   var sFN = useState(''); var focusName = sFN[0]; var setFocusName = sFN[1]; // the description whose unit box is highlighted in Set-up
   var sRet = useState(null); var fixReturned = sRet[0]; var setFixReturned = sRet[1]; // { key, title } — shown once back on the list
+  var loadSeq = useRef(0); var sRf = useState({ seq: 0, state: 'idle', error: '' }); var refresh = sRf[0]; var setRefresh = sRf[1]; // ZN rev2 — the last load and how it ended
   var sFF2 = useState(null); var fromFormula = sFF2[0]; var setFromFormula = sFF2[1]; // { key, label } — the fix list was opened from that period's pop-up
   function markEl(el) { if (!el) { return; } try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); var o = el.style.outline; el.style.outline = '3px solid #f59e0b'; el.style.outlineOffset = '2px'; setTimeout(function () { el.style.outline = o; }, 4000); } catch (eM) {} }
   // opts { pOpen, formula, formulaLabel } — v55.83-ZN: a fix started from the "How … is worked out" pop-up comes back to that pop-up
@@ -232,7 +233,8 @@ export default function ProfitabilityTab(props) {
   }
   function backToFixList() {
     var f = fixFrom; if (!f) { return; }
-    setFixFrom(null); setFocusName(''); setView('period'); setPOpen(f.pOpen); setOpen(null); setFixReturned({ key: f.key, title: f.title });
+    // ZN rev2 — the list is loaded again on the way back and the verdict waits for THAT load (seq): a save's own reload may have failed
+    setFixFrom(null); setFocusName(''); setView('period'); setPOpen(f.pOpen); setOpen(null); setFixReturned({ key: f.key, title: f.title, seq: loadSeq.current + 1 }); load(applied.from, applied.to);
     if (f.formula) { setFShow({ key: f.formula, pinned: true }); } // back to the pop-up it was started from (its counts come from the reloaded report)
     setTimeout(function () {
       try {
@@ -250,7 +252,7 @@ export default function ProfitabilityTab(props) {
   }, [focusName, view, data]);
   // back from the Invoices screen (AccountingTab's "← Back to the fix list"): reload the report — the invoice may have changed — and land on the row
   useEffect(function () {
-    function onBack(ev) { if (!ev || !ev.detail || ev.detail.sub !== 'profitability' || !fixFrom) { return; } load(applied.from, applied.to); backToFixList(); }
+    function onBack(ev) { if (!ev || !ev.detail || ev.detail.sub !== 'profitability' || !fixFrom) { return; } backToFixList(); /* ZN rev2: backToFixList reloads once itself */ }
     try { window.addEventListener('nt-acct-returned', onBack); } catch (eL) {}
     return function () { try { window.removeEventListener('nt-acct-returned', onBack); } catch (eL2) {} };
   });
@@ -343,12 +345,17 @@ export default function ProfitabilityTab(props) {
     });
   }
   useEffect(function () { if (view === 'inbound') { loadInbound(); } }, [view, applied]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-ZN rev2 (Codex 26 Nov) — every load is numbered and records how it ended ({ seq, state: loading | ok | failed, error }), so the
+  // fix list's "Fixed / Still open" is only said from a reload that really finished, never from the figures from before. Returns true / false.
   function load(f, t) {
+    var my = ++loadSeq.current; setRefresh({ seq: my, state: 'loading', error: '' });
     setBusy(true);
-    call({ action: 'report', date_from: (f === undefined ? from : f) || null, date_to: (t === undefined ? to : t) || null }).then(function (j) {
-      if (!j || j.ok !== true) { toast.error((j && j.error) || 'The report did not load.'); return; }
+    return call({ action: 'report', date_from: (f === undefined ? from : f) || null, date_to: (t === undefined ? to : t) || null }).then(function (j) {
+      if (!j || j.ok !== true) { var er = (j && j.error) || 'The report did not load.'; toast.error(er); if (my === loadSeq.current) { setRefresh({ seq: my, state: 'failed', error: er }); } return false; }
       setData(j); setApplied({ from: (f === undefined ? from : f) || '', to: (t === undefined ? to : t) || '' });
-    }).finally(function () { setBusy(false); });
+      if (my === loadSeq.current) { setRefresh({ seq: my, state: 'ok', error: '' }); }
+      return true;
+    }, function (eL) { var er2 = 'The report did not load (' + ((eL && eL.message) || 'error') + ').'; toast.error(er2); if (my === loadSeq.current) { setRefresh({ seq: my, state: 'failed', error: er2 }); } return false; }).finally(function () { setBusy(false); });
   }
   useEffect(function () { load('2026-06-01', ''); }, []);
   function act(payload, okMsg) {
@@ -682,7 +689,16 @@ export default function ProfitabilityTab(props) {
       return <div>
         {/* v55.83-ZN — back from fixing a row: it says whether that row is now gone (fixed) or what is still open, from the reloaded report */}
         {fromFormula && fromFormula.key === r.key && <div className="mb-2"><button onClick={function (e) { e.stopPropagation(); setFromFormula(null); setFShow({ key: r.key, pinned: true }); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>{'← Back to “How ' + fromFormula.label + ' is worked out”'}</button><span className="ml-2 text-[11px]" style={{ color: SUB }}>Its figures are worked out again from what you fix here.</span></div>}
-        {fixReturned && (function () { var still = ot.tasks.filter(function (k) { return k.key === fixReturned.key; })[0]; return <div id="nt-fix-returned" role="status" className="mb-2 rounded-lg px-2 py-1.5 text-[12px] font-bold flex gap-2 items-center flex-wrap" style={busy ? { background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1' } : (still ? { background: '#fef3c7', color: '#78350f', border: '2px solid #f59e0b' } : { background: '#dcfce7', color: '#14532d', border: '2px solid #16a34a' })}><span style={{ flex: '1 1 300px' }}>{busy ? 'Checking the list again…' : (still ? '⚠ Still open: ' + still.title + '. ' + (still.todo || still.how) : '✓ Fixed: ' + fixReturned.title + ' — it has left the list.')}</span><button onClick={function (e) { e.stopPropagation(); setFixReturned(null); }} className="px-2 py-0.5 rounded font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>OK</button></div>; })()}
+        {fixReturned && (function () {
+          // ZN rev2 (Codex 26 Nov) — said ONLY from the reload made on the way back (or a later one): loading → "checking"; failed → the error and
+          // Try again, never a verdict from the old figures; ok → Fixed (the row has left the list) or Still open (what is left). Shown also when
+          // that was the period's LAST issue (this sits outside the fix box, which is gone when the list is empty).
+          var vd = returnVerdict(fixReturned, refresh, ot.tasks); var st = vd.state === 'fixed' || vd.state === 'still_open' ? 'ok' : vd.state; var still = vd.still;
+          var look = st === 'loading' ? { background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1' } : st === 'failed' ? { background: '#fee2e2', color: '#7f1d1d', border: '2px solid #dc2626' } : (still ? { background: '#fef3c7', color: '#78350f', border: '2px solid #f59e0b' } : { background: '#dcfce7', color: '#14532d', border: '2px solid #16a34a' });
+          var words = st === 'loading' ? 'Checking the list again…' : st === 'failed' ? '⚠ The list could not be checked again, so it is not known yet whether “' + fixReturned.title + '” is fixed. ' + (refresh.error || '') : (still ? '⚠ Still open: ' + still.title + '. ' + (still.todo || still.how) : '✓ Fixed: ' + fixReturned.title + ' — it has left the list.' + (vd.none_left ? ' Nothing is left to fix in ' + r.label + '.' : ''));
+          return <div id="nt-fix-returned" role="status" data-state={vd.state} className="mb-2 rounded-lg px-2 py-1.5 text-[12px] font-bold flex gap-2 items-center flex-wrap" style={look}><span style={{ flex: '1 1 300px' }}>{words}</span>
+            {st === 'failed' ? <button onClick={function (e) { e.stopPropagation(); setFixReturned(Object.assign({}, fixReturned, { seq: loadSeq.current + 1 })); load(applied.from, applied.to); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Try again</button> : null}
+            <button onClick={function (e) { e.stopPropagation(); setFixReturned(null); }} className="px-2 py-0.5 rounded font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>OK</button></div>; })()}
         {fixBox}
         {/* Codex 07:20 P2 — shown on its own, also when the period has nothing to fix; openTasks returns no list at all to a person who may not see profit */}
         <CombinedShippingNote combined={ot.combined} />
