@@ -164,13 +164,13 @@
       "dependsOn": [
         "wh-order-queue"
       ],
-      "meta": "26 Nov · Max: \"install on staging now\" · fix staging build 2026.11.26-e (b5bdd63); staging has since moved to 2026.11.26-f (Canada cards 0bb6c5c, built on it) · production: not installed",
+      "meta": "26 Nov · Max: \"install on staging now\" · this change was installed and verified on fix staging as build 2026.11.26-e (b5bdd63) · production: not installed · later staging builds: see environments.staging.observations (dated, not certified for this change)",
       "desc": "The Order Queue shows Rolls and Not rolls (boxes, bales) separately and reserves them separately; reservations made before the split stay \"not yet split\" (held in both) until a person splits them, and a split must keep the reserved weight. The Dashboard and Inventory Summary cards show the same split and open to the grades inside each card. The warehouse footer shows the installed build and its version history.",
       "files": "26 files, each listed with its SHA-256 in nextrade-app/build-manifest.php of b5bdd63 (Order Queue service, controller, model, screen, picking PDF, CGT grade form, Dashboard / Inventory controllers and card views, StockBlocks service, build-info.php, tools/verify-build.php, three migrations)",
       "backup": "Staging, before each install: ~/code-backups/oq-rolls-20261126, oq-rolls-rev2-20261126, oq-rolls-part2-20261126, oq-rolls-part3-20261126, oq-rolls-rev3-20261126; tables zz_oqrolls_c_g_t_grades_before_20261126, zz_oqrolls_order_queues_before_20261126, zz_oqrolls2_order_queues_before_20261126. Production: none yet (nothing installed there).",
       "rollback": "Among the builds of this change (2026.11.26-b and later): copy that build's files back from its backup folder, php artisan view:clear, php tools/verify-build.php, add a version saying so. Back to 2026.11.26-a: not allowed (it reads \"not yet split\" reservations as rolls). Below 2026.11.26-a (the pre-split Order Queue): a data step must come first, because the old code knows one reservation per order + colour + grade (fold the open lines of each order + colour + grade into one, kept as history, and mark them not yet split). That step is a PROPOSAL only: it must first be proven on a disposable restored copy with the old code (read, edit and pick, including partly picked and mixed holds), and a real run needs its own approval, a durable backup and a freeze of allocation and scanning. See CHANGE-MANAGEMENT.md section G in nextrade_WAREHOUSE. The added columns stay.",
       "releaseSteps": [
-        "Production preflight (read-only): no duplicate open reservation rows by order / colour / grade; the production schema of order_queues and c_g_t_grades.",
+        "Production preflight (read-only), BEFORE the migrations: the production schema of order_queues and c_g_t_grades, and any order + colour + grade with more than one open reservation (there is no form column yet, so such rows are true legacy duplicates); report them, do not merge or delete them. AFTER the migrations and before the code goes live: no duplicate open rows by order + colour + grade + form. A rolls row and a not-rolls row for the same order + colour + grade are two valid holds, never duplicates to merge or delete. The concurrent-save limit (two saves of the last pounds in the same second can both succeed) is a known limit, not a duplicate check.",
         "Signed-in walk on fix staging (reserve rolls, reserve boxes, split an older reservation, release one line, release all, download the picking PDF; open the Dashboard and Inventory Summary cards and their drill-down; date and past-year filters; a yards case with real stock) - not done yet.",
         "Codex production review of the exact build and its manifest; Max's named go here.",
         "Back up the production order_queues and c_g_t_grades tables and the replaced files; run the three migrations (2026_11_25_000001, 2026_11_25_000002, 2026_11_26_000001), then move the files; php artisan view:clear.",
@@ -182,8 +182,26 @@
           "buildLabel": "2026.11.26-e",
           "sha": "b5bdd6356cc608b438a9f6fe34b26ff489d1f4d6",
           "installed": "2026-11-26",
-          "verification": "php tools/verify-build.php: ALL 26 FILES MATCH build 2026.11.26-e (26 Nov). Staging now runs 2026.11.26-f (0bb6c5c, built on this): ALL 27 FILES MATCH build 2026.11.26-f.",
-          "review": "Codex staging sign-off 26 Nov (Order Queue b5bdd63; stock cards 3a40bbe / d99c072; picking PDF sample)"
+          "verification": "php tools/verify-build.php on fix staging, 26 Nov 2026: ALL 26 FILES MATCH build 2026.11.26-e. Historical evidence for this change only; it does not certify any later staging build.",
+          "review": "Codex staging sign-off 26 Nov for exactly b5bdd63 / 2026.11.26-e (Order Queue; stock cards 3a40bbe / d99c072; picking PDF sample). It does not transfer to later aggregate staging builds.",
+          "observations": [
+            {
+              "date": "2026-11-26 22:04 EST",
+              "buildLabel": "2026.11.26-f",
+              "sha": "0bb6c5c",
+              "source": "order-research session, php tools/verify-build.php read on fix staging",
+              "result": "ALL 27 FILES MATCH build 2026.11.26-f",
+              "note": "Canada history cards (another session) installed on top of this change"
+            },
+            {
+              "date": "2026-11-27 07:53 EST",
+              "buildLabel": "2026.11.27-c",
+              "sha": "b9ebd50",
+              "source": "order-research session, php tools/verify-build.php read on fix staging",
+              "result": "ALL 27 FILES MATCH build 2026.11.27-c",
+              "note": "later Canada history builds (another session: 2026.11.27-a a8ef2ac, -b e39c596, -c b9ebd50)"
+            }
+          ]
         },
         "production": {
           "buildLabel": null,
