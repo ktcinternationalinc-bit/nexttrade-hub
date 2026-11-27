@@ -12,6 +12,7 @@ import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
 import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, formulaFixes, returnVerdict, addPeriodCell, blankPeriodRow, settlePeriodRow, avgProfitPerUnit } from '../lib/pnl-period';
+import { runReportLoad } from '../lib/report-load'; // v55.83-ZQ
 import FixChips from './FixChips'; // v55.83-WN — each missing thing on a line is a button that jumps to where it is fixed
 import { needCategoryList, pickerState, pickableCategories, currentCategoryOf, categoryLabel, samePick } from '../lib/cat-picker-state'; // v55.83-WR — the category menu loads in the pop-up too
 import AvgProfitCell from './AvgProfitCell'; // v55.83-WK — average profit per unit, never from an unknown profit
@@ -348,14 +349,9 @@ export default function ProfitabilityTab(props) {
   // v55.83-ZN rev2 (Codex 26 Nov) — every load is numbered and records how it ended ({ seq, state: loading | ok | failed, error }), so the
   // fix list's "Fixed / Still open" is only said from a reload that really finished, never from the figures from before. Returns true / false.
   function load(f, t) {
-    var my = ++loadSeq.current; setRefresh({ seq: my, state: 'loading', error: '' });
-    setBusy(true);
-    return call({ action: 'report', date_from: (f === undefined ? from : f) || null, date_to: (t === undefined ? to : t) || null }).then(function (j) {
-      if (!j || j.ok !== true) { var er = (j && j.error) || 'The report did not load.'; toast.error(er); if (my === loadSeq.current) { setRefresh({ seq: my, state: 'failed', error: er }); } return false; }
-      setData(j); setApplied({ from: (f === undefined ? from : f) || '', to: (t === undefined ? to : t) || '' });
-      if (my === loadSeq.current) { setRefresh({ seq: my, state: 'ok', error: '' }); }
-      return true;
-    }, function (eL) { var er2 = 'The report did not load (' + ((eL && eL.message) || 'error') + ').'; toast.error(er2); if (my === loadSeq.current) { setRefresh({ seq: my, state: 'failed', error: er2 }); } return false; }).finally(function () { setBusy(false); });
+    // v55.83-ZQ (Codex re-review P2) — runReportLoad drops an answer that is no longer the newest load's BEFORE it touches the data, the
+    // dates, the status, busy or a message (two reloads finishing out of order can no longer put old figures under a newer "ok")
+    return runReportLoad({ seqRef: loadSeq, call: call, setRefresh: setRefresh, setBusy: setBusy, setData: setData, setApplied: setApplied, toastError: function (m) { toast.error(m); } }, f === undefined ? from : f, t === undefined ? to : t);
   }
   useEffect(function () { load('2026-06-01', ''); }, []);
   function act(payload, okMsg) {

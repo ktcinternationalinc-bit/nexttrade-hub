@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZQ',
+    date: '2026-11-27',
+    title: 'Profitability: the fix list never shows old figures after two quick reloads',
+    items: [
+      { text: 'When the report reloads twice quickly (for example after a save and then Back), only the newest answer is used. An older answer that arrives late is ignored, so “✓ Fixed” and “⚠ Still open” are always worked out from the newest figures.' },
+      { superAdminOnly: true, text: 'Technical (Codex re-review of ZN rev2, P2): the report load moved to src/lib/report-load.js (runReportLoad). An answer that is no longer the newest load’s is dropped before it touches data, applied dates, refresh status / error, busy or a toast. Before, only setRefresh was guarded and setData / setApplied / setBusy(false) ran for every answer. No SQL. Test: test-v55-83-zq-load-order.js (deferred answers in both orders, an older failure after a newer success, and a control with the old load).' },
+    ]
+  },
+  {
     version: 'v55.83-ZD',
     date: '2026-11-26',
     title: 'Payroll: one Payroll group of bills; payroll bank lines and history only with P&L access',
