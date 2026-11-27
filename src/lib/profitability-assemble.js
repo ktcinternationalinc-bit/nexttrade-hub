@@ -210,8 +210,18 @@ export function assembleProfitability(d) {
   }
   Object.keys(billById).forEach(function (id) {
     var b = billById[id]; var type = b.bill_type;
-    if (type !== 'trucking' && type !== 'shipping' && type !== 'bonded_brokerage') { return; }
     if (b.shipment_direction === 'operational') { return; } // v55.83-ZY — Operational = not for a shipment: never on a release or its P&L
+    // v55.83-ZY (Codex ZY-01) — an Other services bill tied to a shipment (a release in this report, not Operational) is never silently
+    // dropped: it is listed under "Amounts NOT yet placed" and flagged, so that container's margin never looks complete without it
+    if (type === 'other_services') {
+      var relsS = splitReleases(b.release_number); var mineS = relsS.filter(function (r) { return relKnown[r.key]; });
+      if (!mineS.length) { return; }
+      var amtS = r2(b.total_amount); var relWords = mineS.map(function (r) { return r.raw; });
+      unallocated.push({ what: 'other_services_on_release', bill: b.bill_number, vendor: b.vendor_name, release: relWords.join(', '), amount: amtS, why: 'an Other services bill tied to this shipment — NOT counted in that container’s profit yet (the profit shown is without it)' });
+      flags.push({ kind: 'service_bill_on_release_not_counted', bill: b.bill_number, vendor: b.vendor_name, releases: relWords, amount: amtS });
+      return;
+    }
+    if (type !== 'trucking' && type !== 'shipping' && type !== 'bonded_brokerage') { return; }
     var rels = splitReleases(b.release_number);
     var mineRels = rels.filter(function (r) { return relKnown[r.key]; });
     var amount = r2(b.total_amount);
