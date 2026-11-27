@@ -1007,9 +1007,17 @@ export async function POST(req) {
       var whyF = String(body.reason || '').trim();
       if (whyF.length < 5) { return fail('Say why the service fee changes.'); }
       // v55.83-ZP — the same partner-fee guard as a draft (the bills of this request count as "on this wire")
-      var fxC = null; try { var flC = await fundingLines(db, { ids: [pkg.funding_txn_id] }); fxC = flC && flC.lines && flC.lines[0]; } catch (eFc) { fxC = null; }
+      // v55.83-ZR (Codex 27 Nov P2) — the fee's currency is the transfer's own: its bank line must be READ before anything else.
+      // A failed read, a missing transfer or one outside KTC's books refuses with nothing posted (never "assume USD"). A bank line
+      // that was read but carries no currency code is USD — the same documented default as the funds calculation (fundingLines).
+      var txC = await db.from('bank_transactions').select('id, iso_currency, wave_business_id').eq('id', pkg.funding_txn_id).maybeSingle();
+      if (txC.error) { return fail('The transfer this request draws from could not be read (' + (txC.error.message || 'error') + '). The service fee was not changed — try again.', 503); }
+      if (!txC.data) { return fail('The transfer this request draws from is not found. The service fee was not changed.', 409); }
+      if (String(txC.data.wave_business_id || '') !== String(US_WAVE_BUSINESS_ID)) { return fail('The transfer this request draws from is not in KTC’s books. The service fee was not changed.', 409); }
+      var curC = String(txC.data.iso_currency == null || txC.data.iso_currency === '' ? 'USD' : txC.data.iso_currency).trim().toUpperCase();
+      if (!/^[A-Z]{3}$/.test(curC)) { return fail('The transfer’s currency “' + curC + '” is not a currency code. The service fee was not changed.', 409); }
       var pfC = await partnerFeeGuard(db, r2(feeTyped.replace(/,/g, '')), P.rawLines.map(function (l) { return l.bill_id; }), { yes: body.it_is_a_different_fee === true, reason: body.different_fee_reason },
-        { businessId: US_WAVE_BUSINESS_ID, currency: (fxC && fxC.currency) || 'USD', canSeeBills: !!(await perm(db, userId, ['bills.view', 'bills.manage', 'wires.prepare'], req)) });
+        { businessId: US_WAVE_BUSINESS_ID, currency: curC, canSeeBills: !!(await perm(db, userId, ['bills.view', 'bills.manage', 'wires.prepare'], req)) });
       if (pfC && !pfC.allowed) { return NextResponse.json({ ok: false, error: pfC.error, code: pfC.code || null, partner_fee_bill: pfC.bill || null }, { status: pfC.status }); }
       var cf = await db.rpc('wire_request_fee_change', { p_pkg: pkg.id, p_fee: r2(feeTyped.replace(/,/g, '')), p_actor: userId });
       if (cf.error) { return fail(cf.error.message + (spMissing(cf.error.message) ? SP_HINT : ''), 400); }

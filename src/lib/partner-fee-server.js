@@ -1,7 +1,8 @@
 // v55.83-ZP — the partner-fee bills still open, for the service-fee guard (wires to RTM / NextTrade, "services rendered" in the
 // funds). Server only. A failed read is NEVER "no partner-fee bills": the caller refuses the fee and says why (fail closed).
 // rev2 (Codex 26 Nov HOLD): EVERY matching bill counts (recurring fee bills share one amount) and a match ON this wire wins; only the
-// accounting company the wire / funds belong to, and only bills in the fee's currency; every read is paged; a refusal names a bill
+// accounting company the wire / funds belong to, and only bills in the fee's currency; the bills and their payments are read in pages
+// of 1,000 (the vendor credits come from loadBillCredits: 200 bills per request, NOT paged within a request); a refusal names a bill
 // only to a person who may see bills.
 import { isPartnerFee, feeMatchesPartnerBills } from './partner-fee';
 import { loadBillCredits } from './vendor-credits-server';

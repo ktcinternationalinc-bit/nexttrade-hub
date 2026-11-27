@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZR',
+    date: '2026-11-27',
+    title: 'Changing the service fee of a request: the transfer is checked first',
+    items: [
+      { text: 'When you change the service fee of a request drawn from a transfer to RTM / NextTrade, the Hub now reads that transfer first. If it cannot be read, is not found, or is not in KTC’s books, nothing is changed and the message says so — before, the change could go through checked against the wrong currency.' },
+      { text: 'The partner-fee check then uses the transfer’s own currency (for example EUR), so a fee is compared with the partner-fee bills in that currency.' },
+      { superAdminOnly: true, text: 'Technical: no SQL. wire-packages change_fee reads bank_transactions(id, iso_currency, wave_business_id) for pkg.funding_txn_id before partnerFeeGuard and before rpc wire_request_fee_change: read error → 503, missing → 409, not US_WAVE_BUSINESS_ID → 409, non-ISO code → 409; a read row with no iso_currency = USD (same default as fundingLines). Replaces ZP rev2’s swallowed fundingLines lookup (Codex 27 Nov P2). partner-fee-server comment: loadBillCredits is not paged within a request. Test: zr-fee-change-currency (9, zero fee RPC calls on every refusal).' }
+    ]
+  },
+  {
     version: 'v55.83-ZQ',
     date: '2026-11-27',
     title: 'Profitability: the fix list never shows old figures after two quick reloads',
