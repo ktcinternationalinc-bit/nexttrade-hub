@@ -1935,7 +1935,7 @@ export async function POST(req) {
         // basis). Fetch in AND out; the income side mirrors the spending side.
         var spTx = await fetchAll(function () {
           return db.from('bank_transactions')
-            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction, third_party_payer')
+            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction, third_party_payer, account_id, iso_currency')
             .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out']).neq('pending', true)
             .neq('review_status', 'duplicate') // v55.83-QM — duplicates never count in spending/income
             .gte('date', pFrom).lte('date', pTo).order('date', { ascending: false });
@@ -2000,8 +2000,8 @@ export async function POST(req) {
         } catch (eMb) { moneyBack = {}; mbUnavailable = true; mbNote = 'Money back from RTM / NextTrade could not be read.'; }
         // v55.83-ZO (Max, 26 Nov) — a return a person categorized as a returned check, whose bank text names its deposit (date + amount),
         // nets that deposit automatically when exactly one money-in line fits. Nothing is saved; only how this report counts the line.
-        var autoPair = pairReturnedDeposits(spTx.filter(function (tA) { var dA = tA.posted_date || tA.date; return dA >= pFrom && dA <= pTo; }), isContraCat, function (tS) { return !!moneyBack[tS.id]; });
-        contra.not_paired = autoPair.not_paired;
+        var autoPair = pairReturnedDeposits(spTx.filter(function (tA) { var dA = tA.posted_date || tA.date; return dA >= pFrom && dA <= pTo; }), isContraCat, function (tS) { return !!moneyBack[tS.id]; }, { disabled: mbUnavailable ? 'Money back from RTM / NextTrade could not be read, so no deposit is matched automatically.' : null });
+        contra.not_paired = autoPair.not_paired; contra.auto_pair_skipped = autoPair.skipped;
         spTx.forEach(function (t6) {
           var d6 = t6.posted_date || t6.date;
           if (!(d6 >= pFrom && d6 <= pTo)) { return; }

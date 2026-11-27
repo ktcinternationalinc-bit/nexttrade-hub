@@ -38,7 +38,7 @@ export const BUILD_HISTORY = [
     title: 'Profitability: a returned check now cancels its own deposit automatically',
     items: [
       { text: '**A returned deposit zeroes itself out.** When the bank returns a deposited check, its line says which deposit it was (the date and the amount). Once the return is under “Returned checks”, the Hub finds that deposit and nets the two, so you no longer have to move the deposit into the category by hand.' },
-      { text: '**Only a certain match is used.** The deposit must be the same date and the same amount the bank names, and there must be exactly one. If the bank names none, or two fit, nothing is matched and it stays for a person to decide.' },
+      { text: '**Only a certain match is used.** The deposit must be in the same bank account, on the same date and for the same amount the bank names, and there must be exactly one. If the bank names none, or two fit, nothing is matched and it stays for a person to decide.' },
       { text: '**A deposit of several checks with one returned** has only the returned part taken out; the rest stays where it was. The matched deposit is marked “matched automatically to the bank return of …”. No bank line or category is changed.' },
       { superAdminOnly: true, text: 'Technical: lib/returned-deposit-pairing.js (parseReturnText, pairReturnedDeposits) used by bills route period_stats; in-period only; rows carry auto_paired; returned_checks.not_paired / auto_paired_count / auto_paired_total. Report-time only, no SQL, nothing written.' },
     ]
