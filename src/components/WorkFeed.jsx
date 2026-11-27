@@ -12,6 +12,8 @@ import { waitingFor } from '../lib/waiting-list';
 import { buildFeed, compareFeed, addResolved, tally } from '../lib/work-feed';
 import { acctAccess, screenHub } from '../lib/accounting-access';
 import { hubFetch } from '../lib/hub-fetch';
+import WorkAssignmentsPanel from './WorkAssignmentsPanel'; // v55.83-AAH — admin / super admin pick who owns each task
+import { canAssign, taskOf } from '../lib/work-feed-tasks';
 
 // Kept only in this open page (never stored): the feed as it was when the person pressed a button (so Back can tell Resolved / Still
 // open), and the Resolved group of this person while the page is open.
@@ -49,6 +51,8 @@ export default function WorkFeed(props) {
   var s6 = useState(false); var shut = s6[0]; var setShut = s6[1];
   var s7 = useState(resolvedMem.list); var resolved = s7[0]; var setResolved = s7[1];
   var s8 = useState('todo'); var view = s8[0]; var setView = s8[1];
+  var s9 = useState(null); var asg = s9[0]; var setAsg = s9[1]; // v55.83-AAH — { tasks, names } from /api/work-feed/assignments (null = none / not readable)
+  var s10 = useState(false); var asgOpen = s10[0]; var setAsgOpen = s10[1];
   var prevRef = useRef(null); // the feed now on screen (also read by the invoice watcher)
   var seqRef = useRef(0); var userRef = useRef(null); // which load is the newest; whose feed this is
 
@@ -104,6 +108,12 @@ export default function WorkFeed(props) {
     if (userRef.current !== me) { userRef.current = me; prevRef.current = null; setFeed(null); setSince(null); if (lastJump && lastJump.user !== me) { lastJump = null; } }
     load(null);
   }, [accessKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-AAH — who owns each task. Read for every signed-in person (names only); a failed read = today's behaviour (no owner tags).
+  function loadAssignments() {
+    if (!me) { setAsg(null); return; }
+    hubFetch('/api/work-feed/assignments', { method: 'GET' }).then(function (r) { return r.json(); }).then(function (j) { setAsg(j && j.ok ? { tasks: j.tasks || {}, names: j.names || {} } : null); }).catch(function () { setAsg(null); });
+  }
+  useEffect(function () { loadAssignments(); }, [me]); // eslint-disable-line react-hooks/exhaustive-deps
   // Codex AAA-02: the invoices on the home screen load and change on their own (a bank match changes an AMOUNT, not the count). Watch
   // their content; a change re-builds the invoice group and moves what left it to Resolved — only when the page says they loaded.
   var invSig = invoiceSignature(props.invoices, props.invoicesStatus);
@@ -124,7 +134,10 @@ export default function WorkFeed(props) {
     if (props.onOpen) { props.onOpen(item.target, { title: item.title, todo: item.todo }); }
   }
 
-  if (!acc.any) { return null; }
+  var editor = canAssign(userProfile && userProfile.role);
+  var mine = myAssignments(asg, me); // { taskKey: 'primary' | 'backup' }
+  var blocked = Object.keys(mine).filter(function (k) { return !feedShowsTask(acc, k); }); // assigned to me, but my switches do not show it
+  if (!acc.any && !editor && !blocked.length) { return null; }
   var sq = { borderRadius: 0 };
   var btnGhost = Object.assign({ background: 'transparent', color: INK, border: '1px solid #525252' }, sq);
   var total = feed ? feed.total : 0; var stuckN = feed ? feed.stuck : 0; var payN = feed ? (feed.payTotal || 0) : 0;
@@ -143,10 +156,14 @@ export default function WorkFeed(props) {
         <div className="text-[11px]" style={{ color: SUB }}>{'What needs you, from the screens you can open' + (at ? ' · updated ' + at : '')}</div>
       </div>
       <div className="flex-1" />
-      <button onClick={function () { load(feed); }} disabled={busy} className="px-3 py-1.5 text-[11px] font-extrabold" style={btnGhost}>{busy ? 'Loading…' : '↻ Refresh'}</button>
+      {editor && <button onClick={function () { setAsgOpen(!asgOpen); }} className="px-3 py-1.5 text-[11px] font-extrabold" style={Object.assign({}, btnGhost, asgOpen ? { background: INK, color: '#000000' } : {})} data-testid="open-work-assignments">⚙ Work assignments</button>}
+      <button onClick={function () { load(feed); loadAssignments(); }} disabled={busy} className="px-3 py-1.5 text-[11px] font-extrabold" style={btnGhost}>{busy ? 'Loading…' : '↻ Refresh'}</button>
       <button onClick={function () { setShut(!shut); }} className="px-3 py-1.5 text-[11px] font-extrabold" style={btnGhost}>{shut ? '▼ Show' : '▲ Hide'}</button>
     </div>
     {!shut && <div className="px-4 py-3">
+      {editor && asgOpen && <WorkAssignmentsPanel userProfile={userProfile} onSaved={loadAssignments} onClose={function () { setAsgOpen(false); }} />}
+      {blocked.length > 0 && <div className="px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#1c1300', color: '#fde68a', border: '1px solid ' + AMBER }} data-testid="feed-assigned-not-visible">{'You are assigned: ' + blocked.map(function (k) { var t = taskOf(k); return t ? t.label + (t.live ? '' : ' (its feed items come in a later build)') : k; }).join(' · ') + '. ' + (blocked.some(function (k) { var t = taskOf(k); return t && t.live; }) ? 'Your account does not have the switch to see some of these (' + blocked.map(function (k) { var t = taskOf(k); return t && t.live ? t.needsWords : null; }).filter(Boolean).join(', ') + ') — ask the super admin. Being assigned does not open them.' : '')}</div>}
+      {!acc.any && <div className="text-[12px] mb-2" style={{ color: SUB }}>No feed items for your switches. Use ⚙ Work assignments to choose who owns each task.</div>}
       {/* counts = the two groups */}
       <div className="flex gap-2 flex-wrap mb-3">
         {stat('To do', feed ? total : '…', total ? INK : GREEN, function () { setView('todo'); }, view === 'todo')}
@@ -176,13 +193,16 @@ export default function WorkFeed(props) {
         {feed && view === 'todo' && !total && !errs.length && <div className="px-4 py-6 text-center" style={{ background: PANEL, border: '1px solid ' + LINE }}>
           <div style={{ fontSize: 15, fontWeight: 900, color: GREEN }}>✓ You are all caught up</div>
           <div className="text-[12px] mt-1" style={{ color: SUB }}>Nothing is waiting for you on the screens you can open.</div></div>}
-        {feed && feed.groups.filter(function (g) { return (g.lane || 'main') === lane; }).map(function (g) {
+        {feed && sortMineFirst(feed.groups.filter(function (g) { return (g.lane || 'main') === lane; }), mine).map(function (g) {
+          var own = ownerLine(asg, g.key, me);
           return <div key={g.key} className="mb-4">
             <div className="flex items-center gap-2 flex-wrap pb-1.5 mb-2" style={{ borderBottom: '1px solid ' + LINE }}>
               <span className="px-1.5 py-0.5" style={{ fontSize: 9, fontWeight: 900, letterSpacing: '0.12em', background: '#262626', color: SUB }}>{(g.area || '').toUpperCase()}</span>
               <span style={{ fontSize: 13, fontWeight: 900, color: INK }}>{g.title}</span>
               {g.stale && <span className="px-1.5 py-0.5" style={{ fontSize: 10, fontWeight: 900, background: AMBER, color: '#000000' }} data-testid="feed-group-stale">NOT REFRESHED — last good list</span>}
               <span className="tabular-nums" style={{ fontSize: 12, fontWeight: 900, color: SUB }}>{g.items.length}</span>
+              {mine[g.key] && <span className="px-1.5 py-0.5" style={{ fontSize: 10, fontWeight: 900, background: INK, color: '#000000' }} data-testid="feed-group-mine">{mine[g.key] === 'primary' ? 'YOURS' : 'YOU ARE BACKUP'}</span>}
+              {own && <span style={{ fontSize: 11, color: SUB }} data-testid="feed-group-owner">{own}</span>}
             </div>
             {g.items.slice(0, 15).map(function (x) {
               var opened = since && since.openedKey === x.key && (since.openedStillOpen || since.unverified);
@@ -239,6 +259,33 @@ export function invoicesReady(st) { return !!(st && st.ok === true); }
 export function invoiceSignature(invoices, st) {
   var parts = []; (invoices || []).forEach(function (v) { if (v && v.id && Number(v.total_pending_bank || 0) > 0) { parts.push(v.id + ':' + Number(v.total_pending_bank)); } });
   return (st && st.ok === true ? 'ok' : st && st.ok === false ? 'failed' : 'unknown') + '|' + (st && st.n || 0) + '|' + parts.sort().join(',');
+}
+// v55.83-AAH — assignments in the feed. They only LABEL and ORDER what the person's switches already show; they never add a task.
+export function myAssignments(asg, me) {
+  var out = {}; if (!asg || !asg.tasks || !me) { return out; }
+  Object.keys(asg.tasks).forEach(function (k) { var a = asg.tasks[k] || {}; if (a.primary === me) { out[k] = 'primary'; } else if (a.backup === me) { out[k] = 'backup'; } });
+  return out;
+}
+// which task types this person's feed can show today (the same switches as feedAccess)
+export function feedShowsTask(acc, key) {
+  var p = (acc && acc.perms) || {};
+  if (key === 'bill_flags' || key === 'bill_validate') { return !!p.bills; }
+  if (key === 'bill_ready' || key === 'wire_fix' || key === 'transfer_unused') { return !!p.prepare; }
+  if (key === 'wire_sign') { return !!p.signoff; }
+  if (key === 'wire_send' || key === 'wire_bank' || key === 'wire_proof') { return !!p.send; }
+  if (key === 'invoice_bank') { return !!(acc && acc.canInvoices); }
+  return false; // a task whose feed items are not built yet
+}
+export function ownerLine(asg, key, me) {
+  var a = asg && asg.tasks ? asg.tasks[key] : null; var nm = (asg && asg.names) || {};
+  if (!a || (!a.primary && !a.backup)) { return asg ? 'Owner: not assigned' : ''; }
+  function who(id) { return id === me ? 'you' : (nm[id] || 'someone'); }
+  return 'Owner: ' + (a.primary ? who(a.primary) : 'not assigned') + (a.backup ? ' · backup: ' + who(a.backup) : '');
+}
+// the person's own tasks first (owner, then backup), the rest in their usual order
+export function sortMineFirst(groups, mine) {
+  function rank(g) { return mine[g.key] === 'primary' ? 0 : mine[g.key] === 'backup' ? 1 : 2; }
+  return (groups || []).map(function (g, i) { return { g: g, i: i }; }).sort(function (a, b) { return rank(a.g) - rank(b.g) || a.i - b.i; }).map(function (x) { return x.g; });
 }
 // v55.83-AAG (Codex AAA-03) — the invoice tasks after a failed reload: the page's retained list when it has tasks, else the last good copy
 // (on screen, or taken when the person left the feed). Marked stale: shown, never compared, never resolved.

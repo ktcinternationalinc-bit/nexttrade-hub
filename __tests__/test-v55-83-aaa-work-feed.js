@@ -127,6 +127,6 @@ check('42: Wires opens that wire with the SAME open() as a click (read only, not
 check('43: badge v55.83-AAA or a later three-letter build (AAG realign)', />v55\.83-[A-Z]{3}<\/span>/.test(P));
 var WN = R('src/components/WhatsNewWidget.jsx');
 check('44: What’s New: the AAA entry is there in plain words, and the newest entry is the badge (AAG realign)', WN.indexOf("    version: 'v55.83-AAA',") > 0 && WN.indexOf('📋 My work feed') > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]+)'/.exec(WN); return !!top && P.indexOf('>' + top[1] + '</span>') > 0; })());
-check('45: no new server route and no SQL in this build', !fs.existsSync(path.join(root, 'src/app/api/work-feed')) && !fs.existsSync(path.join(root, 'sql/v55-83-aaa.sql')));
+check('45: no SQL; the only work-feed route is the AAH assignments route (AAH realign — AAA itself added none)', fs.readdirSync(path.join(root, 'src/app/api/work-feed')).join() === 'assignments' && !fs.existsSync(path.join(root, 'sql/v55-83-aaa.sql')) && !fs.existsSync(path.join(root, 'sql/v55-83-AAH-work-assignments.sql')));
 
 console.log('\n' + pass + ' passed, ' + failN + ' failed'); if (failN) { process.exit(1); }

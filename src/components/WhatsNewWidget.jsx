@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AAH',
+    date: '2026-11-27',
+    title: 'Work feed: ⚙ Work assignments — pick who owns each task, and a backup',
+    items: [
+      { text: 'Admins and the super admin now have a **⚙ Work assignments** button at the top of 📋 My work feed (home screen). It lists every feed task — bills to validate, price flags, bills not paid, pre-wires, wires to sign / send, sent wires with no bank line, wires waiting for proof, Egypt bank confirmations, and the ones coming next (shipped orders with no invoice, NT paperwork, pre-load, collections, bank lines, warehouse check). For each, pick the **owner** and a **backup** from the active team, then press **Save assignments**.' },
+      { text: 'In each person\'s feed, the tasks they own come first, marked **YOURS** (or **YOU ARE BACKUP**), and every group says who owns it. People who can already see a task still see it.' },
+      { text: '**Assigning never gives access.** If you pick someone whose switches do not let them see that task, the row warns you in yellow, and that person sees a note in their feed (“you are assigned … ask the super admin”) — not the items or amounts. Give the switch in Settings if they should see them.' },
+      { text: 'Every save is recorded on the audit trail with who changed what. If two people edit at the same time, the second save is refused and asks you to reload first.' },
+      { superAdminOnly: true, text: 'Technical: NO SQL — one app_settings row, key work_feed_assignments (value + legacy setting_key/setting_value, like the visibility window and the release stop switch). New route /api/work-feed/assignments: GET any verified active user (owners by name; editors also get active users + per-task "sees" from loadUserPermissions/userHasPermission), POST admin / super_admin only (canAssign), known tasks + active users only, expected_at concurrency (409), audit work_feed_assignments_saved with the diff; unreadable setting → 503 and no save. src/lib/work-feed-tasks.js = the task list + needs. WorkFeed: myAssignments / ownerLine / sortMineFirst / feedShowsTask — labels and order only; the two list requests and feedAccess are unchanged. WorkAssignmentsPanel.jsx. Test: test-v55-83-aah-work-assignments.js 31/31.' },
+    ]
+  },
+  {
     version: 'v55.83-AAG',
     date: '2026-11-27',
     title: 'Work feed: when a list could not be checked, it says so — never a false “Resolved”',

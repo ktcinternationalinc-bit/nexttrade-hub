@@ -15,6 +15,7 @@ console.log('AAA rev3 — the feed starts when sign-in finishes; invoice changes
 // fake server
 var srv = { calls: [], bills: [], packages: [] };
 stub(path.join(root, 'src/lib/hub-fetch.js'), { hubFetch: function (url, opts) {
+  if (url.indexOf('/api/work-feed/assignments') >= 0) { srv.calls.push({ url: url, action: 'assignments' }); var aj = srv.assignments || { ok: true, tasks: {}, names: {} }; return Promise.resolve({ status: 200, json: function () { return Promise.resolve(aj); } }); } // v55.83-AAH
   var b = JSON.parse(opts.body); srv.calls.push({ url: url, action: b.action, user: b.user_id });
   var j = url.indexOf('/bills') >= 0 ? { ok: true, bills: srv.bills } : { ok: true, packages: srv.packages, funding_open: [] };
   return Promise.resolve({ status: 200, json: function () { return Promise.resolve(j); } });
