@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AAA',
+    date: '2026-11-27',
+    title: 'Home screen: 📋 My work feed — each issue, how to resolve it, a button to the exact place, and a Resolved group',
+    items: [
+      { text: 'The home screen now starts with **📋 My work feed**: everything that needs YOU to update or correct, from the screens you are allowed to open. At the top: **To do**, **Stuck**, **💸 Bills not paid** and **✓ Resolved** counts.' },
+      { text: '**Bills not paid are their own group, away from the main feed.** Validated bills that are due within 7 days (or late) and not on any wire yet are counted under **💸 Bills not paid** — click it when you are planning payments. They do not fill up your main To do.' },
+      { text: 'Each item is one card: **THE ISSUE** — one exact sentence naming the bill, wire or invoice and what is wrong (for example “Kronos · bill 14746: not validated yet — it cannot be paid until it is.”) — then **HOW TO RESOLVE**, the steps in order, and one **Go resolve →** button.' },
+      { text: '**Go resolve →** takes you to the exact place: Bills opened **on that bill** (with its validation checks open when it needs validating), Wires opened **on that wire**, or the invoice. A **← Back to your work feed** button there brings you back to the same spot, with a yellow “What to do here” note beside it.' },
+      { text: 'When you come back, the feed reloads by itself: the item you resolved moves to the **✓ Resolved** group (click the Resolved count to see them, with the time). If it still needs something it stays in To do marked **STILL OPEN**. ↻ Refresh also moves anything that was resolved meanwhile. The Resolved group covers this visit; nothing is stored.' },
+      { text: 'What is in it today: bills to validate and price flags (Bills: Manage), pre-wires to finish and unused transfer money (Wires: Prepare), wires waiting for your signature (Wires: Sign off), wires to send / with no bank line / waiting for proof (Wires: Send), and Egypt invoices awaiting bank confirmation (the same people who see that card today); and, in its own group, validated bills not paid yet (Wires: Prepare). Next builds add Profitability lines to fix, the Warehouse check, bank lines and overdue customers.' },
+      { text: 'You only ever see what you can already see on those screens: the feed asks the same server requests with your own sign-in, so your permissions, your date window and payroll hiding all apply. It only reads — nothing changes until you act on the screen it opens.' },
+      { superAdminOnly: true, text: 'Technical: screen only, no route / SQL. New src/lib/work-feed.js (buildFeed from waitingFor() + invoices with total_pending_bank > 0 → items with issue / steps / todo / target; lane pay = bill_ready (💸 Bills not paid, own view, tally() counts lanes apart); compareFeed; addResolved = Resolved group, newest first, an item back in the feed leaves it) and src/components/WorkFeed.jsx (feedAccess: bills/wires need the KTC hub switch + their own switches + not a revenue-hidden researcher; invoices = super admin / Treasury / View Financial Reports, the PendingBankConfirmationsWidget gate; Resolved kept in page memory per user, compare only when every source loaded). page.jsx: openFromFeed → acctReturn {tab dashboard, label, note} + acctDeepLink {sub, bill | wire}; invoices → feedReturn sticky Back bar; feedBackN so Still open shows only after a real Back. AccountingTab: deepLink.bill / deepLink.wire, returnNote. BillsTab: Back / Opened-from labels. WiresTab + WirePackagesPanel: openWire {id, n} → the existing open(id).' },
+    ]
+  },
+  {
     version: 'v55.83-AAC',
     date: '2026-11-27',
     title: 'ClickBooks: Profit & Loss on CASH basis (how the tax return counts it)',

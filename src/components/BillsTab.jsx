@@ -542,8 +542,8 @@ export default function BillsTab(props) {
       <span>{'⛔ The bills did not load: ' + loadErr}</span>
       <button onClick={load} className="px-2 py-1 rounded text-[12px] font-extrabold" style={{ background: '#991b1b', color: '#ffffff' }}>Try again</button></div>}
     {fromWaiting && props.openBillTarget && <div id="nt-from-waiting" className="rounded-xl px-3 py-2 mb-2 flex items-center gap-2 flex-wrap" style={{ background: '#eff6ff', color: '#0f172a', border: '2px solid #1d4ed8' }}>
-      {props.onBackFromBill && <button onClick={props.onBackFromBill} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', border: '1px solid #1d4ed8' }}>← Back to the Waiting list</button>}
-      <span className="text-[12px] font-bold" style={{ color: '#0f172a' }}>{fromWaiting.missing ? 'Opened from 🔔 Waiting for me, but ' + fromWaiting.title + ' is no longer in the Bills list (it may have been voided or changed). Go back and press ↻ Refresh.' : 'Opened from 🔔 Waiting for me: ' + fromWaiting.title + (fromWaiting.validating ? ' — its validation checks are open below.' : ' — it is shown below.')}</span>
+      {props.onBackFromBill && <button onClick={props.onBackFromBill} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', border: '1px solid #1d4ed8' }}>{'← Back to ' + (props.backFromBillLabel || 'the Waiting list')}</button>}
+      <span className="text-[12px] font-bold" style={{ color: '#0f172a' }}>{fromWaiting.missing ? 'Opened from ' + (props.openedFromLabel || '🔔 Waiting for me') + ', but ' + fromWaiting.title + ' is no longer in the Bills list (it may have been voided or changed). Go back and press ↻ Refresh.' : 'Opened from ' + (props.openedFromLabel || '🔔 Waiting for me') + ': ' + fromWaiting.title + (fromWaiting.validating ? ' — its validation checks are open below.' : ' — it is shown below.')}</span>
     </div>}
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900 mr-1">💸 Bills — what we owe</div>

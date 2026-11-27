@@ -12,6 +12,7 @@ var cp = require('child_process');
 var path = require('path');
 
 var MANIFEST = [
+  { f: 'test-v55-83-aaa-work-feed.js', label: 'new', why: 'AAA My work feed (Max 27 Nov): exact issue + how-to-resolve steps per item from Waiting for me + Egypt invoices awaiting bank confirmation; who sees which part (same switches as the screens, researcher / admin / super admin); Go resolve opens the exact bill / wire / invoice and Back returns; Resolved group; read-only, no route, no SQL' },
   { f: 'test-v55-83-yh-canada-history.js', label: 'new', why: 'YH Canada historical archive: goods-name rules and like-for-like CGT grouping, received vs starting stock / winding / corrections / disposals, the real route (explicit switch only, super admin loads and decides, fingerprint, load once, part-way load never shown, incomplete read refused), wiring, SQL adds tables only' },
   { f: 'test-v55-83-xt-pending-final-copy.js', label: 'new', why: 'XT a pending line is retired when its bank-linked final line came in through a second connection: exactly one live copy, same account/money/day/description, work and links protected, fail closed' },
   { f: 'test-v55-83-xt-pending-never-counts.js', label: 'new', why: 'XT a pending bank line never counts, matches, teaches a rule or goes to Wave: server guard (fail closed), company totals, Bank tab totals, age flag, imports present' },

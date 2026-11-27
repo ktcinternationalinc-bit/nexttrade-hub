@@ -79,9 +79,13 @@ export default function AccountingTab(props) {
       try { window.scrollTo(0, b0.y || 0); window.dispatchEvent(new CustomEvent('nt-acct-returned', { detail: { sub: b0.sub } })); } catch (e2) {}
     }, 60);
   }
-  function pickTab(k) { setBack(null); setBillTarget(null); setSub(k); }
+  function pickTab(k) { setBack(null); setBillTarget(null); setWireOpen(null); setSub(k); }
   // v55.83-XL — "Open this bill" from Waiting for me: Bills opens on that exact bill; the Back button (SO) returns to the list
-  var [billTarget, setBillTarget] = useState(null); // { id, bill_number, title, section, n } | null
+  // v55.83-AAA — 📋 My work feed (home screen) can open Accounting ON a bill (deepLink.bill) or ON a wire (deepLink.wire); its Back = props.onReturn
+  var _dl = props.deepLink || {};
+  var [billTarget, setBillTarget] = useState(_dl.bill && _dl.bill.id && _initSub === 'bills' ? Object.assign({}, _dl.bill, { n: Date.now() }) : null); // { id, bill_number, title, section, n } | null
+  var [wireOpen, setWireOpen] = useState(_dl.wire && _dl.wire.id && _initSub === 'wires' ? { id: _dl.wire.id, n: Date.now() } : null); // { id, n } | null
+  var feedBill = !back && !!props.onReturn && !!billTarget; // the bill was opened from the work feed, not from Waiting for me
   function openBillFrom(t) { if (!t || !t.id) { return; } setBillTarget(Object.assign({}, t, { n: Date.now() })); goFrom('bills'); }
   // v55.83-XX (Max, 23 Nov: Nextrade bills "will be available for only Nextrade payments wires") — 🟦 Nextrade bills → Pay ▸ → "From a KTC
   // transfer to NextTrade" asks (window event hub-open-nextrade-wire) for Wires → ＋ New wire to NextTrade with that bill ticked. goFrom keeps
@@ -258,6 +262,7 @@ export default function AccountingTab(props) {
         {back && back.sub !== sub && <button onClick={goBack} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>← Back to {back.label || labelOfSub(tabs, back.sub)}</button>}
         {back && back.sub !== sub && back.note && <span className="text-[12px] font-bold px-2 py-1 rounded" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>{'What to do here: ' + back.note}</span>}
         {!(back && back.sub !== sub) && props.onReturn && <button onClick={props.onReturn} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>← Back to {props.returnLabel || 'where you were'}</button>}
+        {!(back && back.sub !== sub) && props.onReturn && props.returnNote && <span className="text-[12px] font-bold px-2 py-1 rounded" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>{'What to do here: ' + props.returnNote}</span>}
         <span className="text-[11px]" style={{ color: '#cbd5e1' }}>Your filters and place are kept.</span>
       </div>}
       {alive('dashboard') && <div style={shown('dashboard')}><AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { goFrom('review'); }} /></div>}
@@ -267,8 +272,8 @@ export default function AccountingTab(props) {
       {sub === 'journals' && <div className="p-3"><JournalEntriesTab /></div>}
       {sub === 'nextrade' && <div className="p-3"><CompanyBooksTab key="nextrade" company="nextrade" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.nextrade.manage'] === true} canCreateKtcCategory={isSuper || mp['bank.classify'] === true || mp['bills.manage'] === true} /></div>}
       {sub === 'rtm' && <div className="p-3"><CompanyBooksTab key="rtm" company="rtm" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.rtm.manage'] === true} /></div>}
-      {sub === 'bills' && <div className="p-3"><BillsTab {...props} warehousePreset={wcPreset} openBillTarget={back && back.sub === 'waiting' ? billTarget : null} onBackFromBill={back && back.sub === 'waiting' ? goBack : null} fundsTarget={fundsTarget} /></div>}
-      {sub === 'wires' && <div className="p-3"><WiresTab {...props} wirePreset={wirePreset} /></div>}
+      {sub === 'bills' && <div className="p-3"><BillsTab {...props} warehousePreset={wcPreset} openBillTarget={(back && back.sub === 'waiting') || feedBill ? billTarget : null} onBackFromBill={back && back.sub === 'waiting' ? goBack : (feedBill ? props.onReturn : null)} openedFromLabel={feedBill ? '📋 My work feed' : ''} backFromBillLabel={feedBill ? 'your work feed' : ''} fundsTarget={fundsTarget} /></div>}
+      {sub === 'wires' && <div className="p-3"><WiresTab {...props} wirePreset={wirePreset} openWire={!back && props.onReturn ? wireOpen : null} /></div>}
       {alive('forecast') && <div className="p-3" style={shown('forecast')}><CashForecastTab {...props} onGo={goFrom} /></div>}
       {alive('period_stats') && <div className="p-3" style={shown('period_stats')}><PeriodStatsTab {...props} onGo={goFrom} /></div>}
       {sub === 'categories' && <div className="p-3"><ExpenseRulesTab {...props} /></div>}

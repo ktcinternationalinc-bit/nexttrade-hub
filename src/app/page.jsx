@@ -38,6 +38,7 @@ import PersonalDashboard from '../components/PersonalDashboard';
 // (Overdue / Recent Updates / Newly Assigned) and an in-place ticket modal
 // that renders on the dashboard without a tab switch.
 import DashboardPrioritySections from '../components/DashboardPrioritySections';
+import WorkFeed from '../components/WorkFeed'; // v55.83-AAA — 📋 My work feed, first on the home screen
 import DashboardTicketModalOverlay from '../components/DashboardTicketModalOverlay';
 import VoicemailsWidget from '../components/VoicemailsWidget';
 import AIAssistant from '../components/AIAssistant';
@@ -464,9 +465,36 @@ function HubApp() {
     setAcctReturn({ tab: tab, y: y0, label: tab === 'bank' ? 'Banking' : 'where you were' });
     setAcctDeepLink({ sub: 'review', txnId: txnId || null }); setTab('accounting');
   };
+  // v55.83-AAA — 📋 My work feed: "Open it →" goes to the exact place; a Back button there returns to the feed (home screen).
+  // Accounting places use the SO Back bar (acctReturn, label "your work feed" + what to do); a Sales invoice uses feedReturn.
+  const [feedReturn, setFeedReturn] = useState(null); // { y, title, todo } | null
+  const [feedBackN, setFeedBackN] = useState(0); // counts Backs to the feed, so it says Fixed / Still open only after a real Back
+  const openFromFeed = (target, info) => {
+    if (!target) { return; }
+    var y0 = 0; try { y0 = window.scrollY || 0; } catch (e0) {}
+    var todo = (info && info.todo) || '';
+    if (target.kind === 'invoice') {
+      var inv = (invoices || []).find(function (v) { return v && v.id === target.id; });
+      if (!inv) { toast.error('That invoice is no longer in your list — press ↻ Refresh on the feed.'); return; }
+      setAcctReturn(null); setAcctDeepLink(null);
+      setFeedReturn({ y: y0, title: (info && info.title) || '', todo: todo });
+      setTab('sales'); setSelectedInvoice(inv);
+      return;
+    }
+    setFeedReturn(null);
+    setAcctReturn({ tab: 'dashboard', y: y0, label: 'your work feed', note: todo });
+    if (target.kind === 'bill') { setAcctDeepLink({ sub: 'bills', bill: { id: target.id, bill_number: target.bill_number || '', title: target.title || '', section: target.section || '' } }); }
+    else if (target.kind === 'wire') { setAcctDeepLink({ sub: 'wires', wire: { id: target.id } }); }
+    else { setAcctDeepLink({ sub: target.sub || 'waiting' }); }
+    setTab('accounting');
+  };
+  const returnToFeed = () => {
+    var r0 = feedReturn; setFeedReturn(null); setSelectedInvoice(null); setFeedBackN(function (k) { return k + 1; }); setTab('dashboard');
+    setTimeout(function () { try { window.scrollTo(0, (r0 && r0.y) || 0); } catch (e1) {} }, 80);
+  };
   const returnFromAccounting = () => {
     var r0 = acctReturn; if (!r0) { return; }
-    setAcctReturn(null); setAcctDeepLink(null); setTab(r0.tab);
+    setAcctReturn(null); setAcctDeepLink(null); if (r0.tab === 'dashboard') { setFeedBackN(function (k) { return k + 1; }); } setTab(r0.tab);
     setTimeout(function () { try { window.scrollTo(0, r0.y || 0); } catch (e1) {} }, 80);
   };
   // v55.83-A.6.13 (Max May 14 2026) — when user clicks a ticket from
@@ -494,6 +522,7 @@ function HubApp() {
 
   // Data
   const [invoices, setInvoices] = useState([]);
+  const [invoicesStatus, setInvoicesStatus] = useState(null); // v55.83-AAA rev3 (Codex AAA-02) — did the last invoice load work? { ok, n } — the work feed never reads a failed load as "resolved"
   const [treasury, setTreasury] = useState([]);
   // v55.83-A.6.27.71 (Phase 3): bucket-status map for the treasury renderer.
   // When a bucket placeholder treasury row is rendered, we look up the bucket
@@ -1622,9 +1651,10 @@ function HubApp() {
       // Promise.allSettled never rejects — one failed table cannot nuke the whole dashboard.
       // Previously Promise.all here caused: single RLS hiccup on any of 9 tables → all setState
       // calls skipped → dashboard renders empty/stale. Fixed 2026-04-20.
+      let invLoadOk = false; // v55.83-AAA rev3 (Codex AAA-02) — told to the work feed together with the list itself
       const safe = (p) => p.catch((e) => { try { console.warn('[loadAllData]', e?.message || e); } catch(_){} return []; });
       const [inv, tres, chk, dbt, cust, wh, items, rules, stock] = await Promise.all([
-        safe(fetchAll('invoices', 'invoice_date')),
+        safe(fetchAll('invoices', 'invoice_date').then(function (r) { invLoadOk = true; return r; })), // v55.83-AAA rev3: remember whether it worked
         safe(fetchAll('treasury', 'transaction_date')),
         safe(fetchAll('checks', 'check_date', true)),
         safe(fetchAll('debts', 'total_debt')),
@@ -1799,7 +1829,7 @@ function HubApp() {
           }
         }
       } catch(e) { console.warn('Users table not ready'); }
-      setInvoices(inv);
+      setInvoices(inv); setInvoicesStatus({ ok: invLoadOk, n: Date.now() }); // v55.83-AAA rev3 — same moment as the list: a failed load (empty list) is never read as resolved
       setTreasury(tres);
       setChecks(chk);
       setDebts(dbt);
@@ -2951,6 +2981,7 @@ function HubApp() {
     setTabLoading(true);
     if (t !== 'accounting') { setAcctDeepLink(null); } // v55.83-IN — clear stale Bank Review deep-link on manual nav elsewhere
     setAcctReturn(null); // v55.83-SO — a manual move to another tab is a fresh start, no Back
+    setFeedReturn(null); // v55.83-AAA — same for a jump from the work feed
     setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
     setSelectedInvoice(null); setDrillType(null); setTreasuryDrill(null); setSelectedMonth(null);
     if (opts && opts.from && opts.to) {
@@ -5616,7 +5647,7 @@ function HubApp() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-AAC</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-AAA</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -10237,8 +10268,19 @@ function HubApp() {
         {/* ==========================================
             DASHBOARD TAB
         ========================================== */}
+        {/* v55.83-AAA — back to the work feed after opening an invoice from it */}
+        {feedReturn && tab !== 'dashboard' && tab !== 'accounting' && (
+          <div className="mb-3 px-3 py-2 flex items-center gap-2 flex-wrap" style={{ background: '#000000', border: '1px solid #fafafa', position: 'sticky', top: 0, zIndex: 40 }}>
+            <button onClick={returnToFeed} className="px-4 py-2 text-[13px] font-extrabold" style={{ background: '#fafafa', color: '#000000', border: '1px solid #fafafa' }}>← Back to your work feed</button>
+            {feedReturn.todo && <span className="text-[12px] font-bold px-2 py-1" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>{'What to do here: ' + feedReturn.todo}</span>}
+            {feedReturn.title && <span className="text-[12px]" style={{ color: '#d4d4d4' }}>{feedReturn.title}</span>}
+          </div>
+        )}
         {tab === 'dashboard' && (
           <div className="flex flex-col">
+
+            {/* v55.83-AAA — 📋 My work feed FIRST on the home screen (Max: look 25 Nov, feed 27 Nov) */}
+            <WorkFeed userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} invoices={invoices} invoicesStatus={invoicesStatus} onOpen={openFromFeed} backN={feedBackN} />
 
             {/* v55.83-A.6.27.9 (Max May 15 2026) — FX widget pinned to the
                 top of the dashboard. Compact: single small row, USD→EGP
@@ -14801,7 +14843,7 @@ function HubApp() {
 
         {tab === 'accounting' && (
           <SafeSection label="Accounting">
-            <AccountingTab toast={toast} user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} onReload={loadAllData} deepLink={acctDeepLink} onReturn={acctReturn ? returnFromAccounting : null} returnLabel={acctReturn ? acctReturn.label : ''} />
+            <AccountingTab toast={toast} user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} onReload={loadAllData} deepLink={acctDeepLink} onReturn={acctReturn ? returnFromAccounting : null} returnLabel={acctReturn ? acctReturn.label : ''} returnNote={acctReturn ? (acctReturn.note || '') : ''} />
           </SafeSection>
         )}
 

@@ -439,6 +439,9 @@ export default function WirePackagesPanel(props) {
   }
   // v55.83-XX (Max, 23 Nov: Nextrade bills "will be available for only Nextrade payments wires") — 🟦 Nextrade bills → Pay ▸ → "From a KTC
   // transfer to NextTrade" lands here: a NEW wire to NextTrade Industries with that bill ticked. The transfer is NOT picked for the person.
+  // v55.83-AAA — 📋 My work feed: "Open it →" on a wire opens that wire's details here (read only; the same open() as clicking it)
+  var openWireN = props.openWire ? props.openWire.n : 0;
+  useEffect(function () { var ow = props.openWire; if (ow && ow.id) { open(ow.id); } }, [openWireN]); // eslint-disable-line react-hooks/exhaustive-deps
   var presetN = props.preset ? props.preset.n : 0;
   useEffect(function () {
     var pr = props.preset; if (!pr || !pr.bill_id) { return; }
