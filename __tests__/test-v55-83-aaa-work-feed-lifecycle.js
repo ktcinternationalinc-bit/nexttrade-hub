@@ -125,5 +125,54 @@ var MGR = { 'accounting.clickbooks.access': true, 'bills.manage': true };
     P.indexOf('if (invLoadOk) { setInvoices(inv); } setInvoicesStatus({ ok: invLoadOk, n: Date.now() });') > 0 &&
     P.indexOf("fetchAllPagesStrict(function (from, to) { return supabase.from(table).select('*').order(orderCol, { ascending: asc }).order('id', { ascending: true }).range(from, to); }, 1000)") > 0);
 
+  // ── v55.83-AAG (Codex AAA-03, its exact repro): good 250 task → its real Go resolve button → the home screen un-mounts and re-mounts
+  // (hook state reset) → the invoice reload FAILED while away (page kept its list, says not-ok) → Back. Must NOT say Resolved; must say
+  // "could not verify"; the task must still be there (not refreshed). Then a later successful load with the payment matched resolves it. ──
+  function findAll(n, pred, acc0) { acc0 = acc0 || []; if (!n || typeof n !== 'object') { return acc0; } if (Array.isArray(n)) { n.forEach(function (x) { findAll(x, pred, acc0); }); return acc0; } if (pred(n)) { acc0.push(n); } findAll(n.props && n.props.children, pred, acc0); return acc0; }
+  function txt(n) { if (n === null || n === undefined || typeof n === 'boolean') { return ''; } if (typeof n === 'string' || typeof n === 'number') { return String(n); } if (Array.isArray(n)) { return n.map(txt).join(''); } return txt(n.props && n.props.children); }
+  function byTest(id) { return findAll(out, function (n) { return n.props && n.props['data-testid'] === id; }); }
+  function resolvedMemReset() { /* each journey signs in as its own person, so the Resolved memory starts empty by itself */ }
+  var back1 = [{ id: 'back1', order_number: 'EG-77', customer_name: 'Y', total_pending_bank: 250 }];
+  var jumps = [];
+  srv.calls = []; resolvedMemReset();
+  props = { userProfile: { id: 'u-back', role: 'staff' }, modulePerms: { Treasury: true }, isSuperAdmin: false, invoices: back1, invoicesStatus: { ok: true, n: 20 }, backN: 0, onOpen: function (t) { jumps.push(t); } };
+  await flush();
+  var go = findAll(out, function (n) { return n.type === 'button' && /Go resolve/.test(txt(n)); })[0];
+  check('04a: the good load shows the 250 task with its Go resolve button', feed().total === 1 && !!go);
+  go.props.onClick(); await flush();
+  check('04b: Go resolve opens that exact invoice', jumps.length === 1 && jumps[0].kind === 'invoice' && jumps[0].id === 'back1');
+  // home screen un-mounts while the person is on the invoice; Back re-mounts it (fresh hook state, no on-screen copy)
+  H.states = []; H.effects = []; H.refs = [];
+  props = Object.assign({}, props, { invoices: back1, invoicesStatus: { ok: false, n: 21 }, backN: 1 });
+  await flush();
+  check('04c: Back after a FAILED reload: no "Resolved" banner (Codex probe: green RESOLVED, openedStillOpen:false)', byTest('feed-back-resolved').length === 0 && byTest('feed-back-still-open').length === 0);
+  check('04d: it says COULD NOT VERIFY — still needs review', byTest('feed-back-unverified').length === 1 && /still needs review/.test(txt(byTest('feed-back-unverified')[0])));
+  check('04e: the task is still in To do (Codex probe: feedTotal 0), marked NOT REFRESHED, and nothing went to Resolved', feed().total === 1 && feed().groups[0].stale === true && byTest('feed-group-stale').length === 1 && resolved().length === 0, { total: feed().total, r: resolved() });
+  check('04f: the opened task is marked NEEDS REVIEW in the list', /NEEDS REVIEW/.test(txt(out)));
+  // the same journey when the page kept no list at all: the copy taken when the person left the feed is used
+  H.states = []; H.effects = []; H.refs = []; jumps = []; resolvedMemReset();
+  props = Object.assign({}, props, { invoices: back1, invoicesStatus: { ok: true, n: 22 }, backN: 1 });
+  await flush();
+  findAll(out, function (n) { return n.type === 'button' && /Go resolve/.test(txt(n)); })[0].props.onClick(); await flush();
+  H.states = []; H.effects = []; H.refs = [];
+  props = Object.assign({}, props, { invoices: [], invoicesStatus: { ok: false, n: 23 }, backN: 2 });
+  await flush();
+  check('04g: page kept nothing → the copy taken on leaving keeps the task (stale), still COULD NOT VERIFY, nothing resolved', feed().total === 1 && feed().groups[0].stale === true && byTest('feed-back-unverified').length === 1 && resolved().length === 0, { total: feed().total });
+  // a later SUCCESSFUL load where the payment is now matched → resolved for real
+  props = Object.assign({}, props, { invoices: [{ id: 'back1', order_number: 'EG-77', customer_name: 'Y', total_pending_bank: 0 }], invoicesStatus: { ok: true, n: 24 } });
+  await flush();
+  check('04h: the next successful load with the payment matched → the task leaves To do and is in Resolved', feed().total === 0 && resolved().length === 1 && resolved()[0].key === 'invoice_bank:back1', { total: feed().total, r: resolved() });
+  // and when the reload WORKED, Back still says the truth both ways
+  check('04i: backVerdict: own list loaded → Resolved / Still open; own list failed → could not verify (bills/wires use their own lists)',
+    WF.backVerdict('invoice_bank:x', 'T', { groups: [] }, { invoicesOk: true, othersOk: true }).openedStillOpen === false &&
+    WF.backVerdict('invoice_bank:x', 'T', { groups: [{ items: [{ key: 'invoice_bank:x' }] }] }, { invoicesOk: true, othersOk: false }).openedStillOpen === true &&
+    WF.backVerdict('invoice_bank:x', 'T', { groups: [] }, { invoicesOk: false, othersOk: true }).unverified === true &&
+    WF.backVerdict('bill_validate:b1', 'T', { groups: [] }, { invoicesOk: true, othersOk: false }).unverified === true &&
+    WF.backVerdict('bill_validate:b1', 'T', { groups: [] }, { invoicesOk: false, othersOk: true }).unverified === false);
+  // a failed reload while the feed stays open (no Back) marks the group not refreshed too
+  props = Object.assign({}, props, { invoices: back1, invoicesStatus: { ok: true, n: 25 } }); await flush();
+  props = Object.assign({}, props, { invoicesStatus: { ok: false, n: 26 } }); await flush();
+  check('04j: a failed reload with the feed open: the task stays, NOT REFRESHED, nothing resolved', feed().total === 1 && feed().groups[0].stale === true && resolved().filter(function (r) { return r.at && r.key === 'invoice_bank:back1'; }).length === 0);
+
   console.log('\n' + pass + ' passed, ' + failN + ' failed'); if (failN) { process.exit(1); }
 })().catch(function (e) { console.log('CRASH ' + (e && e.stack || e)); process.exit(1); });

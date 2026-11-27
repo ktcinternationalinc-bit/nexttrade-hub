@@ -69,8 +69,13 @@ export default function WorkFeed(props) {
       // Codex AAA-02: the home screen's invoices count only when the page says they loaded (invoicesStatus.ok); otherwise the last good
       // invoice group is kept as it was and is left out of the Resolved comparison (an empty list after a failed load is not "resolved").
       var invOk = invoicesReady(props.invoicesStatus);
-      var f = buildFeed({ waiting: w, invoices: acc.canInvoices && invOk ? (props.invoices || []) : null });
-      if (acc.canInvoices && !invOk && prevRef.current) { f = tally(f.groups.concat(prevRef.current.groups.filter(function (g) { return g.key === 'invoice_bank'; }))); }
+      // v55.83-AAG (Codex AAA-03): after a failed reload the page KEEPS its last good invoice list, so the tasks are rebuilt from it (also
+      // after the feed was re-mounted by Back, when there is no on-screen copy); if the page has none, the copy taken when the person left the
+      // feed (same person) or the on-screen copy is used. Either way the group is marked not-refreshed and is never compared.
+      var invFailed = !!(props.invoicesStatus && props.invoicesStatus.ok === false);
+      var jumpCopy = lastJump && lastJump.user === me ? lastJump.before : null;
+      var f = buildFeed({ waiting: w, invoices: acc.canInvoices && (invOk || invFailed) ? (props.invoices || []) : null });
+      if (acc.canInvoices && invFailed) { f = keepLastGoodInvoices(f, prevRef.current || jumpCopy); }
       var stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       // Which feed to compare with: the one from before the jump (only right after the Back button: backN moved on by one; a home
       // visit through the menu is a fresh start), else the one on screen when ↻ Refresh was pressed.
@@ -79,14 +84,13 @@ export default function WorkFeed(props) {
       if (!base && prev) { base = prev; }
       // A source that failed to load must never make its items look resolved: only compare when everything loaded.
       if (base && !e.length) {
-        var c = compareFeed(invOk ? base : dropGroup(base, 'invoice_bank'), invOk ? f : dropGroup(f, 'invoice_bank'), openedKey);
+        var c = compareFeed(invOk ? base : dropGroup(base, 'invoice_bank'), invOk ? f : dropGroup(f, 'invoice_bank'), null);
         var nextR = addResolved(resolvedMem.list, c.fixed, f, stamp);
         resolvedMem.list = nextR; setResolved(nextR);
-        setSince(openedKey ? { openedKey: openedKey, openedStillOpen: c.openedStillOpen, openedTitle: openedTitle } : null);
       } else {
         var keepR = addResolved(resolvedMem.list, [], f, ''); resolvedMem.list = keepR; setResolved(keepR); // a reopened item leaves Resolved
-        setSince(null);
       }
+      setSince(openedKey ? backVerdict(openedKey, openedTitle, f, { invoicesOk: invOk, othersOk: !e.length }) : null);
       if (seqRef.current !== mySeq) { return; } // a newer load (other person / other switches) started meanwhile: drop this answer
       prevRef.current = f; setFeed(f);
       setAt(stamp);
@@ -104,7 +108,10 @@ export default function WorkFeed(props) {
   // their content; a change re-builds the invoice group and moves what left it to Resolved — only when the page says they loaded.
   var invSig = invoiceSignature(props.invoices, props.invoicesStatus);
   useEffect(function () {
-    var f0 = prevRef.current; if (!f0 || !acc.canInvoices || !invoicesReady(props.invoicesStatus)) { return; }
+    var f0 = prevRef.current; if (!f0 || !acc.canInvoices) { return; }
+    // v55.83-AAG — a failed reload while the feed is open: keep the invoice tasks, mark them not refreshed, compare nothing
+    if (props.invoicesStatus && props.invoicesStatus.ok === false) { var fs0 = keepLastGoodInvoices(f0, f0); prevRef.current = fs0; setFeed(fs0); return; }
+    if (!invoicesReady(props.invoicesStatus)) { return; }
     var f1 = mergeInvoices(f0, props.invoices);
     var c = compareFeed(onlyGroup(f0, 'invoice_bank'), onlyGroup(f1, 'invoice_bank'), null);
     var nr = addResolved(resolvedMem.list, c.fixed, f1, new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); resolvedMem.list = nr; setResolved(nr); // also: an invoice that is a task again leaves Resolved
@@ -151,7 +158,11 @@ export default function WorkFeed(props) {
       {/* v55.83-AAA rev4 (Codex HOLD) — the home screen's invoice list failed to load: say so; the last good invoice tasks stay, nothing resolves */}
       {acc.canInvoices && props.invoicesStatus && props.invoicesStatus.ok === false && <div className="px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#450a0a', color: '#fecaca', border: '1px solid ' + RED }} data-testid="feed-invoices-unavailable">{'⛔ Invoices: unavailable — the invoice list could not be loaded. The invoice tasks shown are from the last good load, and none of them is marked resolved until the list loads again. Reload the page to try again.'}</div>}
       {/* what happened to the item just opened */}
-      {since && since.openedKey && <div className="px-3 py-2 mb-3 flex items-center gap-2 flex-wrap" style={{ background: since.openedStillOpen ? '#1c1300' : '#052e16', border: '1px solid ' + (since.openedStillOpen ? AMBER : GREEN) }}>
+      {since && since.openedKey && since.unverified && <div className="px-3 py-2 mb-3 flex items-center gap-2 flex-wrap" style={{ background: '#1c1300', border: '1px solid ' + AMBER }} data-testid="feed-back-unverified">
+        <span className="px-2 py-0.5 text-[11px] font-extrabold" style={{ background: AMBER, color: '#000000' }}>COULD NOT VERIFY</span>
+        <span className="text-[12px] font-bold" style={{ color: INK }}>{since.openedTitle + ': its list could not be loaded, so the Hub cannot tell whether it is done. It still needs review — it stays in To do until the list loads again.'}</span>
+      </div>}
+      {since && since.openedKey && !since.unverified && <div className="px-3 py-2 mb-3 flex items-center gap-2 flex-wrap" style={{ background: since.openedStillOpen ? '#1c1300' : '#052e16', border: '1px solid ' + (since.openedStillOpen ? AMBER : GREEN) }} data-testid={since.openedStillOpen ? 'feed-back-still-open' : 'feed-back-resolved'}>
         <span className="px-2 py-0.5 text-[11px] font-extrabold" style={{ background: since.openedStillOpen ? AMBER : GREEN, color: '#000000' }}>{since.openedStillOpen ? 'STILL OPEN' : '✓ RESOLVED'}</span>
         <span className="text-[12px] font-bold" style={{ color: INK }}>{since.openedStillOpen ? since.openedTitle + ' still needs something — it is marked below. Read its How to resolve steps.' : since.openedTitle + ' is done and moved to Resolved.'}</span>
       </div>}
@@ -170,17 +181,18 @@ export default function WorkFeed(props) {
             <div className="flex items-center gap-2 flex-wrap pb-1.5 mb-2" style={{ borderBottom: '1px solid ' + LINE }}>
               <span className="px-1.5 py-0.5" style={{ fontSize: 9, fontWeight: 900, letterSpacing: '0.12em', background: '#262626', color: SUB }}>{(g.area || '').toUpperCase()}</span>
               <span style={{ fontSize: 13, fontWeight: 900, color: INK }}>{g.title}</span>
+              {g.stale && <span className="px-1.5 py-0.5" style={{ fontSize: 10, fontWeight: 900, background: AMBER, color: '#000000' }} data-testid="feed-group-stale">NOT REFRESHED — last good list</span>}
               <span className="tabular-nums" style={{ fontSize: 12, fontWeight: 900, color: SUB }}>{g.items.length}</span>
             </div>
             {g.items.slice(0, 15).map(function (x) {
-              var opened = since && since.openedKey === x.key && since.openedStillOpen;
+              var opened = since && since.openedKey === x.key && (since.openedStillOpen || since.unverified);
               var edge = x.stuck ? RED : opened ? AMBER : '#525252';
               return <div key={x.key} className="mb-2 flex flex-wrap" style={{ background: opened ? '#140e00' : PANEL, border: '1px solid ' + (opened ? AMBER : LINE), borderLeft: '4px solid ' + edge }} data-feed-item={x.key}>
                 <div className="px-3 py-2.5" style={{ flex: '1 1 340px', minWidth: 0 }}>
                   <div className="flex items-center gap-2 flex-wrap mb-1">
                     <span style={LABEL}>The issue</span>
                     {x.stuck && <span className="px-1.5 py-0.5" style={{ fontSize: 10, fontWeight: 900, background: RED, color: '#ffffff' }}>STUCK</span>}
-                    {opened && <span className="px-1.5 py-0.5" style={{ fontSize: 10, fontWeight: 900, background: AMBER, color: '#000000' }}>STILL OPEN</span>}
+                    {opened && <span className="px-1.5 py-0.5" style={{ fontSize: 10, fontWeight: 900, background: AMBER, color: '#000000' }}>{since.unverified ? 'NEEDS REVIEW' : 'STILL OPEN'}</span>}
                     <span style={{ fontSize: 11, color: SUB }}>{x.chip ? x.chip : (x.age == null ? '' : x.age === 0 ? 'since today' : 'waiting ' + x.age + ' day' + (x.age === 1 ? '' : 's'))}</span>
                   </div>
                   <div style={{ fontSize: 14, fontWeight: 800, color: INK, lineHeight: 1.35 }}>{x.issue}</div>
@@ -227,6 +239,23 @@ export function invoicesReady(st) { return !!(st && st.ok === true); }
 export function invoiceSignature(invoices, st) {
   var parts = []; (invoices || []).forEach(function (v) { if (v && v.id && Number(v.total_pending_bank || 0) > 0) { parts.push(v.id + ':' + Number(v.total_pending_bank)); } });
   return (st && st.ok === true ? 'ok' : st && st.ok === false ? 'failed' : 'unknown') + '|' + (st && st.n || 0) + '|' + parts.sort().join(',');
+}
+// v55.83-AAG (Codex AAA-03) — the invoice tasks after a failed reload: the page's retained list when it has tasks, else the last good copy
+// (on screen, or taken when the person left the feed). Marked stale: shown, never compared, never resolved.
+export function keepLastGoodInvoices(f, lastGood) {
+  var have = (f.groups || []).filter(function (g) { return g.key === 'invoice_bank'; })[0];
+  var copy = have || (lastGood ? (lastGood.groups || []).filter(function (g) { return g.key === 'invoice_bank'; })[0] : null);
+  var others = (f.groups || []).filter(function (g) { return g.key !== 'invoice_bank'; });
+  return tally(copy ? others.concat([Object.assign({}, copy, { stale: true })]) : others);
+}
+// v55.83-AAG (Codex AAA-03) — what Back says about the item the person opened. Only when that item's OWN list loaded can it say Resolved /
+// Still open; otherwise: could not verify, still needs review.
+export function backVerdict(openedKey, openedTitle, f, ok) {
+  var isInvoice = String(openedKey || '').indexOf('invoice_bank:') === 0;
+  var sourceOk = isInvoice ? !!(ok && ok.invoicesOk) : !!(ok && ok.othersOk);
+  if (!sourceOk) { return { openedKey: openedKey, openedTitle: openedTitle || '', unverified: true, openedStillOpen: false }; }
+  var there = false; ((f && f.groups) || []).forEach(function (g) { g.items.forEach(function (x) { if (x.key === openedKey) { there = true; } }); });
+  return { openedKey: openedKey, openedTitle: openedTitle || '', unverified: false, openedStillOpen: there };
 }
 export function dropGroup(f, key) { return f ? tally(f.groups.filter(function (g) { return g.key !== key; })) : f; }
 export function onlyGroup(f, key) { return f ? tally(f.groups.filter(function (g) { return g.key === key; })) : f; }

@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AAG',
+    date: '2026-11-27',
+    title: 'Work feed: when a list could not be checked, it says so — never a false “Resolved”',
+    items: [
+      { text: 'When you come **Back** to your work feed and the list your item belongs to could not be loaded (for example the invoice list failed to refresh), the feed now says **COULD NOT VERIFY — it still needs review** instead of a green “Resolved”. The item stays in To do, marked **NEEDS REVIEW**.' },
+      { text: 'The invoice tasks no longer disappear when the invoice list fails to refresh: they stay, under a yellow **NOT REFRESHED — last good list** tag, and nothing moves to Resolved until the list loads again. The next good load moves what was really fixed to Resolved.' },
+      { superAdminOnly: true, text: 'Technical: screen only, no route / SQL (Codex AAA-03). WorkFeed: backVerdict(openedKey, title, feed, { invoicesOk, othersOk }) — Resolved / Still open only when the opened item\'s own source loaded (invoice_bank:* → invoicesStatus.ok; bills / wires → both lists loaded), else unverified. keepLastGoodInvoices: after a failed reload the invoice group is rebuilt from the page\'s retained list, else the on-screen copy or the copy taken at Go resolve (same user), marked stale, never compared. The invoice watcher marks the group stale on a failed reload while the feed is open. Test: lifecycle 04a-04j (Codex\'s remount repro).' },
+    ]
+  },
+  {
     version: 'v55.83-AAA',
     date: '2026-11-27',
     title: 'Home screen: 📋 My work feed — each issue, how to resolve it, a button to the exact place, and a Resolved group',
