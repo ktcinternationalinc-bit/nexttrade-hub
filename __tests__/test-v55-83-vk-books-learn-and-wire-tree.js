@@ -17,6 +17,24 @@ console.log('VK — books learn rules; categorized lines stay; wire bill tree');
 
 var L = require(path.join(root, 'src/lib/company-rule-learn.js'));
 var T = require(path.join(root, 'src/lib/wire-bill-tree.js'));
+var tax = require(path.join(root, 'src/lib/nextrade-tax-report.js')).nextradeTaxReport;
+
+var taxCategories = [{ key: 'sales', label: 'Sales', kind: 'income' }, { key: 'materials', label: 'Materials', kind: 'cogs' }, { key: 'utilities', label: 'Utilities', kind: 'expense' }];
+function taxLine(category, amount, fields) {
+  return Object.assign({ wave_business_id: 'NEXTRADE_BOOKS', date: '2026-01-15', iso_currency: 'USD', company_category: category, amount_abs: amount, direction: 'out' }, fields);
+}
+var report = tax([
+  taxLine('sales', 100, { direction: 'in', date: '2025-12-31', posted_date: '2026-01-01' }),
+  taxLine('materials', 20), taxLine('utilities', 15), taxLine('utilities', 2, { direction: 'in' }),
+  taxLine('utilities', 300, { transfer_group_id: 'PAIR' }), taxLine(null, 50),
+  taxLine('utilities', 700, { pending: true }), taxLine('utilities', 700, { review_status: 'duplicate' }),
+  taxLine('utilities', 700, { payroll_restricted: true }), taxLine('utilities', 700, { wave_business_id: 'RTM_BOOKS' }),
+  taxLine('utilities', 700, { posted_date: '2027-01-01' }), taxLine('utilities', 40, { iso_currency: 'CAD' }),
+], taxCategories, '2026-01-01', '2026-12-31');
+var usd = report.currencies.find(function (row) { return row.currency === 'USD'; });
+var cad = report.currencies.find(function (row) { return row.currency === 'CAD'; });
+check('Nextrade tax report uses posted dates, nets refunds, and keeps currencies separate', report.first === '2026-01-01' && usd.summary.income === 10000 && usd.summary.cost_of_goods === 2000 && usd.summary.expenses === 1300 && usd.summary.net === 6700 && cad.summary.expenses === 4000, report);
+check('Transfers and uncategorized activity appear outside the tax summary', usd.rows.some(function (row) { return row.kind === 'transfer' && row.money_out === 30000; }) && usd.summary.review_count === 1, usd);
 
 // ── the filter ──
 var la = { company_category: 'elec' }, lb = { company_category: null };
@@ -295,6 +313,14 @@ function rulesOf(db, company) { return db.t.company_rules.filter(function (r) { 
   check('A transaction can seed a saved rule and stay uncategorized until Apply', savedRule.ok && rulesOf(db, 'NEXTRADE_BOOKS').length === 1 && !nexttradeLine.company_category, savedRule);
   var crossCompanyRule = await call({ company: 'nextrade', action: 'save_rule', rule: Object.assign({}, draft, { lineId: 'L1' }) });
   check('A rule draft cannot use a transaction from another company', crossCompanyRule._status === 404, crossCompanyRule);
+  var taxRequest = { action: 'tax_report', company: 'nextrade', from: '2026-01-01', to: '2026-11-27' };
+  var blockedTax = await call(taxRequest);
+  check('The tax report requires the existing financial summary permission', blockedTax._status === 403, blockedTax);
+  state.perms['accounting.view_totals'] = true;
+  var taxResult = await call(taxRequest);
+  check('The Nextrade tax endpoint reads its own transactions and shows restricted scope', taxResult.ok && taxResult.report.currencies[0].summary.review_count === 1 && taxResult.report.currencies[0].rows[0].count === 1 && taxResult.payroll_restricted && taxResult.accounts_restricted, taxResult);
+  var invalidTax = await call(Object.assign({}, taxRequest, { to: '2026-02-30' }));
+  check('An invalid calendar date is rejected by the tax report', invalidTax._status === 400, invalidTax);
   state.perms = { 'company.rtm.manage': true, 'company.rtm.view': true };
   var n2 = await call({ company: 'rtm', action: 'lines', from: '2026-10-01', to: '2026-11-30' });
   check('RTM lines carry no KTC mapping (RTM makes no KTC bills)', n2.ok && n2.ktc_map === undefined && n2.ktc_categories === undefined);

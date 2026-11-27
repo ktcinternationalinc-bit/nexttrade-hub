@@ -14,6 +14,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { audit } from '../../../../lib/audit-server';
 import { companyByKey, COMPANY_KINDS, categoryKey, bestCompanyRule, companyTotals, normMatch, NEXTRADE_COMPANY_ID } from '../../../../lib/companies';
+import { nextradeTaxReport } from '../../../../lib/nextrade-tax-report';
 import { categorizeLine, partyName, wantsBill, loadBillCutoff, beforeCutoff, NEXTRADE_BILL_CUTOFF } from '../../../../lib/nextrade-bills-server'; // v55.83-TW (Codex P1-2): one database function, all or nothing
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP private bank accounts — respected here too
 import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
@@ -46,15 +47,26 @@ function transactionSource(line) {
   return id ? 'plaid' : null;
 }
 function isDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+function isCalendarDate(s) {
+  if (!isDate(s)) { return false; }
+  var parsed = new Date(s);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === s;
+}
 function fail(msg, st) { return NextResponse.json({ ok: false, error: msg }, { status: st || 400 }); }
 function readFail(what, e) { return NextResponse.json({ ok: false, error: missingRel(e) ? SQL_MISSING : 'Could not read ' + what + ' (' + ((e && e.message) || 'error') + ') — nothing changed.' }, { status: missingRel(e) ? 409 : 503 }); }
 
-async function pageLines(db, companyId, from, to) {
+async function pageLines(db, companyId, from, to, taxReport) {
   var out = [];
   for (var pg = 0; pg < 30; pg++) {
-    var r = await db.from('bank_transactions').select(LINE_COLS + (companyId === NEXTRADE_COMPANY_ID ? ', bank_source, plaid_transaction_id' : '')).eq('wave_business_id', companyId)
-      .or('review_status.is.null,review_status.neq.duplicate').gte('date', from).lte('date', to)
-      .order('date', { ascending: false }).order('id', { ascending: true }).range(pg * 1000, pg * 1000 + 999);
+    var columns = LINE_COLS + (taxReport ? ', iso_currency' : companyId === NEXTRADE_COMPANY_ID ? ', bank_source, plaid_transaction_id' : '');
+    var query = db.from('bank_transactions').select(columns).eq('wave_business_id', companyId)
+      .or('review_status.is.null,review_status.neq.duplicate');
+    if (taxReport) {
+      query = query.not('pending', 'is', true).or('and(posted_date.gte.' + from + ',posted_date.lte.' + to + '),and(posted_date.is.null,date.gte.' + from + ',date.lte.' + to + ')');
+    } else {
+      query = query.gte('date', from).lte('date', to);
+    }
+    var r = await query.order('date', { ascending: false }).order('id', { ascending: true }).range(pg * 1000, pg * 1000 + 999);
     if (r.error) { return { error: r.error }; }
     out = out.concat(r.data || []);
     if (!r.data || r.data.length < 1000) { return { data: out }; }
@@ -309,14 +321,17 @@ export async function POST(req) {
     var from = isDate(body.from) ? body.from : '2026-01-01';
     var to = isDate(body.to) ? body.to : new Date().toISOString().substring(0, 10);
 
-    if (action === 'totals') { // v55.83-TW (Codex P1-1) — month totals (money in / out / transfers) need the sensitive 'Bank & Financial Summary'
+    var taxReport = action === 'tax_report';
+    if (taxReport && comp.key !== 'nextrade') { return fail('The Nextrade tax report uses the Nextrade books.'); }
+    if (taxReport && (!isCalendarDate(body.from) || !isCalendarDate(body.to) || from > to)) { return fail('Choose a valid reporting period.'); }
+    if (action === 'totals' || taxReport) { // v55.83-TW (Codex P1-1) — summary totals need the sensitive 'Bank & Financial Summary'
       var gTot = await assertPermission(db, userId, 'accounting.view_totals', req);
-      if (!gTot || gTot.ok !== true) { return fail('Totals need the "P2 · Bank & Financial Summary" permission — ask the super admin.', 403); }
+      if (!gTot || gTot.ok !== true) { return fail((taxReport ? 'The tax report needs' : 'Totals need') + ' the "P2 · Bank & Financial Summary" permission — ask the super admin.', 403); }
     }
-    if (action === 'lines' || action === 'totals') {
+    if (action === 'lines' || action === 'totals' || taxReport) {
       var catsL = await loadCats(db, cid);
       if (catsL.error) { return missingRel(catsL.error) ? NextResponse.json({ ok: true, lines: [], categories: [], sql_missing: SQL_MISSING }) : readFail('the categories', catsL.error); }
-      var pl = await pageLines(db, cid, from, to);
+      var pl = await pageLines(db, cid, from, to, taxReport);
       if (pl.error) { return readFail('the bank lines', pl.error); }
       pl.data = dropPrivate(pl.data, scope);
       var byKey = {}; (catsL.data || []).forEach(function (c) { byKey[c.key] = c; });
@@ -325,6 +340,11 @@ export async function POST(req) {
       // v55.83-XE — without 'payroll.view' a payroll line keeps its date, account and category, but not its amount
       var payK = payrollKeys(catsL.data || []); var hiddenPay = 0;
       if (!pay.canSee) { linesOut = linesOut.map(function (l) { if (payK[l.company_category]) { hiddenPay++; return maskPayrollLine(l); } return l; }); }
+      if (taxReport) {
+        if (pl.capped) { return fail('This period contains too many transactions. Choose a shorter period for a complete report.', 422); }
+        return NextResponse.json({ ok: true, report: nextradeTaxReport(linesOut, catsL.data || [], from, to), from: from, to: to,
+          payroll_restricted: !pay.canSee || payZD.canSeeLines === false, accounts_restricted: !scope.all });
+      }
       if (action === 'totals') {
         if (pay.canSee || !hiddenPay) { return NextResponse.json({ ok: true, totals: companyTotals(linesOut, catsL.data || []), from: from, to: to, capped: !!pl.capped }); }
         // XE (Codex 11:24: an exact total a payroll amount can be subtracted out of is not shown) — totals WITHOUT payroll, labelled

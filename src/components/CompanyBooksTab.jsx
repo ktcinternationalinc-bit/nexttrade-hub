@@ -8,6 +8,7 @@ import { hubFetch } from '../lib/hub-fetch';
 import { companyByKey } from '../lib/companies';
 import { learnMatchText, lineShown } from '../lib/company-rule-learn';
 import StatementImport from './StatementImport';
+import NextradeTaxReport from './NextradeTaxReport';
 import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -274,7 +275,7 @@ export default function CompanyBooksTab(props) {
   var lastFeedSync = feedAccounts.reduce(function (latest, a) { return a.last_synced && a.last_synced > latest ? a.last_synced : latest; }, '');
   var feedNeedsAttention = feedAccounts.some(function (a) { return ['error', 'partial', 'preparing'].indexOf(a.last_sync_status) >= 0; });
   var tabs = [['lines', '📋 Transactions'], ['totals', '📊 Totals'], ['categories', '🏷 Categories'], ['rules', '📏 Rules'], ['accounts', '🏦 Accounts & cards']];
-  if (comp.key === 'nextrade') { tabs.push(['mapping', '🔁 Category mapping → KTC']); }
+  if (comp.key === 'nextrade') { tabs.splice(2, 0, ['tax_report', 'Tax report']); tabs.push(['mapping', '🔁 Category mapping → KTC']); }
 
   return <div className="rounded-xl p-3" style={panel}>
     <div className="flex items-center gap-2 flex-wrap mb-2">
@@ -383,6 +384,8 @@ export default function CompanyBooksTab(props) {
       </div>
       {lines && !shown.length && <div className="text-[11px] mt-2" style={{ color: '#64748b' }}>Nothing to show for these dates and filters.</div>}
     </div>}
+
+    {view === 'tax_report' && <NextradeTaxReport api={api} exportCsv={exportCsv} />}
 
     {view === 'totals' && totals && <div>
       <div className="flex gap-3 flex-wrap mb-2 text-[11px]">
