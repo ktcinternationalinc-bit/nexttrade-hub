@@ -1,13 +1,12 @@
 'use client';
 // v55.83-TW — Accounting → 🟦 Nextrade and 🟪 RTM: each company's OWN books (Max, Nov 17 2026: "They're three separate
 // companies per se when it comes to categorization, all that stuff"). Own bank + credit-card accounts, own categories,
-// own rules, own totals and export. Nothing here touches KTC's lists. For Nextrade, a money-out line categorized as an
-// expense makes a KTC bill at once (shown in KTC Bills → 🟦 Nextrade bills); payroll does not.
+// own rules, own totals and export. Nextrade expense categories can map to KTC bill categories.
 // Inline colours on white panels (the dark theme repaints bg-white).
 import React, { useState, useEffect } from 'react';
 import { hubFetch } from '../lib/hub-fetch';
 import { companyByKey } from '../lib/companies';
-import { lineShown } from '../lib/company-rule-learn'; // v55.83-VK — All / Categorized / Not categorized / one category
+import { learnMatchText, lineShown } from '../lib/company-rule-learn';
 import StatementImport from './StatementImport';
 import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
 
@@ -19,10 +18,13 @@ var inpS = { background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1' };
 function btn(bg, fg) { return { background: bg, color: fg }; }
 var DIR_WORDS = { any: 'money in or out', 'in': 'money in only', out: 'money out only' }; // v55.83-UB
 var KTC_BILL_WORDS = { created: '🧾 KTC bill made', attached: '🔗 attached to a KTC bill' };
+var SOURCE_LABELS = { plaid: 'Plaid', csv: 'CSV import', pdf: 'PDF import', manual: 'Manual entry', statement: 'Statement import' };
 
 export default function CompanyBooksTab(props) {
   var comp = companyByKey(props.company);
   var userProfile = props.userProfile; var canManage = props.canManage === true;
+  var canCreateKtcCategory = canManage && props.canCreateKtcCategory === true;
+  var [ktcCategoryForm, setKtcCategoryForm] = useState(null);
   var toast = props.toast || { success: function () {}, error: function () {} };
   var s1 = useState('lines'); var view = s1[0]; var setView = s1[1];
   var s2 = useState(null); var lines = s2[0]; var setLines = s2[1];
@@ -46,7 +48,7 @@ export default function CompanyBooksTab(props) {
   var s17 = useState(null); var ruleForm = s17[0]; var setRuleForm = s17[1];
   var s18 = useState(''); var sqlMissing = s18[0]; var setSqlMissing = s18[1];
   var s19 = useState({}); var kinds = s19[0]; var setKinds = s19[1];
-  var s21 = useState(null); var cutoff = s21[0]; var setCutoff = s21[1]; // v55.83-XN — { on, would_stop, would_stop_total, stopped, can_set, installed }
+  var [cutoff, setCutoff] = useState(null);
   var s20 = useState(null); var rowPanel = s20[0]; var setRowPanel = s20[1]; // v55.83-UB — { id, mode: 'newcat' | 'transfer', ... } under one row
 
   function api(payload) {
@@ -56,6 +58,12 @@ export default function CompanyBooksTab(props) {
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
   function loadCats() { return api({ action: 'categories' }).then(function (j) { if (j && j.ok) { setCats(j.categories || []); setKinds(j.kinds || {}); if (j.sql_missing) { setSqlMissing(j.sql_missing); } } }); }
+  function loadAccounts() {
+    return api({ action: 'accounts' }).then(function (j) {
+      if (j && j.ok) { setAccounts(j.accounts || []); }
+      else { setErr((j && j.error) || 'Could not load the accounts.'); }
+    });
+  }
   // v55.83-VK (Codex 19 Nov 20:27 P1 / P3) — opening the page WRITES NOTHING. It only counts the lines shown that a rule
   // covers and says so in a bar; a rule categorizes lines only when a person presses Apply and answers the question.
   function loadLines() {
@@ -94,14 +102,14 @@ export default function CompanyBooksTab(props) {
   }
   function loadView(v) {
     setView(v);
-    if (v === 'lines') { loadLines(); }
+    if (v === 'lines') { loadLines(); if (comp.key === 'nextrade') { loadAccounts(); } }
     if (v === 'rules') { loadCats(); api({ action: 'rules' }).then(function (j) { if (j && j.ok) { setRules(j.rules || []); } else { setErr((j && j.error) || ''); } }); }
     if (v === 'categories') { loadCats(); }
     if (v === 'totals') { setBusy(true); api({ action: 'totals', from: from, to: to }).then(function (j) { if (j && j.ok) { setTotals(j.totals); } else { setErr((j && j.error) || ''); } }).finally(function () { setBusy(false); }); }
-    if (v === 'accounts') { api({ action: 'accounts' }).then(function (j) { if (j && j.ok) { setAccounts(j.accounts || []); } else { setErr((j && j.error) || ''); } }); }
+    if (v === 'accounts') { loadAccounts(); }
     if (v === 'mapping') { api({ action: 'mapping' }).then(function (j) { if (j && j.ok) { setMapping(j); } else { setErr((j && j.error) || ''); } }); }
   }
-  useEffect(function () { if (comp) { loadCats(); loadLines(); loadCutoff(); } }, [props.company]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(function () { if (comp) { loadCats(); loadView('lines'); loadCutoff(); } }, [props.company]); // eslint-disable-line react-hooks/exhaustive-deps
   // v55.83-XN (Max, 21 Nov: "JUST ONE BUTTON TO IGNORE ALL OF THEM FROM CREATING KTC BILLS PRIOR TO JUNE 1 2026") — the super admin's
   // one button. ON: the KTC bills made from Nextrade lines before 1 June 2026 are voided (kept, never deleted) and no earlier line
   // makes one again. OFF: exactly those bills come back. A bill with money on it or on a wire is left alone and named.
@@ -150,14 +158,72 @@ export default function CompanyBooksTab(props) {
       return loadLines();
     }).finally(function () { setBusy(false); });
   }
-  // v55.83-VK (Max 19 Nov: "should be able to categorize the nextrade selections for ktc") — the KTC category of the KTC bills a
-  // Nextrade category makes, picked right on the line (the same setting as 🔁 Category mapping → KTC)
-  function setKtcCategory(nextradeKey, ktcKey) {
+  function openKtcCategory(nextradeKey) {
+    setKtcCategoryForm({ nextradeKey: nextradeKey, label: '', kind: 'expense' });
+  }
+  async function setKtcCategory(nextradeKey, ktcKey) {
+    if (ktcKey === '__new') { openKtcCategory(nextradeKey); return; }
+    var j = await api({ action: 'save_mapping', category_key: nextradeKey, ktc_category: ktcKey || null });
+    if (!j || !j.ok) { toast.error((j && j.error) || 'KTC mapping could not be saved.'); return false; }
+    toast.success('KTC category saved for “' + ((catByKey[nextradeKey] || {}).label || nextradeKey) + '”' + (j.bills_updated ? ' · ' + j.bills_updated + ' KTC bill(s) updated' : ''));
+    var value = ktcKey || null;
+    setKtc(function (current) { return Object.assign({}, current, { map: Object.assign({}, current.map, { [nextradeKey]: value }) }); });
+    setMapping(function (current) {
+      if (!current) { return current; }
+      return Object.assign({}, current, { rows: current.rows.map(function (row) { return row.key === nextradeKey ? Object.assign({}, row, { ktc_category: value }) : row; }) });
+    });
+    return true;
+  }
+  async function pickKtcCategory(nextradeKey, key) {
     setBusy(true);
-    api({ action: 'save_mapping', category_key: nextradeKey, ktc_category: ktcKey || null }).then(function (j) {
-      if (j && j.ok) { toast.success('KTC category saved for “' + ((catByKey[nextradeKey] || {}).label || nextradeKey) + '”' + (j.bills_filled ? ' · ' + j.bills_filled + ' KTC bill(s) filled in' : '')); var m = Object.assign({}, ktc.map); m[nextradeKey] = ktcKey || null; setKtc({ map: m, cats: ktc.cats }); }
-      else { toast.error((j && j.error) || 'Not saved.'); }
-    }).finally(function () { setBusy(false); });
+    try { await setKtcCategory(nextradeKey, key); }
+    finally { setBusy(false); }
+  }
+  async function saveKtcCategory(event) {
+    event.preventDefault();
+    var form = ktcCategoryForm;
+    setBusy(true);
+    try {
+      var response = await hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_category', payload: { label: form.label, kind: form.kind } }) });
+      var j = await response.json();
+      if (!j.ok || !j.category) { toast.error(j.error || 'KTC category could not be created.'); return; }
+      var category = { key: j.category.key, label: j.category.label };
+      setKtc(function (current) { return Object.assign({}, current, { cats: current.cats.concat(category) }); });
+      setMapping(function (current) { return current && Object.assign({}, current, { ktc_categories: current.ktc_categories.concat(category) }); });
+      setKtcCategoryForm(null);
+      toast.success('KTC category “' + category.label + '” created');
+      await setKtcCategory(form.nextradeKey, category.key);
+    } catch (e) { toast.error('Could not confirm the KTC category save. Refresh the category list before retrying.'); }
+    finally { setBusy(false); }
+  }
+  function openRule(line) {
+    setRowPanel(null);
+    setRuleForm({ lineId: line.id, match_text: learnMatchText(line) || '', direction: line.direction, category_key: '' });
+  }
+  async function saveRule(event) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      var j = await api({ action: 'save_rule', rule: ruleForm });
+      if (!j || !j.ok) { toast.error((j && j.error) || 'Rule could not be saved.'); return; }
+      toast.success(ruleForm.lineId ? 'Rule saved' : 'Rule saved. Apply it from Transactions.');
+      setRuleForm(null);
+      if (ruleForm.lineId) { await loadLines(); } else { loadView('rules'); }
+    } finally { setBusy(false); }
+  }
+  function renderRuleForm() {
+    var choices = activeCats.filter(function (c) { return !c.direction || c.direction === 'any' || ruleForm.direction === 'any' || c.direction === ruleForm.direction; });
+    return <form onSubmit={saveRule} className="flex gap-2 items-center flex-wrap mb-2 p-2 rounded" style={btn('#f8fafc', '#0f172a')}>
+      <label className="text-[10px] font-bold">Description contains <input className={inp} style={inpS} value={ruleForm.match_text} onChange={function (e) { setRuleForm(Object.assign({}, ruleForm, { match_text: e.target.value })); }} placeholder="e.g. centerpoint" /></label>
+      <select aria-label="Money direction" className={inp} style={inpS} value={ruleForm.direction} onChange={function (e) {
+        var direction = e.target.value; var category = catByKey[ruleForm.category_key];
+        setRuleForm(Object.assign({}, ruleForm, { direction: direction, category_key: category && category.direction && category.direction !== 'any' && direction !== 'any' && category.direction !== direction ? '' : ruleForm.category_key }));
+      }}><option value="any">Money in or out</option><option value="out">Money out only</option><option value="in">Money in only</option></select>
+      <select aria-label={comp.label + ' category'} className={inp} style={inpS} value={ruleForm.category_key} onChange={function (e) { setRuleForm(Object.assign({}, ruleForm, { category_key: e.target.value })); }}><option value="">Choose a category</option>{choices.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select>
+      <button disabled={busy || ruleForm.match_text.trim().length < 3 || !ruleForm.category_key} className="px-2 py-1 rounded text-[10px] font-extrabold" style={btn('#0f172a', '#ffffff')}>Save rule</button>
+      <button type="button" onClick={function () { setRuleForm(null); }} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#f1f5f9', '#334155')}>Cancel</button>
+    </form>;
   }
   // v55.83-UB (Max: 'add categories on the fly and give it a direction') — make the category, then put this line in it
   function addCategoryForLine(l, f) {
@@ -203,17 +269,27 @@ export default function CompanyBooksTab(props) {
     return true;
   });
   var selIds = Object.keys(sel).filter(function (k) { return sel[k]; });
+  var feedAccounts = (accounts || []).filter(function (a) { return a.feed_type === 'plaid'; });
+  var manualAccounts = (accounts || []).filter(function (a) { return a.feed_type === 'statement'; });
+  var lastFeedSync = feedAccounts.reduce(function (latest, a) { return a.last_synced && a.last_synced > latest ? a.last_synced : latest; }, '');
+  var feedNeedsAttention = feedAccounts.some(function (a) { return ['error', 'partial', 'preparing'].indexOf(a.last_sync_status) >= 0; });
   var tabs = [['lines', '📋 Transactions'], ['totals', '📊 Totals'], ['categories', '🏷 Categories'], ['rules', '📏 Rules'], ['accounts', '🏦 Accounts & cards']];
   if (comp.key === 'nextrade') { tabs.push(['mapping', '🔁 Category mapping → KTC']); }
 
   return <div className="rounded-xl p-3" style={panel}>
     <div className="flex items-center gap-2 flex-wrap mb-2">
       <div className="text-[14px] font-extrabold">{comp.icon} {comp.label} — own books</div>
-      <div className="text-[10px]" style={{ color: '#64748b' }}>{comp.key === 'nextrade' ? 'Separate from KTC. A money-out line marked as an expense makes a KTC bill (owed to Nextrade) at once; payroll does not.' : 'Separate from KTC. Categorize RTM’s own lines here; RTM payments and wires in KTC work as before.'}</div>
+      {comp.key === 'nextrade' && <div className="text-[10px]" style={{ color: '#64748b' }}>Money-out transactions in categories KTC pays can create KTC bills owed to Nextrade.</div>}
     </div>
     {sqlMissing && <div className="text-[11px] p-2 rounded mb-2" style={{ background: '#fef2f2', color: '#991b1b' }}>{sqlMissing}</div>}
     {err && <div className="text-[11px] p-2 rounded mb-2" style={{ background: '#fef2f2', color: '#991b1b' }}>{err}</div>}
     <div className="flex gap-1 flex-wrap mb-3">{tabs.map(function (t) { return <button key={t[0]} onClick={function () { setErr(''); loadView(t[0]); }} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={view === t[0] ? btn('#0f172a', '#ffffff') : btn('#f1f5f9', '#334155')}>{t[1]}</button>; })}</div>
+    {canCreateKtcCategory && ktcCategoryForm && (view === 'lines' || view === 'mapping') && <form onSubmit={saveKtcCategory} className="flex flex-wrap items-center gap-2 p-2 mb-2 rounded text-[11px]" style={btn('#eff6ff', '#1e3a8a')}>
+      <label className="font-bold">New KTC category for {(catByKey[ktcCategoryForm.nextradeKey] || {}).label || ktcCategoryForm.nextradeKey} <input autoFocus className={inp} style={inpS} value={ktcCategoryForm.label} onChange={function (e) { setKtcCategoryForm(Object.assign({}, ktcCategoryForm, { label: e.target.value })); }} placeholder="Category name" /></label>
+      <select aria-label="KTC category type" className={inp} style={inpS} value={ktcCategoryForm.kind} onChange={function (e) { setKtcCategoryForm(Object.assign({}, ktcCategoryForm, { kind: e.target.value })); }}>{['expense', 'cogs', 'other_expense'].map(function (kind) { return <option key={kind} value={kind}>{kinds[kind] || kind}</option>; })}</select>
+      <button disabled={busy || ktcCategoryForm.label.trim().length < 2} className="px-2 py-1 rounded font-bold" style={btn('#1e3a8a', '#ffffff')}>Create and map</button>
+      <button type="button" disabled={busy} onClick={function () { setKtcCategoryForm(null); }} className="px-2 py-1 rounded font-bold">Cancel</button>
+    </form>}
 
     {(view === 'lines' || view === 'totals') && <div className="flex gap-2 items-center flex-wrap mb-2">
       <span className="text-[10px] font-bold">From</span><input type="date" className={inp} style={inpS} value={from} onChange={function (e) { setFrom(e.target.value); }} />
@@ -222,9 +298,16 @@ export default function CompanyBooksTab(props) {
     </div>}
 
     {view === 'lines' && <div>
+      {comp.key === 'nextrade' && accounts && <div className="flex items-center flex-wrap gap-2 mb-2 text-[11px]" style={{ color: '#475569' }}>
+        <span>{feedAccounts.length ? 'Plaid checks for new transactions every 2 hours' + (lastFeedSync ? ' · Latest pull ' + new Date(lastFeedSync).toLocaleString() : ' · Waiting for the first pull') : 'No Plaid feed connected'}</span>
+        {feedNeedsAttention && <span style={{ color: '#92400e' }}>A connection needs attention</span>}
+        {manualAccounts.length > 0 && <span>{manualAccounts.length} statement-only account(s)</span>}
+        <button onClick={function () { loadView('accounts'); }} className="font-bold underline" style={{ color: '#1e40af' }}>Account sources &amp; imports</button>
+      </div>}
       <div className="flex gap-2 items-center flex-wrap mb-2">
-        <select className={inp} style={inpS} value={show} onChange={function (e) { setShow(e.target.value); }}>
-          <option value="all">{'All lines (' + (nCat + nUncat) + ')'}</option><option value="cat">{'Categorized (' + nCat + ')'}</option><option value="uncat">{'Not categorized yet (' + nUncat + ')'}</option>
+        <button type="button" aria-pressed={show === 'uncat'} onClick={function () { setShow(show === 'uncat' ? 'all' : 'uncat'); setSel({}); }} className="px-2 py-1 rounded text-[11px] font-bold" style={show === 'uncat' ? btn('#1e40af', '#ffffff') : btn('#dbeafe', '#1e3a8a')}>Uncategorized ({nUncat})</button>
+        <select aria-label="Transaction category filter" className={inp} style={inpS} value={show} onChange={function (e) { setShow(e.target.value); setSel({}); }}>
+          <option value="all">{'All lines (' + (nCat + nUncat) + ')'}</option><option value="cat">{'Categorized (' + nCat + ')'}</option><option value="uncat">{'Uncategorized (' + nUncat + ')'}</option>
           <optgroup label="One category">{cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</optgroup></select>
         <input className={inp} style={inpS} placeholder="Find (description or amount)" value={q} onChange={function (e) { setQ(e.target.value); }} />
         {canManage && <button onClick={applyRulesAsk} disabled={busy} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#ede9fe', '#5b21b6')}>📏 Apply rules to uncategorized</button>}
@@ -234,7 +317,7 @@ export default function CompanyBooksTab(props) {
         <span className="text-[10px]" style={{ color: '#64748b' }}>{shown.length} line(s)</span>
       </div>
       {canManage && ruleWait && ruleWait.would > 0 && <div className="flex gap-2 items-center flex-wrap mb-2 p-2 rounded" style={{ background: '#f5f3ff', border: '1px solid #c4b5fd', color: '#4c1d95' }}>
-        <span className="text-[12px] font-bold">{'📏 ' + ruleWait.would + ' line(s) shown are not categorized yet and match one of your rules' + (ruleWait.bills ? ' (' + ruleWait.bills + ' would make a KTC bill)' : '') + '. Nothing is changed until you press:'}</span>
+        <span className="text-[12px] font-bold">{'📏 ' + ruleWait.would + ' uncategorized transaction(s) in this date range match your rules' + (ruleWait.bills ? ' (' + ruleWait.bills + ' would make a KTC bill)' : '') + '.'}</span>
         <button onClick={applyRulesAsk} disabled={busy} className="px-2.5 py-1 rounded text-[11px] font-extrabold" style={{ background: '#5b21b6', color: '#ffffff' }}>📏 Apply rules…</button>
       </div>}
       {canManage && selIds.length > 0 && <div className="flex gap-2 items-center mb-2 p-2 rounded" style={{ background: '#f8fafc', border: '1px solid #cbd5e1' }}>
@@ -251,8 +334,8 @@ export default function CompanyBooksTab(props) {
             return <React.Fragment key={l.id}><tr style={{ borderTop: '1px solid #e2e8f0', background: l.company_category ? '#f0fdf4' : '#ffffff' }}>
               <td className="p-1">{canManage && <input type="checkbox" disabled={l.pending === true} checked={!!sel[l.id] && l.pending !== true} onChange={function (e) { if (l.pending === true) { return; } var n = Object.assign({}, sel); n[l.id] = e.target.checked; setSel(n); }} />}</td>
               <td className="p-1 whitespace-nowrap">{l.date}{l.pending ? <div className="text-[10px] font-bold" style={{ color: isStalePending(l) ? '#b45309' : '#64748b' }}>{pendingLabel(l)}</div> : ''}</td>
-              <td className="p-1 whitespace-nowrap">{l.is_card ? '💳 ' : '🏦 '}{l.account_label}</td>
-              <td className="p-1">{l.name}</td>
+              <td className="p-1 whitespace-nowrap">{l.is_card ? '💳 ' : '🏦 '}{l.account_label}{comp.key === 'nextrade' && SOURCE_LABELS[l.source] && <div className="text-[10px]" style={{ color: '#475569' }}>{SOURCE_LABELS[l.source]}</div>}</td>
+              <td className="p-1">{l.name}{canManage && !l.company_category && !l.pending && !l.transfer_group_id && <div><button disabled={busy} onClick={function () { openRule(l); }} className="mt-1 text-[10px] font-bold underline" style={{ color: '#5b21b6' }}>Create rule</button></div>}</td>
               <td className="p-1 text-right whitespace-nowrap font-bold" style={{ color: l.direction === 'in' ? '#166534' : '#991b1b' }}>{l.payroll_restricted ? <span title="Payroll amount restricted — needs the Payroll / salaries: view switch" style={{ color: '#64748b' }}>🔒 payroll</span> : <>{l.direction === 'in' ? '+' : '−'}{fmt(l.amount_abs)}</>}</td>
               <td className="p-1">
                 {l.transfer_group_id
@@ -264,10 +347,11 @@ export default function CompanyBooksTab(props) {
                 {l.company_category_source === 'rule' ? <span className="ml-1 text-[9px]" style={{ color: '#6d28d9' }}>📏 rule</span> : null}</td>
               {comp.key === 'nextrade' && <td className="p-1 text-[10px]">{l.ktc_bill ? KTC_BILL_WORDS[l.ktc_bill.mode] || '' : ''}
                 {l.ktc_bill && l.company_category ? (canManage
-                  ? <select className={inp + ' ml-1'} style={Object.assign({}, inpS, ktc.map[l.company_category] ? {} : { borderColor: '#d97706', background: '#fffbeb' })} disabled={busy} value={ktc.map[l.company_category] || ''} title={'The KTC category of KTC bills made from “' + ((catByKey[l.company_category] || {}).label || l.company_category) + '”. Set once: it is used for every line in that Nextrade category, and fills in KTC bills that have no category yet.'} onChange={function (e) { setKtcCategory(l.company_category, e.target.value); }}>
-                      <option value="">KTC category — not set</option>{ktc.cats.map(function (k) { return <option key={k.key} value={k.key}>{'KTC: ' + k.label}</option>; })}</select>
+                  ? <select aria-label="KTC category mapping" className={inp + ' ml-1'} style={Object.assign({}, inpS, ktc.map[l.company_category] ? {} : { borderColor: '#d97706', background: '#fffbeb' })} disabled={busy} value={ktc.map[l.company_category] || ''} title="KTC category shared by bills that follow this Nextrade category’s mapping." onChange={function (e) { pickKtcCategory(l.company_category, e.target.value); }}>
+                      <option value="">KTC category — not set</option>{ktc.cats.map(function (k) { return <option key={k.key} value={k.key}>{'KTC: ' + k.label}</option>; })}{canCreateKtcCategory && <option value="__new">Create KTC category…</option>}</select>
                   : <span className="ml-1" style={{ color: '#475569' }}>{ktc.map[l.company_category] ? 'KTC: ' + ((ktc.cats.filter(function (k) { return k.key === ktc.map[l.company_category]; })[0] || {}).label || ktc.map[l.company_category]) : 'KTC category not set'}</span>) : null}</td>}
             </tr>
+            {ruleForm && ruleForm.lineId === l.id && <tr><td colSpan={comp.key === 'nextrade' ? 7 : 6} className="p-2">{renderRuleForm()}</td></tr>}
             {panel && panel.mode === 'newcat' && <tr><td colSpan={comp.key === 'nextrade' ? 7 : 6} className="p-2" style={{ background: '#f8fafc' }}>
               <div className="flex gap-2 items-center flex-wrap">
                 <span className="text-[11px] font-extrabold">➕ New category for this line:</span>
@@ -331,14 +415,8 @@ export default function CompanyBooksTab(props) {
     </div>}
 
     {view === 'rules' && <div>
-      {canManage && !ruleForm && <button onClick={function () { setRuleForm({ match_text: '', category_key: '', direction: 'any' }); }} className="px-2 py-1 rounded text-[11px] font-extrabold mb-2" style={btn('#0f172a', '#ffffff')}>➕ New rule</button>}
-      {ruleForm && <div className="flex gap-2 items-center flex-wrap mb-2 p-2 rounded" style={{ background: '#f8fafc', border: '1px solid #cbd5e1' }}>
-        <span className="text-[10px] font-bold">When the description contains</span><input className={inp} style={inpS} value={ruleForm.match_text} onChange={function (e) { setRuleForm(Object.assign({}, ruleForm, { match_text: e.target.value })); }} placeholder="e.g. centerpoint" />
-        <select className={inp} style={inpS} value={ruleForm.direction} onChange={function (e) { setRuleForm(Object.assign({}, ruleForm, { direction: e.target.value })); }}><option value="any">money in or out</option><option value="out">money out only</option><option value="in">money in only</option></select>
-        <span className="text-[10px] font-bold">→</span><select className={inp} style={inpS} value={ruleForm.category_key} onChange={function (e) { setRuleForm(Object.assign({}, ruleForm, { category_key: e.target.value })); }}><option value="">pick a category…</option>{activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select>
-        <button disabled={busy} onClick={function () { setBusy(true); api({ action: 'save_rule', rule: ruleForm }).then(function (j) { if (j && j.ok) { toast.success('Rule saved — press "Apply rules" on Transactions to use it'); setRuleForm(null); loadView('rules'); } else { toast.error((j && j.error) || 'Not saved.'); } }).finally(function () { setBusy(false); }); }} className="px-2 py-1 rounded text-[10px] font-extrabold" style={btn('#0f172a', '#ffffff')}>💾 Save</button>
-        <button onClick={function () { setRuleForm(null); }} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#f1f5f9', '#334155')}>Cancel</button>
-      </div>}
+      {canManage && (!ruleForm || ruleForm.lineId) && <button onClick={function () { setRuleForm({ match_text: '', category_key: '', direction: 'any' }); }} className="px-2 py-1 rounded text-[11px] font-extrabold mb-2" style={btn('#0f172a', '#ffffff')}>➕ New rule</button>}
+      {canManage && ruleForm && !ruleForm.lineId && renderRuleForm()}
       {(rules || []).map(function (r) { return <div key={r.id} className="flex items-center gap-2 text-[11px] py-1" style={{ borderTop: '1px solid #e2e8f0', opacity: r.active ? 1 : 0.5 }}>
         <span>"{r.match_text}"{r.direction !== 'any' ? ' (money ' + r.direction + ')' : ''} → <b>{(catByKey[r.category_key] || {}).label || r.category_key}</b></span><span style={{ color: '#64748b' }}>used {r.hit_count || 0}×</span><div className="flex-1" />
         {canManage && <button onClick={function () { setRuleForm({ id: r.id, match_text: r.match_text, category_key: r.category_key, direction: r.direction }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#eff6ff', '#1d4ed8')}>✏ Edit</button>}
@@ -352,18 +430,25 @@ export default function CompanyBooksTab(props) {
         <b>Connect a {comp.label} bank account or credit card (Plaid):</b> Bank (top menu) → 🔗 Connect a bank → when asked which books, pick <b>{comp.label}</b> → sign in to the bank in the Plaid window → choose the accounts and cards. They then show here and update every 2 hours.
         <br /><b>Or from a statement file:</b> below → ➕ add the account (Company = {comp.label}, Bank account or Credit card) → import its CSV.
       </div>
-      {(accounts || []).map(function (a) { return <div key={a.plaid_account_id} className="text-[11px] py-1" style={{ borderTop: '1px solid #e2e8f0' }}>{a.is_card ? '💳 Credit card' : '🏦 Bank'} · <b>{a.institution || ''} {a.name}</b>{a.mask ? ' ••' + a.mask : ''}{a.connection_status === 'manual' ? ' · from statement files' : ''}</div>; })}
+      {(accounts || []).map(function (a) { return <div key={a.plaid_account_id} className="text-[11px] py-1" style={{ borderTop: '1px solid #e2e8f0' }}>
+        {a.is_card ? '💳 Credit card' : '🏦 Bank'} · <b>{a.institution || ''} {a.name}</b>{a.mask ? ' ••' + a.mask : ''}
+        {a.feed_type === 'statement' ? ' · Statement imports (CSV or PDF)' : a.feed_type === 'plaid' ? ' · Plaid automatic feed' : ' · No connected feed'}
+        {a.feed_type === 'plaid' && a.last_synced && ' · Latest pull ' + new Date(a.last_synced).toLocaleString()}
+        {a.last_sync_status === 'error' && ' · Sync failed'}
+        {a.last_sync_status === 'preparing' && ' · Bank is preparing transactions'}
+        {a.last_sync_status === 'partial' && ' · Sync needs review'}
+      </div>; })}
       {accounts && !accounts.length && <div className="text-[11px]" style={{ color: '#64748b' }}>No {comp.label} accounts yet.</div>}
       <div className="mt-3"><StatementImport userProfile={userProfile} canUse={canManage} companyId={comp.id} /></div>
     </div>}
 
     {view === 'mapping' && mapping && <div>
-      <div className="text-[11px] mb-2" style={{ color: '#475569' }}>Set once per Nextrade expense category: which KTC category its KTC bill gets. Bills already made without a KTC category get it when you save.</div>
+      <div className="text-[11px] mb-2" style={{ color: '#475569' }}>Choose the KTC category for new bills and existing bills that follow this Nextrade mapping.</div>
       {(mapping.rows || []).filter(function (c) { return ['expense', 'cogs', 'other_expense'].indexOf(c.kind) >= 0; }).map(function (c) { return <div key={c.key} className="flex items-center gap-2 text-[11px] py-1" style={{ borderTop: '1px solid #e2e8f0' }}>
         <span className="font-bold" style={{ minWidth: 200 }}>{c.label}</span>
         {(typeof c.makes_ktc_bill === 'boolean' ? !c.makes_ktc_bill : c.is_payroll) ? <span style={{ color: '#64748b' }}>no KTC bill for this category (Categories → ✏ Edit → "KTC pays this" to change)</span>
-          : <select className={inp} style={inpS} disabled={!canManage || busy} value={c.ktc_category || ''} onChange={function (e) { setBusy(true); api({ action: 'save_mapping', category_key: c.key, ktc_category: e.target.value || null }).then(function (j) { if (j && j.ok) { toast.success('Saved' + (j.bills_filled ? ' · ' + j.bills_filled + ' bill(s) filled in' : '')); loadView('mapping'); } else { toast.error((j && j.error) || 'Not saved.'); } }).finally(function () { setBusy(false); }); }}>
-            <option value="">— KTC category not set —</option>{(mapping.ktc_categories || []).map(function (k) { return <option key={k.key} value={k.key}>{k.label}</option>; })}</select>}
+          : <select aria-label={'KTC category for ' + c.label} className={inp} style={inpS} disabled={!canManage || busy} value={c.ktc_category || ''} onChange={function (e) { pickKtcCategory(c.key, e.target.value); }}>
+            <option value="">— KTC category not set —</option>{(mapping.ktc_categories || []).map(function (k) { return <option key={k.key} value={k.key}>{k.label}</option>; })}{canCreateKtcCategory && <option value="__new">Create KTC category…</option>}</select>}
       </div>; })}
     </div>}
   </div>;

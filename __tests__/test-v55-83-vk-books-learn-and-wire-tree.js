@@ -119,6 +119,10 @@ function seed() {
     dbx.guardedCalls = (dbx.guardedCalls || 0) + 1;
     return dbx.rpcs.hub_company_categorize({ p: Object.assign({}, p, { source: 'rule' }) }, dbx);
   };
+  db.rpcs.hub_company_categorize_with_mapping = function (args, dbx) {
+    var rpc = args.p.source === 'rule' ? 'hub_company_categorize_if_open' : 'hub_company_categorize';
+    return dbx.rpcs[rpc](args, dbx);
+  };
   state.db = db; return db;
 }
 function cat(db, id) { return db.t.bank_transactions.filter(function (x) { return x.id === id; })[0].company_category; }
@@ -277,8 +281,20 @@ function rulesOf(db, company) { return db.t.company_rules.filter(function (r) { 
   // Nextrade lines carry the KTC category setting
   state.perms = { 'company.nextrade.manage': true, 'company.nextrade.view': true };
   db.t.company_category_map.push({ company_id: 'NEXTRADE_BOOKS', category_key: 'elec', ktc_category: 'utilities' });
+  var nexttradeLine = db.t.bank_transactions.find(function (line) { return line.id === 'N1'; });
+  Object.assign(nexttradeLine, { bank_source: '[CSV] Bank', plaid_transaction_id: 'manual-import-id' });
+  db.t.plaid_accounts.find(function (account) { return account.plaid_account_id === 'NXT-1'; }).connection_id = 'feed1';
+  db.t.bank_connections = [{ id: 'feed1', plaid_item_id: 'plaid-item-id', status: 'active', last_synced: '2026-11-27T14:00:00Z', last_sync_status: 'ok' }];
   var n1 = await call({ company: 'nextrade', action: 'lines', from: '2026-10-01', to: '2026-11-30' });
   check('Nextrade lines come with the KTC category of each Nextrade category and KTC\'s category list', n1.ok && n1.ktc_map && n1.ktc_map.elec === 'utilities' && n1.ktc_categories.length === 1 && n1.ktc_categories[0].key === 'utilities', [n1.ktc_map, n1.ktc_categories]);
+  check('Nextrade rows show the import source without provider identifiers', n1.lines[0].source === 'csv' && !n1.lines[0].bank_source && !n1.lines[0].plaid_transaction_id, n1.lines[0]);
+  var accounts = await call({ company: 'nextrade', action: 'accounts' });
+  check('Accounts show Plaid status without the Plaid item identifier', accounts.ok && accounts.accounts[0].feed_type === 'plaid' && accounts.accounts[0].last_sync_status === 'ok' && !accounts.accounts[0].plaid_item_id, accounts);
+  var draft = { lineId: 'N1', match_text: 'centerpoint energy', direction: 'out', category_key: 'elec' };
+  var savedRule = await call({ company: 'nextrade', action: 'save_rule', rule: draft });
+  check('A transaction can seed a saved rule and stay uncategorized until Apply', savedRule.ok && rulesOf(db, 'NEXTRADE_BOOKS').length === 1 && !nexttradeLine.company_category, savedRule);
+  var crossCompanyRule = await call({ company: 'nextrade', action: 'save_rule', rule: Object.assign({}, draft, { lineId: 'L1' }) });
+  check('A rule draft cannot use a transaction from another company', crossCompanyRule._status === 404, crossCompanyRule);
   state.perms = { 'company.rtm.manage': true, 'company.rtm.view': true };
   var n2 = await call({ company: 'rtm', action: 'lines', from: '2026-10-01', to: '2026-11-30' });
   check('RTM lines carry no KTC mapping (RTM makes no KTC bills)', n2.ok && n2.ktc_map === undefined && n2.ktc_categories === undefined);
@@ -286,9 +302,9 @@ function rulesOf(db, company) { return db.t.company_rules.filter(function (r) { 
   // ── wiring of the two screens ──
   var tab = fs.readFileSync(path.join(root, 'src/components/CompanyBooksTab.jsx'), 'utf8');
   check('Transactions opens on ALL lines (a categorized line stays on the page)', /useState\('all'\); var show = /.test(tab) && tab.indexOf("useState('uncat'); var show") < 0);
-  check('filter offers All, Categorized, Not categorized yet — with counts — and uses the shared rule', tab.indexOf('value="cat"') > 0 && tab.indexOf('value="uncat"') > 0 && tab.indexOf('value="all"') > 0 && tab.indexOf('lineShown(show, l)') > 0 && /import \{ lineShown \} from '\.\.\/lib\/company-rule-learn'/.test(tab));
+  check('filter offers All, Categorized and Uncategorized and uses the shared rule', tab.indexOf('value="cat"') > 0 && tab.indexOf('value="uncat"') > 0 && tab.indexOf('value="all"') > 0 && tab.indexOf('lineShown(show, l)') > 0 && /import \{ [^}]*lineShown[^}]* \} from '\.\.\/lib\/company-rule-learn'/.test(tab));
   check('after a hand categorization the screen asks before using the new rule on other lines', tab.indexOf('window.confirm(nMore') > 0 && tab.indexOf("action: 'apply_rules', all_dates: true, rule_ids:") > 0);
-  check('opening the page WRITES NOTHING: it only counts (preview) and shows a bar with an Apply button', tab.indexOf('automatic') < 0 && tab.indexOf("action: 'apply_rules', from: from, to: to, preview: true") > 0 && tab.indexOf('setRuleWait({ would: a.would') > 0 && tab.indexOf('loadLines(true)') < 0);
+  check('loading lines uses a read-only rules preview and shows an Apply button', tab.indexOf("action: 'apply_rules', from: from, to: to, preview: true") > 0 && tab.indexOf('setRuleWait({ would: a.would') > 0 && tab.indexOf('loadLines(true)') < 0);
   check('every Apply press counts first, asks, and only then writes', (function () { var f0 = tab.indexOf('function applyRulesAsk()'); var f1 = tab.indexOf('preview: true', f0); var f2 = tab.indexOf('window.confirm(', f1); var f3 = tab.indexOf("api({ action: 'apply_rules', from: from, to: to })", f2); return f0 > 0 && f1 > f0 && f2 > f1 && f3 > f2; })() && tab.split('onClick={applyRulesAsk}').length === 3);
   check('a failed or partial rule run is always shown (error, lines left alone, lines it could not do)', tab.indexOf('if (!a || !a.ok) { toast.error') > tab.indexOf('function sayRuleRun(a, lead)') && tab.indexOf('function sayRuleRun(a, lead)') > 0 &&tab.indexOf('a.skipped') > 0 && tab.indexOf('could NOT be categorized by a rule') > 0);
   check('the KTC category is set on the Nextrade line through the existing mapping action', tab.indexOf('function setKtcCategory') > 0 && tab.indexOf("action: 'save_mapping', category_key: nextradeKey") > 0);

@@ -72,14 +72,14 @@ function ctx(cat, ktc) { return { cat: cat, ktcCategory: ktc || null, party: 'Ne
   var dbR = newDb(); dbR.rpcs.hub_company_categorize = function () { return { data: null, error: { message: 'HUB_GUARD: KTC bill X made from this line already has money recorded on it — undo that payment first, then change the category.' } }; };
   var c1 = await N.categorizeLine(dbR, LINE, TRF, ctx(TRF));
   check('a refusal from the database is reported plainly, and says nothing was changed', !c1.ok && /undo that payment/.test(c1.error) && /Nothing was changed/.test(c1.error));
-  dbR.rpcs.hub_company_categorize = function () { return { data: null, error: { code: '23505', message: 'duplicate key' } }; };
+  dbR.rpcs.hub_company_categorize_with_mapping = function () { return { data: null, error: { code: '23505', message: 'duplicate key' } }; };
   var c2 = await N.categorizeLine(dbR, LINE, EXP, ctx(EXP));
   check('two people at once → the second is told to refresh, nothing changed', !c2.ok && /same moment/.test(c2.error));
-  dbR.rpcs.hub_company_categorize = function () { return { data: { ok: true, action: 'created', bill_id: 'B1', bill_number: 'NXT-1' }, error: null }; };
+  dbR.rpcs.hub_company_categorize_with_mapping = function () { return { data: { ok: true, action: 'created', bill_id: 'B1', bill_number: 'NXT-1' }, error: null }; };
   var c3 = await N.categorizeLine(dbR, LINE, EXP, ctx(EXP));
   check('success → the action and bill come back', c3.ok && c3.action === 'created' && c3.bill_id === 'B1');
   var lib = fs.readFileSync(path.join(root, 'src/lib/nextrade-bills-server.js'), 'utf8');
-  check('no step-by-step writes left in the server code (only the one database call)', lib.indexOf("from('vendor_bills').insert") < 0 && lib.indexOf("from('company_bill_links').insert") < 0 && lib.indexOf("from('company_bill_links').update") < 0 && lib.indexOf("db.rpc('hub_company_categorize'") >= 0);
+  check('the mapping-aware RPC keeps categorization and bill changes in one call', lib.indexOf("from('vendor_bills').insert") < 0 && lib.indexOf("from('company_bill_links').insert") < 0 && lib.indexOf("from('company_bill_links').update") < 0 && lib.indexOf("db.rpc('hub_company_categorize_with_mapping'") >= 0);
 
   // ── wiring ──
   var route = fs.readFileSync(path.join(root, 'src/app/api/accounting/company-books/route.js'), 'utf8');

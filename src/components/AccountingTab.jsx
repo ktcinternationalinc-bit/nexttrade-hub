@@ -265,7 +265,7 @@ export default function AccountingTab(props) {
       {alive('waiting') && <div className="p-3" style={shown('waiting')}><WaitingTab {...props} onGo={goFrom} onOpenBill={openBillFrom} /></div>}
       {sub === 'monthend' && <div className="p-3"><MonthEndTab /></div>}
       {sub === 'journals' && <div className="p-3"><JournalEntriesTab /></div>}
-      {sub === 'nextrade' && <div className="p-3"><CompanyBooksTab key="nextrade" company="nextrade" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.nextrade.manage'] === true} /></div>}
+      {sub === 'nextrade' && <div className="p-3"><CompanyBooksTab key="nextrade" company="nextrade" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.nextrade.manage'] === true} canCreateKtcCategory={isSuper || mp['bank.classify'] === true || mp['bills.manage'] === true} /></div>}
       {sub === 'rtm' && <div className="p-3"><CompanyBooksTab key="rtm" company="rtm" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.rtm.manage'] === true} /></div>}
       {sub === 'bills' && <div className="p-3"><BillsTab {...props} warehousePreset={wcPreset} openBillTarget={back && back.sub === 'waiting' ? billTarget : null} onBackFromBill={back && back.sub === 'waiting' ? goBack : null} fundsTarget={fundsTarget} /></div>}
       {sub === 'wires' && <div className="p-3"><WiresTab {...props} wirePreset={wirePreset} /></div>}

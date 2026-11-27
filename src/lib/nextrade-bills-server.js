@@ -136,7 +136,14 @@ export async function categorizeLine(db, line, cat, ctx) {
   if (!prep.ok) { return prep; }
   // v55.83-VK (Codex 19 Nov 20:27 P1) — a RULE goes through the guarded step: under the line's lock it categorizes only a line
   // that is still waiting (not categorized by a person a moment ago, not pending, not a duplicate, not paired) — else "skipped".
-  var r = ctx && ctx.guarded === true ? await db.rpc('hub_company_categorize_if_open', { p: prep.payload }) : await db.rpc('hub_company_categorize', { p: prep.payload });
+  var rpc = ctx && ctx.guarded === true ? 'hub_company_categorize_if_open' : 'hub_company_categorize';
+  var r;
+  if (line.wave_business_id === NEXTRADE_COMPANY_ID && Object.prototype.hasOwnProperty.call(prep.payload, 'ktc_category')) {
+    var payload = Object.assign({}, prep.payload, { allow_payroll: ctx && ctx.allowPayroll === true });
+    r = await db.rpc('hub_company_categorize_with_mapping', { p: payload });
+  }
+  // Keep categorization available on installations that have not enabled the new mapping write yet.
+  if (!r || (r.error && r.error.code === 'PGRST202')) { r = await db.rpc(rpc, { p: prep.payload }); }
   if (!r.error && r.data && r.data.skipped === true) { return { ok: true, skipped: true, why: r.data.why || null, action: 'none', bill_id: null, bill_number: null }; }
   if (r.error) {
     var m = String(r.error.message || '');

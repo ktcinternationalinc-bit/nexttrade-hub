@@ -35,6 +35,16 @@ function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, pro
 function missingRel(e) { return /does not exist|schema cache|Could not find the table|company_category/i.test(String((e && e.message) || '')); }
 // the is_private column does not exist at all (Postgres 42703 / PostgREST PGRST204) — anything else (permission, network…) is NOT this
 function missingPrivateColumn(e) { var c = String((e && e.code) || ''); var m = String((e && e.message) || ''); return (c === '42703' || c === 'PGRST204') && /is_private/.test(m) && /does not exist|schema cache/i.test(m) && !/permission/i.test(m); }
+function transactionSource(line) {
+  var source = String(line.bank_source || '');
+  if (source.startsWith('[CSV]')) { return 'csv'; }
+  if (source.startsWith('[PDF]')) { return 'pdf'; }
+  if (source.startsWith('[HAND]')) { return 'manual'; }
+  var id = String(line.plaid_transaction_id || '');
+  if (id.startsWith('manual-hand-')) { return 'manual'; }
+  if (id.startsWith('manual-')) { return 'statement'; }
+  return id ? 'plaid' : null;
+}
 function isDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
 function fail(msg, st) { return NextResponse.json({ ok: false, error: msg }, { status: st || 400 }); }
 function readFail(what, e) { return NextResponse.json({ ok: false, error: missingRel(e) ? SQL_MISSING : 'Could not read ' + what + ' (' + ((e && e.message) || 'error') + ') — nothing changed.' }, { status: missingRel(e) ? 409 : 503 }); }
@@ -42,7 +52,7 @@ function readFail(what, e) { return NextResponse.json({ ok: false, error: missin
 async function pageLines(db, companyId, from, to) {
   var out = [];
   for (var pg = 0; pg < 30; pg++) {
-    var r = await db.from('bank_transactions').select(LINE_COLS).eq('wave_business_id', companyId)
+    var r = await db.from('bank_transactions').select(LINE_COLS + (companyId === NEXTRADE_COMPANY_ID ? ', bank_source, plaid_transaction_id' : '')).eq('wave_business_id', companyId)
       .or('review_status.is.null,review_status.neq.duplicate').gte('date', from).lte('date', to)
       .order('date', { ascending: false }).order('id', { ascending: true }).range(pg * 1000, pg * 1000 + 999);
     if (r.error) { return { error: r.error }; }
@@ -178,14 +188,24 @@ export async function POST(req) {
     if (action === 'accounts') {
       var ac = await db.from('plaid_accounts').select('plaid_account_id, name, official_name, mask, type, subtype, connection_id, current_balance, updated_at').eq('wave_business_id', cid);
       if (ac.error) { return readFail('the accounts', ac.error); }
+      ac.data = dropPrivate(ac.data || [], scope, 'plaid_account_id');
       var connIds = (ac.data || []).map(function (a) { return a.connection_id; }).filter(Boolean);
       var conns = {};
-      if (connIds.length) { var cq = await db.from('bank_connections').select('id, institution_name, status').in('id', connIds); if (cq.error) { return readFail('the connections', cq.error); } (cq.data || []).forEach(function (c) { conns[c.id] = c; }); }
-      ac.data = dropPrivate(ac.data || [], scope, 'plaid_account_id');
+      if (connIds.length) {
+        var cq = await db.from('bank_connections').select('id, institution_name, status, plaid_item_id, last_synced, last_sync_status').in('id', Array.from(new Set(connIds)));
+        if (cq.error) { return readFail('the connections', cq.error); }
+        (cq.data || []).forEach(function (c) { conns[c.id] = c; });
+      }
       // v55.83-TW (Codex P1-1) — account balances are a sensitive number: only with 'Bank: View Account Balances'
       var gBal = await assertPermission(db, userId, 'bank_balances.view', req);
       if (!gBal || gBal.ok !== true) { ac.data = ac.data.map(function (a) { var o = Object.assign({}, a); delete o.current_balance; return o; }); }
-      return NextResponse.json({ ok: true, accounts: (ac.data || []).map(function (a) { var c = conns[a.connection_id] || {}; return Object.assign({}, a, { institution: c.institution_name || null, connection_status: c.status || null, is_card: a.type === 'credit' }); }) });
+      return NextResponse.json({ ok: true, accounts: (ac.data || []).map(function (a) {
+        var c = conns[a.connection_id] || {};
+        var isStatement = c.status === 'manual' || /^manual-/.test(String(c.plaid_item_id || ''));
+        var feedType = isStatement ? 'statement' : c.plaid_item_id ? 'plaid' : null;
+        return Object.assign({}, a, { institution: c.institution_name || null, connection_status: c.status || null, is_card: a.type === 'credit',
+          feed_type: feedType, last_synced: feedType === 'plaid' ? c.last_synced || null : null, last_sync_status: feedType === 'plaid' ? c.last_sync_status || null : null });
+      }) });
     }
 
     if (action === 'categories') {
@@ -254,6 +274,15 @@ export async function POST(req) {
         return NextResponse.json({ ok: true });
       }
       var rp = body.rule || {};
+      if (rp.lineId) {
+        var seed = await db.from('bank_transactions').select('account_id, company_category, pending, transfer_group_id, review_status').eq('wave_business_id', cid).eq('id', rp.lineId).maybeSingle();
+        if (seed.error) { return readFail('the source transaction', seed.error); }
+        if (!seed.data || isPrivateRow(seed.data, scope)) { return fail('Transaction not found.', 404); }
+        if (seed.data.company_category || seed.data.pending || seed.data.transfer_group_id || seed.data.review_status === 'duplicate') { return fail('This transaction is no longer waiting to be categorized. Refresh the page and try again.', 409); }
+        var seedAccount = await db.from('plaid_accounts').select('is_private').eq('plaid_account_id', seed.data.account_id).maybeSingle();
+        if (seedAccount.error && !missingPrivateColumn(seedAccount.error)) { return readFail('the source account', seedAccount.error); }
+        if (seedAccount.data && seedAccount.data.is_private) { return fail('Rules are shared across the company. Use the Rules tab to enter a rule without copying a private transaction.', 403); }
+      }
       var mt = normMatch(rp.match_text);
       if (mt.length < 3) { return fail('Type at least 3 letters the description contains.'); }
       var dir = rp.direction === 'in' || rp.direction === 'out' ? rp.direction : 'any';
@@ -261,6 +290,7 @@ export async function POST(req) {
       if (catsR.error) { return readFail('the categories', catsR.error); }
       var okCat = (catsR.data || []).filter(function (c) { return c.key === rp.category_key && c.active; })[0];
       if (!okCat) { return fail('Pick one of ' + comp.label + '’s categories.'); }
+      if (dir !== 'any' && okCat.direction && okCat.direction !== 'any' && okCat.direction !== dir) { return fail('The rule’s direction must match its category.'); }
       var rrow = { match_text: mt, category_key: okCat.key, direction: dir, active: true, updated_by: userId, updated_at: new Date().toISOString() };
       if (rp.id) {
         var ru = await db.from('company_rules').update(rrow).eq('id', rp.id).eq('company_id', cid).select('id');
@@ -325,7 +355,13 @@ export async function POST(req) {
         (lq.data || []).forEach(function (x) { (legs[x.transfer_group_id] = legs[x.transfer_group_id] || []).push(x); });
       }
       function otherLeg(l) { if (!l.transfer_group_id) { return null; } var o = (legs[l.transfer_group_id] || []).filter(function (x) { return x.id !== l.id; })[0]; if (!o) { return null; } if (isPrivateRow(o, scope)) { return { private: true }; } var oa = accts[o.account_id] || {}; return { id: o.id, date: o.date, account_label: (oa.name || 'account') + (oa.mask ? ' ••' + oa.mask : '') }; } // (Codex 22:50) a private partner leg: nothing about it is returned
-      return NextResponse.json({ ok: true, lines: linesOut.map(function (l) { var a = accts[l.account_id] || {}; return Object.assign({}, l, { account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', ktc_bill: links[l.id] || null, transfer_with: otherLeg(l) }); }), categories: catsL.data || [], capped: !!pl.capped, ktc_map: ktcMapL || undefined, ktc_categories: ktcCatsL || undefined, payroll_restricted: hiddenPay ? PAYROLL_NOTE : undefined });
+      return NextResponse.json({ ok: true, lines: linesOut.map(function (l) {
+        var a = accts[l.account_id] || {};
+        var row = Object.assign({}, l, { source: transactionSource(l), account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', ktc_bill: links[l.id] || null, transfer_with: otherLeg(l) });
+        delete row.bank_source;
+        delete row.plaid_transaction_id;
+        return row;
+      }), categories: catsL.data || [], capped: !!pl.capped, ktc_map: ktcMapL || undefined, ktc_categories: ktcCatsL || undefined, payroll_restricted: hiddenPay ? PAYROLL_NOTE : undefined });
     }
 
     // the KTC side needs: the party name and the Nextrade → KTC category mapping
@@ -342,7 +378,7 @@ export async function POST(req) {
         if (acc.error) { return { id: line.id, ok: false, error: 'Could not read the account (' + acc.error.message + ') — nothing changed.' }; }
         label = acc.data ? (acc.data.name || '') + (acc.data.mask ? ' ••' + acc.data.mask : '') : null;
       }
-      var res = await categorizeLine(db, line, cat, { actorId: userId, source: source, ktcCategory: cat && nctx ? nctx.map[cat.key] || null : null, party: nctx ? nctx.party : null, accountLabel: label, guarded: guarded === true });
+      var res = await categorizeLine(db, line, cat, { actorId: userId, source: source, ktcCategory: cat && nctx ? nctx.map[cat.key] || null : null, party: nctx ? nctx.party : null, accountLabel: label, guarded: guarded === true, allowPayroll: payZD.isSuper === true });
       if (!res.ok) { return { id: line.id, ok: false, error: res.error }; }
       if (res.skipped === true) { return { id: line.id, ok: true, skipped: true, why: res.why }; }
       return { id: line.id, ok: true, ktc: comp.key === 'nextrade' ? res : undefined };
@@ -502,7 +538,10 @@ export async function POST(req) {
       var todo = dropPrivate(plA.data, scope).filter(function (l) { return !l.company_category && l.pending !== true && !l.transfer_group_id; });
       for (var j = 0; j < todo.length; j++) {
         var ln = todo[j];
-        var rules = (rulesA.data || []).filter(function (r) { return r.direction === 'any' || r.direction === ln.direction; });
+        var rules = (rulesA.data || []).filter(function (r) {
+          var category = byKeyA[r.category_key];
+          return category && (r.direction === 'any' || r.direction === ln.direction) && (!category.direction || category.direction === 'any' || category.direction === ln.direction);
+        });
         var rule = bestCompanyRule(rules, String(ln.merchant_name || '') + ' ' + String(ln.name || ''));
         if (!rule || !byKeyA[rule.category_key]) { continue; }
         if (onlyRules && onlyRules.indexOf(String(rule.id)) < 0) { continue; }
@@ -526,28 +565,15 @@ export async function POST(req) {
     if (action === 'mapping' || action === 'save_mapping') {
       if (comp.key !== 'nextrade') { return fail('The KTC category mapping is for Nextrade only.'); }
       if (action === 'save_mapping') {
-        var catsM = await loadCats(db, cid);
-        if (catsM.error) { return readFail('the categories', catsM.error); }
-        var nc = (catsM.data || []).filter(function (c) { return c.key === body.category_key; })[0];
-        if (!nc) { return fail('Pick one of Nextrade’s categories.'); }
         var ktc = String(body.ktc_category || '').trim() || null;
-        if (ktc) { var kc = await db.from('expense_categories').select('key').eq('key', ktc).limit(1); if (kc.error) { return readFail('KTC’s categories', kc.error); } if (!kc.data || !kc.data.length) { return fail('Pick one of KTC’s categories.'); } }
-        var prevM = await db.from('company_category_map').select('ktc_category').eq('company_id', cid).eq('category_key', nc.key).maybeSingle();
-        if (prevM.error) { return readFail('the mapping', prevM.error); }
-        var upM = await db.from('company_category_map').upsert({ company_id: cid, category_key: nc.key, ktc_category: ktc, updated_by: userId, updated_at: new Date().toISOString() }, { onConflict: 'company_id,category_key' });
-        if (upM.error) { return fail('Not saved (' + upM.error.message + ').', 500); }
-        // bills already made from this category that still have NO KTC category get it now (a person's own pick is never overwritten)
-        var filled = 0;
-        if (ktc) {
-          var lkM = await db.from('company_bill_links').select('bill_id').eq('company_id', cid).eq('category_key', nc.key).eq('status', 'active').eq('mode', 'created');
-          var bIds = ((lkM && lkM.data) || []).map(function (x) { return x.bill_id; }).filter(Boolean);
-          for (var k = 0; k < bIds.length; k += 200) {
-            var fb = await db.from('vendor_bills').update({ category: ktc, updated_at: new Date().toISOString() }).in('id', bIds.slice(k, k + 200)).is('category', null).select('id');
-            if (!fb.error) { filled += (fb.data || []).length; }
-          }
+        var savedMap = await db.rpc('hub_save_nextrade_ktc_mapping', { p: { category_key: String(body.category_key || ''), ktc_category: ktc, actor: userId,
+          allow_private: scope.all === true, allow_payroll: payZD.isSuper === true } });
+        if (savedMap.error) {
+          if (savedMap.error.code === 'PGRST202') { return fail('Install sql/nextrade-ktc-category-mapping.sql to update KTC mappings and linked bills.', 409); }
+          if (savedMap.error.code === 'P0001') { return fail(String(savedMap.error.message).replace(/^HUB_GUARD:\s*/, ''), 409); }
+          return fail('Could not save the KTC mapping. No changes were applied.', 500);
         }
-        await audit(db, userId, 'nextrade_category_mapped', 'company_category', nc.id, { nextrade_category: nc.key, from: prevM.data ? prevM.data.ktc_category : null, to: ktc, bills_filled: filled });
-        return NextResponse.json({ ok: true, bills_filled: filled });
+        return NextResponse.json(savedMap.data);
       }
       var catsK = await loadCats(db, cid);
       var mpK = await db.from('company_category_map').select('category_key, ktc_category').eq('company_id', cid);
