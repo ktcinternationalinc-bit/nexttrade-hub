@@ -140,7 +140,7 @@ var COMPLETE = [R('100277', 'trucking', 900), R('100277', 'freight', 1322)];
 
   // ── 8. housekeeping ──
   var page = read('src/app/page.jsx'); var wn = read('src/components/WhatsNewWidget.jsx');
-  check('40: What\'s New has the YP entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-YP'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]{2}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
+  check('40: What\'s New has the YP entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-YP'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55.83-[A-Z]{2,3}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
   check('41: the test is in the regression runner', read('scripts/run-accounting-bank-regression.js').indexOf('test-v55-83-yp-invoice-shipping-and-reopen.js') > 0);
 
   console.log('\nYP: ' + pass + ' passed, ' + failN + ' failed');

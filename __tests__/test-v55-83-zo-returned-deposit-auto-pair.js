@@ -69,6 +69,6 @@ check('28 (source): the report loads the bank account and currency, turns matchi
 var lib = read('src/lib/returned-deposit-pairing.js');
 check('19 (source): the rule writes nothing and reads no database', !/supabase|\.from\(|fetch\(|\.update\(|\.insert\(/.test(lib));
 var page = read('src/app/page.jsx'); var wn = read('src/components/WhatsNewWidget.jsx');
-check('20: What\'s New has the ZO entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-ZO'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]{2}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
+check('20: What\'s New has the ZO entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-ZO'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55.83-[A-Z]{2,3}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
 console.log('\nZO: ' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

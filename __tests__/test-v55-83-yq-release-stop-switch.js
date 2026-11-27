@@ -114,7 +114,7 @@ var TOKEN = 'Bearer ' + new Array(65).join('a');
   check('25 (source): the bar is on Change Schedule, above the heading; the confirmation is on the page, no browser pop-up', tab.indexOf('<ReleasePauseBar ') > 0 && tab.indexOf('onChange={function () { load(); }} />') > 0 && tab.indexOf('<ReleasePauseBar') < tab.indexOf('<h1 ') && bar.indexOf('window.confirm') < 0 && bar.indexOf('window.prompt') < 0 && bar.indexOf('Yes, stop them now') > 0);
   check('26 (source): the stop-switch library imports nothing (safe for server routes) and no SQL file was added for it', !/^import |require\(/m.test(read('src/lib/release-pause.js')) && fs.readdirSync(path.join(root, 'sql')).filter(function (f) { return /YQ/.test(f); }).length === 0);
   var page = read('src/app/page.jsx'); var wn = read('src/components/WhatsNewWidget.jsx');
-  check('27: What\'s New has the YQ entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-YQ'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]{2}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
+  check('27: What\'s New has the YQ entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-YQ'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55.83-[A-Z]{2,3}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
   check('28: the test is in the regression runner', read('scripts/run-accounting-bank-regression.js').indexOf('test-v55-83-yq-release-stop-switch.js') > 0);
 
   console.log('\nYQ: ' + pass + ' passed, ' + failN + ' failed');

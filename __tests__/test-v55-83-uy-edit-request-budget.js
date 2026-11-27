@@ -261,7 +261,7 @@ function mini(o) {
   check('D4: What’s New has the UY entry', /version: 'v55.83-UY'/.test(wn));
   // realigned in v55.83-UU (orders session): letters are claimed in advance, so a later release can carry an earlier letter (UU ships after UY).
   // What matters: a badge is shown and the UY release note is still there.
-  check('D5: a build badge is shown and What\'s New still has the UY entry', /v55\.83-[A-Z]{2}<\/span>/.test(page) && /version: 'v55\.83-UY'/.test(fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8')));
+  check('D5: a build badge is shown and What\'s New still has the UY entry', /v55.83-[A-Z]{2,3}<\/span>/.test(page) && /version: 'v55\.83-UY'/.test(fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8')));
 
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);

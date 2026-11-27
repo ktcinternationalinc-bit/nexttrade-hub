@@ -33,6 +33,6 @@ check('10 (source): the same pick sends NOTHING to the server and says so — it
 check('11 (source): a real change names where the line came from and went to, and the numbers are loaded again', tab.indexOf("toast.success('Saved: moved ' + (fromLbl ? 'from “' + fromLbl + '” ' : '') + 'to “' + toLbl + '”'") > 0 && /Saved: moved [\s\S]{0,420}startExpenses\(\{ ignoreCache: true \}\)/.test(tab) && tab.indexOf("toast.success('Category saved'") < 0);
 check('12 (source): removing a category and the undo point are untouched', tab.indexOf("erApi('clear_category', { ids: [row.id], confirm: true })") > 0 && tab.indexOf('setUndoPt(j.undo_id ?') > 0 && tab.indexOf('<option value="__remove__">✕ remove category (back to Uncategorized)</option>') > 0);
 var page = read('src/app/page.jsx'); var wn = read('src/components/WhatsNewWidget.jsx');
-check('13: What\'s New has the ZK entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-ZK'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]{2}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
+check('13: What\'s New has the ZK entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-ZK'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55.83-[A-Z]{2,3}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
 console.log('\nZK: ' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

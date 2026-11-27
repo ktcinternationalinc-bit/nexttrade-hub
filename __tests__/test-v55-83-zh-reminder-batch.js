@@ -200,7 +200,7 @@ function byRel(results) { var o = {}; results.forEach(function (r) { o[r.release
   var rs = fs.readFileSync(path.join(root, 'src/app/api/accounting/arrival-reminders/route.js'), 'utf8');
   check('route: the morning run and the button use ONE send routine (sendDue), and the file is still var + concatenation only', (rs.match(/await sendDue\(db, all, mailCfg, /g) || []).length === 2 && (rs.match(/async function sendDue\(/g) || []).length === 1 && (rs.match(/mode: 'auto'/g) || []).length === 1 && !/\blet\s|\bconst\s|=>|`/.test(rs.replace(/export const maxDuration/, '')));
   var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
-  check('What’s New has the ZH entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-ZH'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]{2})'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
+  check('What’s New has the ZH entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-ZH'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55.83-[A-Z]{2,3})'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
 
   Module._load = origLoad; Module._resolveFilename = orig;
   console.log('\n' + pass + ' passed, ' + failN + ' failed');

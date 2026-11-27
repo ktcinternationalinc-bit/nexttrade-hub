@@ -82,7 +82,7 @@ check('a retried click that was put back meanwhile is NOT called archived (Codex
 check('a failed refresh is shown on the screen (numbers may be out of date)', /The last refresh failed/.test(T) && /return j; \} setErr/.test(T));
 
 console.log('UC — badge and What\'s New');
-check('a v55.83 badge is shown (later builds move it on; realigned in UU)', />v55\.83-[A-Z]{2}<\/span>/.test(read('src/app/page.jsx')));
+check('a v55.83 badge is shown (later builds move it on; realigned in UU)', />v55.83-[A-Z]{2,3}<\/span>/.test(read('src/app/page.jsx')));
 check('What\'s New still has the v55.83-UC entry (later builds go above it; realigned in UU)', /version: 'v55\.83-UC'/.test(read('src/components/WhatsNewWidget.jsx')));
 
 console.log('\n' + pass + ' passed, ' + failN + ' failed');

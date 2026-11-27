@@ -375,7 +375,7 @@ async function readPdf(buf) {
   var rs = fs.readFileSync(path.join(root, 'src/app/api/accounting/arrival-reminders/route.js'), 'utf8'); var ls = fs.readFileSync(path.join(root, 'src/lib/arrival-reminders-server.js'), 'utf8'); var lp = fs.readFileSync(path.join(root, 'src/lib/arrival-reminders.js'), 'utf8');
   check('route / libs: still var + concatenation only, no client module imported, GET checks the timer secret first', !/\blet\s|\bconst\s|=>|`/.test(rs.replace(/export const maxDuration/, '')) && !/\blet\s|\bconst\s|=>|`/.test(ls) && !/\blet\s|\bconst\s|=>|`/.test(lp) && !/components\//.test(rs + ls + lp) && /export async function GET\(req\) \{\s*if \(!isTimer\(req\)\) \{ return bad\('Timer only\.', 401\); \}/.test(rs));
   var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
-  check('What’s New has the XY entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-XY'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]{2})'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
+  check('What’s New has the XY entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-XY'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55.83-[A-Z]{2,3})'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
 
   Module._load = origLoad; Module._resolveFilename = orig;
   console.log('\n' + pass + ' passed, ' + failN + ' failed');

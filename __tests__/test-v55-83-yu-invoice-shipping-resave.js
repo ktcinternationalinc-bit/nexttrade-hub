@@ -92,7 +92,7 @@ var REASON = 'Price agreed with customer';
   check('16 (source): a NEW invoice and one read from a document start with nothing known (no stale "actual" from the invoice opened before)', (tab.match(/forgetShipActual\(\);/g) || []).length >= 2 && tab.indexOf('function forgetShipActual() { setShipActualFor(null); setAutoShip(null); }') > 0);
 
   var page = read('src/app/page.jsx'); var wn = read('src/components/WhatsNewWidget.jsx');
-  check('17: What\'s New has the YU entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-YU'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]{2}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
+  check('17: What\'s New has the YU entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-YU'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55.83-[A-Z]{2,3}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
   check('18: the test is in the regression runner', read('scripts/run-accounting-bank-regression.js').indexOf('test-v55-83-yu-invoice-shipping-resave.js') > 0);
   console.log('\nYU: ' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);

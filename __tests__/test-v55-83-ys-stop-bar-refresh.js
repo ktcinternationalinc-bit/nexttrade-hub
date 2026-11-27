@@ -101,7 +101,7 @@ Module._load = realLoad;
   var tab = fs.readFileSync(path.join(root, 'src/components/ChangeScheduleTab.jsx'), 'utf8');
   check('16 (source): Change Schedule hands the bar the time of its own last status read, so both refresh together', tab.indexOf('<ReleasePauseBar refreshKey={checkedAt} onChange={function () { load(); }} />') > 0 && tab.indexOf('setCheckedAt(new Date().toISOString())') > 0);
   var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
-  check('17: What\'s New has the YS entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-YS'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55\.83-[A-Z]{2}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
+  check('17: What\'s New has the YS entry and the badge names the newest entry on top', wn.indexOf("version: 'v55.83-YS'") > 0 && (function () { var top = /BUILD_HISTORY = \[\s*\{\s*version: '(v55.83-[A-Z]{2,3}(?:\.\d+)?)'/.exec(wn); return !!top && page.indexOf('>' + top[1] + '</span>') > 0; })());
 
   console.log('\nYS: ' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
