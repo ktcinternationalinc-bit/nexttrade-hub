@@ -19,8 +19,10 @@ export var DECISION_LABEL = { validate_match: '✓ Validate match', accept_discr
 export function say(t, msg, kind) { if (!t) { return; } if (typeof t === 'function') { t(msg, kind); return; } if (kind === 'error' && t.error) { t.error(msg); } else if (t.success) { t.success(msg); } }
 export function wcApi(payload) {
   return hubFetch('/api/accounting/weight-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-    .then(function (r) { return r.json().then(function (j) { j.http_status = r.status; return j; }, function () { return { ok: false, error: 'The server answered ' + r.status + '.', http_status: r.status }; }); })
-    .catch(function () { return { ok: false, error: 'Could not reach the Hub server.' }; });
+    // v55.83-ZT (Codex 27 Nov): an explicit server refusal stays a refusal; an unreachable server or an unreadable answer is UNCERTAIN —
+    // the request may have been saved, so callers must check before saying "not saved" or offering a retry
+    .then(function (r) { return r.json().then(function (j) { if (!j || typeof j !== 'object') { return { ok: false, uncertain: true, error: 'The server answer (' + r.status + ') could not be read.', http_status: r.status }; } j.http_status = r.status; return j; }, function () { return { ok: false, uncertain: true, error: 'The server answered ' + r.status + ' without a readable answer.', http_status: r.status }; }); })
+    .catch(function () { return { ok: false, uncertain: true, error: 'Could not reach the Hub server.' }; });
 }
 export function warehouseMappingLabel(map, lookups) {
   return [['wh_product_type', 'product_types'], ['wh_cgt', 'cgt_grades'], ['wh_nt', 'nt_grades'], ['wh_color', 'colors']].map(function (pair) {

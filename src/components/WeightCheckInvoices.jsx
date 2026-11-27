@@ -270,6 +270,50 @@ function reasonProblem(inv, mode, reason) {
 // The Approved / Disputed flow, outside React so it can be tested. o = { inv, mode: 'approve'|'dispute', reason, api(body) → json,
 // reload() → fresh report rows }. A previewed card first has its receipt confirmed by this person; then the fresh, REAL result must be
 // exactly what was shown, otherwise nothing is decided and the person looks again. The reason is judged against the real result.
+// v55.83-ZT (Codex 27 Nov): after an UNCERTAIN answer (server unreachable / unreadable), re-read and say per line what is actually saved —
+// never "not saved" on a guess, never "try again" before checking. refreshed = the report_preview answer after the problem (or null).
+export function reconcileWords(res, refreshed, inv, mode, label) {
+  var verb = mode === 'dispute' ? 'Disputed' : 'Approved';
+  if (!refreshed || !refreshed.ok) {
+    var what = res.linkUnknown ? 'whether warehouse receipt ' + res.receipt + ' was confirmed' : 'whether ' + res.uncertainLines.map(function (x) { return x.label; }).join(', ') + ' ' + (res.uncertainLines.length === 1 ? 'was' : 'were') + ' saved';
+    return { kind: 'warn', text: 'Connection problem: could not confirm ' + what + ' (' + (res.error || 'no answer') + ')' + (res.wrote ? '; ' + res.wrote + ' line' + (res.wrote === 1 ? ' was' : 's were') + ' saved before it' : '') + '. Press Show (last reading) and check the card before pressing ' + verb + ' again.' };
+  }
+  var rows = refreshed.rows || []; var billId = inv.bills[0].id;
+  var billRows = rows.filter(function (r) { return (r.bill_ids || []).indexOf(billId) >= 0; });
+  if (res.linkUnknown) {
+    // proved confirmed: a CONFIRMED link to exactly that receipt on this bill; proved not: still a preview of exactly that receipt
+    var confirmed = billRows.some(function (r) { return (r.links || []).some(function (l) { return String(l.receipt_id) === String(res.receipt) && String(l.bill_id || billId) === String(billId) && l.state === 'confirmed'; }); });
+    var stillPreview = billRows.some(function (r) { return r.preview && r.proposed_receipt && String(r.proposed_receipt.receipt_id) === String(res.receipt); });
+    if (confirmed && !stillPreview) { return { kind: 'warn', text: 'Connection problem — checked again: warehouse receipt ' + res.receipt + ' WAS confirmed, but nothing was ' + verb.toLowerCase() + ' yet. Look at the card and press ' + verb + ' again.' }; }
+    if (stillPreview && !confirmed) { return { kind: 'warn', text: 'Connection problem — checked again: warehouse receipt ' + res.receipt + ' was NOT confirmed. Nothing was saved — press ' + verb + ' again.' }; }
+    return { kind: 'warn', text: 'Connection problem: the Hub looked again but cannot tell whether warehouse receipt ' + res.receipt + ' was confirmed. Press Show (last reading), open the card and check before pressing ' + verb + ' again.' };
+  }
+  var done = mode === 'dispute' ? ['issue_open'] : ['validated', 'accepted'];
+  // per uncertain line: the SAME line (key), the SAME comparison (fingerprint), decided by THIS decision (kind + note) → saved;
+  // the same line + comparison still undecided → not saved; anything else (missing, filtered, changed, decided otherwise) → unknown
+  function verdict(x) {
+    var r = billRows.filter(function (y) { return y.item_key === x.key; })[0];
+    if (!r || String(r.comparison_fp || '') !== String(x.fp || '')) { return 'unknown'; }
+    var d = mode === 'dispute' ? (r.issue || r.decision) : r.decision;
+    if (done.indexOf(r.state) >= 0 && d && d.kind === x.kind && String(d.reason || '') === String(x.reason || '')) { return 'saved'; }
+    if (r.state === 'unreviewed' || r.state === 'reopened' || r.state === 'needs_revalidation') { return 'not_saved'; }
+    return 'unknown';
+  }
+  var savedU = [], notSavedU = [], unknownU = [];
+  res.uncertainLines.forEach(function (x) { var v = verdict(x); (v === 'saved' ? savedU : v === 'not_saved' ? notSavedU : unknownU).push(x); });
+  var total = (res.wrote || 0) + savedU.length;
+  if (!notSavedU.length && !unknownU.length && !(res.notSent || []).length && !(res.failed || []).length) {
+    return { kind: 'ok', text: 'Saved — ' + verb + ': ' + label + ' (' + total + ' line' + (total === 1 ? '' : 's') + '), confirmed after a connection problem.' };
+  }
+  var parts = [];
+  if (total) { parts.push(total + ' line' + (total === 1 ? '' : 's') + ' saved'); }
+  if (notSavedU.length) { parts.push('not saved: ' + notSavedU.map(function (x) { return x.label; }).join(', ')); }
+  if (unknownU.length) { parts.push('cannot tell: ' + unknownU.map(function (x) { return x.label; }).join(', ')); }
+  if ((res.notSent || []).length) { parts.push('not sent: ' + res.notSent.map(function (x) { return x.label; }).join(', ')); }
+  if ((res.failed || []).length) { parts.push('refused: ' + res.failed.join(' · ')); }
+  return { kind: 'warn', text: 'Connection problem — checked again: ' + parts.join('; ') + '. ' + (unknownU.length ? 'Press Show (last reading), open the card and check before pressing ' + verb + ' again.' : 'Press ' + verb + ' again for the rest.') };
+}
+
 export async function runInvoiceDecision(o) {
   var inv = o.inv; var mode = o.mode; var reason = String(o.reason || '').trim();
   var problem = reasonProblem(inv, mode, reason); if (problem) { return { ok: false, error: problem, wrote: 0 }; }
@@ -278,6 +322,7 @@ export async function runInvoiceDecision(o) {
     var c = inv.proposed || (inv.linkRow && (inv.linkRow.candidates || [])[0]);
     if (!c) { return { ok: false, error: 'No warehouse receipt to confirm.', wrote: 0 }; }
     var j0 = await o.api({ action: 'link', bill_id: inv.bills[0].id, receipt_id: c.receipt_id, basis: (c.bases || [])[0], bill_value: c.bill_value, receipt_value: c.receipt_value, state: 'confirmed' });
+    if (j0 && j0.uncertain) { return { ok: false, uncertain: true, linkUnknown: true, receipt: c.receipt_id, uncertainLines: [], notSent: [], failed: [], wrote: 0, error: j0.error }; }
     if (!j0 || !j0.ok) { return { ok: false, error: (j0 && j0.error) || 'The receipt could not be confirmed.', wrote: 0 }; }
     var rows = await o.reload();
     var again = groupInvoices(rows || []).filter(function (v) { return v.bills.some(function (b) { return b.id === inv.bills[0].id; }); })[0] || null;
@@ -295,13 +340,15 @@ export async function runInvoiceDecision(o) {
   if (!todo.length) { return { ok: false, error: 'Nothing left to decide on this invoice.', wrote: 0, linked: !!o.inv.previewed }; }
   var blocked = todo.filter(function (r) { var a = r.allowed || []; return mode === 'dispute' ? a.indexOf('report_issue') < 0 : (a.indexOf('validate_match') < 0 && a.indexOf('accept_discrepancy') < 0); });
   if (blocked.length) { return { ok: false, error: 'Not possible yet: ' + blocked.map(function (r) { return r.product_label || r.outcome_words || r.outcome; }).join(', ') + ' — see the note on the card.', wrote: 0, linked: !!o.inv.previewed }; }
-  var failed = []; var wrote = 0;
+  var failed = []; var wrote = 0; var uncertainLines = []; var notSent = [];
   for (var i = 0; i < todo.length; i++) {
     var r = todo[i]; var a = r.allowed || [];
     var kind = mode === 'dispute' ? 'report_issue' : (a.indexOf('validate_match') >= 0 ? 'validate_match' : 'accept_discrepancy');
     var j = await o.api({ action: 'decide', bill_id: (r.bill_ids || [])[0] || inv.bills[0].id, item_key: r.item_key, kind: kind, reason: reason, expected_fp: r.comparison_fp });
+    if (j && j.uncertain) { uncertainLines.push({ key: r.item_key, label: r.product_label || r.item_key, error: j.error, fp: r.comparison_fp, kind: kind, reason: reason }); notSent = todo.slice(i + 1).map(function (x) { return { key: x.item_key, label: x.product_label || x.item_key }; }); break; }
     if (!j || !j.ok) { failed.push((r.product_label || r.item_key) + ': ' + ((j && j.error) || 'not saved')); } else { wrote++; }
   }
+  if (uncertainLines.length) { return { ok: false, uncertain: true, wrote: wrote, uncertainLines: uncertainLines, notSent: notSent, failed: failed, error: uncertainLines[0].error, mode: mode }; }
   if (failed.length) { return { ok: false, error: 'Some lines were not saved — ' + failed.join(' · '), wrote: wrote, failed: failed }; }
   return { ok: true, wrote: wrote, message: (mode === 'dispute' ? 'Disputed: ' : 'Approved: ') + inv.bills.map(function (b) { return b.vendor + ' ' + b.bill_number; }).join(' + ') };
 }
@@ -435,19 +482,22 @@ export default function WeightCheckInvoices(props) {
     try { res = await runInvoiceDecision({ inv: inv, mode: mode, reason: reasons[inv.key], api: wcApi, reload: function () { return refreshKeep().then(function (j) { return (j && j.ok && j.rows) || []; }); } }); }
     catch (eD) { unknown = true; res = { ok: false, wrote: 0, error: 'Could not confirm whether this was saved (' + ((eD && eD.message) || 'no answer') + ') — press Show (last reading) to see what is saved now.' }; }
     var refreshed = null;
-    if (res.wrote || res.linked || unknown) { refreshed = await refreshKeep(); }
+    if (res.wrote || res.linked || unknown || res.uncertain) { refreshed = await refreshKeep(); }
     setBusy('');
     var refreshFailed = !!(refreshed && !refreshed.ok);
     var n = res.wrote || 0; var lines = n + ' line' + (n === 1 ? '' : 's');
     var m;
-    if (res.ok) { m = { kind: refreshFailed ? 'warn' : 'ok', text: 'Saved — ' + res.message + ' (' + lines + ').' + (refreshFailed ? ' The list could not be refreshed — press Show (last reading) to see it.' : '') }; }
+    if (res.uncertain) { m = reconcileWords(res, refreshed, inv, mode, label); }
+    else if (res.ok) { m = { kind: refreshFailed ? 'warn' : 'ok', text: 'Saved — ' + res.message + ' (' + lines + ').' + (refreshFailed ? ' The list could not be refreshed — press Show (last reading) to see it.' : '') }; }
     else if (unknown) { m = { kind: 'warn', text: res.error }; }
     else if (n > 0) { m = { kind: 'warn', text: 'Partly saved: ' + lines + ' saved; ' + String(res.error || '').replace(/^Some lines were not saved — /, 'not saved: ') + ' — press Show (last reading), then decide the rest.' }; }
     else { m = { kind: 'err', text: res.error || 'Not saved.', needNote: /type (a note|what is wrong) in the box/.test(res.error || '') }; }
-    m.fp = fpk;
-    putCardMsg(inv.key, m);
+    // the answer belongs to the card as it is NOW: after a successful re-read, the comparison that came back (e.g. a confirmed receipt)
+    var msgKey = inv.key; m.fp = fpk;
+    if (refreshed && refreshed.ok) { var g2 = groupInvoices(refreshed.rows || []).filter(function (v) { return v.bills.some(function (b) { return b.id === inv.bills[0].id; }); })[0]; if (g2) { m.fp = fpKey(g2); msgKey = g2.key; } }
+    putCardMsg(msgKey, m);
     setLastAction({ kind: m.kind, text: label + ': ' + m.text, at: new Date().toISOString() });
-    if (res.ok) { say(props.toast, res.message, 'success'); } else { say(props.toast, res.error, 'error'); }
+    say(props.toast, m.text, m.kind === 'ok' ? 'success' : 'error'); // the corner message says the same as the card
   }
 
   function MapForm(p) {
