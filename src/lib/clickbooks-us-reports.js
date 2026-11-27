@@ -2,7 +2,7 @@ import { loadUserPermissions, userHasPermission } from './server-permissions.js'
 import { LEDGER_PNL_PERMISSION, MARGIN_PERMISSION } from './margin-visibility.js';
 import { scrubLedgerReport, PAYROLL_REPORT_WITHHELD, PAYROLL_LEDGER_NOTE } from './payroll-ledger.js'; // v55.83-ZD rev3
 
-const REPORTS=new Set(['readiness','profit_loss','balance_sheet','trial_balance','general_ledger','tax_summary','cash_flow','bank_reconciliation','settings']);
+const REPORTS=new Set(['readiness','profit_loss','profit_loss_cash','balance_sheet','trial_balance','general_ledger','tax_summary','cash_flow','bank_reconciliation','settings']);
 const BANK_REQUIRED=new Set(['trial_balance','general_ledger','cash_flow','bank_reconciliation']);
 const HEADERS={'Cache-Control':'private, no-store, max-age=0',Pragma:'no-cache',Vary:'Authorization, Origin','X-Content-Type-Options':'nosniff'};
 function json(body,status=200){return Response.json(body,{status,headers:HEADERS});}
@@ -18,7 +18,7 @@ export function createReportsHandlers(authorize,env){
    const access=await authorize(request);if(!access?.authUserId)fail('Sign in again.',401);
    const superAdmin=access.isVerifiedSuperAdmin===true,dashboard=superAdmin||access.canViewFullDashboard===true,bank=superAdmin||access.canViewBankBalances===true;
    if(!dashboard)fail('Full dashboard permission is required.',403);
-   if(report==='profit_loss'&&!superAdmin){
+   if((report==='profit_loss'||report==='profit_loss_cash')&&!superAdmin){ // AAC: the cash-basis P&L needs the same P&L permission
     const ctx=await loadUserPermissions(access.db,access.profileId);
     if(ctx.readError)fail('Profit and loss permissions could not be verified.',503);
     // Keep the report's super-admin decision tied to the verified session above.

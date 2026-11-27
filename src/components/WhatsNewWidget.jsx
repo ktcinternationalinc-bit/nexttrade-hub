@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AAC',
+    date: '2026-11-27',
+    title: 'ClickBooks: Profit & Loss on CASH basis (how the tax return counts it)',
+    items: [
+      { text: 'ClickBooks reports now have **Profit & Loss (cash basis)** next to the usual **Profit & Loss (accrual)**. Cash basis counts a sale when the customer **pays**, not when the invoice is sent — the way Wave and QuickBooks show it for taxes.' },
+      { text: 'A payment is spread over the lines of the invoice it pays (for example Sales and Product Sales), so a half payment counts half of each line. Bank lines you categorised directly count on their bank date. A vendor bill counts when it is **paid** (on the day of its bank payment), not when it arrives — an unpaid bill is not in it.' },
+      { text: 'Money that moved through **Accounts Receivable** without being tied to an invoice is **not** counted; the report lists how many lines and how much, so they can be reviewed.' },
+      { text: 'Same permission as the accrual Profit & Loss. Nothing is posted or changed by opening the report.' },
+      { superAdminOnly: true, text: 'Technical: sql/v55-83-AAC-cash-basis-pnl.sql adds clickbooks_us.report_profit_loss_cash(from,to) (security invoker, search_path empty, no grants) and one branch profit_loss_cash in public.clickbooks_us_report_read (otherwise identical to the deployed definition, sha256 f616c594…; ACL unchanged). Receivables = account code 1100 (engine identity) plus accounts debited by live invoice journals; payables = code 2000; every journal with a payables line (apbill accrual / appay take-back / settlements) is left out, so a bill counts once through its bank line (Codex AAC-01); opening receivables collected without an invoice journal go to the default income account (AAC-02). Invoice composition = income lines of the live (non-reversed) accounting_invoice journal; payments = accounting_invoice_payment journals → accounting_invoice_payments.accounting_invoice_id; rounding remainder on the largest line; invoices without a journal go to posting_defaults.invoice_income_account_id (counted in notes); other A/R movements reported, not counted; reversed pairs and openings excluded. Method proven on the local practice books: KTC 2025 = 947,812.89 = Wave cash. Test: __tests__/test-v55-83-aac-cash-pnl-real-postgres.mjs (PGlite, 30 checks). Route: src/lib/clickbooks-us-reports.js accepts profit_loss_cash under the profit_loss permission; payroll scrub unchanged (generic).' },
+    ],
+  },
+  {
     version: 'v55.83-AAB',
     date: '2026-11-27',
     title: 'Profitability: a discount or cash line on an invoice no longer hides its shipping',
