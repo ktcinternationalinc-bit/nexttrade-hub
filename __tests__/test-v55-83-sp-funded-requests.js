@@ -233,7 +233,7 @@ var TODAY = new Date().toISOString().substring(0, 10);
   check('G9: recording a past wire no longer offers RTM / NextTrade — it points to the request', /onParty=\{startPaidFor\}/.test(ui) && /function startPaidFor\(kind, name\)/.test(ui) && !/function startPaidFor[\s\S]{0,600}record_past_wire/.test(ui) && /Two people sign/.test(ui)); // v55.83-SV realign: the companies are choices again, and they open the two-signature request steps (never record_past_wire)
   var wn = R('src/components/WhatsNewWidget.jsx');
   check('G10: What’s New has v55.83-SP in plain words with one technical line for the super admin', /version: 'v55\.83-SP'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SP'"), wn.indexOf("version: 'v55.83-SO'"))));
-  check('G11: the build badge is at v55.83-SP or later (v55.83-SQ realign)', />v55\.83-(?:S[P-Z]|[T-Z][A-Z])<\/span>/.test(R('src/app/page.jsx')));
+  check('G11: the build badge is at v55.83-SP or later (v55.83-SQ realign)', />v55\.83-(?:S[P-Z]|[T-Z][A-Z]|AA[A-Z])<\/span>/.test(R('src/app/page.jsx')));
 
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
