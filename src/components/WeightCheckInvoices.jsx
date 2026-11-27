@@ -43,11 +43,33 @@ export function cardLine(inv) {
   return parts.join('   ·   ') || 'no product compared yet';
 }
 // Codex 26 Nov (ZL hold): with a wire, count ONLY the wire's own bills (a related bill sharing the receipt is context, not counted)
+// v55.83-ZS (Max 27 Nov: "if something is full passing then there should be a status of Pass or Fail or Review in the top layer near
+// confirm receipt"): the MAIN block is always what the comparison says — PASS, FAIL, or REVIEW (anything not clearly pass or fail).
+// Confirm receipt / provisional / approved / accepted / disputed / recheck are a SECOND tag beside it (cardTags), never the result.
+export function cardResult(inv) {
+  var prods = (inv && inv.products) || [];
+  if (prods.some(function (r) { return r.outcome === 'discrepancy' || r.outcome === 'product_missing'; })) { return { key: 'fail', label: 'FAIL', bg: Z_RED, why: ((inv && inv.why) || [])[0] || 'billed and warehouse do not agree within the tolerance' }; }
+  if (inv && inv.pass) { return { key: 'pass', label: 'PASS', bg: Z_GREEN, why: null }; }
+  var why = ((inv && inv.why) || [])[0] || null;
+  if ((inv && inv.rows || []).some(function (r) { return r.provisional || r.outcome === 'incomplete'; })) { why = 'the warehouse receipt is still a draft — the figures may still change'; }
+  return { key: 'review', label: 'REVIEW', bg: Z_AMBER, why: why || 'nothing could be compared yet' };
+}
+export function cardTags(inv) {
+  var rows = (inv && inv.rows) || []; var tags = [];
+  if (inv.disputed) { tags.push({ key: 'disputed', label: 'DISPUTED', color: Z_RED, why: 'an issue was reported' }); }
+  if (rows.some(function (r) { return r.state === 'needs_revalidation'; })) { tags.push({ key: 'recheck', label: 'RECHECK', color: Z_AMBER, why: 'the figures changed after it was decided — decide again' }); }
+  if (inv.approved) { tags.push(rows.some(function (r) { return r.state === 'accepted'; }) ? { key: 'accepted', label: 'ACCEPTED', color: Z_AMBER, why: 'a difference was accepted (it did not pass)' } : { key: 'approved', label: 'APPROVED', color: Z_GREEN, why: 'checked and approved' }); }
+  if (inv.previewed) { tags.push({ key: 'confirm', label: 'CONFIRM RECEIPT', color: Z_BLUE, why: 'matched by reference — a person confirms the warehouse receipt before it can be approved' }); }
+  if (rows.some(function (r) { return r.provisional || r.outcome === 'incomplete'; })) { tags.push({ key: 'provisional', label: 'PROVISIONAL', color: Z_AMBER, why: 'the warehouse receipt is still a draft' }); }
+  return tags;
+}
+// the wire tally counts by RESULT (PASS / FAIL / REVIEW) and only the wire's own bills (Codex 26 Nov)
 export function wireTally(invs, wireBillIds) {
-  var t = { bills: 0, pass: 0, fail: 0, not_checked: 0, other: 0 };
-  (invs || []).forEach(function (inv) { var k = cardStatus(inv).key; var bs = (inv.bills || []).filter(function (b) { return !wireBillIds || wireBillIds.indexOf(b.id) >= 0; }); var n = wireBillIds ? bs.length : (bs.length || 1); if (!n) { return; } t.bills += n; if (k === 'pass' || k === 'approved') { t.pass += n; } else if (k === 'fail' || k === 'disputed') { t.fail += n; } else if (k === 'not_checked') { t.not_checked += n; } else { t.other += n; } });
+  var t = { bills: 0, pass: 0, fail: 0, review: 0 };
+  (invs || []).forEach(function (inv) { var k = cardResult(inv).key; var bs = (inv.bills || []).filter(function (b) { return !wireBillIds || wireBillIds.indexOf(b.id) >= 0; }); var n = wireBillIds ? bs.length : (bs.length || 1); if (!n) { return; } t.bills += n; t[k] += n; });
   return t;
 }
+function zTag(color) { return { display: 'inline-block', padding: '3px 8px', background: '#000000', color: color, border: '1px solid ' + color, fontSize: 10, fontWeight: 900, letterSpacing: '0.08em', borderRadius: 2 }; }
 // the bills of a card that are NOT on the selected wire (compared together because they share a receipt) — [] without a wire
 export function outsideWire(inv, wireBillIds) {
   if (!wireBillIds) { return []; }
@@ -416,7 +438,7 @@ export default function WeightCheckInvoices(props) {
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8, alignItems: 'center' }}>
           <span style={{ fontWeight: 800 }}>{W.bills_on_wire + ' bill' + (W.bills_on_wire === 1 ? '' : 's') + ' on this wire'}</span>
-          <span style={zBlock(Z_GREEN)}>{t.pass + ' PASS'}</span><span style={zBlock(Z_RED)}>{t.fail + ' FAIL'}</span><span style={zBlock(Z_GREY)}>{t.not_checked + ' NOT CHECKED'}</span>{t.other ? <span style={zBlock(Z_AMBER)}>{t.other + ' OTHER'}</span> : null}
+          <span style={zBlock(Z_GREEN)}>{t.pass + ' PASS'}</span><span style={zBlock(Z_RED)}>{t.fail + ' FAIL'}</span><span style={zBlock(Z_AMBER)}>{t.review + ' REVIEW'}</span>
         </div>
         {(W.out_of_scope || []).length ? <div style={{ fontSize: 12, color: '#d4d4d4', marginTop: 6 }}>{'Not in the warehouse check (vendor not selected): ' + W.out_of_scope.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' · ')}</div> : null}
         {(W.no_lines || []).length ? <div style={{ fontSize: 12, color: '#d4d4d4', marginTop: 4 }}>{'Nothing to compare (no product lines): ' + W.no_lines.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' · ')}</div> : null}
@@ -432,16 +454,16 @@ export default function WeightCheckInvoices(props) {
       var badgeText = badge[0] + (inv.shared ? ' · group of ' + inv.bills.length + ' invoices' : '');
       var receipts = []; inv.rows.forEach(function (r) { (r.receipts || []).forEach(function (x) { var t = 'Receipt ' + (x.reference_number || x.id) + (x.warehouse ? ' · ' + x.warehouse : '') + (x.receipt_date ? ' · received ' + String(x.receipt_date).substring(0, 10) : ''); if (receipts.indexOf(t) < 0) { receipts.push(t); } }); });
       var canDecide = inv.previewed || inv.rows.some(function (r) { return r.needs_decision; });
-      var cs = cardStatus(inv); var isOpen = !!openCards[inv.key] || !!(mapNotice && mapNotice.key === inv.key);
+      var cs = cardResult(inv); var tags = cardTags(inv); var isOpen = !!openCards[inv.key] || !!(mapNotice && mapNotice.key === inv.key);
       var wireIds = data && data.wire ? (data.wire.bill_ids || []) : null; var outside = outsideWire(inv, wireIds); var gWarn = groupActionWarning(inv, wireIds);
       var bar = <button type="button" onClick={function () { toggleCard(inv.key); }} aria-expanded={isOpen} style={{ display: 'flex', width: '100%', flexWrap: 'wrap', gap: 10, alignItems: 'center', textAlign: 'left', background: '#000000', color: '#ffffff', border: 'none', borderBottom: isOpen ? '1px solid #3f3f46' : 'none', borderRadius: 0, padding: '9px 12px', cursor: 'pointer' }}>
-        <span style={zBlock(cs.bg)}>{cs.label}</span>
+        <span style={zBlock(cs.bg)}>{cs.label}</span>{tags.map(function (tg) { return <span key={tg.key} style={zTag(tg.color)}>{tg.label}</span>; })}
         <span style={{ fontWeight: 800 }}>{inv.bills.map(function (b) { return b.vendor || ''; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(' + ')}</span>
         <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: Z_GOLD, fontWeight: 800 }}>{inv.bills.map(function (b) { return 'Bill ' + (b.bill_number || '') + (outside.indexOf(b) >= 0 ? ' (not on this wire)' : ''); }).join(' + ')}</span>
         {outside.length ? <span style={{ fontSize: 11, color: Z_AMBER, width: '100%' }}>{'Compared together with ' + outside.length + ' related bill' + (outside.length === 1 ? '' : 's') + ' NOT on this wire (same warehouse receipt) — only this wire’s bill' + (inv.bills.length - outside.length === 1 ? ' is' : 's are') + ' counted on top.'}</span> : null}
         <span style={{ fontSize: 12, color: '#a3a3a3' }}>{inv.bills.map(function (b) { return (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ')}</span>
         <span style={{ fontSize: 12, color: '#e5e5e5', flex: '1 1 260px' }}>{cardLine(inv)}</span>
-        {cs.why && cs.key !== 'pass' ? <span style={{ fontSize: 11, color: '#d4d4d4', width: '100%' }}>{cs.why}</span> : null}
+        {(cs.why && cs.key !== 'pass') || tags.length ? <span style={{ fontSize: 11, color: '#d4d4d4', width: '100%' }}>{[cs.key !== 'pass' ? cs.why : null].concat(tags.map(function (tg) { return tg.why; })).filter(Boolean).join(' · ')}</span> : null}
         <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.08em', color: '#a3a3a3', marginLeft: 'auto' }}>{isOpen ? 'CLOSE ▲' : 'OPEN ▼'}</span>
       </button>;
       if (!isOpen) { return <div key={inv.key} style={{ marginTop: 6, border: '1px solid #3f3f46', borderRadius: 2 }}>{bar}</div>; }

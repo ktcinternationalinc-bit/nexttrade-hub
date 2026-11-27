@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZS',
+    date: '2026-11-27',
+    title: 'Warehouse check: each bill shows PASS, FAIL or REVIEW first',
+    items: [
+      { text: 'On a closed bill card the big block is now always the result of the comparison: **PASS** (green), **FAIL** (red) or **REVIEW** (amber — not clearly pass or fail, for example no receipt yet or a draft receipt).' },
+      { text: 'What still has to happen, or what was decided, is a smaller tag beside it: **CONFIRM RECEIPT**, **PROVISIONAL**, **APPROVED**, **ACCEPTED**, **DISPUTED** or **RECHECK**. Example: a bill whose lines all pass but whose receipt is not confirmed yet reads **PASS** + **CONFIRM RECEIPT**. An accepted difference reads **FAIL** + **ACCEPTED** — never PASS.' },
+      { text: 'The wire summary now counts PASS · FAIL · REVIEW the same way.' },
+      { superAdminOnly: true, text: 'Technical: screen only. cardResult (FAIL if any product discrepancy / missing; PASS if inv.pass incl. previews; else REVIEW with reason) + cardTags (disputed, recheck, approved/accepted, confirm, provisional) replace the single cardStatus block on the bar; wireTally counts by cardResult (wire-only bills as before). No route, calculation, fingerprint or SQL change.' }
+    ]
+  },
+  {
     version: 'v55.83-ZR',
     date: '2026-11-27',
     title: 'Changing the service fee of a request: the transfer is checked first',

@@ -34,7 +34,8 @@ check('the closed card says billed vs warehouse in one line: "Leather · Thirds 
 var many = inv([prod('matched', { item_key: 'a' }), prod('matched', { item_key: 'b', product_label: 'Paper' }), prod('matched', { item_key: 'c', product_label: 'Folds' })]);
 check('…with more than two products it shows two and "+1 more"', /\+1 more$/.test(INV.cardLine(many)), INV.cardLine(many));
 var t = INV.wireTally([tests[0][1], tests[1][1], tests[2][1], tests[4][1], tests[5][1]]);
-check('the wire tally: 5 bills → 2 PASS (pass + approved) · 1 FAIL · 1 NOT CHECKED · 1 other (accepted) — an accepted difference is not counted as a pass', t.bills === 5 && t.pass === 2 && t.fail === 1 && t.not_checked === 1 && t.other === 1, t);
+// v55.83-ZS: the tally counts by RESULT — an approved pass is PASS, an accepted difference is FAIL (never PASS), not compared is REVIEW
+check('the wire tally (by result, ZS): 5 bills → 2 PASS (pass + approved pass) · 2 FAIL (fail + accepted difference) · 1 REVIEW (no receipt) — an accepted difference is never counted as a pass', t.bills === 5 && t.pass === 2 && t.fail === 2 && t.review === 1, t);
 
 var src = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
 check('SCREEN: cards are CLOSED by default (openCards starts empty) and a closed card renders only its bar; clicking the bar opens the rows', /var _op = useState\(\{\}\); var openCards = _op\[0\]/.test(src) && /if \(!isOpen\) \{ return <div key=\{inv\.key\}[^\n]*\{bar\}<\/div>; \}/.test(src) && /onClick=\{function \(\) \{ toggleCard\(inv\.key\); \}\} aria-expanded=\{isOpen\}/.test(src));
