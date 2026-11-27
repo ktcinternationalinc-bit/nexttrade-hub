@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZT',
+    date: '2026-11-27',
+    title: 'Warehouse check: Approved always answers on the card',
+    items: [
+      { text: 'Pressing **Approved** or **Disputed** on a bill now always answers right on that card: **✓ Saved — Approved: … (2 lines)** in green, or a red **✗ Not saved** with the reason. Before, the reason only flashed in the corner for 5 seconds, so it looked as if nothing happened.' },
+      { text: 'A bill that is FAIL or REVIEW needs a short note before Approved (why you approve it anyway). The note box now says so — “Note — REQUIRED to approve this FAIL” — and turns red if you pressed Approved without one. The button shows “Saving…” while it saves.' },
+      { text: 'Inside an opened card, a line with a difference now says **FAIL** (as the bar does) instead of REVIEW.' },
+      { superAdminOnly: true, text: 'Technical: screen only. CardMessage (exported) + cardMsg state written by decideAll for every outcome (and still the toast); try/catch around runInvoiceDecision; reasonProblem wording names cardResult and the box; note placeholder / red border on a missing note; line pill FAIL for discrepancy / product_missing. Root cause: the refusal for a FAIL without a note was toast-only (5 s, top corner). No route, calculation or SQL change.' }
+    ]
+  },
+  {
     version: 'v55.83-ZS',
     date: '2026-11-27',
     title: 'Warehouse check: each bill shows PASS, FAIL or REVIEW first; yards must match exactly',

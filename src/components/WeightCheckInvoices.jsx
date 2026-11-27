@@ -142,6 +142,13 @@ export function groupActionWarning(inv, wireBillIds) {
 }
 function zBlock(bg) { return { display: 'inline-block', minWidth: 96, textAlign: 'center', padding: '4px 10px', background: bg, color: '#000000', fontSize: 11, fontWeight: 900, letterSpacing: '0.08em', borderRadius: 2 }; }
 
+// v55.83-ZT: the answer to Approved / Disputed, shown ON the card next to the buttons (the corner message alone was missed)
+export function CardMessage(props) {
+  var m = props.msg; if (!m || !m.text) { return null; }
+  var ok = m.kind === 'ok';
+  return <div role={ok ? 'status' : 'alert'} data-testid="card-message" style={{ width: '100%', marginTop: 10, padding: '8px 10px', borderRadius: 2, fontSize: 13, fontWeight: 700, background: ok ? '#f0fdf4' : '#fef2f2', color: ok ? '#14532d' : '#991b1b', border: '1px solid ' + (ok ? '#22c55e' : '#ef4444') }}>{(ok ? '✓ ' : '✗ ') + m.text}</div>;
+}
+
 function lastDays(n) { var b = new Date(); var a = new Date(Date.now() - n * 86400000); return [a.toISOString().substring(0, 10), b.toISOString().substring(0, 10)]; }
 
 // rows (report_preview, all:true) → one entry per invoice (rows sharing the same bill set)
@@ -245,8 +252,8 @@ export function autoReason(inv) {
   return 'Approved: billed weight vs scanned weight within the approved tolerance';
 }
 function reasonProblem(inv, mode, reason) {
-  if (mode === 'approve' && !inv.pass && reason.length < 5) { return 'This invoice is REVIEW — write why you approve it anyway (at least a few words).'; }
-  if (mode === 'dispute' && reason.length < 5) { return 'Write what is wrong (at least a few words) before disputing.'; }
+  if (mode === 'approve' && !inv.pass && reason.length < 5) { return 'Not saved: this bill is ' + cardResult(inv).label + ' — type a note in the box (a few words saying why you approve it anyway), then press Approved again.'; }
+  if (mode === 'dispute' && reason.length < 5) { return 'Not saved: type what is wrong in the box (a few words), then press Disputed again.'; }
   return '';
 }
 // The Approved / Disputed flow, outside React so it can be tested. o = { inv, mode: 'approve'|'dispute', reason, api(body) → json,
@@ -303,6 +310,7 @@ export default function WeightCheckInvoices(props) {
   var _w = useState(null); var wires = _w[0], setWires = _w[1]; // v55.83-ZL: { list, note }
   var _wi = useState((props.wirePreset && props.wirePreset.wire_id) || ''); var wireId = _wi[0], setWireId = _wi[1];
   var _op = useState({}); var openCards = _op[0], setOpenCards = _op[1]; // v55.83-ZL: cards are CLOSED by default
+  var _cm = useState({}); var cardMsg = _cm[0], setCardMsg = _cm[1]; // v55.83-ZT: card key → { kind: 'ok' | 'err', text, needNote }
   var [mapError, setMapError] = useState(null);
   var [mapNotice, setMapNotice] = useState(null);
 
@@ -404,11 +412,17 @@ export default function WeightCheckInvoices(props) {
     </div>;
   }
 
+  function putCardMsg(k, m) { setCardMsg(function (prev) { var o = Object.assign({}, prev); if (m) { o[k] = m; } else { delete o[k]; } return o; }); }
   async function decideAll(inv, mode) {
+    putCardMsg(inv.key, { kind: 'busy', text: '' });
     setBusy(inv.key);
-    var res = await runInvoiceDecision({ inv: inv, mode: mode, reason: reasons[inv.key], api: wcApi, reload: function () { return load(false).then(function (j) { return (j && j.rows) || []; }); } });
+    var res;
+    try { res = await runInvoiceDecision({ inv: inv, mode: mode, reason: reasons[inv.key], api: wcApi, reload: function () { return load(false).then(function (j) { return (j && j.rows) || []; }); } }); }
+    catch (eD) { res = { ok: false, error: 'Not saved: ' + ((eD && eD.message) || 'the Hub could not be reached') + ' — try again.' }; }
     if (res.wrote || res.linked) { await load(false); }
     setBusy('');
+    var needNote = !res.ok && /type (a note|what is wrong) in the box/.test(res.error || '');
+    putCardMsg(inv.key, res.ok ? { kind: 'ok', text: 'Saved — ' + res.message + ' (' + res.wrote + ' line' + (res.wrote === 1 ? '' : 's') + ').' } : { kind: 'err', text: res.error || 'Not saved.', needNote: needNote });
     if (res.ok) { say(props.toast, res.message, 'success'); } else { say(props.toast, res.error, 'error'); }
   }
 
@@ -495,7 +509,7 @@ export default function WeightCheckInvoices(props) {
     {/* one card per invoice — CLOSED by default (v55.83-ZL); click the bar to open its rows */}
     {shown.map(function (inv) {
       var head = inv.bills.map(function (b) { return (b.vendor || '') + ' · Bill ' + (b.bill_number || '') + ' · ' + (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ');
-      var badge = inv.approved ? ['APPROVED', GREEN, '#dcfce7'] : inv.disputed ? ['DISPUTED', RED, '#fee2e2'] : inv.pass ? ['PASS', GREEN, '#dcfce7'] : ['REVIEW', RED, '#fee2e2'];
+      var badge = inv.approved ? ['APPROVED', GREEN, '#dcfce7'] : inv.disputed ? ['DISPUTED', RED, '#fee2e2'] : inv.pass ? ['PASS', GREEN, '#dcfce7'] : (cardResult(inv).key === 'fail' ? ['FAIL', RED, '#fee2e2'] : ['REVIEW', AMBER, '#fffbeb']); // v55.83-ZT: same result word as the bar
       var badgeText = badge[0] + (inv.shared ? ' · group of ' + inv.bills.length + ' invoices' : '');
       var receipts = []; inv.rows.forEach(function (r) { (r.receipts || []).forEach(function (x) { var t = 'Receipt ' + (x.reference_number || x.id) + (x.warehouse ? ' · ' + x.warehouse : '') + (x.receipt_date ? ' · received ' + String(x.receipt_date).substring(0, 10) : ''); if (receipts.indexOf(t) < 0) { receipts.push(t); } }); });
       var canDecide = inv.previewed || inv.rows.some(function (r) { return r.needs_decision; });
@@ -524,7 +538,7 @@ export default function WeightCheckInvoices(props) {
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{f.billed != null ? num(f.billed) + ' ' + (f.unit || '') : (bl.qty != null ? num(bl.qty) + ' ' + (bl.unit || '') : '—')}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{f.received != null ? num(f.received) + ' ' + (f.unit || '') : '—'}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: f.diff < 0 ? RED : INK, fontWeight: 700 }}>{f.diff != null ? (f.diff > 0 ? '+' : '') + num(f.diff) + (f.pct != null ? '  (' + (f.pct > 0 ? '+' : '') + f.pct + '%)' : '') : '—'}</td>
-              <td style={{ padding: '7px 8px' }}><span style={pill(ok ? GREEN : RED, ok ? '#f0fdf4' : '#fef2f2')}>{ok ? passWords(f.diff, ((f.checks || {})[f.basis === 'yd' ? 'yards' : 'weight'] || {}).tol || tol, f.basis) : 'REVIEW'}</span><span style={{ fontSize: 12, color: MUTED, marginLeft: 6 }}>{r.outcome_words || r.outcome}{r.state && DONE_STATES.indexOf(r.state) >= 0 ? ' · ' + (r.state_words || r.state) : r.state === 'issue_open' ? ' · disputed' : ''}</span></td>
+              <td style={{ padding: '7px 8px' }}><span style={pill(ok ? GREEN : RED, ok ? '#f0fdf4' : '#fef2f2')}>{ok ? passWords(f.diff, ((f.checks || {})[f.basis === 'yd' ? 'yards' : 'weight'] || {}).tol || tol, f.basis) : (r.outcome === 'discrepancy' || r.outcome === 'product_missing' ? 'FAIL' : 'REVIEW')}</span><span style={{ fontSize: 12, color: MUTED, marginLeft: 6 }}>{r.outcome_words || r.outcome}{r.state && DONE_STATES.indexOf(r.state) >= 0 ? ' · ' + (r.state_words || r.state) : r.state === 'issue_open' ? ' · disputed' : ''}</span></td>
             </tr>
             {f.checks ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{checksBlock(f.checks)}</td></tr> : null}
             {r.needs_mapping || changing[r.item_key] ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{MapForm({ row: r, inv: inv })}</td></tr> : null}
@@ -533,15 +547,16 @@ export default function WeightCheckInvoices(props) {
 
         {inv.shared ? <table style={{ width: '100%', marginTop: 8, borderCollapse: 'collapse', fontSize: 12 }}><thead><tr style={{ color: SUB, textAlign: 'left' }}><th style={{ padding: '4px 8px' }}>Invoice</th><th style={{ padding: '4px 8px' }}>Billed on this invoice</th><th style={{ padding: '4px 8px' }}>Status</th></tr></thead><tbody>{inv.perBill.map(function (b) { return <tr key={b.id} style={{ borderTop: '1px solid ' + LINE }}><td style={{ padding: '4px 8px' }}>{(b.vendor || '') + ' · ' + (b.bill_number || '') + ' · ' + (b.bill_date || '')}</td><td style={{ padding: '4px 8px' }}>{b.lines.length ? b.lines.map(function (l) { return l.product + ': ' + num(l.qty) + ' ' + (l.unit || ''); }).join(' · ') : '—'}</td><td style={{ padding: '4px 8px', color: MUTED }}>part of the group result — not verified on its own</td></tr>; })}</tbody></table> : null}
 
-        {!inv.pass && inv.why.length ? <div style={{ fontSize: 12, marginTop: 8, color: RED, fontWeight: 600 }}>{'Why REVIEW: ' + inv.why.slice(0, 4).join(' · ')}</div> : null}
+        {!inv.pass && inv.why.length ? <div style={{ fontSize: 12, marginTop: 8, color: RED, fontWeight: 600 }}>{'Why ' + cardResult(inv).label + ': ' + inv.why.slice(0, 4).join(' · ')}</div> : null}
         {inv.linkRow && !inv.previewed ? <div style={{ marginTop: 8 }}><LinkChooser item={inv.linkRow} perms={perms} onLink={function (l) { setBusy(inv.key); wcApi(Object.assign({ action: 'link', bill_id: inv.bills[0].id }, l)).then(function (j) { setBusy(''); if (!j || !j.ok) { say(props.toast, (j && j.error) || 'Not saved.', 'error'); } load(false); }); }} /></div> : null}
 
         {gWarn && canDecide && (perms.validate || perms.accept) && !inv.approved && !inv.disputed ? <div role="note" style={{ fontSize: 12, marginTop: 10, padding: '6px 10px', borderRadius: 2, background: '#fffbeb', color: '#92400e', border: '1px solid #f59e0b', fontWeight: 700 }}>{gWarn}</div> : null}
         {canDecide && (perms.validate || perms.accept) && !inv.approved && !inv.disputed ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: '1px solid ' + LINE }}>
-          <input value={reasons[inv.key] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[inv.key] = e.target.value; setReasons(o); }} placeholder={inv.pass ? 'Note (optional)' : 'Reason — needed to approve a REVIEW or to dispute'} className="nt-light" style={Object.assign({}, FIELD, { flex: '1 1 260px' })} />
-          <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'approve'); }} style={Object.assign(btn(GREEN, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Approved</button>
+          <input value={reasons[inv.key] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[inv.key] = e.target.value; setReasons(o); }} placeholder={inv.pass ? 'Note (optional)' : 'Note — REQUIRED to approve this ' + cardResult(inv).label + ' (a few words why), or to dispute'} aria-label="Note for Approved or Disputed" className="nt-light" style={Object.assign({}, FIELD, { flex: '1 1 260px' }, cardMsg[inv.key] && cardMsg[inv.key].needNote && String(reasons[inv.key] || '').trim().length < 5 ? { border: '2px solid #ef4444' } : {})} />
+          <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'approve'); }} style={Object.assign(btn(GREEN, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>{busy === inv.key ? 'Saving…' : 'Approved'}</button>
           <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'dispute'); }} style={Object.assign(btn(RED, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Disputed</button>
         </div> : null}
+        <CardMessage msg={cardMsg[inv.key] && cardMsg[inv.key].kind !== 'busy' ? cardMsg[inv.key] : null} />
         {inv.approved || inv.disputed ? <div style={{ fontSize: 12, marginTop: 8, color: SUB }}>{inv.rows.filter(function (r) { return r.decision; }).slice(0, 1).map(function (r) { return 'Decided by ' + r.decision.actor_name + ' · ' + when(r.decision.at) + ' — “' + r.decision.reason + '”'; }).join('')}</div> : null}
       </div></div>;
     })}

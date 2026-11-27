@@ -454,7 +454,7 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   var pvR = await call({ action: 'report_preview', date_from: '2026-10-01', date_to: '2026-10-31', all: true, recheck: true });
   check('"Check against the warehouse": reads the warehouse only with Validate (View-only stays on the stored copy), saves no numbered report', fc1 === fc0 && world.feedCalls > fc1 && !!pvR.body.recheck && pvR.body.freshness && pvR.body.freshness.kind !== 'stored_copy' && !pvR.body.report, [fc0, fc1, world.feedCalls, pvR.body.freshness]);
   var invSrc = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
-  check('SCREEN (Invoices): PASS green / REVIEW red badge, Approved + Disputed buttons, a REVIEW needs a written reason to approve, Disputed always needs one', /'PASS', GREEN/.test(invSrc) && /'REVIEW', RED/.test(invSrc) && />Approved</.test(invSrc) && />Disputed</.test(invSrc) && /mode === 'approve' && !inv.pass && reason.length < 5/.test(invSrc) && /mode === 'dispute' && reason.length < 5/.test(invSrc) && /kind: kind, reason: reason, expected_fp: r.comparison_fp/.test(invSrc));
+  check('SCREEN (Invoices): PASS green / REVIEW red badge, Approved + Disputed buttons, a REVIEW needs a written reason to approve, Disputed always needs one', /'PASS', GREEN/.test(invSrc) && /\['FAIL', RED, '#fee2e2'\] : \['REVIEW', AMBER, '#fffbeb'\]/.test(invSrc) && /'Saving…' : 'Approved'\}<\/button>/.test(invSrc) && />Disputed</.test(invSrc) && /mode === 'approve' && !inv.pass && reason.length < 5/.test(invSrc) && /mode === 'dispute' && reason.length < 5/.test(invSrc) && /kind: kind, reason: reason, expected_fp: r.comparison_fp/.test(invSrc));
 
   // Codex 25 Nov follow-ups: (1) two invoices on one receipt = ONE group result, labelled as such, each invoice's own billing shown;
   // (2) NexPac is always in, whatever is saved
@@ -523,7 +523,7 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   var invS2 = INV.groupInvoices(pvS2.body.rows).filter(function (v) { return v.bills.some(function (b) { return b.id === BS1; }); })[0];
   check('…the card now shows the real group result (B1 + B2, not previewed, REVIEW) for the person to look at again', invS2 && !invS2.previewed && invS2.bills.length === 2 && invS2.pass === false, invS2 && [invS2.bills.length, invS2.previewed, invS2.pass]);
   var resS2 = await INV.runInvoiceDecision({ inv: invS2, mode: 'approve', reason: '', api: apiS, reload: reloadS });
-  check('…a second Approved without a reason is refused: the real result is REVIEW, the automatic "within tolerance" reason never applies', resS2.ok === false && resS2.wrote === 0 && /REVIEW — write why/.test(resS2.error) && tbl('wc_decisions').length === decBefore, resS2);
+  check('…a second Approved without a reason is refused: the real result is REVIEW, the automatic "within tolerance" reason never applies', resS2.ok === false && resS2.wrote === 0 && /^Not saved: this bill is FAIL — type a note in the box/.test(resS2.error) && tbl('wc_decisions').length === decBefore, resS2);
   // contrast: a previewed card whose confirmed result is exactly what was shown is decided in the same click
   var BS3 = 'b0000000-0000-4000-8000-0000000000s3';
   world.wh.receipts.push({ id: 17, reference_number: 'P-17', nexpac_bill: null, is_draf: 0, info: {}, supplier: { id: 1, name: 'NexPac' }, warehouse: { id: 2, name: 'CANADA' } });
@@ -536,7 +536,7 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('(contrast) a previewed card whose confirmed result is unchanged is confirmed AND approved in one click, with the automatic reason', invS3 && invS3.previewed && invS3.pass && resS3 && resS3.ok === true && resS3.wrote >= 1 && sentS[0] === 'link' && sentS.slice(1).every(function (a) { return a === 'decide'; }) && tbl('wc_decisions').length > decB3, [invS3 && [invS3.previewed, invS3.pass], resS3, sentS]);
   check('…invoiceSignature changes when the bills, the figures or the result change', INV.invoiceSignature(invS) !== INV.invoiceSignature(invS2) && INV.invoiceSignature(invS) === INV.invoiceSignature(JSON.parse(JSON.stringify(invS))));
   var invSrc3 = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
-  check('SCREEN: the dashboard\'s Approved / Disputed buttons go through runInvoiceDecision (no separate copy of the flow)', /var res = await runInvoiceDecision\(\{ inv: inv, mode: mode/.test(invSrc3) && !/async function confirmPreview/.test(invSrc3));
+  check('SCREEN: the dashboard\'s Approved / Disputed buttons go through runInvoiceDecision (no separate copy of the flow)', /res = await runInvoiceDecision\(\{ inv: inv, mode: mode/.test(invSrc3) && !/async function confirmPreview/.test(invSrc3));
   // ---- Codex 25 Nov (ZA, finding 2): every typed field opts into the shared light-panel styles (globals.css .nt-light, !important)
   function fieldsWithout(src) { var out = []; var re = /<(input|select|textarea)\b[^>]*>/g; var m; while ((m = re.exec(src))) { if (/type="(checkbox|file)"/.test(m[0])) { continue; } if (!/nt-light/.test(m[0]) && !/className=\{inp/.test(m[0])) { out.push(m[0].slice(0, 80)); } } return out; }
   var boxSrc = fs.readFileSync(path.join(root, 'src/components/WarehouseCheckBox.jsx'), 'utf8');

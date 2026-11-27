@@ -75,7 +75,7 @@ var b5w = run({ lines: [line(30000, 'LBS')], tolerance: { id: 't2', version: 1, 
 check('…a weight line names both parts of the tolerance it was judged by: "(10% or 5000 lb)"', /— PASS — within tolerance \(10% or 5000 lb\)$/.test(INV.checkWords('Weight', b5w.figures.checks.weight).text), INV.checkWords('Weight', b5w.figures.checks.weight).text);
 check('…an EXACT match stays plain "PASS" (bill 14755: 12,231.64 = 12,231.64), and a REVIEW line never says within tolerance', /— PASS$/.test(INV.checkWords('Yards', c.yards).text) && INV.passWords(0, TOL, 'yd') === 'PASS' && !/within tolerance/.test(INV.checkWords('Yards', b4.figures.checks.yards).text));
 var srcW = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
-check('…and the product\'s Result pill uses the same wording with the tolerance the comparison used', /\{ok \? passWords\(f\.diff, \(\(f\.checks \|\| \{\}\)\[f\.basis === 'yd' \? 'yards' : 'weight'\] \|\| \{\}\)\.tol \|\| tol, f\.basis\) : 'REVIEW'\}/.test(srcW));
+check('…and the product\'s Result pill uses the same wording with the tolerance the comparison used', /\{ok \? passWords\(f\.diff, \(\(f\.checks \|\| \{\}\)\[f\.basis === 'yd' \? 'yards' : 'weight'\] \|\| \{\}\)\.tol \|\| tol, f\.basis\) : \(r\.outcome === 'discrepancy' \|\| r\.outcome === 'product_missing' \? 'FAIL' : 'REVIEW'\)\}/.test(srcW));
 
 // 4. a side not recorded on the receipt
 var b6 = run({ lines: [line(12231.64, 'YDS')], receipt: receipt({ noYards: true }) });
