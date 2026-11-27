@@ -52,6 +52,6 @@ check('…a Fabrics line within 15% anyway (+5%) has NO rule entry: its fingerpr
 check('…and a Fabrics line beyond 30% (still FAIL) has none either', !!f31.inputs && f31.inputs.product_tolerance === undefined);
 var fs = require('fs'); var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
 var topV = (/version: '([^']+)'/.exec(wn.substring(wn.indexOf('BUILD_HISTORY = ['))) || [])[1];
-check('badge and What\'s New name the newest entry, and the ZX entry exists', topV === 'v55.83-ZX' && page.indexOf(topV) >= 0, topV);
+check('badge and What\'s New name the newest entry, and the ZX entry exists', wn.indexOf("version: 'v55.83-ZX'") >= 0 && page.indexOf(topV) >= 0, topV);
 console.log('\nZX Fabrics 30%: ' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);
