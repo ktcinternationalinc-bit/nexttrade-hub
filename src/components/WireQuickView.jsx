@@ -93,7 +93,7 @@ export default function WireQuickView(props) {
               return <tr key={i} style={{ borderTop: '1px solid #f1f5f9', verticalAlign: 'top' }}>
                 <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
                 <td className="px-2 py-1.5 whitespace-nowrap">{BILL_TYPE_LABEL[b.bill_type] || '—'}</td>
-                <td className="px-2 py-1.5">{b.shipment_direction === 'inbound' ? '⬅ In' : b.shipment_direction === 'outbound' ? 'Out ➡' : '—'}</td>
+                <td className="px-2 py-1.5">{b.shipment_direction === 'inbound' ? '⬅ In' : b.shipment_direction === 'outbound' ? 'Out ➡' : b.shipment_direction === 'operational' ? '🏢 Operational' : '—'}</td>
                 <td className="px-2 py-1.5">{b.release_number || '—'}</td><td className="px-2 py-1.5">{b.other_reference || '—'}</td>
                 <td className="px-2 py-1.5 whitespace-nowrap">{b.bill_date || '—'}</td><td className="px-2 py-1.5">{b.category ? String(b.category).replace(/_/g, ' ') : '—'}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums">${fmt(b.total_amount)}</td><td className="px-2 py-1.5 text-right tabular-nums font-extrabold">${fmt(l.amount)}</td>

@@ -16,10 +16,12 @@ export async function loadLines(db, billId) {
 // replace a bill's lines (a validated bill's lines are frozen — the DB trigger refuses too)
 export async function saveBillLines(db, bill, rawLines, source, userId) {
   if (bill.validation_status === 'validated') { return { error: 'This bill is validated — reopen its validation to change its lines.', status: 409 }; }
-  var defKind = (bill.bill_type === 'trucking' || bill.bill_type === 'shipping' || bill.bill_type === 'bonded_brokerage') ? 'charge' : 'item';
+  // v55.83-ZY — Other services / Operational bills are services: their lines are charges, NEVER a product (goods)
+  var zyService = bill.bill_type === 'other_services' || bill.shipment_direction === 'operational';
+  var defKind = (bill.bill_type === 'trucking' || bill.bill_type === 'shipping' || bill.bill_type === 'bonded_brokerage' || zyService) ? 'charge' : 'item';
   var shaped = (rawLines || []).slice(0, 60).map(function (l, i) {
     var x = shapeLine(Object.assign({}, l, { line_no: i + 1, line_kind: l.line_kind || (/commission/i.test(String(l.description || '')) ? 'commission' : defKind) }), i);
-    x.line_no = i + 1; return x;
+    x.line_no = i + 1; if (zyService && x.line_kind === 'item') { x.line_kind = 'charge'; } return x;
   }).filter(function (l) { return l.description || l.amount != null; });
   var crs = await loadCommissionRules(db);
   var cr = commissionRuleFor(crs, bill.vendor_name);

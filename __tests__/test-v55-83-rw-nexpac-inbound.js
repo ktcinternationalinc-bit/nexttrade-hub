@@ -53,7 +53,7 @@ console.log('RW — NexPac bills default to inbound (changeable)');
   var BT = R('src/components/BillsTab.jsx'); var WP = R('src/components/WirePackagesPanel.jsx'); var PR = R('src/components/PriceRulesPanel.jsx'); var Q = R('sql/v55-83-RW-vendor-default-direction.sql');
   check('2a: the validation panel pre-picks it and says so ("NexPac Corporation bills are always inbound — click the other one to change it"); the wire screen too',
     BT.indexOf("dir: (b.shipment_direction === 'inbound' || b.shipment_direction === 'outbound') ? b.shipment_direction : (b.default_direction || '')") > 0 && BT.indexOf("' bills are always ' + validating.dir + ' — click the other one to change it'") > 0 && WP.indexOf("if (!dir && j.default_direction) { setDir(j.default_direction);") > 0);
-  check('2b: 📏 Price rules shows and edits it', PR.indexOf("'bills are ' + (c.default_direction === 'outbound' ? 'Outbound ➡' : '⬅ Inbound')") > 0 && PR.indexOf('<option value="inbound">⬅ Inbound</option>') > 0);
+  check('2b: 📏 Price rules shows and edits it', PR.indexOf("'bills are ' + (c.default_direction === 'outbound' ? 'Outbound ➡' : c.default_direction === 'operational' ? '🏢 Operational' : '⬅ Inbound')") > 0 /* v55.83-ZY */ && PR.indexOf('<option value="inbound">⬅ Inbound</option>') > 0);
   check('2c: SQL: NexPac set to inbound; open NexPac bills without a direction become inbound; validated bills untouched; safe to re-run',
     Q.indexOf("SET default_direction = 'inbound' WHERE lower(vendor_match) = 'nexpac' AND default_direction IS NULL") > 0 && Q.indexOf("COALESCE(vb.validation_status, 'pending') <> 'validated'") > 0 && Q.indexOf("'vendor_default'") > 0);
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
