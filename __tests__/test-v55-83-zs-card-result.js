@@ -38,6 +38,30 @@ check('the wire tally counts by RESULT: 5 bills → 2 PASS (14657 + approved) ·
 var src = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
 check('SCREEN: the bar shows the RESULT block first, then each state as a smaller outlined tag beside it', /var cs = cardResult\(inv\); var tags = cardTags\(inv\);/.test(src) && /<span style=\{zBlock\(cs\.bg\)\}>\{cs\.label\}<\/span>\{tags\.map\(function \(tg\) \{ return <span key=\{tg\.key\} style=\{zTag\(tg\.color\)\}>\{tg\.label\}<\/span>; \}\)\}/.test(src) && /function zTag\(color\) \{ return \{[^}]*background: '#000000', color: color, border: '1px solid ' \+ color/.test(src));
 check('SCREEN: the wire bar counts PASS · FAIL · REVIEW', /t\.pass \+ ' PASS'/.test(src) && /t\.fail \+ ' FAIL'/.test(src) && /t\.review \+ ' REVIEW'/.test(src) && !/NOT CHECKED'\}<\/span>/.test(src));
+// ---- Codex 27 Nov (ZS hold): the RENDERED wire summary must show what is still waiting, not only PASS / FAIL / REVIEW
+var React = require('react'); var RDS = require('react-dom/server');
+function wireHtml(invs, ids) { return RDS.renderToStaticMarkup(React.createElement(INV.WireSummaryBar, { wire: { seq: 77, payee: 'NexPac Corporation', status: 'needs_check', bills_on_wire: ids.length, bill_ids: ids, out_of_scope: [], no_lines: [], hidden_count: 0 }, invoices: invs, tol: { pct: 15 } })).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').replace(/&#x27;/g, "'"); }
+function barHtml(i, ids) { return RDS.renderToStaticMarkup(React.createElement(INV.BillCardBar, { inv: i, wireIds: ids, isOpen: false, onToggle: function () {} })).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '); }
+var hPrev = wireHtml([b14657], ['b1']);
+check('RENDERED wire summary, preview only (bill 14657): "1 PASS" is labelled as a comparison result incl. unconfirmed receipts, AND "1 to CONFIRM RECEIPT" is shown as waiting', /COMPARISON RESULTS \(incl\. receipts not yet confirmed\): 1 PASS 0 FAIL 0 REVIEW/.test(hPrev) && /WAITING ON THIS WIRE: 1 to CONFIRM RECEIPT/.test(hPrev) && !/every result above is final/.test(hPrev), hPrev);
+var hDisp = wireHtml([inv([prod('A', 'matched', { state: 'issue_open' })])], ['b1']);
+check('RENDERED: a matching but DISPUTED bill → "1 PASS" and "1 DISPUTED" waiting (the match is not turned into a failure)', /1 PASS 0 FAIL 0 REVIEW/.test(hDisp) && /WAITING ON THIS WIRE: 1 DISPUTED/.test(hDisp), hDisp);
+var hRe = wireHtml([inv([prod('A', 'matched', { state: 'needs_revalidation', needs_decision: true })])], ['b1']);
+check('RENDERED: a matching bill that NEEDS REVALIDATION → "1 PASS" and "1 to RECHECK" waiting', /1 PASS 0 FAIL 0 REVIEW/.test(hRe) && /WAITING ON THIS WIRE: 1 to RECHECK/.test(hRe), hRe);
+var B2 = [{ id: 'b1', vendor: 'NexPac Corporation', bill_number: '14657' }, { id: 'b2', vendor: 'NexPac Corporation', bill_number: '14700' }];
+var shared = inv([prod('A', 'matched', { preview: true, bill_ids: ['b1', 'b2'], bills: B2 }), { item_key: 'b:b1|unlinked', kind: 'bill', outcome: 'cannot_compare', needs_link: true, bill_ids: ['b1', 'b2'], bills: B2 }]);
+var hSh = wireHtml([shared], ['b1']); var barSh = barHtml(shared, ['b1']);
+check('RENDERED: a receipt-shared group (one bill on this wire, one not), preview → counts ONE bill: "1 PASS", "1 to CONFIRM RECEIPT"; its card marks the other bill "(not on this wire)"', /1 bill on this wire/.test(hSh) && /1 PASS 0 FAIL 0 REVIEW/.test(hSh) && /1 to CONFIRM RECEIPT/.test(hSh) && /Bill 14700 \(not on this wire\)/.test(barSh) && /^ ?PASS CONFIRM RECEIPT /.test(barSh), [hSh, barSh]);
+var hDone = wireHtml([inv([prod('A', 'matched', { state: 'validated' })]), inv([prod('B', 'discrepancy', { state: 'accepted', bill_ids: ['b3'], bills: [{ id: 'b3', vendor: 'NexPac Corporation', bill_number: '14800' }] })])], ['b1', 'b3']);
+check('RENDERED: nothing pending → "nothing — every result above is final" and the decided line "1 approved · 1 accepted (a difference)"; the accepted one is a FAIL', /1 PASS 1 FAIL 0 REVIEW/.test(hDone) && /nothing — every result above is final/.test(hDone) && /decided: 1 approved · 1 accepted \(a difference\)/.test(hDone), hDone);
+// REVIEW for the states that are neither pass nor fail
+var revs = [
+  ['limited access', { item_key: 'g|limited', kind: 'group', outcome: 'limited_access', reasons: ['part of this group is a bill outside your access'], bill_ids: ['b1'], bills: B }],
+  ['warehouse unavailable', { item_key: 'g|unavailable', kind: 'group', outcome: 'warehouse_unavailable', reasons: ['the warehouse has not been read'], bill_ids: ['b1'], bills: B }],
+  ['mapping conflict', prod('A', 'mapping_conflict', { reasons: ['mapping conflict'] })],
+  ['no product compared (only an unmapped line)', { item_key: 'b1|line', kind: 'line', outcome: 'cannot_compare', reasons: ['no approved product mapping'], bill_ids: ['b1'], bills: B, figures: null }]
+];
+revs.forEach(function (rv) { var i = inv([rv[1]]); check('REVIEW (never PASS / FAIL) for ' + rv[0] + ' — with its reason; the rendered bar starts "REVIEW"', INV.cardResult(i).label === 'REVIEW' && !!INV.cardResult(i).why && /^ ?REVIEW /.test(barHtml(i, null)), [INV.cardResult(i), barHtml(i, null)]); });
 var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
 var topV = (/version: '([^']+)'/.exec(wn.substring(wn.indexOf('BUILD_HISTORY = ['))) || [])[1];
 check('badge and What\'s New name the newest entry, and the ZS entry exists', wn.indexOf("version: 'v55.83-ZS'") >= 0 && page.indexOf(topV) >= 0, topV);

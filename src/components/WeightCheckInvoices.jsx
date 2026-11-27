@@ -65,9 +65,63 @@ export function cardTags(inv) {
 }
 // the wire tally counts by RESULT (PASS / FAIL / REVIEW) and only the wire's own bills (Codex 26 Nov)
 export function wireTally(invs, wireBillIds) {
-  var t = { bills: 0, pass: 0, fail: 0, review: 0 };
-  (invs || []).forEach(function (inv) { var k = cardResult(inv).key; var bs = (inv.bills || []).filter(function (b) { return !wireBillIds || wireBillIds.indexOf(b.id) >= 0; }); var n = wireBillIds ? bs.length : (bs.length || 1); if (!n) { return; } t.bills += n; t[k] += n; });
+  // Codex 27 Nov (ZS hold): the result counts alone hid what is still pending — count the workflow tags too (same bills)
+  var t = { bills: 0, pass: 0, fail: 0, review: 0, waiting: { confirm: 0, recheck: 0, disputed: 0, provisional: 0 }, decided: { approved: 0, accepted: 0 } };
+  (invs || []).forEach(function (inv) {
+    var k = cardResult(inv).key; var bs = (inv.bills || []).filter(function (b) { return !wireBillIds || wireBillIds.indexOf(b.id) >= 0; }); var n = wireBillIds ? bs.length : (bs.length || 1); if (!n) { return; }
+    t.bills += n; t[k] += n;
+    cardTags(inv).forEach(function (tg) { if (t.waiting[tg.key] != null) { t.waiting[tg.key] += n; } else if (t.decided[tg.key] != null) { t.decided[tg.key] += n; } });
+  });
   return t;
+}
+// the words of the wire summary (rendered by WireSummaryBar; tested as rendered text)
+export function wireWaitingWords(t) {
+  var w = t.waiting; var parts = [];
+  if (w.confirm) { parts.push(w.confirm + ' to CONFIRM RECEIPT'); }
+  if (w.recheck) { parts.push(w.recheck + ' to RECHECK'); }
+  if (w.disputed) { parts.push(w.disputed + ' DISPUTED'); }
+  if (w.provisional) { parts.push(w.provisional + ' PROVISIONAL (draft receipt)'); }
+  return parts;
+}
+// v55.83-ZL/ZS: the black wire bar — exported so it can be rendered on its own (tests, screenshots)
+export function WireSummaryBar(props) {
+  var W = props.wire; var t = wireTally(props.invoices || [], W.bill_ids || []); var waiting = wireWaitingWords(t);
+  return <div data-testid="wire-summary" style={{ marginTop: 14, background: '#000000', color: '#ffffff', border: '1px solid #3f3f46', borderRadius: 2, padding: '10px 12px' }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+      <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.12em', color: '#a3a3a3' }}>WIRE</span>
+      <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: Z_GOLD, fontWeight: 800 }}>{'#' + W.seq}</span>
+      <span style={{ fontWeight: 800 }}>{W.payee || ''}</span>
+      <span style={{ fontSize: 12, color: '#a3a3a3' }}>{String(W.status || '').replace(/_/g, ' ').toUpperCase()}</span>
+    </div>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8, alignItems: 'center' }}>
+      <span style={{ fontWeight: 800 }}>{W.bills_on_wire + ' bill' + (W.bills_on_wire === 1 ? '' : 's') + ' on this wire'}</span>
+      <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.1em', color: '#a3a3a3' }}>COMPARISON RESULTS (incl. receipts not yet confirmed):</span>
+      <span style={zBlock(Z_GREEN)}>{t.pass + ' PASS'}</span><span style={zBlock(Z_RED)}>{t.fail + ' FAIL'}</span><span style={zBlock(Z_AMBER)}>{t.review + ' REVIEW'}</span>
+    </div>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6, alignItems: 'center' }}>
+      <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.1em', color: '#a3a3a3' }}>WAITING ON THIS WIRE:</span>
+      {waiting.length ? waiting.map(function (w, i) { return <span key={i} style={zTag(Z_BLUE)}>{w}</span>; }) : <span style={{ fontSize: 12, color: '#d4d4d4' }}>nothing — every result above is final</span>}
+      {t.decided.approved || t.decided.accepted ? <span style={{ fontSize: 12, color: '#d4d4d4' }}>{'decided: ' + t.decided.approved + ' approved · ' + t.decided.accepted + ' accepted (a difference)'}</span> : null}
+    </div>
+    {(W.out_of_scope || []).length ? <div style={{ fontSize: 12, color: '#d4d4d4', marginTop: 6 }}>{'Not in the warehouse check (vendor not selected): ' + W.out_of_scope.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' · ')}</div> : null}
+    {(W.no_lines || []).length ? <div style={{ fontSize: 12, color: '#d4d4d4', marginTop: 4 }}>{'Nothing to compare (no product lines): ' + W.no_lines.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' · ')}</div> : null}
+    {W.hidden_count ? <div style={{ fontSize: 12, color: Z_AMBER, marginTop: 4 }}>{W.hidden_count + ' bill' + (W.hidden_count === 1 ? ' is' : 's are') + ' on this wire but outside what you may see — not shown, not counted as checked.'}</div> : null}
+    {!props.tol ? <div style={{ fontSize: 12, color: Z_AMBER, marginTop: 4, fontWeight: 700 }}>No tolerance is approved yet, so only an exact match can PASS.</div> : null}
+  </div>;
+}
+// the closed card's black bar — exported for the same reason
+export function BillCardBar(props) {
+  var inv = props.inv; var cs = cardResult(inv); var tags = cardTags(inv); var isOpen = !!props.isOpen; var outside = outsideWire(inv, props.wireIds || null);
+  return <button type="button" data-testid="card-bar" onClick={props.onToggle} aria-expanded={isOpen} style={{ display: 'flex', width: '100%', flexWrap: 'wrap', gap: 10, alignItems: 'center', textAlign: 'left', background: '#000000', color: '#ffffff', border: 'none', borderBottom: isOpen ? '1px solid #3f3f46' : 'none', borderRadius: 0, padding: '9px 12px', cursor: 'pointer' }}>
+    <span style={zBlock(cs.bg)}>{cs.label}</span>{tags.map(function (tg) { return <span key={tg.key} style={zTag(tg.color)}>{tg.label}</span>; })}
+    <span style={{ fontWeight: 800 }}>{inv.bills.map(function (b) { return b.vendor || ''; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(' + ')}</span>
+    <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: Z_GOLD, fontWeight: 800 }}>{inv.bills.map(function (b) { return 'Bill ' + (b.bill_number || '') + (outside.indexOf(b) >= 0 ? ' (not on this wire)' : ''); }).join(' + ')}</span>
+    {outside.length ? <span style={{ fontSize: 11, color: Z_AMBER, width: '100%' }}>{'Compared together with ' + outside.length + ' related bill' + (outside.length === 1 ? '' : 's') + ' NOT on this wire (same warehouse receipt) — only this wire’s bill' + (inv.bills.length - outside.length === 1 ? ' is' : 's are') + ' counted on top.'}</span> : null}
+    <span style={{ fontSize: 12, color: '#a3a3a3' }}>{inv.bills.map(function (b) { return (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ')}</span>
+    <span style={{ fontSize: 12, color: '#e5e5e5', flex: '1 1 260px' }}>{cardLine(inv)}</span>
+    {(cs.why && cs.key !== 'pass') || tags.length ? <span style={{ fontSize: 11, color: '#d4d4d4', width: '100%' }}>{[cs.key !== 'pass' ? cs.why : null].concat(tags.map(function (tg) { return tg.why; })).filter(Boolean).join(' · ')}</span> : null}
+    <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.08em', color: '#a3a3a3', marginLeft: 'auto' }}>{isOpen ? 'CLOSE ▲' : 'OPEN ▼'}</span>
+  </button>;
 }
 function zTag(color) { return { display: 'inline-block', padding: '3px 8px', background: '#000000', color: color, border: '1px solid ' + color, fontSize: 10, fontWeight: 900, letterSpacing: '0.08em', borderRadius: 2 }; }
 // the bills of a card that are NOT on the selected wire (compared together because they share a receipt) — [] without a wire
@@ -388,7 +442,7 @@ export default function WeightCheckInvoices(props) {
       <div style={tile}>
         <span style={LABEL}>Tolerance</span>
         {tol ? <div style={{ fontSize: 16, fontWeight: 800 }}>{(tol.pct != null ? tol.pct + '%' : '') + (tol.lb != null ? (tol.pct != null ? ' or ' : '') + tol.lb + ' lb' : '')}</div> : <div style={{ fontSize: 15, fontWeight: 800, color: AMBER }}>Not set</div>}
-        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>A bill may be BELOW what was scanned by up to this much. A bill ABOVE what was scanned is never allowed. The % applies to weight and to yards (each checked on its own); a pound allowance only to weight.</div>
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>A bill may be BELOW what was scanned by up to this much. A bill ABOVE what was scanned is never allowed. The tolerance is for WEIGHT only. Yards must match exactly — no tolerance (Max 27 Nov).</div>
         {perms.super_admin ? <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}><input value={tolPct} onChange={function (e) { setTolPct(e.target.value.replace(/[^0-9.]/g, '')); }} placeholder={tol && tol.pct != null ? String(tol.pct) : '10'} className="nt-light" style={Object.assign({}, FIELD, { width: 70 })} /><span style={{ color: SUB }}>%</span><button disabled={busy === 'tol' || !tolPct} onClick={saveTolerance} style={Object.assign(btn(INK, '#ffffff'), { opacity: tolPct ? 1 : 0.5 })}>{tol ? 'Change' : 'Set tolerance'}</button></div> : null}
       </div>
       <div style={tile}>
@@ -427,25 +481,7 @@ export default function WeightCheckInvoices(props) {
     {mapNotice && !shown.some(function (inv) { return inv.key === mapNotice.key; }) && mappingNotice()}
 
     {/* v55.83-ZL: one wire — its bills only, with the overall tally */}
-    {data && data.ok && data.wire ? (function () {
-      var W = data.wire; var t = wireTally(invoices, W.bill_ids || []);
-      return <div style={{ marginTop: 14, background: '#000000', color: '#ffffff', border: '1px solid #3f3f46', borderRadius: 2, padding: '10px 12px' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.12em', color: '#a3a3a3' }}>WIRE</span>
-          <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: Z_GOLD, fontWeight: 800 }}>{'#' + W.seq}</span>
-          <span style={{ fontWeight: 800 }}>{W.payee || ''}</span>
-          <span style={{ fontSize: 12, color: '#a3a3a3' }}>{String(W.status || '').replace(/_/g, ' ').toUpperCase()}</span>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8, alignItems: 'center' }}>
-          <span style={{ fontWeight: 800 }}>{W.bills_on_wire + ' bill' + (W.bills_on_wire === 1 ? '' : 's') + ' on this wire'}</span>
-          <span style={zBlock(Z_GREEN)}>{t.pass + ' PASS'}</span><span style={zBlock(Z_RED)}>{t.fail + ' FAIL'}</span><span style={zBlock(Z_AMBER)}>{t.review + ' REVIEW'}</span>
-        </div>
-        {(W.out_of_scope || []).length ? <div style={{ fontSize: 12, color: '#d4d4d4', marginTop: 6 }}>{'Not in the warehouse check (vendor not selected): ' + W.out_of_scope.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' · ')}</div> : null}
-        {(W.no_lines || []).length ? <div style={{ fontSize: 12, color: '#d4d4d4', marginTop: 4 }}>{'Nothing to compare (no product lines): ' + W.no_lines.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' · ')}</div> : null}
-        {W.hidden_count ? <div style={{ fontSize: 12, color: Z_AMBER, marginTop: 4 }}>{W.hidden_count + ' bill' + (W.hidden_count === 1 ? ' is' : 's are') + ' on this wire but outside what you may see — not shown, not counted as checked.'}</div> : null}
-        {!tol ? <div style={{ fontSize: 12, color: Z_AMBER, marginTop: 4, fontWeight: 700 }}>No tolerance is approved yet, so only an exact match can PASS.</div> : null}
-      </div>;
-    })() : null}
+    {data && data.ok && data.wire ? <WireSummaryBar wire={data.wire} invoices={invoices} tol={tol} /> : null}
 
     {/* one card per invoice — CLOSED by default (v55.83-ZL); click the bar to open its rows */}
     {shown.map(function (inv) {
@@ -454,18 +490,9 @@ export default function WeightCheckInvoices(props) {
       var badgeText = badge[0] + (inv.shared ? ' · group of ' + inv.bills.length + ' invoices' : '');
       var receipts = []; inv.rows.forEach(function (r) { (r.receipts || []).forEach(function (x) { var t = 'Receipt ' + (x.reference_number || x.id) + (x.warehouse ? ' · ' + x.warehouse : '') + (x.receipt_date ? ' · received ' + String(x.receipt_date).substring(0, 10) : ''); if (receipts.indexOf(t) < 0) { receipts.push(t); } }); });
       var canDecide = inv.previewed || inv.rows.some(function (r) { return r.needs_decision; });
-      var cs = cardResult(inv); var tags = cardTags(inv); var isOpen = !!openCards[inv.key] || !!(mapNotice && mapNotice.key === inv.key);
+      var isOpen = !!openCards[inv.key] || !!(mapNotice && mapNotice.key === inv.key);
       var wireIds = data && data.wire ? (data.wire.bill_ids || []) : null; var outside = outsideWire(inv, wireIds); var gWarn = groupActionWarning(inv, wireIds);
-      var bar = <button type="button" onClick={function () { toggleCard(inv.key); }} aria-expanded={isOpen} style={{ display: 'flex', width: '100%', flexWrap: 'wrap', gap: 10, alignItems: 'center', textAlign: 'left', background: '#000000', color: '#ffffff', border: 'none', borderBottom: isOpen ? '1px solid #3f3f46' : 'none', borderRadius: 0, padding: '9px 12px', cursor: 'pointer' }}>
-        <span style={zBlock(cs.bg)}>{cs.label}</span>{tags.map(function (tg) { return <span key={tg.key} style={zTag(tg.color)}>{tg.label}</span>; })}
-        <span style={{ fontWeight: 800 }}>{inv.bills.map(function (b) { return b.vendor || ''; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(' + ')}</span>
-        <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: Z_GOLD, fontWeight: 800 }}>{inv.bills.map(function (b) { return 'Bill ' + (b.bill_number || '') + (outside.indexOf(b) >= 0 ? ' (not on this wire)' : ''); }).join(' + ')}</span>
-        {outside.length ? <span style={{ fontSize: 11, color: Z_AMBER, width: '100%' }}>{'Compared together with ' + outside.length + ' related bill' + (outside.length === 1 ? '' : 's') + ' NOT on this wire (same warehouse receipt) — only this wire’s bill' + (inv.bills.length - outside.length === 1 ? ' is' : 's are') + ' counted on top.'}</span> : null}
-        <span style={{ fontSize: 12, color: '#a3a3a3' }}>{inv.bills.map(function (b) { return (b.bill_date || '') + (b.reference ? ' · ref ' + b.reference : ''); }).join('  +  ')}</span>
-        <span style={{ fontSize: 12, color: '#e5e5e5', flex: '1 1 260px' }}>{cardLine(inv)}</span>
-        {(cs.why && cs.key !== 'pass') || tags.length ? <span style={{ fontSize: 11, color: '#d4d4d4', width: '100%' }}>{[cs.key !== 'pass' ? cs.why : null].concat(tags.map(function (tg) { return tg.why; })).filter(Boolean).join(' · ')}</span> : null}
-        <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.08em', color: '#a3a3a3', marginLeft: 'auto' }}>{isOpen ? 'CLOSE ▲' : 'OPEN ▼'}</span>
-      </button>;
+      var bar = <BillCardBar inv={inv} wireIds={wireIds} isOpen={isOpen} onToggle={function () { toggleCard(inv.key); }} />;
       if (!isOpen) { return <div key={inv.key} style={{ marginTop: 6, border: '1px solid #3f3f46', borderRadius: 2 }}>{bar}</div>; }
       return <div key={inv.key} style={{ marginTop: 6, border: '1px solid #3f3f46', borderRadius: 2, background: '#000000' }}>{bar}<div style={{ background: '#ffffff', padding: 14 }}>
         {mapNotice && mapNotice.key === inv.key && mappingNotice()}

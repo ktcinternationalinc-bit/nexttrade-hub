@@ -292,6 +292,11 @@ export function compareGroup(inp) {
     // Codex 25 Nov (ZB P1): where that change flips this item's result, its fingerprint must change so an earlier decision needs
     // revalidation; where the result is the same, the fingerprint is unchanged and earlier decisions stay valid
     var ydRuleChanged = !!(basis === 'yd' && tol && tol.lb != null && diff != null && withinTolerance(diff, billed, tol) !== withinTolerance(diff, billed, tolFor));
+    // v55.83-ZS (Max 27 Nov: "yards should always be the same as yards.. no tolerance"): a yards comparison passes only when EQUAL; any
+    // difference is a discrepancy, whatever tolerance is approved (that tolerance is for weight). Where this flips the result that the
+    // ZB rule (% only) gave, the fingerprint changes (yd_rule) so a decision made on it is asked again; where it does not, nothing moves.
+    var ydExactChanged = !!(basis === 'yd' && tol && diff != null && withinTolerance(diff, billed, tolFor) !== (Math.abs(diff) < 1e-9));
+    var tolUse = basis === 'yd' ? null : tol;
     var outcome; var words;
     if (removed.length) { outcome = 'cannot_compare'; reasons.unshift('receipt ' + removed.map(function (r) { return r.key; }).join(', ') + ' was not found in the warehouse any more (confirmed by an id lookup)'); }
     else if (incompleteRead.length) { outcome = 'cannot_compare'; reasons.unshift('the warehouse answer for ' + incompleteRead.map(function (r) { return r.key; }).join(', ') + ' was incomplete — recheck'); }
@@ -299,8 +304,8 @@ export function compareGroup(inp) {
     else if (!mine.length) { outcome = 'product_missing'; }
     else if (reasons.length || basis === null || diff === null) { outcome = 'cannot_compare'; }
     else if (drafts.length) { outcome = 'incomplete'; }
-    else if (tol && withinTolerance(diff, billed, tolFor)) { outcome = 'matched'; }
-    else if (!tol && diff === 0) { outcome = 'equal'; }
+    else if (tolUse && withinTolerance(diff, billed, tolUse)) { outcome = 'matched'; }
+    else if (!tolUse && Math.abs(diff) < 1e-9) { outcome = 'equal'; }
     else { outcome = 'discrepancy'; }
     // Max 25 Nov: a bill above what was scanned is never allowed — say so plainly
     if (outcome === 'discrepancy' && diff != null && diff < 0) { reasons.unshift('billed MORE than was scanned into the warehouse (' + Math.abs(diff) + ' ' + (unitWord || '') + ') — never allowed, no tolerance'); }
@@ -343,7 +348,7 @@ export function compareGroup(inp) {
       tolerance: tol ? { id: tol.id, version: tol.version } : null,
       conflict: conflict ? conflict.map(function (c) { return [c.product, c.scans.slice().sort()]; }) : null
     };
-    if (ydRuleChanged) { inputs.yd_rule = 'percent only (v55.83-ZB)'; }
+    if (ydExactChanged) { inputs.yd_rule = 'exact match only (v55.83-ZS)'; } else if (ydRuleChanged) { inputs.yd_rule = 'percent only (v55.83-ZB)'; }
     items.push(Object.assign({}, base, {
       item_key: inputs.item_key, kind: 'product', product_key: pk, product_label: P.map.wh_label || pk,
       // v55.83-ZF (Codex): the exact mapping(s) this comparison used, so an edit opens THAT mapping (never a guess by name)
@@ -373,7 +378,7 @@ export function compareGroup(inp) {
 // one side-by-side check (v55.83-ZB): billed vs warehouse in ONE unit; result matched / equal / discrepancy, or not_recorded
 function oneCheck(unit, billed, received, tol, isWeight) {
   var d = (billed != null && received != null) ? r3(received - billed) : null;
-  var t = tol ? (isWeight ? tol : { pct: tol.pct, lb: null }) : null;
+  var t = isWeight ? (tol || null) : null; // v55.83-ZS: yards have NO tolerance — equal or a discrepancy
   var res = d === null ? 'not_recorded' : (t && withinTolerance(d, billed, t) ? 'matched' : (!t && d === 0 ? 'equal' : 'discrepancy'));
   return { unit: unit, billed: billed, received: received, diff: d, pct: (d != null && billed) ? Math.round(d / billed * 10000) / 100 : null, result: res, note: null,
     over: d != null && d < -1e-9, tol: t ? { pct: t.pct != null ? Number(t.pct) : null, lb: t.lb != null ? Number(t.lb) : null } : null };

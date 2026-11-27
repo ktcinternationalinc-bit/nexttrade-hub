@@ -35,12 +35,13 @@ export const BUILD_HISTORY = [
   {
     version: 'v55.83-ZS',
     date: '2026-11-27',
-    title: 'Warehouse check: each bill shows PASS, FAIL or REVIEW first',
+    title: 'Warehouse check: each bill shows PASS, FAIL or REVIEW first; yards must match exactly',
     items: [
       { text: 'On a closed bill card the big block is now always the result of the comparison: **PASS** (green), **FAIL** (red) or **REVIEW** (amber — not clearly pass or fail, for example no receipt yet or a draft receipt).' },
       { text: 'What still has to happen, or what was decided, is a smaller tag beside it: **CONFIRM RECEIPT**, **PROVISIONAL**, **APPROVED**, **ACCEPTED**, **DISPUTED** or **RECHECK**. Example: a bill whose lines all pass but whose receipt is not confirmed yet reads **PASS** + **CONFIRM RECEIPT**. An accepted difference reads **FAIL** + **ACCEPTED** — never PASS.' },
-      { text: 'The wire summary now counts PASS · FAIL · REVIEW the same way.' },
-      { superAdminOnly: true, text: 'Technical: screen only. cardResult (FAIL if any product discrepancy / missing; PASS if inv.pass incl. previews; else REVIEW with reason) + cardTags (disputed, recheck, approved/accepted, confirm, provisional) replace the single cardStatus block on the bar; wireTally counts by cardResult (wire-only bills as before). No route, calculation, fingerprint or SQL change.' }
+      { text: 'The wire summary counts PASS · FAIL · REVIEW the same way, and a second line says what is still **waiting** on that wire — for example “1 to CONFIRM RECEIPT”, “1 to RECHECK”, “1 DISPUTED” — or “nothing — every result above is final”.' },
+      { text: '**Yards must match exactly** (Max 27 Nov: “yards should always be the same as yards.. no tolerance”): billed 1,000 yd against 1,000 yd in the warehouse is PASS; 999 or 1,001 is a difference, whatever tolerance is set. The tolerance now applies to weight only. Anything approved earlier that this changes is asked again.' },
+      { superAdminOnly: true, text: 'Technical: screen only. cardResult (FAIL if any product discrepancy / missing; PASS if inv.pass incl. previews; else REVIEW with reason) + cardTags (disputed, recheck, approved/accepted, confirm, provisional) replace the single cardStatus block on the bar; wireTally counts by cardResult plus waiting / decided tags (wire-only bills); WireSummaryBar + BillCardBar exported components. weight-check.js: yards use NO tolerance (tolUse null for basis yd; oneCheck yards t = null) — equal or discrepancy; where that flips the ZB (% only) result, inputs.yd_rule = exact match only (v55.83-ZS) so earlier decisions need revalidation; weight unchanged. No route or SQL change.' }
     ]
   },
   {

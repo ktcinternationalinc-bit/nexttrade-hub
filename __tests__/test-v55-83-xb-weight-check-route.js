@@ -740,7 +740,7 @@ var STAFF = { 'accounting.view': 1, 'bills.view': 1, 'bills.weight_check.view': 
   check('ZL rev2: the card names S2 as NOT on this wire, and Approved / Disputed says it decides the whole group including that bill', outA.length === 1 && outA[0].id === BS2 && /decides this whole group, including NexPac Corporation bill N0s2/.test(warnA || '') && /NOT on this wire/.test(warnA || ''), [outA, warnA]);
   check('…without a wire nothing is marked and no warning is shown (date view unchanged)', INVW.outsideWire(grpA, null).length === 0 && INVW.groupActionWarning(grpA, null) === null);
   var srcW2 = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
-  check('SCREEN: the wire bar tallies with the wire\'s own bill ids; a card marks "(not on this wire)" and shows the group-action warning above Approved / Disputed', /wireTally\(invoices, W\.bill_ids \|\| \[\]\)/.test(srcW2) && /' \(not on this wire\)'/.test(srcW2) && /\{gWarn && canDecide/.test(srcW2));
+  check('SCREEN: the wire bar tallies with the wire\'s own bill ids; a card marks "(not on this wire)" and shows the group-action warning above Approved / Disputed', /wireTally\(props\.invoices \|\| \[\], W\.bill_ids \|\| \[\]\)/.test(srcW2) && /<WireSummaryBar wire=\{data\.wire\} invoices=\{invoices\} tol=\{tol\} \/>/.test(srcW2) && /' \(not on this wire\)'/.test(srcW2) && /\{gWarn && canDecide/.test(srcW2));
 
   module.exports = { pass: pass, fail: failN };
   if (require.main === module) { console.log('\nXB route: ' + pass + ' passed, ' + failN + ' failed'); process.exit(failN ? 1 : 0); }

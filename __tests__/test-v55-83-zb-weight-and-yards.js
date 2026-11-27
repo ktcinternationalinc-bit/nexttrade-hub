@@ -46,10 +46,10 @@ function run(o) {
 // 1. the 14755 / 2219 shape: billed in YARDS, no weight on the bill
 var a = run({ lines: [line(12231.64, 'YDS')] });
 var c = a && a.figures && a.figures.checks;
-check('yards bill: Yards check = billed 12,231.64 yd vs warehouse 12,231.64 yd → PASS (matched)', c && c.yards.billed === 12231.64 && c.yards.received === 12231.64 && c.yards.diff === 0 && c.yards.result === 'matched', c && c.yards);
+check('yards bill: Yards check = billed 12,231.64 yd vs warehouse 12,231.64 yd → PASS (equal — yards have no tolerance, ZS)', c && c.yards.billed === 12231.64 && c.yards.received === 12231.64 && c.yards.diff === 0 && c.yards.result === 'equal' && c.yards.tol === null, c && c.yards);
 check('…Weight check = "not on the bill (billed in yards)", the scale weight is still shown (31,333 lb), no mismatch', c && c.weight.result === 'not_recorded' && c.weight.billed === null && c.weight.received === 31333 && /not on the bill \(billed in yards\)/.test(c.weight.note), c && c.weight);
 check('…the packing-list weight is shown beside the scale (14,401.61 kg = 31,750.08 lb; scale 417.08 lb below) — information only', c && Math.abs(c.weight.packing_list_lb - 31750.077) < 0.01 && Math.abs(c.weight.scale_vs_packing_list_lb + 417.077) < 0.01, c && c.weight);
-check('…the product is PASS (matched) — a missing side never makes it REVIEW', a.outcome === 'matched', [a.outcome, a.reasons]);
+check('…the product is PASS (equal) — a missing side never makes it REVIEW', a.outcome === 'equal', [a.outcome, a.reasons]);
 check('…the yards equal the packing-list quantity, so the card notes they may be copied, not measured (Codex 25 Nov)', c && /may have been copied from it, not measured/.test(c.yards.copied_note || ''), c && c.yards);
 var cw = INV.checkWords('Weight', c.weight); var cy = INV.checkWords('Yards', c.yards);
 check('SCREEN words: "Weight: not on the bill (billed in yards) — warehouse 31,333 lb · packing list …" (muted) and "Yards: billed … — PASS" (green)', /^Weight: not on the bill \(billed in yards\) — warehouse 31,333 lb · packing list 31,750 lb$/.test(cw.text) && cw.tone === 'muted' && /^Yards: billed 12,231\.64 yd · warehouse 12,231\.64 yd · 0 .*— PASS$/.test(cy.text) && cy.tone === 'pass', [cw, cy]);
@@ -66,11 +66,11 @@ check('yards billed ABOVE the warehouse (12,500 vs 12,231.64) → REVIEW, "bille
 var b4 = run({ lines: [line(10000, 'YDS')] });
 check('yards billed 18% BELOW the warehouse (10,000 vs 12,231.64, tolerance 10%) → REVIEW', b4.outcome === 'discrepancy' && b4.figures.checks.yards.result === 'discrepancy' && !b4.figures.checks.yards.over, [b4.outcome, b4.figures.checks.yards]);
 var b5 = run({ lines: [line(11500, 'YDS')], tolerance: { id: 't2', version: 1, pct: 10, lb: 5000 } });
-check('the POUND allowance never widens the yards check: 11,500 yd vs 12,231.64 (6%) passes on the %, and 9,000 yd (26%) fails even with a 5,000 lb allowance', b5.figures.checks.yards.result === 'matched' && run({ lines: [line(9000, 'YDS')], tolerance: { id: 't2', version: 1, pct: 10, lb: 5000 } }).figures.checks.yards.result === 'discrepancy', [b5.figures.checks.yards]);
+check('ZS (Max 27 Nov "yards should always be the same as yards.. no tolerance"): 11,500 yd vs 12,231.64 is a discrepancy even with 10% (and a 5,000 lb allowance) approved; so is 9,000 yd', b5.figures.checks.yards.result === 'discrepancy' && b5.outcome === 'discrepancy' && run({ lines: [line(9000, 'YDS')], tolerance: { id: 't2', version: 1, pct: 10, lb: 5000 } }).figures.checks.yards.result === 'discrepancy', [b5.figures.checks.yards, b5.outcome]);
 
 // 3b. v55.83-ZC (Max 25 Nov: "if within tolerance it should say Pass within tolerance for each item that is within the tolerance")
 check('WITHIN TOLERANCE wording: a pounds line 30,000 vs 31,333 (−4.3%, 10%) says "PASS — within tolerance (10%)"', /— PASS — within tolerance \(10%\)$/.test(INV.checkWords('Weight', c2.weight).text), INV.checkWords('Weight', c2.weight).text);
-check('…a yards line inside the % says the same, and never names the pound allowance (yards use the % only)', /— PASS — within tolerance \(10%\)$/.test(INV.checkWords('Yards', b5.figures.checks.yards).text), INV.checkWords('Yards', b5.figures.checks.yards).text);
+check('…a yards line that differs at all says REVIEW (never "within tolerance"); an exact yards line says plain PASS', /— REVIEW$/.test(INV.checkWords('Yards', b5.figures.checks.yards).text) && !/within tolerance/.test(INV.checkWords('Yards', b5.figures.checks.yards).text) && /— PASS$/.test(INV.checkWords('Yards', c.yards).text), INV.checkWords('Yards', b5.figures.checks.yards).text);
 var b5w = run({ lines: [line(30000, 'LBS')], tolerance: { id: 't2', version: 1, pct: 10, lb: 5000 } });
 check('…a weight line names both parts of the tolerance it was judged by: "(10% or 5000 lb)"', /— PASS — within tolerance \(10% or 5000 lb\)$/.test(INV.checkWords('Weight', b5w.figures.checks.weight).text), INV.checkWords('Weight', b5w.figures.checks.weight).text);
 check('…an EXACT match stays plain "PASS" (bill 14755: 12,231.64 = 12,231.64), and a REVIEW line never says within tolerance', /— PASS$/.test(INV.checkWords('Yards', c.yards).text) && INV.passWords(0, TOL, 'yd') === 'PASS' && !/within tolerance/.test(INV.checkWords('Yards', b4.figures.checks.yards).text));
@@ -85,7 +85,7 @@ check('pounds bill, the receipt has no yards → weight decides (PASS), yards "n
 
 // 5. measured yards ≠ declared → compared as entered, no "copied" note
 var b8 = run({ lines: [line(12000, 'YDS')], receipt: receipt({ yd: 12105.3 }) });
-check('warehouse yards differ from the packing list (12,105.3 vs 12,231.64) → compared as entered (12,000 billed → PASS), no "copied" note', b8.figures.checks.yards.received === 12105.3 && b8.figures.checks.yards.result === 'matched' && !b8.figures.checks.yards.copied_note && b8.outcome === 'matched', b8.figures.checks.yards);
+check('warehouse yards differ from the packing list (12,105.3 vs 12,231.64) → compared as entered: 12,000 billed is a discrepancy (no yards tolerance), no "copied" note', b8.figures.checks.yards.received === 12105.3 && b8.figures.checks.yards.result === 'discrepancy' && !b8.figures.checks.yards.copied_note && b8.outcome === 'discrepancy', b8.figures.checks.yards);
 
 // 6. no tolerance saved: exact equality only, per check
 var b9 = run({ lines: [line(12231.64, 'YDS')], tolerance: null });
@@ -125,12 +125,12 @@ var oldC = runWith(OLD, { lines: [line(30000, 'LBS')], tolerance: TOL_LB }); var
 var oldD = runWith(OLD, { lines: [line(12231.64, 'YDS')], tolerance: TOL }); var newD = run({ lines: [line(12231.64, 'YDS')], tolerance: TOL });
 check('…and nothing else moves: a pounds bill and a yards bill without a lb allowance keep their pre-ZB fingerprints', fp(oldC.inputs) === fp(newC.inputs) && fp(oldD.inputs) === fp(newD.inputs));
 var oldE = runWith(OLD, { lines: [line(11500, 'YDS')], tolerance: TOL_LB }); var newE = run({ lines: [line(11500, 'YDS')], tolerance: TOL_LB });
-check('…a yards bill that passes on the % alone keeps its fingerprint even with a lb allowance (11,500 vs 12,231.64: Matched before and after)', oldE.outcome === 'matched' && newE.outcome === 'matched' && fp(oldE.inputs) === fp(newE.inputs));
+check('ZS: a yards bill that passed on the % alone (11,500 vs 12,231.64: Matched under ZB) is now a discrepancy and its fingerprint CHANGES (yd_rule "exact match only"), so an earlier approval is asked again', oldE.outcome === 'matched' && newE.outcome === 'discrepancy' && fp(oldE.inputs) !== fp(newE.inputs) && newE.inputs.yd_rule === 'exact match only (v55.83-ZS)', [oldE.outcome, newE.outcome, newE.inputs.yd_rule]);
 
 // 12. Codex 25 Nov (ZB P2): no green PASS on a draft or an incomplete read
 var dr = receipt(); dr.is_draf = 1;
 var b12 = run({ lines: [line(12231.64, 'YDS')], receipt: dr });
-check('DRAFT receipt: the product is incomplete and the yards check says PROVISIONAL (amber), never a green PASS', b12.outcome === 'incomplete' && b12.figures.checks.yards.result === 'provisional' && b12.figures.checks.yards.raw_result === 'matched' && INV.checkWords('Yards', b12.figures.checks.yards).tone === 'provisional' && /Provisional/.test(INV.checkWords('Yards', b12.figures.checks.yards).text), [b12.outcome, b12.figures.checks.yards]);
+check('DRAFT receipt: the product is incomplete and the yards check says PROVISIONAL (amber), never a green PASS', b12.outcome === 'incomplete' && b12.figures.checks.yards.result === 'provisional' && b12.figures.checks.yards.raw_result === 'equal' && INV.checkWords('Yards', b12.figures.checks.yards).tone === 'provisional' && /Provisional/.test(INV.checkWords('Yards', b12.figures.checks.yards).text), [b12.outcome, b12.figures.checks.yards]);
 var ir = receipt(); ir.read_complete = false;
 var b13 = run({ lines: [line(12231.64, 'YDS')], receipt: ir });
 check('INCOMPLETE read: cannot compare, the yards check says NOT CHECKED (grey), never PASS', b13.outcome === 'cannot_compare' && b13.figures.checks.yards.result === 'not_checked' && INV.checkWords('Yards', b13.figures.checks.yards).tone === 'muted' && !/PASS/.test(INV.checkWords('Yards', b13.figures.checks.yards).text), [b13.outcome, b13.figures.checks.yards]);
@@ -140,9 +140,24 @@ check('…the same for weight on a draft (provisional), and a side "not on the b
 // 13. the automatic approval reason names what was compared
 check('AUTO REASON: a yards-only invoice is approved as "billed yards vs receipt yards", a pounds one as "billed weight vs scanned weight", both when both', INV.autoReason({ products: [a] }) === 'Approved: billed yards vs receipt yards within the approved tolerance' && INV.autoReason({ products: [b2] }) === 'Approved: billed weight vs scanned weight within the approved tolerance' && /weight vs scanned weight and billed yards vs receipt yards/.test(INV.autoReason({ products: [a, b2] })), [INV.autoReason({ products: [a] })]);
 
+// 14. v55.83-ZS (Max 27 Nov: "yards should always be the same as yards.. no tolerance")
+var T15 = { id: 't15', version: 2, pct: 15, lb: null };
+var y1000 = run({ lines: [line(1000, 'YDS')], receipt: receipt({ yd: 1000, declared: '1000' }), tolerance: T15 });
+var y1001 = run({ lines: [line(1001, 'YDS')], receipt: receipt({ yd: 1000, declared: '1000' }), tolerance: T15 });
+var y999 = run({ lines: [line(999, 'YDS')], receipt: receipt({ yd: 1000, declared: '1000' }), tolerance: T15 });
+var y999t10 = run({ lines: [line(999, 'YDS')], receipt: receipt({ yd: 1000, declared: '1000' }), tolerance: TOL });
+check('ZS YARDS: billed 1,000 yd vs 1,000 yd in the warehouse → PASS (Equal), even with 15% approved', y1000.outcome === 'equal' && y1000.figures.checks.yards.result === 'equal' && y1000.figures.checks.yards.tol === null && /— PASS$/.test(INV.checkWords('Yards', y1000.figures.checks.yards).text), [y1000.outcome, y1000.figures.checks.yards]);
+check('ZS YARDS: billed 1,001 yd (1 more) → discrepancy, billed MORE — never allowed', y1001.outcome === 'discrepancy' && y1001.figures.checks.yards.result === 'discrepancy' && y1001.figures.checks.yards.over === true, [y1001.outcome, y1001.figures.checks.yards]);
+check('ZS YARDS: billed 999 yd (1 less) → discrepancy with 15% approved AND with 10% approved — yards have no tolerance', y999.outcome === 'discrepancy' && y999.figures.checks.yards.result === 'discrepancy' && y999t10.outcome === 'discrepancy', [y999.outcome, y999t10.outcome]);
+var wt15 = run({ lines: [line(30000, 'LBS')], tolerance: T15 }); var wt15b = run({ lines: [line(36100, 'LBS')], tolerance: T15 });
+check('ZS: WEIGHT is unchanged — 30,000 lb vs 31,333 lb is within 15% → PASS (within tolerance); 36,100 lb (billed more) → discrepancy', wt15.outcome === 'matched' && wt15.figures.checks.weight.result === 'matched' && /PASS — within tolerance \(15%\)$/.test(INV.checkWords('Weight', wt15.figures.checks.weight).text) && wt15b.outcome === 'discrepancy', [wt15.outcome, wt15b.outcome]);
+var preZS = runWith(OLD, { lines: [line(999, 'YDS')], receipt: receipt({ yd: 1000, declared: '1000' }), tolerance: T15 });
+var stY = W.decisionState([{ id: 'dz', kind: 'validate_match', comparison_fp: fp(preZS.inputs), at: '2026-11-26T10:00:00Z' }], fp(y999.inputs));
+check('ZS: a 999-yd bill approved before (Matched under the old % rule) now needs REVALIDATION (its fingerprint changed); an exact 1,000-yd approval keeps its fingerprint', preZS.outcome === 'matched' && stY.state === 'needs_revalidation' && fp(runWith(OLD, { lines: [line(1000, 'YDS')], receipt: receipt({ yd: 1000, declared: '1000' }), tolerance: T15 }).inputs) === fp(y1000.inputs), [preZS.outcome, stY.state]);
+
 // 10. screen + version
 var src = fs.readFileSync(path.join(root, 'src/components/WeightCheckInvoices.jsx'), 'utf8');
-check('SCREEN: each product row renders the two checks (checksBlock(f.checks)) and the tolerance tile says the % applies to weight and to yards', /\{f\.checks \? <tr><td colSpan=\{5\}[^]*?checksBlock\(f\.checks\)/.test(src) && /The % applies to weight and to yards/.test(src));
+check('SCREEN: each product row renders the two checks (checksBlock(f.checks)) and the tolerance tile says the % applies to weight and to yards', /\{f\.checks \? <tr><td colSpan=\{5\}[^]*?checksBlock\(f\.checks\)/.test(src) && /The tolerance is for WEIGHT only\. Yards must match exactly — no tolerance/.test(src));
 var page = fs.readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8'); var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8');
 var topV = (/version: '([^']+)'/.exec(wn.substring(wn.indexOf('BUILD_HISTORY'))) || [])[1];
 check('badge and What\'s New name the newest entry, and the ZB entry exists', wn.indexOf("version: 'v55.83-ZB'") >= 0 && page.indexOf(topV) >= 0, topV);
