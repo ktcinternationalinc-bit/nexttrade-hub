@@ -113,7 +113,7 @@ function chain(table) { var q = { ins: null };
 stub(path.join(root, 'node_modules/next/server.js'), { NextResponse: { json: function (body, init) { return { status: (init && init.status) || 200, body: body }; } } });
 stub('@supabase/supabase-js', { createClient: function () { return { from: chain, rpc: function () { world.writes += 1; return Promise.resolve({}); } }; } });
 stub(path.join(root, 'src/lib/verified-caller.js'), { verifiedCaller: async function () { return world.who; } });
-stub(path.join(root, 'src/lib/server-permissions.js'), { loadUserPermissions: async function () { return {}; }, revenueSwitchedOff: function () { return false; } /* v55.83-XK stand-in: nobody is a researcher here */, assertPermission: async function (db, userId, key) { return world.perms[key] ? { ok: true, ctx: {} } : { ok: false }; } });
+stub(path.join(root, 'src/lib/server-permissions.js'), { userHasPermission: function (ctx, perm) { return !!(ctx && ctx.permissions && ctx.permissions[perm]); } /* v55.83-ZD rev3: payroll-bills imports it */, loadUserPermissions: async function () { return {}; }, revenueSwitchedOff: function () { return false; } /* v55.83-XK stand-in: nobody is a researcher here */, assertPermission: async function (db, userId, key) { return world.perms[key] ? { ok: true, ctx: {} } : { ok: false }; } });
 stub(path.join(root, 'src/lib/visibility-window-server.js'), { windowFloorFor: async function () { return { floor: null }; }, clampFrom: function (d0) { return d0; } });
 stub(path.join(root, 'src/lib/audit-server.js'), { audit: async function () { world.audits = (world.audits || 0) + 1; } });
 var ROUTE = require(path.join(root, 'src/app/api/accounting/profitability/route.js'));
