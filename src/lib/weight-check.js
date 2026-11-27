@@ -297,6 +297,11 @@ export function compareGroup(inp) {
     // ZB rule (% only) gave, the fingerprint changes (yd_rule) so a decision made on it is asked again; where it does not, nothing moves.
     var ydExactChanged = !!(basis === 'yd' && tol && diff != null && withinTolerance(diff, billed, tolFor) !== (Math.abs(diff) < 1e-9));
     var tolUse = basis === 'yd' ? null : tol;
+    // v55.83-ZX: this product's own weight tolerance (Fabrics Canada 30%); the fingerprint changes only where it flips the result
+    var ovT = productToleranceFor(P.map);
+    var tolOv = ovT ? { id: 'zx:' + ovT.key, version: 1, pct: ovT.pct, lb: tol && tol.lb != null ? tol.lb : null, product_rule: ovT.label } : null;
+    var ovChanged = !!(tolOv && basis === 'lb' && diff != null && withinTolerance(diff, billed, tol) !== withinTolerance(diff, billed, tolOv));
+    if (tolOv && basis === 'lb') { tolUse = tolOv; }
     var outcome; var words;
     if (removed.length) { outcome = 'cannot_compare'; reasons.unshift('receipt ' + removed.map(function (r) { return r.key; }).join(', ') + ' was not found in the warehouse any more (confirmed by an id lookup)'); }
     else if (incompleteRead.length) { outcome = 'cannot_compare'; reasons.unshift('the warehouse answer for ' + incompleteRead.map(function (r) { return r.key; }).join(', ') + ' was incomplete — recheck'); }
@@ -317,7 +322,7 @@ export function compareGroup(inp) {
     var declaredYd = null; var declaredAll = recs.length > 0 && recs.every(function (r) { return r.data.state !== 'removed' && r.data.info && parseNum(r.data.info.declared_quantity, false).value != null && receiptLengthUnit(r.data).toYd != null; });
     if (declaredAll) { declaredYd = r3(recs.reduce(function (s, r) { return s + parseNum(r.data.info.declared_quantity, false).value * receiptLengthUnit(r.data).toYd; }, 0)); }
     var checks = {
-      weight: oneCheck('lb', weightOnly ? billedLb : null, mine.length ? recLb : null, tol, true),
+      weight: oneCheck('lb', weightOnly ? billedLb : null, mine.length ? recLb : null, tolOv || tol, true), // v55.83-ZX: the product's own weight tolerance when it has one
       yards: oneCheck('yd', lengthOnly ? billedYd : null, mine.length ? recYd : null, tol, false)
     };
     if (checks.weight.billed == null) { checks.weight.note = kinds.length ? 'not on the bill (billed in yards)' : 'not on the bill'; }
@@ -349,6 +354,7 @@ export function compareGroup(inp) {
       conflict: conflict ? conflict.map(function (c) { return [c.product, c.scans.slice().sort()]; }) : null
     };
     if (ydExactChanged) { inputs.yd_rule = 'exact match only (v55.83-ZS)'; } else if (ydRuleChanged) { inputs.yd_rule = 'percent only (v55.83-ZB)'; }
+    if (ovChanged) { inputs.product_tolerance = tolOv.product_rule + ' (v55.83-ZX)'; }
     items.push(Object.assign({}, base, {
       item_key: inputs.item_key, kind: 'product', product_key: pk, product_label: P.map.wh_label || pk,
       // v55.83-ZF (Codex): the exact mapping(s) this comparison used, so an edit opens THAT mapping (never a guess by name)
@@ -389,6 +395,19 @@ function cmpArr(a, b) { var x = canonical(a); var y = canonical(b); return x < y
 
 // v55.83-YX (Max 25 Nov): ONE-WAY. diff = scanned − billed. A bill may be BELOW what was scanned by up to the approved
 // tolerance (packaging / gross vs net); a bill ABOVE what was scanned is NEVER within tolerance — not by one pound.
+// v55.83-ZX (Max 27 Nov: "individual discrepancy for fabrics - fabrics canada to be 30% hardcoded"): a product's OWN weight tolerance,
+// hard-coded as asked. Fabrics Canada = the warehouse grade CGT 15 (product type 3, or a mapping by grade only). Weight only — yards stay
+// an exact match (ZS). The approved pound allowance is kept, so it is never stricter than the general rule; the one-way rule is unchanged
+// (billed above the scan is never allowed). More products would be a setting with its own SQL, not more lines here.
+export var PRODUCT_TOLERANCES = [{ key: 'fabrics-canada', wh_cgt: '15', wh_product_types: ['3'], pct: 30, label: 'Fabrics Canada 30%' }];
+export function productToleranceFor(map) {
+  if (!map) { return null; }
+  for (var i = 0; i < PRODUCT_TOLERANCES.length; i++) {
+    var t = PRODUCT_TOLERANCES[i]; var pt = map.wh_product_type == null || map.wh_product_type === '' ? null : String(map.wh_product_type);
+    if (String(map.wh_cgt) === t.wh_cgt && (pt === null || t.wh_product_types.indexOf(pt) >= 0)) { return t; }
+  }
+  return null;
+}
 export function withinTolerance(diff, billed, tol) {
   if (!tol) { return false; }
   if (Number(diff) < -1e-9) { return false; }

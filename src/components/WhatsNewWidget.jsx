@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZX',
+    date: '2026-11-27',
+    title: 'Warehouse check: Fabrics Canada allows 30% on weight',
+    items: [
+      { text: '**Fabrics Canada** now has its own weight tolerance of **30%** (every other product keeps the approved 15%). Bill 14743’s Fabrics (billed 301 lb, scanned 388 lb, +28.9%) now **passes**.' },
+      { text: 'The rule that a bill may never be **above** what was scanned is unchanged, and **yards** still have to match exactly.' },
+      { text: 'Only Fabrics lines whose result changes because of the 30% ask to be decided again; the others keep their decisions.' },
+      { superAdminOnly: true, text: 'Technical: src/lib/weight-check.js only, no SQL. PRODUCT_TOLERANCES (hard-coded, as asked): warehouse grade CGT 15 with product type 3 or any → pct 30, the approved lb allowance kept; weight basis only; used for the outcome and the weight check; inputs.product_tolerance set only where the result flips versus the general tolerance (ZB / ZS pattern).' }
+    ]
+  },
+  {
     version: 'v55.83-ZW',
     date: '2026-11-27',
     title: 'Warehouse check: a note and Approved / Disputed on each failing line, and the invoice in a pop-up',
