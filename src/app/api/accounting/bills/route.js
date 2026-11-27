@@ -35,7 +35,7 @@ import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { bankLineRemaining, checkBankPayment } from '../../../../lib/bill-bank-pay'; // v55.83-TH
 import { addAuditSubjects, billName, bankName } from '../../../../lib/audit-subjects-server'; // v55.83-TH
 import { billWireStates, wireStateWords } from '../../../../lib/bill-wire-state'; // v55.83-RZ
-import { buildPaymentsReport } from '../../../../lib/bill-payments-report'; // v55.83-ZZ
+import { buildPaymentsReport, hideTotals } from '../../../../lib/bill-payments-report'; // v55.83-ZZ
 import { windowFloorFor } from '../../../../lib/visibility-window-server'; // v55.83-ZZ — employees see only the permitted window, in every number
 import { nextradeBillIds, markNextradeBills, NEXTRADE_PAY_POINTER } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills are paid only through NextTrade
 import { verifiedCaller } from '../../../../lib/verified-caller';
@@ -451,7 +451,7 @@ export async function POST(req) {
       var filesP = await byIds('wire_package_files', 'id, package_id, kind, file_name, path, uploaded_at', wIdsP, 'package_id');
       var repP = buildPaymentsReport({ pays: LP.pays, bills: LP.bills, wireLines: wlP, wires: wiresP, wireFiles: filesP, bankLines: bankP, floor: winP.floor || null,
         from: body.date_from || null, to: body.date_to || null, vendor: body.vendor || null, showVoided: body.show_voided === true, isVoid: isPaymentVoid });
-      if (!canTotals) { repP.total = null; repP.by_vendor.forEach(function (v) { v.total = null; }); repP.by_month.forEach(function (m) { m.total = null; }); }
+      if (!canTotals) { hideTotals(repP); } // Codex 13:52 ZZ-02: no totals anywhere (screen, CSV, vendor page) without See Money Totals
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, report: repP, can_totals: canTotals, vendors: idsOf(LP.bills.filter(function (b) { return b.record_status === 'active'; }), 'vendor_name').sort() });
     }
 

@@ -49,13 +49,16 @@ export function buildPaymentsReport(i) {
   });
   rows.sort(function (a, b) { return a.paid_date < b.paid_date ? -1 : a.paid_date > b.paid_date ? 1 : (a.bill.vendor < b.bill.vendor ? -1 : a.bill.vendor > b.bill.vendor ? 1 : 0); });
   // totals count only live payments (a voided one shown for reference is never money paid)
-  var byVendor = {}; var byMonth = {}; var total = 0; var count = 0;
+  // Codex 13:52 ZZ-03: amounts in different currencies are NEVER added together — every total is per currency
+  var byCur = {}; var byVendor = {}; var byMonth = {}; var count = 0;
   rows.forEach(function (r) {
     if (r.voided) { return; }
-    count++; total = r2(total + r.amount);
-    var v = byVendor[r.bill.vendor] || (byVendor[r.bill.vendor] = { vendor: r.bill.vendor, count: 0, total: 0 }); v.count++; v.total = r2(v.total + r.amount);
-    var m = byMonth[r.month] || (byMonth[r.month] = { month: r.month, count: 0, total: 0 }); m.count++; m.total = r2(m.total + r.amount);
+    var cur = r.bill.currency || 'USD'; count++;
+    var c = byCur[cur] || (byCur[cur] = { currency: cur, count: 0, total: 0 }); c.count++; c.total = r2(c.total + r.amount);
+    var vk2 = r.bill.vendor + '\u0001' + cur; var v = byVendor[vk2] || (byVendor[vk2] = { vendor: r.bill.vendor, currency: cur, count: 0, total: 0 }); v.count++; v.total = r2(v.total + r.amount);
+    var mk = r.month + '\u0001' + cur; var m = byMonth[mk] || (byMonth[mk] = { month: r.month, currency: cur, count: 0, total: 0 }); m.count++; m.total = r2(m.total + r.amount);
   });
+  function curOrder(a, b) { return a === b ? 0 : a === 'USD' ? -1 : b === 'USD' ? 1 : (a < b ? -1 : 1); }
   // bills paid THROUGH NextTrade / RTM: listed on their own, with no pay date invented (the date lives in the funding record)
   var paidThrough = (i.bills || []).filter(function (b) {
     if (!b.paid_via || b.record_status !== 'active') { return false; }
@@ -63,15 +66,26 @@ export function buildPaymentsReport(i) {
     var bd = day(b.bill_date); if (floor && bd && bd < floor) { return false; }
     if (from && bd && bd < from) { return false; } if (to && bd && bd > to) { return false; }
     return true;
-  }).map(function (b) { return { id: b.id, vendor: b.vendor_name || '', number: b.bill_number || '', date: day(b.bill_date), release: b.release_number || null, total: r2(b.total_amount), paid_via: b.paid_via }; })
+  }).map(function (b) { return { id: b.id, vendor: b.vendor_name || '', number: b.bill_number || '', date: day(b.bill_date), release: b.release_number || null, total: r2(b.total_amount), currency: b.currency || 'USD', paid_via: b.paid_via }; })
     .sort(function (a, b) { return String(a.date || '') < String(b.date || '') ? -1 : 1; });
   return {
-    rows: rows, paid_through: paidThrough, total: total, count: count, voided_shown: rows.filter(function (r) { return r.voided; }).length,
-    by_vendor: Object.keys(byVendor).sort().map(function (k) { return byVendor[k]; }),
-    by_month: Object.keys(byMonth).sort().map(function (k) { return byMonth[k]; }),
-    period: { from: from, to: to }, floor: floor || null
+    rows: rows, paid_through: paidThrough, count: count, voided_shown: rows.filter(function (r) { return r.voided; }).length,
+    totals: Object.keys(byCur).sort(curOrder).map(function (k) { return byCur[k]; }),
+    by_vendor: Object.keys(byVendor).map(function (k) { return byVendor[k]; }).sort(function (a, b) { return a.vendor < b.vendor ? -1 : a.vendor > b.vendor ? 1 : curOrder(a.currency, b.currency); }),
+    by_month: Object.keys(byMonth).map(function (k) { return byMonth[k]; }).sort(function (a, b) { return a.month < b.month ? -1 : a.month > b.month ? 1 : curOrder(a.currency, b.currency); }),
+    totals_hidden: false, period: { from: from, to: to }, floor: floor || null
   };
 }
+// Codex 13:52 ZZ-02: a person without "See Money Totals" gets the rows but no totals — on screen, in the CSV and on the vendor page
+export function hideTotals(rep) {
+  if (!rep) { return rep; }
+  rep.totals_hidden = true;
+  (rep.totals || []).forEach(function (t) { t.total = null; }); (rep.by_vendor || []).forEach(function (v) { v.total = null; }); (rep.by_month || []).forEach(function (m) { m.total = null; });
+  (rep.paid_through || []).forEach(function (b) { b.total = null; });
+  return rep;
+}
+// an amount with its currency: "$1,234.50" for USD, "CAD 1,234.50" for anything else; ••• when hidden
+export function moneyCur(n, cur) { if (n === null || n === undefined) { return '•••'; } var v = Number(n) || 0; var s = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return (v < 0 ? '−' : '') + (!cur || cur === 'USD' ? '$' + s : cur + ' ' + s); }
 
 // CSV of what is shown (one line per payment), with an "as of" line on top — to send to a vendor
 function csvCell(v) { var s = v === null || v === undefined ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
@@ -81,6 +95,8 @@ export function paymentsCsv(rep, asOf, title) {
   rep.rows.forEach(function (r) {
     out.push([r.paid_date, r.bill.vendor, r.bill.number, r.bill.date, r.bill.release, r.amount.toFixed(2), r.bill.currency, r.wire ? r.wire.label : '', r.wire ? r.wire.sent_date : '', r.wire ? r.wire.bank_reference : '', r.bank ? r.bank.date : '', r.bank ? r.bank.amount.toFixed(2) : '', r.voided ? 'VOIDED — not paid' : ''].map(csvCell).join(','));
   });
-  out.push(['Total paid', '', '', '', '', rep.total.toFixed(2), '', '', '', '', '', '', ''].map(csvCell).join(','));
+  // one total line PER CURRENCY (never summed across currencies); hidden totals say so instead of a number
+  if (rep.totals_hidden) { out.push(['Totals not shown (needs "See Money Totals")', '', '', '', '', '', '', '', '', '', '', '', ''].map(csvCell).join(',')); }
+  else { (rep.totals || []).forEach(function (t) { out.push(['Total paid (' + t.currency + ')', '', '', '', '', t.total == null ? '' : Number(t.total).toFixed(2), t.currency, '', '', '', '', '', ''].map(csvCell).join(',')); }); }
   return out.join('\r\n');
 }
