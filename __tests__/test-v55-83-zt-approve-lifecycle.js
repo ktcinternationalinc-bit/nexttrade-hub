@@ -18,7 +18,9 @@ function row(label, outcome, billed, received) {
   var k = 'k-' + label; var st = srv.reopen ? 'reopened' : (srv.decided[k] || 'unreviewed'); var open = st === 'unreviewed' || st === 'reopened';
   return { item_key: k, kind: 'product', outcome: outcome, outcome_words: outcome, product_label: label, figures: { basis: 'lb', unit: 'lb', billed: billed, received: received, diff: received - billed, pct: 1 }, bill_ids: [bill.id], bills: [bill], receipts: [], needs_decision: open, outstanding: open, allowed: open ? (outcome === 'matched' ? ['validate_match', 'report_issue'] : ['accept_discrepancy', 'report_issue']) : [], comparison_fp: 'fp-' + label + srv.fpSuffix, state: st, reasons: [] };
 }
-function rows() { return [row('Texas Thirds', 'matched', 33703.5, 35728), row('Texas Third Folds', 'discrepancy', 3957, 4562)]; }
+// v55.83-ZW: both lines PASS — a FAILING line is approved on its own line now (Max: a note on each failure), so this lifecycle runs
+// through the bill's Approved on a passing bill; the per-line lifecycle is in test-v55-83-zw-line-decisions.js
+function rows() { return [row('Texas Thirds', 'matched', 33703.5, 35728), row('Texas Third Folds', 'matched', 3957, 4100)]; }
 var box = {
   wcApi: function (p) {
     srv.calls.push(p);
@@ -66,14 +68,14 @@ function note() { return all(function (n) { return n.type === 'input' && n.props
   render(); await flush();
   await click(button('Show (last reading)'));
   await click(all(function (n) { return n.props && n.props['data-testid'] === 'card-bar'; })[0]);
-  check('(set-up) Show → the FAIL card opens with its note box and Approved', !!note() && !!button('Approved'), text(tree).slice(0, 200));
-  // 1. no note
-  await click(button('Approved'));
-  check('Approved with NO note → a red answer ON the card, nothing sent', /^✗ Not saved: this bill is FAIL — type a note in the box/.test(cardMsg() || '') && srv.calls.filter(function (c) { return c.action === 'decide'; }).length === 0, cardMsg());
+  check('(set-up) Show → the card opens with its note box and Approved', !!note() && !!button('Approved'), text(tree).slice(0, 200));
+  // 1. no note (Disputed always needs one)
+  await click(button('Disputed'));
+  check('Disputed with NO note → a red answer ON the card, nothing sent', /^✗ Not saved: type what is wrong in the box/.test(cardMsg() || '') && srv.calls.filter(function (c) { return c.action === 'decide'; }).length === 0, cardMsg());
   // 2. with a note → saved
   await type(note(), 'folds checked, extra was a bonus');
   await click(button('Approved'));
-  check('with a note → "✓ Saved — Approved: NexPac Corporation 14756 (2 lines)." ON the card, both lines decided', cardMsg() === '✓ Saved — Approved: NexPac Corporation 14756 (2 lines).' && srv.decided['k-Texas Thirds'] === 'validated' && srv.decided['k-Texas Third Folds'] === 'accepted', [cardMsg(), srv.decided]);
+  check('with a note → "✓ Saved — Approved: NexPac Corporation 14756 (2 lines)." ON the card, both lines decided', cardMsg() === '✓ Saved — Approved: NexPac Corporation 14756 (2 lines).' && srv.decided['k-Texas Thirds'] === 'validated' && srv.decided['k-Texas Third Folds'] === 'validated', [cardMsg(), srv.decided]);
   check('…and the lasting line above the list says the same, time-stamped', /^Last action \(\d\d:\d\d\): NexPac Corporation 14756: Saved — Approved/.test(lastAction() || ''), lastAction());
   // 3. unchanged refresh keeps it
   await click(button('Show (last reading)'));

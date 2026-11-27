@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZW',
+    date: '2026-11-27',
+    title: 'Warehouse check: a note and Approved / Disputed on each failing line, and the invoice in a pop-up',
+    items: [
+      { text: 'Each line that does not pass (FAIL or REVIEW) now has its **own note box with Approved and Disputed**, right under that line. What you write is saved for that line only, with your name and the date and time — like Fabrics on bill 14743.' },
+      { text: 'The bill itself can only be **Approved once every failing line has been decided** on its own line. Until then the card says which lines are left. Then the bill’s Approved covers the passing lines (no note needed) and the bill reads **PASS — REVIEWED**. A disputed line keeps the bill open.' },
+      { text: '**Dispute the whole bill** is still there when the whole bill is wrong (it covers every open line, with one note).' },
+      { text: 'New **📄 Invoice** button at the top of an opened bill card: the bill’s own file opens in a pop-up over the page. Close it (✕ or click outside) and you are exactly where you were, on the same bill.' },
+      { text: 'Mappings: the first choice of “Warehouse product” now reads **any product type (match by grade)** — use it when the warehouse scans a product under another product type but with the right grade.' },
+      { superAdminOnly: true, text: 'Technical: screen only, no route / SQL. ownLineControls(inv) = open product rows whose outcome is not a pass (none on a preview); runInvoiceDecision takes o.lines (only those item_keys are sent; the note rule is judged on exactly those lines); the bill-level approve is refused while any own-control line is open; billAllPass(inv) (relevant rows pass or are already done) decides whether the bill-level note is needed; per-line answers keyed by card key + item_key and shown via lineMsgFor (same item + fingerprint; green only while decided), outside the line row; cardBusy + an in-flight guard stop two decisions on one card at once; invoice pop-up uses BillDocViewer read-only. Codex 13:20 design PASS with conditions — all its listed cases are in test-v55-83-zw-line-decisions.js.' }
+    ]
+  },
+  {
     version: 'v55.83-ZU',
     date: '2026-11-27',
     title: 'Warehouse check: a fully reviewed bill shows PASS — REVIEWED',

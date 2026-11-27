@@ -9,6 +9,7 @@
 import React, { useState, useEffect } from 'react';
 import { wcApi, say, num, when, LinkChooser, warehouseMappingLabel } from './WarehouseCheckBox';
 import { vendorKey, billItemKey } from '../lib/weight-check';
+import BillDocViewer from './BillDocViewer'; // v55.83-ZW: the actual invoice, in a pop-up over the card
 
 var INK = '#0f172a'; var SUB = '#475569'; var MUTED = '#64748b'; var LINE = '#e2e8f0'; var SOFT = '#f8fafc';
 var GREEN = '#15803d'; var RED = '#b91c1c'; var AMBER = '#b45309'; var BLUE = '#1d4ed8';
@@ -21,6 +22,15 @@ export function openForDecision(r) { return !!(r && r.needs_decision) && DONE_ST
 // (validated / accepted / resolved) and no issue is open — a blocked, limited, not-checked, recheck, reopened or untouched row never is.
 // A previously reviewed line can never certify another line that is still blocked.
 export function reviewRelevant(r) { return !!r && r.outcome !== 'warehouse_only' && r.kind !== 'warehouse_only'; }
+// v55.83-ZW (Max 27 Nov, bill 14743): "i should be able to put approved and a note on each failure not just on the whole.." and
+// "Second signature cannot be completed until all are passing. from the warehouse check". Every OPEN product line that is not a PASS
+// gets its OWN note + Approved / Disputed (saved for that line only, with its own note). The bill's Approved — the sign-off — is not
+// offered while such a line is still open; it then covers only the remaining (passing) lines. The bill's Disputed still covers every open line.
+export function lineResultWord(r) { return r && (r.outcome === 'discrepancy' || r.outcome === 'product_missing') ? 'FAIL' : 'REVIEW'; }
+export function ownLineControls(inv) { if (!inv || inv.previewed) { return []; } return (inv.products || []).filter(function (r) { return openForDecision(r) && PASS_OUTCOMES.indexOf(r.outcome) < 0; }); }
+export function lineFpKey(r) { return String((r && r.item_key) || '') + ':' + String((r && r.comparison_fp) || ''); }
+// a line's answer is shown only while that line shows the same comparison; a green "Saved" only while the line is decided
+export function lineMsgFor(msg, r) { if (!msg || !msg.text || msg.kind === 'busy' || !r) { return null; } if (msg.fp !== lineFpKey(r)) { return null; } if (msg.kind === 'ok' && DONE_STATES.indexOf(r.state) < 0 && r.state !== 'issue_open') { return null; } return msg; }
 export function fullyReviewed(rows) { var rr = (rows || []).filter(reviewRelevant); return rr.length > 0 && rr.every(function (r) { return DONE_STATES.indexOf(r.state) >= 0; }) && !(rows || []).some(function (r) { return r.state === 'issue_open'; }); }
 // explicit colours: the Hub's dark theme must never make these boxes unreadable (Max 25 Nov "you can't see the fonts")
 var FIELD = { background: '#ffffff', color: INK, border: '1px solid #cbd5e1', borderRadius: 8, padding: '6px 10px', fontSize: 13, lineHeight: '18px' };
@@ -307,8 +317,14 @@ export function autoReason(inv) {
   if (bases.yd) { return 'Approved: billed yards vs receipt yards — an exact match'; }
   return 'Approved: billed weight vs scanned weight within the approved tolerance';
 }
-function reasonProblem(inv, mode, reason) {
-  if (mode === 'approve' && !inv.pass && reason.length < 5) { return 'Not saved: this bill is ' + cardResult(inv).label + ' — type a note in the box (a few words saying why you approve it anyway), then press Approved again.'; }
+// v55.83-ZW: the bill's Approved needs a note while any relevant line is neither a pass nor already decided (a FAIL line that was
+// approved on its own line no longer makes the bill's sign-off need a note). A preview keeps the plain rule (its lines are not decided yet).
+export function billAllPass(inv) { if (!inv) { return false; } if (inv.previewed) { return !!inv.pass; } var rel = (inv.rows || []).filter(reviewRelevant); return rel.length > 0 && rel.every(function (r) { return PASS_OUTCOMES.indexOf(r.outcome) >= 0 || DONE_STATES.indexOf(r.state) >= 0; }); }
+function reasonProblem(inv, mode, reason, targets) {
+  // v55.83-ZW: with a chosen set of lines, the note is required when ANY of THOSE lines is not a pass; one line names itself
+  var allPass = targets ? targets.every(function (r) { return PASS_OUTCOMES.indexOf(r.outcome) >= 0; }) : billAllPass(inv);
+  var what = targets && targets.length === 1 ? (targets[0].product_label || 'this line') + ' is ' + lineResultWord(targets[0]) : 'this bill is ' + cardResult(inv).label;
+  if (mode === 'approve' && !allPass && reason.length < 5) { return 'Not saved: ' + what + ' — type a note in the box (a few words saying why you approve it anyway), then press Approved again.'; }
   if (mode === 'dispute' && reason.length < 5) { return 'Not saved: type what is wrong in the box (a few words), then press Disputed again.'; }
   return '';
 }
@@ -356,7 +372,10 @@ export function reconcileWords(res, refreshed, inv, mode, label) {
 
 export async function runInvoiceDecision(o) {
   var inv = o.inv; var mode = o.mode; var reason = String(o.reason || '').trim();
-  var problem = reasonProblem(inv, mode, reason); if (problem) { return { ok: false, error: problem, wrote: 0 }; }
+  function targetsOf(v) { return o.lines ? (v.rows || []).filter(function (r) { return o.lines.indexOf(r.item_key) >= 0; }) : null; }
+  var problem = reasonProblem(inv, mode, reason, targetsOf(inv)); if (problem) { return { ok: false, error: problem, wrote: 0 }; }
+  // v55.83-ZW (Max: "Second signature cannot be completed until all are passing"): the bill's Approved waits for every failing line
+  if (mode === 'approve' && !o.lines && ownLineControls(inv).length) { return { ok: false, error: 'Not saved: approve or dispute each failing line on its own first (' + ownLineControls(inv).map(function (r) { return r.product_label || r.item_key; }).join(', ') + ') — then the bill can be approved.', wrote: 0 }; }
   if (inv.previewed) {
     var shown = invoiceSignature(inv);
     var c = inv.proposed || (inv.linkRow && (inv.linkRow.candidates || [])[0]);
@@ -373,11 +392,14 @@ export async function runInvoiceDecision(o) {
       return { ok: false, stopped: true, linked: true, error: 'Receipt ' + c.receipt_id + ' is confirmed, but with it ' + what + (again.pass ? '' : ' — now REVIEW') + '. Nothing was ' + (mode === 'dispute' ? 'disputed' : 'approved') + ': look at the card again and choose.', wrote: 0, inv: again };
     }
     inv = again;
-    problem = reasonProblem(inv, mode, reason); if (problem) { return { ok: false, stopped: true, linked: true, error: problem, wrote: 0, inv: inv }; }
+    problem = reasonProblem(inv, mode, reason, targetsOf(inv)); if (problem) { return { ok: false, stopped: true, linked: true, error: problem, wrote: 0, inv: inv }; }
+    if (mode === 'approve' && !o.lines && ownLineControls(inv).length) { return { ok: false, stopped: true, linked: true, error: 'Receipt confirmed. Now approve or dispute each failing line on its own (' + ownLineControls(inv).map(function (r) { return r.product_label || r.item_key; }).join(', ') + ') — then the bill can be approved.', wrote: 0, inv: inv }; }
   }
-  if (mode === 'approve' && inv.pass && reason.length < 5) { reason = autoReason(inv); }
+  var tg = targetsOf(inv);
+  if (mode === 'approve' && (tg ? tg.every(function (r) { return PASS_OUTCOMES.indexOf(r.outcome) >= 0; }) : billAllPass(inv)) && reason.length < 5) { reason = autoReason(inv); }
   var todo = inv.rows.filter(openForDecision); // never re-send a line that is already decided
-  if (!todo.length) { return { ok: false, error: 'Nothing left to decide on this invoice.', wrote: 0, linked: !!o.inv.previewed }; }
+  if (o.lines) { todo = todo.filter(function (r) { return o.lines.indexOf(r.item_key) >= 0; }); } // v55.83-ZW: only the chosen line(s)
+  if (!todo.length) { return { ok: false, error: o.lines ? 'This line is already decided — nothing was sent.' : 'Nothing left to decide on this invoice.', wrote: 0, linked: !!o.inv.previewed }; }
   var blocked = todo.filter(function (r) { var a = r.allowed || []; return mode === 'dispute' ? a.indexOf('report_issue') < 0 : (a.indexOf('validate_match') < 0 && a.indexOf('accept_discrepancy') < 0); });
   if (blocked.length) { return { ok: false, error: 'Not possible yet: ' + blocked.map(function (r) { return r.product_label || r.outcome_words || r.outcome; }).join(', ') + ' — see the note on the card.', wrote: 0, linked: !!o.inv.previewed }; }
   var failed = []; var wrote = 0; var uncertainLines = []; var notSent = [];
@@ -390,7 +412,7 @@ export async function runInvoiceDecision(o) {
   }
   if (uncertainLines.length) { return { ok: false, uncertain: true, wrote: wrote, uncertainLines: uncertainLines, notSent: notSent, failed: failed, error: uncertainLines[0].error, mode: mode }; }
   if (failed.length) { return { ok: false, error: 'Some lines were not saved — ' + failed.join(' · '), wrote: wrote, failed: failed }; }
-  return { ok: true, wrote: wrote, message: (mode === 'dispute' ? 'Disputed: ' : 'Approved: ') + inv.bills.map(function (b) { return b.vendor + ' ' + b.bill_number; }).join(' + ') };
+  return { ok: true, wrote: wrote, message: (mode === 'dispute' ? 'Disputed: ' : 'Approved: ') + (o.lines && todo.length === 1 ? (todo[0].product_label || 'line') + ' on ' : '') + inv.bills.map(function (b) { return b.vendor + ' ' + b.bill_number; }).join(' + ') };
 }
 
 export default function WeightCheckInvoices(props) {
@@ -408,6 +430,8 @@ export default function WeightCheckInvoices(props) {
   var _w = useState(null); var wires = _w[0], setWires = _w[1]; // v55.83-ZL: { list, note }
   var _wi = useState((props.wirePreset && props.wirePreset.wire_id) || ''); var wireId = _wi[0], setWireId = _wi[1];
   var _op = useState({}); var openCards = _op[0], setOpenCards = _op[1]; // v55.83-ZL: cards are CLOSED by default
+  var _if = useState({}); var inflight = _if[0]; // v55.83-ZW: card key → a decision in flight (a plain object kept across renders: a second fast click is ignored before any re-render)
+  var _dv = useState(null); var docBill = _dv[0], setDocBill = _dv[1]; // v55.83-ZW: { key, bill } shown in the invoice pop-up
   var _cm = useState({}); var cardMsg = _cm[0], setCardMsg = _cm[1]; // v55.83-ZT: card key → { kind: 'ok' | 'warn' | 'err', text, fp, needNote }
   var _la = useState(null); var lastAction = _la[0], setLastAction = _la[1]; // v55.83-ZT: the last Approved / Disputed answer, kept above the list (a decided card can leave a filtered view)
   var [mapError, setMapError] = useState(null);
@@ -513,16 +537,22 @@ export default function WeightCheckInvoices(props) {
     </div>;
   }
 
+  // v55.83-ZW (Codex 13:20: simultaneous shortcuts): while the bill OR one of its lines is saving, every decision button of that card waits
+  function cardBusy(inv) { return !!busy && (busy === inv.key || String(busy).indexOf(inv.key + '|') === 0); }
   function putCardMsg(k, m) { setCardMsg(function (prev) { var o = Object.assign({}, prev); if (m) { o[k] = m; } else { delete o[k]; } return o; }); }
-  async function decideAll(inv, mode) {
-    var fpk = fpKey(inv); var label = inv.bills.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' + ');
-    putCardMsg(inv.key, { kind: 'busy', text: '', fp: fpk });
-    setBusy(inv.key);
+  async function decideAll(inv, mode, line) {
+    // v55.83-ZW: line = one product row → only that line is sent, with ITS note; the answer is shown on that line
+    var lk = line ? inv.key + '|' + line.item_key : inv.key;
+    var fpk = line ? lineFpKey(line) : fpKey(inv); var label = inv.bills.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' + ') + (line ? ' — ' + (line.product_label || 'line') : '');
+    if (inflight[inv.key]) { return; } inflight[inv.key] = true;
+    putCardMsg(lk, { kind: 'busy', text: '', fp: fpk });
+    setBusy(lk);
     var res; var unknown = false;
-    try { res = await runInvoiceDecision({ inv: inv, mode: mode, reason: reasons[inv.key], api: wcApi, reload: function () { return refreshKeep().then(function (j) { return (j && j.ok && j.rows) || []; }); } }); }
+    try { res = await runInvoiceDecision({ inv: inv, mode: mode, reason: reasons[lk], lines: line ? [line.item_key] : null, api: wcApi, reload: function () { return refreshKeep().then(function (j) { return (j && j.ok && j.rows) || []; }); } }); }
     catch (eD) { unknown = true; res = { ok: false, wrote: 0, error: 'Could not confirm whether this was saved (' + ((eD && eD.message) || 'no answer') + ') — press Show (last reading) to see what is saved now.' }; }
     var refreshed = null;
-    if (res.wrote || res.linked || unknown || res.uncertain) { refreshed = await refreshKeep(); }
+    if (res.wrote || res.linked || unknown || res.uncertain) { try { refreshed = await refreshKeep(); } catch (eR) { refreshed = { ok: false }; } }
+    delete inflight[inv.key];
     setBusy('');
     var refreshFailed = !!(refreshed && !refreshed.ok);
     var n = res.wrote || 0; var lines = n + ' line' + (n === 1 ? '' : 's');
@@ -533,8 +563,8 @@ export default function WeightCheckInvoices(props) {
     else if (n > 0) { m = { kind: 'warn', text: 'Partly saved: ' + lines + ' saved; ' + String(res.error || '').replace(/^Some lines were not saved — /, 'not saved: ') + ' — press Show (last reading), then decide the rest.' }; }
     else { m = { kind: 'err', text: res.error || 'Not saved.', needNote: /type (a note|what is wrong) in the box/.test(res.error || '') }; }
     // the answer belongs to the card as it is NOW: after a successful re-read, the comparison that came back (e.g. a confirmed receipt)
-    var msgKey = inv.key; m.fp = fpk;
-    if (refreshed && refreshed.ok) { var g2 = groupInvoices(refreshed.rows || []).filter(function (v) { return v.bills.some(function (b) { return b.id === inv.bills[0].id; }); })[0]; if (g2) { m.fp = fpKey(g2); msgKey = g2.key; } }
+    var msgKey = lk; m.fp = fpk;
+    if (refreshed && refreshed.ok) { var g2 = groupInvoices(refreshed.rows || []).filter(function (v) { return v.bills.some(function (b) { return b.id === inv.bills[0].id; }); })[0]; if (g2) { if (line) { var r2 = g2.rows.filter(function (x) { return x.item_key === line.item_key; })[0]; if (r2) { m.fp = lineFpKey(r2); msgKey = g2.key + '|' + line.item_key; } } else { m.fp = fpKey(g2); msgKey = g2.key; } } }
     putCardMsg(msgKey, m);
     setLastAction({ kind: m.kind, text: label + ': ' + m.text, at: new Date().toISOString() });
     say(props.toast, m.text, m.kind === 'ok' ? 'success' : 'error'); // the corner message says the same as the card
@@ -547,7 +577,7 @@ export default function WeightCheckInvoices(props) {
     if (!perms.settings) { return <div style={{ fontSize: 12, color: MUTED }}>No product mapping yet — someone with “Warehouse check: Settings” maps it.</div>; }
     return <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end', marginTop: 6, padding: 8, background: SOFT, border: '1px dashed #cbd5e1', borderRadius: 8 }}>
       <div style={{ fontSize: 12, color: em ? '#1e3a8a' : SUB, fontWeight: em ? 700 : 400, width: '100%' }}>{em ? 'Change the mapping for “' + (em.bill_description || em.item_key) + '” (' + em.bill_unit + ') — now version ' + em.version + '. Saving makes version ' + (em.version + 1) + '; version ' + em.version + ' is kept in the history. Decisions that used it are asked again.' : 'Map “' + (((r.bill_line || (r.bill_lines || [])[0]) || {}).description || 'this product') + '” to the warehouse product it is scanned as:'}</div>
-      <label><span style={LABEL}>Warehouse product</span><select value={e.wh_product_type || ''} onChange={function (ev) { setE('wh_product_type', ev.target.value); }} className="nt-light" style={FIELD}><option value="">choose…</option>{Object.keys(pts).map(function (id) { return <option key={id} value={id}>{pts[id]}</option>; })}</select></label>
+      <label><span style={LABEL}>Warehouse product</span><select value={e.wh_product_type || ''} onChange={function (ev) { setE('wh_product_type', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any product type (match by grade)</option>{Object.keys(pts).map(function (id) { return <option key={id} value={id}>{pts[id]}</option>; })}</select></label>
       <label><span style={LABEL}>Grade (CGT)</span><select value={e.wh_cgt || ''} onChange={function (ev) { setE('wh_cgt', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any grade</option>{Object.keys(cgts).map(function (id) { return <option key={id} value={id}>{cgts[id]}</option>; })}</select></label>
       {em ? <label><span style={LABEL}>NT grade</span><select value={e.wh_nt || ''} onChange={function (ev) { setE('wh_nt', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any</option>{Object.keys(nts).map(function (id) { return <option key={id} value={id}>{nts[id]}</option>; })}</select></label> : null}
       {em ? <label><span style={LABEL}>Colour</span><select value={e.wh_color || ''} onChange={function (ev) { setE('wh_color', ev.target.value); }} className="nt-light" style={FIELD}><option value="">any</option>{Object.keys(cols).map(function (id) { return <option key={id} value={id}>{cols[id]}</option>; })}</select></label> : null}
@@ -637,7 +667,9 @@ export default function WeightCheckInvoices(props) {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <span style={pill(badge[1], badge[2])}>{badgeText}</span>
           <span style={{ fontSize: 14, fontWeight: 800 }}>{head}</span>
+          {inv.bills.map(function (b) { return <button key={'doc' + b.id} data-testid="open-invoice" onClick={function () { setDocBill({ key: inv.key, bill: b }); }} title="Open the invoice here — closing it keeps you on this card" style={Object.assign(btn('#1e293b', '#ffffff'), { padding: '4px 10px', fontSize: 12 })}>{'📄 Invoice' + (inv.bills.length > 1 ? ' ' + (b.bill_number || '') : '')}</button>; })}
         </div>
+        {docBill && docBill.key === inv.key ? <div data-testid="invoice-popup" role="dialog" aria-modal="true" aria-label={'Invoice ' + (docBill.bill.bill_number || '')} onClick={function () { setDocBill(null); }} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}><div onClick={function (e) { e.stopPropagation(); }} style={{ background: '#ffffff', width: 900, maxWidth: '96vw', maxHeight: '94vh', overflow: 'auto', borderRadius: 2, border: '2px solid #000000' }}><div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#000000', color: '#ffffff', fontWeight: 800, fontSize: 13 }}><span style={{ flex: 1 }}>{(docBill.bill.vendor || '') + ' · Bill ' + (docBill.bill.bill_number || '') + (docBill.bill.bill_date ? ' · ' + docBill.bill.bill_date : '')}</span><button data-testid="close-invoice" onClick={function () { setDocBill(null); }} style={Object.assign(btn('#ffffff', '#000000'), { padding: '4px 12px' })}>Close ✕</button></div><div style={{ padding: 10 }}><BillDocViewer bill={{ id: docBill.bill.id, attachment_path: docBill.bill.attachment_path || '' }} /></div></div></div> : null}
         <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>{receipts.length ? receipts.join('   ·   ') : 'No warehouse receipt linked yet'}</div>
         {inv.previewed && inv.proposed ? <div style={{ fontSize: 12, marginTop: 8, padding: '6px 10px', borderRadius: 8, background: '#eff6ff', color: '#1e3a8a', border: '1px solid #bfdbfe' }}>{'Matched by reference to warehouse receipt ' + (inv.proposed.reference_number || inv.proposed.receipt_id) + ' (' + inv.proposed.bill_value + ' = ' + inv.proposed.receipt_value + '). Shown for review — pressing Approved confirms this receipt belongs to the bill.'}</div> : null}
         {inv.shared ? <div style={{ fontSize: 12, marginTop: 8, padding: '6px 10px', borderRadius: 8, background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d' }}>{'These ' + inv.bills.length + ' invoices share the same warehouse receipt, so they are compared TOGETHER: ' + badge[0] + ' is the result for the group, not for each invoice on its own. What each invoice billed is listed below.'}</div> : null}
@@ -656,6 +688,8 @@ export default function WeightCheckInvoices(props) {
               <td style={{ padding: '7px 8px' }}><span style={pill(ok ? GREEN : RED, ok ? '#f0fdf4' : '#fef2f2')}>{ok ? passWords(f.diff, ((f.checks || {})[f.basis === 'yd' ? 'yards' : 'weight'] || {}).tol || tol, f.basis) : (r.outcome === 'discrepancy' || r.outcome === 'product_missing' ? 'FAIL' : 'REVIEW')}</span><span style={{ fontSize: 12, color: MUTED, marginLeft: 6 }}>{r.outcome_words || r.outcome}{r.state && DONE_STATES.indexOf(r.state) >= 0 ? ' · ' + (r.state_words || r.state) : r.state === 'issue_open' ? ' · disputed' : ''}</span>{lineApproval(r) ? <div data-testid="line-approval" style={{ fontSize: 11, fontWeight: 600, color: GREEN, marginTop: 3 }}>{lineApproval(r)}</div> : null}</td>
             </tr>
             {f.checks ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{checksBlock(f.checks)}</td></tr> : null}
+            {(perms.accept || perms.validate) && !inv.approved && ownLineControls(inv).some(function (x) { return x.item_key === r.item_key; }) ? (function () { var lk = inv.key + '|' + r.item_key; var nm = r.product_label || 'this line'; var lm = lineMsgFor(cardMsg[lk], r); var a = r.allowed || []; var busyCard = cardBusy(inv); return <tr><td colSpan={5} style={{ padding: '0 8px 10px' }}><div data-testid="line-decide" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', padding: '8px 10px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 2 }}><span style={{ fontSize: 12, fontWeight: 800, color: RED }}>{'Decide this line — ' + nm + ' is ' + lineResultWord(r)}</span><input value={reasons[lk] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[lk] = e.target.value; setReasons(o); }} placeholder={'Note for ' + nm + ' — REQUIRED (a few words why)'} aria-label={'Note for ' + nm} className="nt-light" style={Object.assign({}, FIELD, { flex: '1 1 240px' }, lm && lm.needNote && String(reasons[lk] || '').trim().length < 5 ? { border: '2px solid #ef4444' } : {})} />{perms.accept && (a.indexOf('accept_discrepancy') >= 0 || a.indexOf('validate_match') >= 0) ? <button data-testid="line-approve" disabled={busyCard} onClick={function () { decideAll(inv, 'approve', r); }} style={Object.assign(btn(GREEN, '#ffffff'), { opacity: busyCard ? 0.6 : 1 })}>{busy === lk ? 'Saving…' : 'Approved'}</button> : null}{perms.validate && a.indexOf('report_issue') >= 0 ? <button data-testid="line-dispute" disabled={busyCard} onClick={function () { decideAll(inv, 'dispute', r); }} style={Object.assign(btn(RED, '#ffffff'), { opacity: busyCard ? 0.6 : 1 })}>Disputed</button> : null}</div></td></tr>; })() : null}
+            {lineMsgFor(cardMsg[inv.key + '|' + r.item_key], r) ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}><CardMessage msg={lineMsgFor(cardMsg[inv.key + '|' + r.item_key], r)} /></td></tr> : null}
             {r.needs_mapping || changing[r.item_key] ? <tr><td colSpan={5} style={{ padding: '0 8px 8px' }}>{MapForm({ row: r, inv: inv })}</td></tr> : null}
             </React.Fragment>;
           })}</tbody></table> : null}
@@ -667,9 +701,9 @@ export default function WeightCheckInvoices(props) {
 
         {gWarn && canDecide && (perms.validate || perms.accept) && !inv.approved && !inv.disputed ? <div role="note" style={{ fontSize: 12, marginTop: 10, padding: '6px 10px', borderRadius: 2, background: '#fffbeb', color: '#92400e', border: '1px solid #f59e0b', fontWeight: 700 }}>{gWarn}</div> : null}
         {canDecide && (perms.validate || perms.accept) && !inv.approved && !inv.disputed ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: '1px solid ' + LINE }}>
-          <input value={reasons[inv.key] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[inv.key] = e.target.value; setReasons(o); }} placeholder={inv.pass ? 'Note (optional)' : 'Note — REQUIRED to approve this ' + cardResult(inv).label + ' (a few words why), or to dispute'} aria-label="Note for Approved or Disputed" className="nt-light" style={Object.assign({}, FIELD, { flex: '1 1 260px' }, cardMsgFor(cardMsg[inv.key], inv) && cardMsg[inv.key].needNote && String(reasons[inv.key] || '').trim().length < 5 ? { border: '2px solid #ef4444' } : {})} />
-          <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'approve'); }} style={Object.assign(btn(GREEN, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>{busy === inv.key ? 'Saving…' : 'Approved'}</button>
-          <button disabled={busy === inv.key} onClick={function () { decideAll(inv, 'dispute'); }} style={Object.assign(btn(RED, '#ffffff'), { opacity: busy === inv.key ? 0.6 : 1 })}>Disputed</button>
+          <input value={reasons[inv.key] || ''} onChange={function (e) { var o = Object.assign({}, reasons); o[inv.key] = e.target.value; setReasons(o); }} placeholder={billAllPass(inv) ? 'Note (optional)' : 'Note — REQUIRED to approve this ' + cardResult(inv).label + ' (a few words why), or to dispute'} aria-label="Note for Approved or Disputed" className="nt-light" style={Object.assign({}, FIELD, { flex: '1 1 260px' }, cardMsgFor(cardMsg[inv.key], inv) && cardMsg[inv.key].needNote && String(reasons[inv.key] || '').trim().length < 5 ? { border: '2px solid #ef4444' } : {})} />
+          {ownLineControls(inv).length ? <span data-testid="signoff-waits" style={{ fontSize: 12, fontWeight: 700, color: AMBER }}>{'Approve the bill after each failing line is decided above (' + ownLineControls(inv).length + ' left: ' + ownLineControls(inv).map(function (x) { return x.product_label || x.item_key; }).join(', ') + ')'}</span> : <button data-testid="bill-approve" disabled={cardBusy(inv)} onClick={function () { decideAll(inv, 'approve'); }} style={Object.assign(btn(GREEN, '#ffffff'), { opacity: cardBusy(inv) ? 0.6 : 1 })}>{busy === inv.key ? 'Saving…' : 'Approved'}</button>}
+          <button data-testid="bill-dispute" disabled={cardBusy(inv)} onClick={function () { decideAll(inv, 'dispute'); }} style={Object.assign(btn(RED, '#ffffff'), { opacity: cardBusy(inv) ? 0.6 : 1 })}>{ownLineControls(inv).length ? 'Dispute the whole bill' : 'Disputed'}</button>
         </div> : null}
         <CardMessage msg={cardMsgFor(cardMsg[inv.key], inv)} />
         {inv.rows.some(reviewRelevant) ? (function () { var q = reviewRecord(inv); return <div data-testid="review-record" style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid ' + LINE }}><span style={LABEL}>Review record</span>{q.entries.length ? q.entries.map(function (h, i) { return <div key={i} style={{ fontSize: 12, fontWeight: 600, color: h.fam === 'pass' || h.fam === 'resolve' ? GREEN : h.fam === 'reopen' ? AMBER : RED, marginTop: 2 }}>{h.icon + ' ' + h.text}</div>; }) : <div style={{ fontSize: 12, fontWeight: 600, color: AMBER, marginTop: 2 }}>Not reviewed yet</div>}{q.changed ? <div style={{ fontSize: 12, fontWeight: 700, color: AMBER, marginTop: 6 }}>{'↺ The figures changed after the last review on ' + q.changed + ' line' + (q.changed === 1 ? '' : 's') + ' — decide again'}</div> : null}</div>; })() : null}

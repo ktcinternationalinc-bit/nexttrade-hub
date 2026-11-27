@@ -25,7 +25,9 @@ function row(label, outcome) {
   return r;
 }
 function rows() {
-  var out = [row('Texas Thirds', 'matched'), row('Texas Third Folds', 'discrepancy')];
+  // v55.83-ZW: both lines PASS — a failing line is now approved on its OWN line (Max), so the multi-line transport path is exercised by
+  // the bill's Approved on a passing bill (and by the whole-bill Disputed); the per-line path is in test-v55-83-zw-line-decisions.js
+  var out = [row('Texas Thirds', 'matched'), row('Texas Third Folds', 'matched')];
   if (srv.preview && !srv.linked) { out.push({ item_key: 'b:' + bill.id + '|unlinked', kind: 'bill', outcome: 'cannot_compare', needs_link: true, preview_available: true, bill_ids: [bill.id], bills: [bill], candidates: [{ receipt_id: '2216', bases: ['reference_number'] }], outstanding: true, state: 'unreviewed', reasons: [] }); }
   return out;
 }
@@ -95,7 +97,7 @@ async function approve(plan) { srv.plan = plan; await type(note(), 'checked agai
   await fresh(); await approve({ 'decide:k-Texas Third Folds': 'delayed' });
   check('DELAYED commit: the immediate re-read still shows line 2 open → "1 line saved; not yet confirmed: Texas Third Folds … check … before pressing Approved again" (no "not saved", no blind retry)', cardMsg() === '⚠ Connection problem — checked again: 1 line saved; not yet confirmed: Texas Third Folds. ' + CHECK, cardMsg());
   await click(button('Show (last reading)'));
-  check('…and pressing Show a moment later shows it saved (the write had landed): the line is accepted, nothing left to decide', srv.decided['k-Texas Third Folds'] === 'accepted' && !button('Approved'), [srv.decided, !!button('Approved')]);
+  check('…and pressing Show a moment later shows it saved (the write had landed): the line is validated, nothing left to decide', srv.decided['k-Texas Third Folds'] === 'validated' && !button('Approved'), [srv.decided, !!button('Approved')]);
   // 5. an ordinary explicit refusal (409) stays a refusal
   await fresh(); await approve({ 'decide:k-Texas Third Folds': 'refuse' });
   check('an EXPLICIT refusal (409 JSON) is a refusal: "Partly saved: 1 line saved; not saved: Texas Third Folds: The figures changed…" — no "connection problem"', /^⚠ Partly saved: 1 line saved; not saved: Texas Third Folds: The figures changed since you opened this/.test(cardMsg() || '') && !/Connection problem/.test(cardMsg() || ''), cardMsg());

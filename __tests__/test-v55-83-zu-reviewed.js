@@ -76,11 +76,15 @@ async function openCard() { var b = all(function (n) { return n.props && n.props
   srv.decided = { 'k-Paper · Paper Canada': 'validated', 'k-Boat Decking · Boat Decking': 'validated' };
   await click(button('Show (last reading)')); await openCard(); srv.calls = [];
   check('(set-up) partly decided (2 of 5): the bar is still FAIL (Fabrics open) and Approved is offered', /^\s*FAIL/.test(bar() || '') && !!button('Approved'), bar());
-  await type(note(), 'fabric is ok at this tolerance'); await click(button('Approved'));
+  // v55.83-ZW: the failing Fabrics line is approved ON ITS OWN line with its note; then the bill's Approved covers the passing lines
+  var fabNote = all(function (n) { return n.type === 'input' && n.props['aria-label'] === 'Note for Fabrics · Fabrics Canada'; })[0];
+  await type(fabNote, 'fabric is ok at this tolerance');
+  await click(all(function (n) { return n.props && n.props['data-testid'] === 'line-approve'; })[0]);
+  await click(button('Approved'));
   var sent = decides().map(function (c) { return c.item_key; });
-  check('Approved on a partly decided bill sends ONLY the 3 open lines (never the 2 already decided) — no "already decided" refusal', sent.length === 3 && sent.indexOf('k-Paper · Paper Canada') < 0 && sent.indexOf('k-Boat Decking · Boat Decking') < 0 && !/already decided/.test(JSON.stringify(srv.calls)), sent);
+  check('the 3 open lines are sent (Fabrics on its own line, then the 2 passing lines by the bill\'s Approved) — never the 2 already decided, no "already decided" refusal', sent.length === 3 && sent[0] === 'k-Fabrics · Fabrics Canada' && sent.indexOf('k-Paper · Paper Canada') < 0 && sent.indexOf('k-Boat Decking · Boat Decking') < 0 && !/already decided/.test(JSON.stringify(srv.calls)), sent);
   check('…after the save the bill reads "PASS — REVIEWED + DIFFERENCE ACCEPTED" and the buttons are gone', /^\s*PASS — REVIEWED\s*DIFFERENCE ACCEPTED/.test(bar() || '') && !button('Approved'), bar());
-  check('…and the history lists BOTH reviews: Max at 07:23 (2 lines validated) and Ahmed at 09:05 (2 validated, 1 difference accepted) with the note', /✓ Passed by approval — Max · 07:23 · 2 lines validated/.test(history() || '') && /✓ Passed by approval — Ahmed · 09:05 · 2 lines validated, 1 difference accepted · note: “fabric is ok at this tolerance”/.test(history() || ''), history());
+  check('…and the record lists every review: Max at 07:23 (2 lines validated), Ahmed at 09:05 Fabrics with ITS note, Ahmed at 09:05 the 2 passing lines with the automatic note', /✓ Passed by approval — Max · 07:23 · 2 lines validated/.test(history() || '') && /✓ Passed by approval — Ahmed · 09:05 · 1 difference accepted · note: “fabric is ok at this tolerance”/.test(history() || '') && /✓ Passed by approval — Ahmed · 09:05 · 2 lines validated · note: “Approved: billed weight vs scanned weight within the approved tolerance”/.test(history() || ''), history());
   // ZU-02 (Codex 12:36): the record reads the FULL history and names every kind; "figures changed" only on a real recheck
   function D(id, kind, who, at, reason) { return { id: id, kind: kind, actor: 'u-' + who, actor_name: who, at: at, reason: reason }; }
   var rc = INV.reviewRecord({ rows: [{ state: 'needs_revalidation', history: [D('a', 'validate_match', 'Max', '2026-11-25T10:00:00Z', 'ok then')] }] });
