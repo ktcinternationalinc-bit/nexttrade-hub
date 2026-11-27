@@ -28,6 +28,7 @@ import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { assemble, recheckWarehouse, lastRun, billAllowed, sha, decisionSnapshot, missingTables, latestMaps, loadVendorScope, inVendorScope, chunksByLength, MAX_IN_CHARS, dbReadError } from '../../../../lib/weight-check-server';
 import { WC_BUILD, allowedDecisions, DECISION_PERM, reportStatus, normRef, vendorKey, billItemKey, OUTCOME_WORDS, STATE_WORDS, BASIS_LABEL } from '../../../../lib/weight-check';
 import { receiptsFeedConfig } from '../../../../lib/weight-check-feed-server';
+import { isServiceOnlyBill } from '../../../../lib/bill-extract'; // v55.83-ZY
 
 export const maxDuration = 300;
 var API_BUILD_MARKER = 'v55.83-XB-weight-check';
@@ -259,6 +260,7 @@ export async function POST(req) {
         });
         bl = bl.filter(function (b) { return billAllowed(b, floor) && inVendorScope(scope, b.vendor_name); });
       }
+      bl = bl.filter(function (b) { return !isServiceOnlyBill(b); }); // v55.83-ZY — Other services / Operational bills are never goods: never in the weight check
       var withItems = {};
       var idsAll = bl.map(function (b) { return b.id; });
       for (var ci = 0; ci < idsAll.length; ci += 200) { (await allRows(function () { return db.from('vendor_bill_lines').select('bill_id').eq('line_kind', 'item').in('bill_id', idsAll.slice(ci, ci + 200)); })).forEach(function (l) { withItems[l.bill_id] = true; }); }

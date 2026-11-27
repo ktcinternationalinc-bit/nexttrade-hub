@@ -148,6 +148,7 @@ export function assembleProfitability(d) {
     var b = billById[l.bill_id];
     if (!b || l.line_kind !== 'item') { return; }
     if (b.bill_type === 'trucking' || b.bill_type === 'shipping' || b.bill_type === 'bonded_brokerage') { return; } // those are services, not goods
+    if (b.bill_type === 'other_services' || b.shipment_direction === 'operational') { return; } // v55.83-ZY — a service / not for a shipment: never a cost of goods
     costLines.push({ bill_id: b.id, bill_number: b.bill_number, vendor: b.vendor_name, bill_date: b.bill_date, release: b.release_number, description: l.description, qty: l.qty, unit: l.unit, cost_amount: l.cost_amount, amount: l.amount, commission_amount: l.commission_amount });
   });
   var linkedBillKeys = {}; Object.keys(billKeysOfGroup).forEach(function (g) { billKeysOfGroup[g].forEach(function (k) { linkedBillKeys[k] = true; }); });
@@ -210,6 +211,7 @@ export function assembleProfitability(d) {
   Object.keys(billById).forEach(function (id) {
     var b = billById[id]; var type = b.bill_type;
     if (type !== 'trucking' && type !== 'shipping' && type !== 'bonded_brokerage') { return; }
+    if (b.shipment_direction === 'operational') { return; } // v55.83-ZY — Operational = not for a shipment: never on a release or its P&L
     var rels = splitReleases(b.release_number);
     var mineRels = rels.filter(function (r) { return relKnown[r.key]; });
     var amount = r2(b.total_amount);

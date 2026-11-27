@@ -7,6 +7,7 @@ import { BILL_EXTRACT_PROMPT, parseBillExtraction, BILL_MEDIA_TYPES, importSort,
 import { saveBillLines, runPriceCheck } from './bill-lines-server';
 import { defaultDirectionFor } from './bill-lines';
 import { exactSameBill, exactSameWords } from './bill-dup-scan'; // v55.83-UQ
+import { autoValidatePayroll } from './payroll-auto-validate-server'; // v55.83-ZY — payroll bills validate themselves
 import { askBillReader } from './bill-reader-call'; // v55.83-WT — the one reader call, shared with the vendor statement check
 
 // v55.83-RP — the bill TYPE every VALIDATED bill of this vendor carries, when they all agree (else null: never guessed)
@@ -77,6 +78,8 @@ export async function insertImportedBill(db, row, draft) {
           last.price_check = pc && pc.check ? pc.check.status : null;
           last.price_flags = pc && pc.check ? pc.check.flags.map(function (f) { return f.text; }) : [];
         } catch (eL) { last.lines_saved = last.lines_saved || 0; }
+        // v55.83-ZY (Max 27 Nov: "payroll is automatically validated") — after the lines are saved (a line can make it payroll)
+        last.payroll = await autoValidatePayroll(db, last.data.id);
       }
       return last;
     }

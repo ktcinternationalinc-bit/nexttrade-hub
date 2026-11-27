@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZY',
+    date: '2026-11-27',
+    title: 'Bills: “Other services” type, “Operational” bills, and payroll bills validate themselves',
+    items: [
+      { text: 'New bill type **🧾 Other services** — software, subscriptions, office and professional services (for example the QuickBooks subscription). It is a service, never goods: it never counts as a product cost and never goes into the Warehouse check.' },
+      { text: 'New choice under **This bill is for: 🏢 Operational** — a bill that is not for a shipment. It needs **no release # and no reference**. An Operational bill never carries a release #, so it is never attached to a shipment or its profit.' },
+      { text: 'The choices show everywhere you mark a bill: adding / editing a bill, validating it, the wire screens, and the filters in 💸 Bills.' },
+      { text: '**Payroll bills validate themselves.** When a payroll bill is created or imported, the Hub marks it validated at once — no type, direction, ticks or “how verified” needed. It reads **✓ VALIDATED · auto (payroll rule)**, and the record says which rule matched, when, and that the system did it. Payroll bills are still shown to the super admin only.' },
+      { superAdminOnly: true, text: 'Run sql/v55-83-ZY-other-services-operational.sql (one transaction, only widens): vendor_bills bill_type + other_services, shipment_direction + operational; same on bill_price_rules / bill_commission_rules.default_direction; hub_bill_auto_validate_payroll(jsonb) (service_role only: sets validated, validated_by NULL, note “Auto-validated: payroll (rule) — reasons”, fills type/direction only when empty, answers a flagged price check in plain words, audit bill_auto_validated_payroll actor NULL); validation trigger message names Operational; hub_bill_other_services_installed(). Until it is run: the new choices are refused with a plain message (nothing saved) and payroll bills wait for validation as before. Payroll rule = ZD payrollReasons for that one bill (src/lib/payroll-auto-validate-server.js), called after save_bill create, every insertImportedBill door, repeating bills and Nextrade-created KTC bills. Existing unvalidated payroll bills are NOT back-filled (data change — Max decides).' },
+    ]
+  },
+  {
     version: 'v55.83-ZW',
     date: '2026-11-27',
     title: 'Warehouse check: a note and Approved / Disputed on each failing line, and the invoice in a pop-up',

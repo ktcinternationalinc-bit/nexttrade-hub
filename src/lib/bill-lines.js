@@ -21,7 +21,7 @@ export var LINE_KINDS = ['item', 'charge', 'commission'];
 export function defaultDirectionFor(rules, vendorName) {
   var cr = commissionRuleFor(rules, vendorName);
   if (!cr) { return null; }
-  if (cr.default_direction === 'inbound' || cr.default_direction === 'outbound') { return cr.default_direction; }
+  if (cr.default_direction === 'inbound' || cr.default_direction === 'outbound' || cr.default_direction === 'operational') { return cr.default_direction; } // ZY + operational
   return normText(cr.vendor_match) === 'nexpac' ? 'inbound' : null; // before the RW SQL is run
 }
 export var LINE_KIND_LABEL = { item: 'Product', charge: 'Charge / service', commission: 'Commission' };
@@ -137,7 +137,7 @@ function ruleWords(rule) {
   var w = [];
   if (rule.vendor_match) { w.push(rule.vendor_match); }
   if (rule.item_match) { w.push('“' + rule.item_match + '”'); }
-  if (rule.bill_type) { w.push(String(rule.bill_type).replace('_', ' / ')); }
+  if (rule.bill_type) { w.push(rule.bill_type === 'bonded_brokerage' ? 'bonded / brokerage' : String(rule.bill_type).replace(/_/g, ' ')); } // ZY: other services
   return 'rule: ' + w.join(', ') + (rule.applies_to === 'billed' ? ', price incl. commission' : '') + (rule.note ? ' — ' + rule.note : '') + ', ±' + Number(rule.tolerance_pct == null ? 0 : rule.tolerance_pct) + '% allowed';
 }
 function pctOf(diff, base) { return base ? (diff > 0 ? '+' : '−') + Math.abs(Math.round(diff / base * 1000) / 10) + '%' : ''; }

@@ -12,7 +12,7 @@ export var BILL_EXTRACT_PROMPT = [
   ' "due_date": "YYYY-MM-DD"|null, "total_amount": number|null, "currency": "USD"|"EGP"|string|null,',
   ' "category": string|null, "notes": string|null,',
   ' "release_number": string|null, "other_reference": string|null,',
-  ' "bill_type": "trucking"|"shipping"|"bonded_brokerage"|"supplier"|null,',
+  ' "bill_type": "trucking"|"shipping"|"bonded_brokerage"|"supplier"|"other_services"|null,',
   ' "lines": [{"description": string, "qty": number|null, "unit": string|null, "unit_price": number|null, "amount": number|null, "line_kind": "item"|"charge"|"commission"}]}',
   'Rules:',
   '- vendor_name = who issued the bill (the supplier), never the recipient (KTC).',
@@ -26,7 +26,8 @@ export var BILL_EXTRACT_PROMPT = [
   '    "trucking" = road freight / drayage / trucking / delivery by truck;',
   '    "shipping" = ocean or air freight, shipping line, freight forwarder, port / terminal / demurrage charges;',
   '    "bonded_brokerage" = customs brokerage, bonded warehouse, customs entry / duty / clearance fees;',
-  '    "supplier" = goods or materials bought from a supplier / manufacturer.',
+  '    "supplier" = goods or materials bought from a supplier / manufacturer;',
+  '    "other_services" = software, subscriptions, office, utilities or professional services (e.g. QuickBooks, phone, accountant) — not freight and not goods.',
   '  If it is not clear, use null — NEVER guess.',
   '- lines = EVERY priced row of the bill, top to bottom, exactly as printed (description, quantity, unit, rate/price per unit, line amount).',
   '    line_kind "item" = goods/products; "charge" = a service or fee (line haul, fuel, rail swing, demurrage, customs entry…); "commission" = a commission row.',
@@ -65,8 +66,19 @@ function cleanStr(x, max) {
 // v55.83-RP (Max, Nov 9 21:04: "Hub should be able to assess if bill is for Trucking or Shipping or Bonded Brokerage
 // fees or supplier bill ... If hub cannot assess the type of bill ... leave blank and ... it will be part of the
 // validation process manually done. Prior to validation there MUST be a selection of the TYPE of bill and the direction")
-export var BILL_TYPES = ['trucking', 'shipping', 'bonded_brokerage', 'supplier'];
-export var BILL_TYPE_LABEL = { trucking: '🚚 Trucking', shipping: '🚢 Shipping', bonded_brokerage: '🛃 Bonded / Brokerage', supplier: '📦 Supplier' };
+// v55.83-ZY (Max, 27 Nov 2026: "we need other services as a selection for type of bill") — Other services = software, subscriptions,
+// office and professional services: a service / charge, NEVER goods, never a cost of goods on a release.
+export var BILL_TYPES = ['trucking', 'shipping', 'bonded_brokerage', 'supplier', 'other_services'];
+export var BILL_TYPE_LABEL = { trucking: '🚚 Trucking', shipping: '🚢 Shipping', bonded_brokerage: '🛃 Bonded / Brokerage', supplier: '📦 Supplier', other_services: '🧾 Other services' };
+// v55.83-ZY (Max: "this bill is for add Operational") — "This bill is for": Inbound / Outbound shipment, or Operational = not tied to a
+// shipment (no release # and no reference needed; never attached to a release or its P&L).
+export var BILL_DIRECTIONS = ['inbound', 'outbound', 'operational'];
+export var BILL_DIRECTION_LABEL = { inbound: '⬅ Inbound', outbound: 'Outbound ➡', operational: '🏢 Operational' };
+export function isOperationalBill(b) { return !!b && b.shipment_direction === 'operational'; }
+// never goods, never in the warehouse weight check, never a cost of goods
+// a payroll bill the system validated (ZY: validated_by empty, the note starts with the rule words)
+export function isPayrollAutoValidated(b) { return !!b && b.validation_status === 'validated' && !b.validated_by && /^Auto-validated: payroll \(rule\)/.test(String(b.validation_notes || '')); }
+export function isServiceOnlyBill(b) { return !!b && (b.shipment_direction === 'operational' || b.bill_type === 'other_services'); }
 // a release number on the bill = an OUTBOUND bill; no release = left blank for the validator (never guessed inbound)
 export function autoDirection(releaseNumber) {
   var r = String(releaseNumber || '').trim();
@@ -80,7 +92,7 @@ export function importSort(draft, vendorHistoryType, vendorDefaultDirection) {
   else if (vendorHistoryType && BILL_TYPE_LABEL[vendorHistoryType]) { out.bill_type = vendorHistoryType; out.bill_type_source = 'vendor_history'; }
   var dir = autoDirection(out.release_number);
   if (dir) { out.shipment_direction = dir; out.direction_source = 'release_number'; }
-  else if (vendorDefaultDirection === 'inbound' || vendorDefaultDirection === 'outbound') { out.shipment_direction = vendorDefaultDirection; out.direction_source = 'vendor_default'; } // RW — e.g. NexPac → inbound
+  else if (vendorDefaultDirection === 'inbound' || vendorDefaultDirection === 'outbound' || vendorDefaultDirection === 'operational') { out.shipment_direction = vendorDefaultDirection; out.direction_source = 'vendor_default'; } // RW — e.g. NexPac → inbound
   return out;
 }
 

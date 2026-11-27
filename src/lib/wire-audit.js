@@ -135,7 +135,7 @@ export function auditWire(input) {
       if (!b.bill_date) { add('block', 'BILL_DATE_MISSING', who + ' has NO bill date — the date is always required.'); }
       if (!dir) {
         if (input.releaseOptional === true) { /* NextTrade overhead (payroll, rent, utilities) is neither */ }
-        else { add('block', 'DIRECTION_MISSING', who + ': tick INBOUND or OUTBOUND (outbound needs the release #, inbound needs the reference).'); }
+        else { add('block', 'DIRECTION_MISSING', who + ': tick INBOUND, OUTBOUND or OPERATIONAL (outbound needs the release #, inbound needs the reference, operational needs neither).'); }
       } else if (dir === 'inbound' && !normRef(b.other_reference)) {
         add('block', 'REFERENCE_MISSING', who + ' is INBOUND and has no reference (BOL / PO / container…) — an inbound bill needs it.');
       }
@@ -143,10 +143,12 @@ export function auditWire(input) {
     if (!rel) {
       if (input && input.releaseOptional === true) { add('warn', 'RELEASE_MISSING', who + ' has no release number (fine for warehouse / overhead bills — the signers confirm).'); }
       else if (dirRules && dir === 'inbound') { /* inbound: the release # is not needed */ }
+      else if (dir === 'operational') { /* v55.83-ZY — Operational: not for a shipment, no release # and no reference needed */ }
       else if (dirRules && !dir) { /* asked above: inbound or outbound first */ }
       else { add('block', 'RELEASE_MISSING', who + ' has NO release number' + (dir === 'outbound' ? ' — an OUTBOUND bill needs its release #.' : ' — every bill on a wire must belong to a release.')); }
     }
     else {
+      if (dir === 'operational') { add('warn', 'OPERATIONAL_HAS_RELEASE', who + ' is marked OPERATIONAL (not for a shipment) but carries release ' + rel + ' — check which it is.'); } // v55.83-ZY
       if (input && input.knownReleases && !known[rel]) { add('warn', 'RELEASE_UNKNOWN', who + ': release ' + rel + ' is not found in the orders or invoices.'); }
       // v55.83-RK (Max, Nov 9 11:38: "actually is for a unique release number and date and or a unique reference and
       // date") — a DUPLICATE is the same vendor + the same release + the SAME bill date. The same release on another
