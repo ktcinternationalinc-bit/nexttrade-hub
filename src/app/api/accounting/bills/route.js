@@ -35,6 +35,8 @@ import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { bankLineRemaining, checkBankPayment } from '../../../../lib/bill-bank-pay'; // v55.83-TH
 import { addAuditSubjects, billName, bankName } from '../../../../lib/audit-subjects-server'; // v55.83-TH
 import { billWireStates, wireStateWords } from '../../../../lib/bill-wire-state'; // v55.83-RZ
+import { buildPaymentsReport } from '../../../../lib/bill-payments-report'; // v55.83-ZZ
+import { windowFloorFor } from '../../../../lib/visibility-window-server'; // v55.83-ZZ — employees see only the permitted window, in every number
 import { nextradeBillIds, markNextradeBills, NEXTRADE_PAY_POINTER } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills are paid only through NextTrade
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts // v55.83-TO (Codex P1: verified identity for money actions)
@@ -312,7 +314,7 @@ export async function POST(req) {
     if (!gate || gate.ok !== true) {
       return NextResponse.json({ error: 'This needs "Accounting Access" (P1) — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: gate && gate.status ? gate.status : 403 });
     }
-    var READ_LIKE_LIST = { list: 1, bill_lines: 1, price_rules_list: 1, bill_reports: 1, bill_history: 1 }; // v55.83-RQ · TH bill_history
+    var READ_LIKE_LIST = { list: 1, bill_lines: 1, price_rules_list: 1, bill_reports: 1, bill_history: 1, payments_report: 1 }; // v55.83-ZZ payments_report // v55.83-RQ · TH bill_history
     if (WRITE_ACTIONS[action] || READ_LIKE_LIST[action]) {
       var gate2 = await assertPermission(db, userId, 'bills.manage', req);
       if ((!gate2 || gate2.ok !== true) && !WRITE_ACTIONS[action]) { gate2 = await assertPermission(db, userId, 'bills.view', req); }
@@ -431,6 +433,26 @@ export async function POST(req) {
         rows.forEach(function (b) { var df = dupScan.byId[b.id]; if (df) { b.dup_flag = df; dupCount++; } });
       } catch (eDS) { /* a scan problem never blocks the list */ }
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, bills: rows, payments: L.pays, totals: totals, dup_flagged: dupCount, enrich_warnings: enrichWarn }); // v55.83-WT — the statement check says when the wire details are incomplete
+    }
+
+    // ── payments_report (v55.83-ZZ, Max 27 Nov): live bill payments with their bank line, the wire that paid them and its bank
+    // confirmation (SWIFT proof); by vendor / month / custom dates. READ-ONLY. The same payroll-scoped bills as the list; the history
+    // window floor (never a payment before it); a voided payment only when asked, never counted; totals masked without view_totals.
+    if (action === 'payments_report') {
+      var winP = await windowFloorFor(db, (gate && gate.ctx) || null);
+      if (winP.error) { return NextResponse.json({ error: winP.error }, { status: 503 }); }
+      var LP = await loadBills(db);
+      function idsOf(list, k) { var o = []; list.forEach(function (x) { var v = x[k]; if (v && o.indexOf(v) < 0) { o.push(v); } }); return o; }
+      async function byIds(table, cols, ids, col) { var out = []; for (var q = 0; q < ids.length; q += 200) { var rq = await db.from(table).select(cols).in(col || 'id', ids.slice(q, q + 200)); if (rq.error) { throw new Error(table + ': ' + rq.error.message); } out = out.concat(rq.data || []); } return out; }
+      var bankP = await byIds('bank_transactions', 'id, date, posted_date, amount, amount_abs, name, merchant_name, wave_account_name, account_subtype', idsOf(LP.pays, 'bank_transaction_id'));
+      var wlP = await fetchAll(function () { return db.from('wire_package_lines').select('package_id, payment_id, is_open, bill_id').not('payment_id', 'is', null); });
+      var wIdsP = idsOf(wlP, 'package_id');
+      var wiresP = await byIds('wire_packages', 'id, seq, status, sent_date, bank_reference, payee_name', wIdsP);
+      var filesP = await byIds('wire_package_files', 'id, package_id, kind, file_name, path, uploaded_at', wIdsP, 'package_id');
+      var repP = buildPaymentsReport({ pays: LP.pays, bills: LP.bills, wireLines: wlP, wires: wiresP, wireFiles: filesP, bankLines: bankP, floor: winP.floor || null,
+        from: body.date_from || null, to: body.date_to || null, vendor: body.vendor || null, showVoided: body.show_voided === true, isVoid: isPaymentVoid });
+      if (!canTotals) { repP.total = null; repP.by_vendor.forEach(function (v) { v.total = null; }); repP.by_month.forEach(function (m) { m.total = null; }); }
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, report: repP, can_totals: canTotals, vendors: idsOf(LP.bills.filter(function (b) { return b.record_status === 'active'; }), 'vendor_name').sort() });
     }
 
     // ── save_bill: create or update (active bills only)

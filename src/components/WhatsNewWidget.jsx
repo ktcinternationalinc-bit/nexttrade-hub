@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ZZ',
+    date: '2026-11-27',
+    title: 'Bills → 💸 Payments: what was paid, when, and by which wire',
+    items: [
+      { text: 'New **💸 Payments** button in Bills. It lists every payment made on a bill: the date paid, vendor, bill number and date, release, amount, the **wire** that paid it (number, sent date, bank reference), the bank line, and **📄 SWIFT** to open the bank confirmation in a pop-up.' },
+      { text: 'Choose **a month** (This month / Last month, or any month) or **custom dates**, and **a vendor** — totals by vendor and by month are under the list.' },
+      { text: '**⬇ CSV** downloads what is shown; **🖨 for the vendor** opens a clean page for one vendor (every payment, its wire and bank reference, the total) to print or save as PDF and send them.' },
+      { text: 'Only real payments count. A payment that was voided is shown only when you tick **show voided** (crossed out, never counted). Bills paid **through NextTrade / RTM** are listed in their own section. Right now no live payments are recorded — the earlier ones were voided — so the list fills as payments are recorded against their bank lines.' },
+      { superAdminOnly: true, text: 'Technical: read-only, no SQL. New bills action payments_report (Bills: View/Manage gate as the list; payroll-scoped db + loadBills; windowFloorFor — no payment before the floor; voided only with show_voided and never counted; totals null without accounting.view_totals). Pure shaping in src/lib/bill-payments-report.js (buildPaymentsReport, paymentsCsv); screen src/components/BillPaymentsReport.jsx (BillDocViewer for the bank-confirmation file).' }
+    ]
+  },
+  {
     version: 'v55.83-ZX',
     date: '2026-11-27',
     title: 'Warehouse check: Fabrics Canada allows 30% on weight',
