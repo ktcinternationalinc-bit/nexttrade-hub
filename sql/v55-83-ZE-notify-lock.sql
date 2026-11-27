@@ -6,6 +6,14 @@
 -- Run it before ZM is live and the old bell stops loading until ZM is out; nothing breaks for good.
 -- The whole thing is one transaction: if any check fails, nothing changes.
 
+-- 0) BEFORE RUNNING (rev2, Codex 26 Nov: "verify effective table grants and the new live bell before the lock"):
+--    a) open the Hub (signed in) and click the 🔔 bell: it must load. On the live build it now reads through /api/notifications
+--       (the browser console shows no request to /rest/v1/notifications). If it does not load, STOP: ZM is not live yet.
+--    b) run this read-only line alone and keep the answer (it is the state the rollback puts back):
+--       select grantee, string_agg(privilege_type, ',' order by privilege_type) from information_schema.role_table_grants
+--        where table_schema = 'public' and table_name = 'notifications' group by grantee order by grantee;
+--    The checks in step 1 below also stop the script if the Hub server role could not read the table after the lock.
+
 begin;
 
 -- 1) SAFETY CHECKS: stops with a plain message if the table is not what this script expects.
@@ -27,6 +35,10 @@ begin
   end if;
   if exists (select 1 from pg_trigger where tgrelid = 'public.notifications'::regclass and not tgisinternal) then
     raise exception 'STOP: public.notifications has a trigger. Ask Claude before running.';
+  end if;
+  -- rev2: the Hub server role must keep working after the lock (it ignores row rules and gets its rights in step 2)
+  if not exists (select 1 from pg_roles where rolname = 'service_role' and rolbypassrls) then
+    raise exception 'STOP: the Hub server role (service_role) does not bypass row rules here. Ask Claude before running.';
   end if;
 end $$;
 

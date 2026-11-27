@@ -74,8 +74,27 @@ var NOTE = { type: 'ticket_assigned', recipientIds: [AYA], subject: 'Ticket T-1 
   var before = mails.length;
   r = await run('notify', 'POST', 'tok-aya', { to: 'anyone@outside.test', subject: 'hi', html: '<p>x</p>' });
   check('SIGNED IN: the direct send to an outside address is refused (403), nothing mailed', r.status === 403 && mails.length === before, r);
+  // rev2 (Codex 26 Nov HOLD) — the direct to+HTML send is the ANNOUNCEMENT e-mail: admins only (role from the database), the type switch
+  // is obeyed, and the mail goes to each Hub user's OWN stored address, one mail each
+  before = mails.length;
   r = await run('notify', 'POST', 'tok-aya', { to: 'Ben@hub.test', subject: 'Announcement', html: '<p>x</p>' });
-  check('SIGNED IN: the direct send (announcements) to a Hub person still works', r.status === 200 && r.j.sent === 1 && mails[mails.length - 1].to === 'Ben@hub.test', r);
+  check('REV2: a STAFF member cannot send the announcement e-mail, even to a Hub person (403, nothing mailed)', r.status === 403 && /Only an admin/.test(r.j.error) && mails.length === before, r);
+  r = await run('notify', 'POST', 'tok-boss', { to: ['Ben@hub.test', ' ben@hub.test ', 'aya@hub.test'], subject: 'Announcement', html: '<p>x</p>' });
+  var last2 = mails.slice(before);
+  check('REV2: the super admin can; each Hub person gets ONE mail at their own stored address (not the text sent), duplicates dropped', r.status === 200 && r.j.sent === 2 && r.j.total === 2 && last2.length === 2 && last2.map(function (m) { return m.to; }).sort().join() === 'aya@hub.test,ben@hub.test', [r, last2.map(function (m) { return m.to; })]);
+  before = mails.length;
+  r = await run('notify', 'POST', 'tok-boss', { to: ['ben@hub.test', 'anyone@outside.test'], subject: 'Announcement', html: '<p>x</p>' });
+  check('REV2: one outside address in the list → the whole send is refused (403), nothing mailed', r.status === 403 && mails.length === before, r);
+  r = await run('notify', 'POST', 'cron-test-secret-0123456789', { to: 'anyone@outside.test', subject: 'x', html: '<p>x</p>' });
+  check('REV2: the server secret cannot mail outside the Hub either (403)', r.status === 403 && mails.length === before, r);
+  world.db.t.notification_settings.push({ notification_type: 'announcement', enabled: false });
+  r = await run('notify', 'POST', 'tok-boss', { to: 'ben@hub.test', subject: 'Announcement', html: '<p>x</p>' });
+  check('REV2: with the “announcement” type switched off in settings, nothing is mailed', r.status === 200 && r.j.sent === 0 && /disabled/.test(r.j.reason || '') && mails.length === before, r);
+  world.db.t.notification_settings = [];
+  // the other notices keep working for a signed-in staff member (recipientIds path): reminder, HR request, ticket
+  var ok3 = true; var types = ['reminder', 'hr_request', 'ticket_assigned'];
+  for (var ty = 0; ty < types.length; ty++) { before = mails.length; r = await run('notify', 'POST', 'tok-aya', { type: types[ty], recipientIds: [BEN], subject: 'S ' + types[ty], body: 'B' }); if (!(r.status === 200 && r.j.sent === 1 && mails.length === before + 1 && mails[mails.length - 1].to === 'ben@hub.test')) { ok3 = false; } }
+  check('REV2: reminder, HR request and ticket notices from a STAFF member still reach the recipient (e-mail + bell)', ok3, r);
 
   // 3) the server secret (internal calls)
   r = await run('notify', 'POST', 'cron-test-secret-0123456789', Object.assign({}, NOTE, { recipientIds: [BEN], triggeredBy: BOSS }));

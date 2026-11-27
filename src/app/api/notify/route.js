@@ -85,43 +85,47 @@ export async function POST(req) {
 
     // Legacy support: direct email send (used by announcements)
     if (to && html) {
-      // v55.83-ZM — the direct send only mails Hub people: every address must be an active Hub user's own e-mail (it was an open relay).
+      // v55.83-ZM rev2 (Codex 26 Nov HOLD: "the raw to+HTML announcement send remains available to any verified user") — this is the
+      // dashboard ANNOUNCEMENT e-mail (page.jsx, shown to admins only). Now, on the server:
+      //   1. only an admin / super admin (role read from the database by notifySender) or the internal server secret may send it;
+      //   2. the 'announcement' type switch in notification_settings is obeyed (off = nothing sent);
+      //   3. every address must belong to an active Hub user, and the mail goes to THAT user's own stored address, one mail each —
+      //      never to the text sent in the request.
+      if (!sender.internal && !sender.isAdmin) { return Response.json({ sent: 0, error: 'Only an admin can send an announcement e-mail.' }, { status: 403 }); }
       var toList = (Array.isArray(to) ? to : [to]).map(function (e) { return String(e || '').trim().toLowerCase(); }).filter(Boolean);
-      if (!sender.internal) {
-        if (!toList.length || toList.length > 200) { return Response.json({ sent: 0, error: 'A message goes to 1 to 200 Hub people.' }, { status: 400 }); }
-        var hubRes = await supabase.from('users').select('email, active');
-        if (hubRes.error) { return Response.json({ sent: 0, error: 'The Hub could not check who the message is for — not sent.' }, { status: 503 }); }
-        var hubEmails = {}; (hubRes.data || []).forEach(function (u) { if (u && u.email && u.active !== false && u.active !== null) { hubEmails[String(u.email).trim().toLowerCase()] = true; } });
-        var outsiders = toList.filter(function (e) { return !hubEmails[e]; });
-        if (outsiders.length) { return Response.json({ sent: 0, error: 'This message can only go to active Hub people — ' + outsiders.length + ' address(es) are not one.' }, { status: 403 }); }
-      }
+      if (!toList.length || toList.length > 200) { return Response.json({ sent: 0, error: 'A message goes to 1 to 200 Hub people.' }, { status: 400 }); }
+      try {
+        var annSet = await supabase.from('notification_settings').select('enabled').eq('notification_type', 'announcement').maybeSingle();
+        if (annSet && annSet.data && annSet.data.enabled === false) { return Response.json({ sent: 0, reason: "Type 'announcement' is disabled in settings" }); }
+      } catch (eSet) { /* no settings table = every type on (as for the other notices) */ }
+      var hubRes = await supabase.from('users').select('id, email, active');
+      if (hubRes.error) { return Response.json({ sent: 0, error: 'The Hub could not check who the message is for — not sent.' }, { status: 503 }); }
+      var hubByEmail = {}; (hubRes.data || []).forEach(function (u) { if (u && u.email && u.active !== false && u.active !== null) { hubByEmail[String(u.email).trim().toLowerCase()] = u; } });
+      var outsiders = toList.filter(function (e) { return !hubByEmail[e]; });
+      if (outsiders.length) { return Response.json({ sent: 0, error: 'This message can only go to active Hub people — ' + outsiders.length + ' address(es) are not one.' }, { status: 403 }); }
+      var seenU = {}; var targets = []; toList.forEach(function (e) { var u = hubByEmail[e]; if (!seenU[u.id]) { seenU[u.id] = true; targets.push(u); } });
       const RESEND_API_KEY = process.env.RESEND_API_KEY;
-      // v55.46 — Soft-degrade when Resend not configured. Previously returned
-      // 500 which broke announcements entirely; now we return 200 with a
-      // clear flag so callers can show "email disabled" instead of a hard error.
+      // v55.46 — Soft-degrade when Resend not configured (200 with a clear flag, so the screen can say e-mail is off).
       if (!RESEND_API_KEY) {
         console.log('[notify] direct-send: RESEND_API_KEY not configured, skipping');
         return Response.json({ sent: 0, email_disabled: true, reason: 'RESEND_API_KEY not configured in Vercel env vars' });
       }
       const FROM_EMAIL = process.env.NOTIFICATION_FROM_EMAIL || 'notifications@ktcus.com';
-      try {
-        const res = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
-          body: JSON.stringify({ from: FROM_EMAIL, to, subject: subject || 'KTC Notification', html }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data?.id) {
-          // v55.46 — surface Resend's error message so admin can debug
-          // (typical causes: domain not verified, FROM not allowed, key revoked).
-          console.log('[notify] direct-send Resend error:', JSON.stringify(data));
-          return Response.json({ sent: 0, error: data?.message || data?.error || 'Resend rejected the message', resend_response: data, http_status: res.status });
-        }
-        return Response.json({ sent: 1, resend_response: data });
-      } catch (sendErr) {
-        console.log('[notify] direct-send exception:', sendErr.message);
-        return Response.json({ sent: 0, error: sendErr.message }, { status: 500 });
+      var sentN = 0; var errs = [];
+      for (var ti = 0; ti < targets.length; ti++) {
+        var tu = targets[ti];
+        try {
+          var res = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + RESEND_API_KEY },
+            body: JSON.stringify({ from: FROM_EMAIL, to: tu.email, subject: subject || 'KTC Notification', html: html }),
+          });
+          var data = await res.json();
+          if (!res.ok || !data || !data.id) { console.log('[notify] direct-send Resend error:', JSON.stringify(data)); errs.push((data && (data.message || data.error)) || 'Resend rejected the message'); }
+          else { sentN++; }
+        } catch (sendErr) { console.log('[notify] direct-send exception:', sendErr.message); errs.push(sendErr.message); }
       }
+      return Response.json({ sent: sentN, total: targets.length, error: errs.length ? errs[0] : undefined });
     }
 
     if (!type || !recipientIds || !subject || !body) {
