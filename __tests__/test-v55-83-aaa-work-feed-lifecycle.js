@@ -89,5 +89,41 @@ var MGR = { 'accounting.clickbooks.access': true, 'bills.manage': true };
   props = { userProfile: { id: 'u-tre', role: 'staff' }, modulePerms: { Treasury: true }, isSuperAdmin: false, invoices: inv1, invoicesStatus: null };
   check('02g: helpers: status unknown / failed are not "ready"; the signature follows amounts, not counts', WF.invoicesReady(null) === false && WF.invoicesReady({ ok: false }) === false && WF.invoicesReady({ ok: true }) === true && WF.invoiceSignature(inv1, { ok: true, n: 1 }) !== WF.invoiceSignature([{ id: 'i1', total_pending_bank: 0 }], { ok: true, n: 1 }));
 
+  // ── rev4 (Codex HOLD): the ACTUAL loader. A query error on the first or a LATER page must fail the invoice load; the page keeps the
+  // last good list and says "not ok"; the feed keeps the task, resolves nothing, and shows "Invoices: unavailable" ──
+  var PF = require(path.join(root, 'src/lib/paged-fetch.js'));
+  var rows = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  async function tryLoad(plan) {
+    try {
+      var r = await PF.fetchAllPagesStrict(function (from, to) { var p = plan[from / 2]; return Promise.resolve(p === 'error' ? { data: null, error: { message: 'permission denied' } } : p === 'null' ? { data: null, error: null } : { data: rows.slice(from, to + 1), error: null }); }, 2);
+      return { ok: true, rows: r };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
+  var l1 = await tryLoad(['ok', 'ok']);
+  check('03a: every page read → all rows, in order (paging unchanged)', l1.ok && l1.rows.map(function (x) { return x.id; }).join() === 'a,b,c');
+  var l2 = await tryLoad(['error']);
+  check('03b: the FIRST page comes back { data: null, error } → the load fails (it used to read as "no invoices")', !l2.ok && /page 1 could not be read: permission denied/.test(l2.error), l2);
+  var l3 = await tryLoad(['ok', 'error']);
+  check('03c: a LATER page fails → the whole load fails (never half a list)', !l3.ok && /page 2/.test(l3.error), l3);
+  var l4 = await tryLoad(['null']);
+  check('03d: a page with no data and no error is a failure too', !l4.ok);
+  // loader → page → feed, as page.jsx does it: if (invLoadOk) { setInvoices(inv); } setInvoicesStatus({ ok: invLoadOk, n })
+  var lastGood = [{ id: 'i9', order_number: 'EG-9', customer_name: 'Z', total_pending_bank: 250 }];
+  srv.calls = [];
+  props = { userProfile: { id: 'u-loader', role: 'staff' }, modulePerms: { Treasury: true }, isSuperAdmin: false, invoices: lastGood, invoicesStatus: { ok: true, n: 10 } };
+  await flush();
+  check('03e: the good load shows the invoice task', feed() && feed().total === 1);
+  var again = await tryLoad(['error']); var invLoadOk = again.ok; var pageInvoices = invLoadOk ? again.rows : lastGood;
+  props = Object.assign({}, props, { invoices: pageInvoices, invoicesStatus: { ok: invLoadOk, n: 11 } });
+  await flush();
+  function hasUnavailable(n) { if (!n || typeof n !== 'object') { return false; } if (Array.isArray(n)) { return n.some(hasUnavailable); } if (n.props && n.props['data-testid'] === 'feed-invoices-unavailable') { return true; } return hasUnavailable(n.props && n.props.children); }
+  check('03f: after a failed reload the task is still there and Resolved is empty (Codex probe: it resolved invoice_bank:i1)', feed().total === 1 && resolved().length === 0, { total: feed().total, r: resolved() });
+  check('03g: and the feed says "Invoices: unavailable"', hasUnavailable(out));
+  var P = require('fs').readFileSync(path.join(root, 'src/app/page.jsx'), 'utf8');
+  check('03h: page.jsx reads invoices through the strict loader and keeps the last good list on failure',
+    P.indexOf("safe(fetchAllStrict('invoices', 'invoice_date').then(function (r) { invLoadOk = true; return r; }))") > 0 &&
+    P.indexOf('if (invLoadOk) { setInvoices(inv); } setInvoicesStatus({ ok: invLoadOk, n: Date.now() });') > 0 &&
+    P.indexOf("fetchAllPagesStrict(function (from, to) { return supabase.from(table).select('*').order(orderCol, { ascending: asc }).order('id', { ascending: true }).range(from, to); }, 1000)") > 0);
+
   console.log('\n' + pass + ' passed, ' + failN + ' failed'); if (failN) { process.exit(1); }
 })().catch(function (e) { console.log('CRASH ' + (e && e.stack || e)); process.exit(1); });

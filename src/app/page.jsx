@@ -38,7 +38,8 @@ import PersonalDashboard from '../components/PersonalDashboard';
 // (Overdue / Recent Updates / Newly Assigned) and an in-place ticket modal
 // that renders on the dashboard without a tab switch.
 import DashboardPrioritySections from '../components/DashboardPrioritySections';
-import WorkFeed from '../components/WorkFeed'; // v55.83-AAA — 📋 My work feed, first on the home screen
+import WorkFeed from '../components/WorkFeed';
+import { fetchAllPagesStrict } from '../lib/paged-fetch'; // v55.83-AAA rev4 — the invoice list stops with an error on any failed page // v55.83-AAA — 📋 My work feed, first on the home screen
 import DashboardTicketModalOverlay from '../components/DashboardTicketModalOverlay';
 import VoicemailsWidget from '../components/VoicemailsWidget';
 import AIAssistant from '../components/AIAssistant';
@@ -1641,6 +1642,8 @@ function HubApp() {
     }
     return all;
   };
+  // v55.83-AAA rev4 (Codex HOLD) — the invoice list: a query error on ANY page is an error, never "no invoices" (same query as fetchAll)
+  const fetchAllStrict = (table, orderCol, asc = false) => fetchAllPagesStrict(function (from, to) { return supabase.from(table).select('*').order(orderCol, { ascending: asc }).order('id', { ascending: true }).range(from, to); }, 1000);
 
   const loadingRef = useRef(false);
   const loadAllData = async () => {
@@ -1654,7 +1657,7 @@ function HubApp() {
       let invLoadOk = false; // v55.83-AAA rev3 (Codex AAA-02) — told to the work feed together with the list itself
       const safe = (p) => p.catch((e) => { try { console.warn('[loadAllData]', e?.message || e); } catch(_){} return []; });
       const [inv, tres, chk, dbt, cust, wh, items, rules, stock] = await Promise.all([
-        safe(fetchAll('invoices', 'invoice_date').then(function (r) { invLoadOk = true; return r; })), // v55.83-AAA rev3: remember whether it worked
+        safe(fetchAllStrict('invoices', 'invoice_date').then(function (r) { invLoadOk = true; return r; })), // v55.83-AAA rev3/rev4: errors on any page propagate; remember whether it worked
         safe(fetchAll('treasury', 'transaction_date')),
         safe(fetchAll('checks', 'check_date', true)),
         safe(fetchAll('debts', 'total_debt')),
@@ -1829,7 +1832,7 @@ function HubApp() {
           }
         }
       } catch(e) { console.warn('Users table not ready'); }
-      setInvoices(inv); setInvoicesStatus({ ok: invLoadOk, n: Date.now() }); // v55.83-AAA rev3 — same moment as the list: a failed load (empty list) is never read as resolved
+      if (invLoadOk) { setInvoices(inv); } setInvoicesStatus({ ok: invLoadOk, n: Date.now() }); // rev4: a failed load keeps the last good list (never blanks it) // v55.83-AAA rev3 — same moment as the list: a failed load (empty list) is never read as resolved
       setTreasury(tres);
       setChecks(chk);
       setDebts(dbt);

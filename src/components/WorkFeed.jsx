@@ -148,6 +148,8 @@ export default function WorkFeed(props) {
         {stat('✓ Resolved', resolved.length, resolved.length ? GREEN : SUB, function () { setView('resolved'); }, view === 'resolved')}
       </div>
       {errs.map(function (e, ix) { return <div key={ix} className="px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#450a0a', color: '#fecaca', border: '1px solid ' + RED }}>{'⛔ ' + e + ' — its items are not shown right now, and nothing moves to Resolved until it loads. Press ↻ Refresh.'}</div>; })}
+      {/* v55.83-AAA rev4 (Codex HOLD) — the home screen's invoice list failed to load: say so; the last good invoice tasks stay, nothing resolves */}
+      {acc.canInvoices && props.invoicesStatus && props.invoicesStatus.ok === false && <div className="px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#450a0a', color: '#fecaca', border: '1px solid ' + RED }} data-testid="feed-invoices-unavailable">{'⛔ Invoices: unavailable — the invoice list could not be loaded. The invoice tasks shown are from the last good load, and none of them is marked resolved until the list loads again. Reload the page to try again.'}</div>}
       {/* what happened to the item just opened */}
       {since && since.openedKey && <div className="px-3 py-2 mb-3 flex items-center gap-2 flex-wrap" style={{ background: since.openedStillOpen ? '#1c1300' : '#052e16', border: '1px solid ' + (since.openedStillOpen ? AMBER : GREEN) }}>
         <span className="px-2 py-0.5 text-[11px] font-extrabold" style={{ background: since.openedStillOpen ? AMBER : GREEN, color: '#000000' }}>{since.openedStillOpen ? 'STILL OPEN' : '✓ RESOLVED'}</span>
