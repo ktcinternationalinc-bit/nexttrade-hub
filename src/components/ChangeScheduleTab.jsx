@@ -423,6 +423,30 @@ export default function ChangeScheduleTab() {
             })}
           </div>
         </header>
+        <div ref={toolbarRef} role="group" aria-label={canSign && statusReadable ? 'Selected Warehouse changes' : 'Change Schedule controls'} style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+            <div role="status" style={{ color: data?.workerOnline && statusReadable ? C.prod : C.max }}>
+              {statusReadable ? active.length + ' active request' + (active.length === 1 ? '' : 's') + ' · ' + workerLabel : 'Live release status unavailable'}
+              <div style={{ color: C.muted, fontSize: 11 }}>{loading ? 'Refreshing status…' : checkedAt && 'Status checked ' + fmtWhen(checkedAt)}</div>
+            </div>
+            <button type="button" onClick={load} style={btn(C.codex, true)}>Refresh page</button>
+          </div>
+          {canSign && statusReadable && <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+            <b>{selectedIds.length} selected</b>
+            {selectionAction === 'go' ? <>
+              <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Review selected deployments</button>
+              {rollbackItems.length > 0 && <button disabled={reviewOpen} style={btn(C.max, false)} onClick={function () { switchSelection('rollback'); }}>Select code rollbacks</button>}
+            </> : <>
+              <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.max, false)} onClick={function () { openReview('rollback'); }}>Review selected code rollbacks</button>
+              <button disabled={reviewOpen} style={btn(C.muted, false)} onClick={function () { switchSelection('go'); }}>Return to deployments</button>
+            </>}
+            <button disabled={!selectedIds.length || reviewOpen} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
+          </div>}
+          {canSign && statusReadable && !selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>
+            {selectionAction === 'go' ? (readyToSelect ? 'Select a ready change to review and approve.' : 'No changes are ready for deployment review.') : 'Select deployed changes under Already on production.'}
+          </div>}
+          {message && !review && <div role="status" style={{ color: C.prod, marginTop: 6 }}>{message}</div>}
+        </div>
         {data && <div role="status" style={{ color: data.workerOnline ? C.prod : C.max }}>
           {workerLabel}
           {data.worker && data.worker.last_seen ? ' · Last contact ' + fmtWhen(data.worker.last_seen) : ''}
@@ -448,30 +472,6 @@ export default function ChangeScheduleTab() {
             </div>}
           </div>; })}
         </section>}
-        <div ref={toolbarRef} role="group" aria-label={canSign && statusReadable ? 'Selected Warehouse changes' : 'Change Schedule controls'} style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-            <div role="status" style={{ color: data?.workerOnline && statusReadable ? C.prod : C.max }}>
-              {statusReadable ? active.length + ' active request' + (active.length === 1 ? '' : 's') + ' · ' + workerLabel : 'Live release status unavailable'}
-              <div style={{ color: C.muted, fontSize: 11 }}>{loading ? 'Refreshing status…' : checkedAt && 'Status checked ' + fmtWhen(checkedAt)}</div>
-            </div>
-            <button onClick={load} style={btn(C.codex, false)}>Refresh</button>
-          </div>
-          {canSign && statusReadable && <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
-            <b>{selectedIds.length} selected</b>
-            {selectionAction === 'go' ? <>
-              <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Review selected deployments</button>
-              {rollbackItems.length > 0 && <button disabled={reviewOpen} style={btn(C.max, false)} onClick={function () { switchSelection('rollback'); }}>Select code rollbacks</button>}
-            </> : <>
-              <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.max, false)} onClick={function () { openReview('rollback'); }}>Review selected code rollbacks</button>
-              <button disabled={reviewOpen} style={btn(C.muted, false)} onClick={function () { switchSelection('go'); }}>Return to deployments</button>
-            </>}
-            <button disabled={!selectedIds.length || reviewOpen} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
-          </div>}
-          {canSign && statusReadable && !selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>
-            {selectionAction === 'go' ? (readyToSelect ? 'Select a ready change to review and approve.' : 'No changes are ready for deployment review.') : 'Select deployed changes under Already on production.'}
-          </div>}
-        </div>
-        {message && !review && <div role="status" style={{ color: C.prod }}>{message}</div>}
         {review && <section ref={reviewPanel} role="dialog" tabIndex={-1} aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
           <h2>{review.version ? 'Restore Warehouse version #' + review.version.id : review.action === 'go' ? 'Production release review' : 'Confirm selected code rollbacks'}</h2>
           {review.action === 'rollback' && <p>Restores the listed Warehouse code files from backup. The worker never runs a database restore or a migration for this action.</p>}

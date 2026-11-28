@@ -90,7 +90,7 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
             const top = bar.getBoundingClientRect().top;
             return top >= 65 && top <= 67 && scrollY > 100;
           });
-          assert.ok(await toolbar.getByRole('button', { name: 'Refresh', exact: true }).isVisible());
+          assert.ok(await toolbar.getByRole('button', { name: 'Refresh page', exact: true }).isVisible());
           await reviewButton.click();
           const dialog = page.getByRole('dialog');
           assert.ok((await dialog.innerText()).includes('One') && !(await dialog.innerText()).includes('Two'));
@@ -113,21 +113,21 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           assert.equal(await future.getByRole('heading', { name: 'One', exact: true }).count(), 0);
           assert.equal(await page.getByRole('checkbox', { name: 'Select One', exact: true }).count(), 0);
           assert.ok((await active.innerText()).includes('Request #1'));
-          await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+          await page.getByRole('button', { name: 'Refresh page', exact: true }).click();
           await active.getByRole('heading', { name: 'One', exact: true }).waitFor();
           assert.equal(await page.getByRole('checkbox', { name: 'Select One', exact: true }).count(), 0);
           await page.evaluate(() => { const d = window.releaseData; d.worker.enabled = true; d.workerOnline = true;
             Object.assign(d.signoffs['fix-0'], { executing: true, canWithdraw: false, execution: { request_id: 1, phase: 'running', started_at: '2026-11-24T13:15:00Z' } }); });
-          await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+          await page.getByRole('button', { name: 'Refresh page', exact: true }).click();
           await active.getByText('Running', { exact: false }).waitFor();
           await page.evaluate(() => { window.releaseData.workerOnline = false; });
-          await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+          await page.getByRole('button', { name: 'Refresh page', exact: true }).click();
           await active.getByText('Started - worker contact lost; completion unconfirmed', { exact: false }).waitFor();
           await page.evaluate(() => { window.releaseData.signoffs['fix-0'].execution.phase = 'attention'; });
-          await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+          await page.getByRole('button', { name: 'Refresh page', exact: true }).click();
           await active.getByText('Blocked - recovery check required', { exact: false }).waitFor();
           const staleRead = await page.evaluate(() => { window.delayNextReleaseRead = 350; return window.releaseReads + 1; });
-          await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+          await page.getByRole('button', { name: 'Refresh page', exact: true }).click();
           await page.waitForFunction(reads => window.releaseReads >= reads, staleRead);
           await page.evaluate(() => {
             Object.assign(window.releaseData.signoffs['fix-0'], { kind: 'none', where: 'deployed', executing: false,
@@ -181,13 +181,13 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           await page.getByRole('alert').getByText('Live release status is unavailable.', { exact: false }).waitFor();
           assert.equal(await page.getByRole('checkbox').count(), 0);
           await page.evaluate(() => { delete window.releaseData.signoffsError; });
-          await page.getByRole('group', { name: 'Change Schedule controls' }).getByRole('button', { name: 'Refresh', exact: true }).click();
-          await toolbar.getByRole('button', { name: 'Refresh', exact: true }).waitFor();
+          await page.getByRole('group', { name: 'Change Schedule controls' }).getByRole('button', { name: 'Refresh page', exact: true }).click();
+          await toolbar.getByRole('button', { name: 'Refresh page', exact: true }).waitFor();
           if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: process.env.TEST_SCREENSHOT.replace('.png', '-' + width + '.png'), fullPage: true });
         } else {
           assert.equal(await page.getByRole('checkbox').count(), 0);
           assert.equal(await page.getByRole('button', { name: /Review selected|Run review/ }).count(), 0);
-          assert.ok(await page.getByRole('group', { name: 'Change Schedule controls' }).getByRole('button', { name: 'Refresh', exact: true }).isVisible());
+          assert.ok(await page.getByRole('group', { name: 'Change Schedule controls' }).getByRole('button', { name: 'Refresh page', exact: true }).isVisible());
         }
         assert.deepEqual(errors, []);
         const sizes = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, width: innerWidth }));
