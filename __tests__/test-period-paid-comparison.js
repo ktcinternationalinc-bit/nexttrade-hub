@@ -123,4 +123,13 @@ addPeriodCell(period, { goods_revenue: 247989.25, goods_profit: 98316.74, transp
 addPeriodCell(period, { goods_revenue: 88159.26, goods_profit: null });
 const html = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], comparison: bankMonth, invoiceRows: [], onFixCosts() {}, onOpenBill() {} }));
 for (const text of ['Goods invoiced less payments', 'Customer receipts less payments', '$336,148.51', '$98,316.74', '$4,409.00', '$88,159.26', 'Fix missing costs', 'Partner fee billed', 'Bill 14277', 'RTM / NextTrade bills and fees paid']) assert.ok(html.includes(text), text);
+const juneReport = renderToStaticMarkup(React.createElement(PeriodPaidComparison, {
+  period, periods: [period], invoiceRows: [], pnl: { cents: -2842386, complete: false }, onOpenPnl() {},
+  comparison: { ...bankMonth, paid: { cents: 26988926, count: 0, rows: [] }, receipts: { cents: 40978220, count: 0, rows: [] },
+    funding: { cents: 7600000, count: 4, rows: [] }, funded_paid: { cents: 1344736, count: 2, rows: [] } },
+}));
+for (const text of ['$336,148.51', '-$269,889.26', '= $66,259.25', '$409,782.20', '= $139,892.94', '$76,000.00', '$13,447.36',
+  'Jun 2026 P&amp;L · -$28,423.86 · Provisional', 'Goods profit + transport profit', 'nt-paper']) assert.ok(juneReport.includes(text), text);
+assert.equal(juneReport.split('-$269,889.26').length - 1, 2);
+assert.doesNotMatch(juneReport, /class="[^"]*\b(?:bg-white|bg-slate-50|text-red-800)\b/);
 console.log('PASS: period comparison reconciliation, source records, RTM funding and refunds, partner duplicates, account transfers, foreign currency, access, and missing costs.');

@@ -745,6 +745,8 @@ export default function ProfitabilityTab(props) {
       var compare = picked.key === 'total' ? (expOn && combinePaidComparisons(dated.map(function (r) { return expOf(r)?.paidComparison; }))) : exp?.paidComparison;
       var status = !expOn ? expOff.long : exp?.why || (exp?.status === 'ok' ? 'Payment comparison unavailable for these dates or permissions.' : 'Loading payments…');
       if (expOn && picked.key === 'total' && !exp.complete) { status = 'The comparison total appears once all selected periods have loaded.'; }
+      var pnl = exp?.status === 'ok' && (picked.key !== 'total' || exp.complete)
+        ? finalPnl(picked.profit, exp.cols, (picked.incomplete || 0) + (picked.uncounted || 0)) : null;
       var invoiceRows = periodInvoices(cells.filter(function (c) { return picked.key === 'total' || bucketOf(c.invoice_date, pGran).key === picked.key; }), false)
         .map(function (iv) { return { id: iv.key, invoice_id: iv.invoice_id, ref: iv.invoice, who: iv.customer, date: iv.date, cents: iv.sold_cents }; });
       function fixCosts() {
@@ -753,6 +755,7 @@ export default function ProfitabilityTab(props) {
       }
       return <PeriodPaidComparison key={picked.key} period={picked} periods={options} onPeriod={setComparisonKey} comparison={compare} status={status} invoiceRows={invoiceRows} onOpenInvoice={setPeekId}
         onOpenBill={function (bill) { openBill(Object.assign({}, bill, { vendor: bill.who, bill_number: bill.ref, paid_date: bill.date, comparison_record: true })); }}
+        pnl={pnl} onOpenPnl={function () { setFShow({ key: picked.key, pinned: true }); }}
         onFixCosts={picked.key === 'total' ? null : fixCosts} />;
     }
     function expCell(r, k) {
