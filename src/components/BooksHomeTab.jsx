@@ -11,6 +11,7 @@ import { supabase } from '../lib/supabase';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
 import { CLASSIFICATIONS } from '../lib/bank-permissions';
+import { readRuleModes } from '../lib/bank-rule-storage';
 import { bestRule } from '../lib/expense-rules'; // v55.83-PI — suggest from learned rules
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
@@ -96,7 +97,7 @@ export default function BooksHomeTab(props) {
     supabase.from('expense_categories').select('key, label, active, sort').eq('active', true).order('sort')
       .then(function (r) { if (!r.error && r.data && r.data.length) { setDynCats(r.data); } })
       .catch(function () {});
-    supabase.from('us_expense_rules').select('id, match_text, classification, auto_apply, active').eq('active', true).limit(1000)
+    readRuleModes(function (mode) { return supabase.from('us_expense_rules').select('id, match_text, classification, auto_apply, active' + mode).eq('active', true).limit(1000); })
       .then(function (r) { if (!r.error && r.data) { setHubRules(r.data); prefillSuggestions(outQueue, r.data); } })
       .catch(function () {});
   }

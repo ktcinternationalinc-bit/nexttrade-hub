@@ -23,38 +23,49 @@ function transactionRows(part) {
   });
 }
 
-function TransactionDetail({ transactions, heading }) {
+function TransactionDetail({ transactions, heading, categoriesFor, onCategoryChange, categoryBusy }) {
   var [month, setMonth] = useState('');
   var [account, setAccount] = useState('');
   var [limit, setLimit] = useState(detailPageSize);
   var months = Array.from(new Set(transactions.map(function (line) { return line.date.slice(0, 7); }))).sort().reverse();
   var accounts = Array.from(new Set(transactions.map(function (line) { return line.account; }))).sort();
+  var activeMonth = months.includes(month) ? month : '';
+  var activeAccount = accounts.includes(account) ? account : '';
   var shown = transactions.filter(function (line) {
-    return (!month || line.date.startsWith(month)) && (!account || line.account === account);
+    return (!activeMonth || line.date.startsWith(activeMonth)) && (!activeAccount || line.account === activeAccount);
   });
   return <section className="p-3 bg-slate-50 text-slate-900" aria-label={heading}>
     <div className="flex flex-wrap items-end gap-3 mb-2">
       <h5 className="font-bold mr-auto">{heading}</h5>
-      {months.length > 1 && <label>Month <select aria-label="Month" className={input} value={month} onChange={function (e) { setMonth(e.target.value); setLimit(detailPageSize); }}>
+      {months.length > 1 && <label>Month <select aria-label="Month" className={input} value={activeMonth} onChange={function (e) { setMonth(e.target.value); setLimit(detailPageSize); }}>
         <option value="">All months</option>{months.map(function (value) { return <option key={value}>{value}</option>; })}
       </select></label>}
-      {accounts.length > 1 && <label>Account <select aria-label="Account" className={input} value={account} onChange={function (e) { setAccount(e.target.value); setLimit(detailPageSize); }}>
+      {accounts.length > 1 && <label>Account <select aria-label="Account" className={input} value={activeAccount} onChange={function (e) { setAccount(e.target.value); setLimit(detailPageSize); }}>
         <option value="">All accounts</option>{accounts.map(function (value) { return <option key={value}>{value}</option>; })}
       </select></label>}
     </div>
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[620px] text-[11px]" aria-label={heading + ' transactions'}>
+      <table className="w-full min-w-[740px] text-[11px]" aria-label={heading + ' transactions'}>
         <thead><tr className="border-b border-slate-300">
-          {['Posted date', 'Account', 'Description', 'Source', 'Money in', 'Money out'].map(function (text, index) {
-            return <th key={text} scope="col" className={'py-1.5 px-2 ' + (index < 4 ? 'text-left' : 'text-right')}>{text}</th>;
+          {['Posted date', 'Account', 'Description', 'Source', 'Category', 'Money in', 'Money out'].map(function (text, index) {
+            return <th key={text} scope="col" className={'py-1.5 px-2 ' + (index < 5 ? 'text-left' : 'text-right')}>{text}</th>;
           })}
         </tr></thead>
         <tbody>{shown.slice(0, limit).map(function (line) {
+          var choices = onCategoryChange && !line.paired_transfer ? categoriesFor(line) : null;
           return <tr key={line.id} className="border-b border-slate-200">
             <td className="px-2 py-1.5 whitespace-nowrap">{line.date}</td>
             <td className="px-2 py-1.5">{line.account}</td>
             <td className="px-2 py-1.5">{line.description}</td>
             <td className="px-2 py-1.5">{NEXTRADE_SOURCE_LABELS[line.source] || '—'}{line.source_row && <span className="block text-slate-600" title={line.source_file}>CSV row {line.source_row}</span>}</td>
+            <td className="px-2 py-1.5">{choices
+              ? <select aria-label={'Category for ' + line.description + ' on ' + line.date} className={input} value={line.company_category || ''}
+                disabled={categoryBusy} onChange={function (e) { onCategoryChange(line, e.target.value || null); }}>
+                <option value="">Uncategorized</option>
+                {line.company_category && !choices.some(function (c) { return c.key === line.company_category; }) && <option value={line.company_category} disabled>{line.category_label}</option>}
+                {choices.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
+              </select>
+              : line.category_label}</td>
             <td className="px-2 py-1.5 text-right">{line.direction === 'in' ? cents(line.amount) : '—'}</td>
             <td className="px-2 py-1.5 text-right">{line.direction === 'out' ? cents(line.amount) : '—'}</td>
           </tr>;
@@ -66,7 +77,7 @@ function TransactionDetail({ transactions, heading }) {
   </section>;
 }
 
-export default function NextradeTaxReport({ api, exportCsv, onReview }) {
+export default function NextradeTaxReport({ api, exportCsv, onReview, categoriesFor, onCategoryChange, categoryBusy }) {
   var [to, setTo] = useState(today);
   var [from, setFrom] = useState(function () { return to.slice(0, 4) + '-01-01'; });
   var [result, setResult] = useState(null);
@@ -74,15 +85,15 @@ export default function NextradeTaxReport({ api, exportCsv, onReview }) {
   var [busy, setBusy] = useState(true);
   var [error, setError] = useState('');
 
-  async function load() {
+  async function load(start = from, end = to, keepDetails = false) {
     setBusy(true);
     setError('');
     try {
-      var response = await api({ action: 'tax_report', from: from, to: to });
+      var response = await api({ action: 'tax_report', from: start, to: end });
       if (!response || !response.ok || !response.report) {
         throw new Error(response?.error || response?.sql_missing || 'Could not load the tax report.');
       }
-      setOpened(null);
+      if (!keepDetails) { setOpened(null); }
       setResult(response);
     } catch (e) {
       setError(e.message || 'Could not load the tax report.');
@@ -93,6 +104,13 @@ export default function NextradeTaxReport({ api, exportCsv, onReview }) {
   useEffect(function () { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   var rerun = result && (result.from !== from || result.to !== to);
+  var detailProps = {
+    categoriesFor: categoriesFor,
+    categoryBusy: busy || categoryBusy || rerun || !!error,
+    onCategoryChange: onCategoryChange && function (line, category) {
+      return onCategoryChange([line.id], category, function () { return load(result.from, result.to, true); });
+    },
+  };
 
   function download(detail) {
     var file = [['Nextrade cash-basis tax report', result.from, result.to]];
@@ -126,10 +144,10 @@ export default function NextradeTaxReport({ api, exportCsv, onReview }) {
     <form className="flex flex-wrap items-end gap-2 mb-3" onSubmit={function (event) { event.preventDefault(); load(); }}>
       <label className="text-[11px] font-bold">From <input required type="date" className={input} value={from} onChange={function (event) { setFrom(event.target.value); }} /></label>
       <label className="text-[11px] font-bold">To <input required type="date" className={input} value={to} onChange={function (event) { setTo(event.target.value); }} /></label>
-      <button className={buttonBase + ' bg-blue-900 text-white'} disabled={busy || !from || !to || from > to}>{busy ? 'Loading…' : 'Run report'}</button>
+      <button className={buttonBase + ' bg-blue-900 text-white'} disabled={busy || categoryBusy || !from || !to || from > to}>{busy ? 'Loading…' : 'Run report'}</button>
       {result && result.report.currencies.length > 0 && <>
-        <button type="button" className={button} disabled={busy || rerun || !!error} onClick={function () { download(false); }}>Export summary CSV</button>
-        {result.report.details_available && <button type="button" className={button} disabled={busy || rerun || !!error} onClick={function () { download(true); }}>Export transactions CSV</button>}
+        <button type="button" className={button} disabled={detailProps.categoryBusy} onClick={function () { download(false); }}>Export summary CSV</button>
+        {result.report.details_available && <button type="button" className={button} disabled={detailProps.categoryBusy} onClick={function () { download(true); }}>Export transactions CSV</button>}
       </>}
     </form>
     {error && <p role="alert" className="text-[11px] text-red-800">{error}{result ? ' Showing the last successful report.' : ''}</p>}
@@ -166,10 +184,10 @@ export default function NextradeTaxReport({ api, exportCsv, onReview }) {
           </dl>
           <div className="flex flex-wrap items-center gap-2 mb-2 text-[11px]">
             {part.summary.review_count > 0 && <p className="font-bold text-amber-900">{part.summary.review_count} transactions need categorization before they can enter the summary.</p>}
-            {part.summary.review_count > 0 && onReview && <button type="button" className={button} disabled={busy || rerun || !!error} onClick={function () { onReview(result.from, result.to); }}>Review uncategorized</button>}
+            {part.summary.review_count > 0 && onReview && <button type="button" className={button} disabled={detailProps.categoryBusy} onClick={function () { onReview(result.from, result.to); }}>Review uncategorized</button>}
             {result.report.details_available && <button type="button" className={button} aria-expanded={opened === allKey} onClick={function () { setOpened(opened === allKey ? null : allKey); }}>All transactions</button>}
           </div>
-          {opened === allKey && <TransactionDetail key={allKey} heading={part.currency + ' · All transactions'} transactions={transactionRows(part).sort(function (a, b) { return b.date.localeCompare(a.date) || a.id.localeCompare(b.id); })} />}
+          {opened === allKey && <TransactionDetail {...detailProps} key={allKey} heading={part.currency + ' · All transactions'} transactions={transactionRows(part).sort(function (a, b) { return b.date.localeCompare(a.date) || a.id.localeCompare(b.id); })} />}
           <div className="overflow-x-auto">
             <table className="w-full text-[11px]" aria-label={part.currency + ' report categories'}>
               <thead className="bg-slate-200 text-slate-800"><tr>
@@ -190,7 +208,7 @@ export default function NextradeTaxReport({ api, exportCsv, onReview }) {
                     <td className="p-1 text-right">{cents(row.money_out)}</td>
                     <td className="p-1 text-right font-bold">{cents(row.money_in - row.money_out)}</td>
                   </tr>
-                  {opened === key && <tr><td colSpan={6}><TransactionDetail heading={row.label} transactions={row.transactions} /></td></tr>}
+                  {opened === key && <tr><td colSpan={6}><TransactionDetail {...detailProps} heading={row.label} transactions={row.transactions} /></td></tr>}
                 </Fragment>;
               })}</tbody>
             </table>

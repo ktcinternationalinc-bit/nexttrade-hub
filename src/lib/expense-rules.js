@@ -7,6 +7,8 @@
 // numbers and dates, keep the first few words. Pure functions; the launch
 // test runs the real math.
 
+import { isKeywordMatch, keywordMatchLength, transactionWords } from './bank-rule-match';
+
 export function merchantKey(name) {
   if (!name) { return null; }
   var s = String(name).toLowerCase();
@@ -36,18 +38,23 @@ export function normMatchText(x) {
 }
 export function ruleMatches(rule, txnText) {
   if (!rule || !rule.match_text || !txnText) { return false; }
+  if (isKeywordMatch(rule.match_mode)) { return keywordMatchLength(rule, transactionWords(txnText)) > 0; }
   var want = normMatchText(rule.match_text);
   if (want.length < 3) { return false; }
   return (' ' + normMatchText(txnText) + ' ').indexOf(want) >= 0;
 }
 
-// Best rule = the most specific (longest match_text) ACTIVE rule that matches.
-export function bestRule(rules, txnText) {
-  var best = null;
+// For alternatives, only a keyword actually found on the line gives the rule specificity.
+export function bestRule(rules, txnText, flagOnly) {
+  var best = null; var bestLength = 0; var words;
   (rules || []).forEach(function (r) {
-    if (!r || r.active === false || !r.classification) { return; } // v55.83-SW — a flag-only rule (no category) never suggests a category
-    if (!ruleMatches(r, txnText)) { return; }
-    if (!best || String(r.match_text).length > String(best.match_text).length) { best = r; }
+    if (!r || r.active === false || !(flagOnly ? r.third_party_payer : r.classification)) { return; }
+    var keyword = isKeywordMatch(r.match_mode);
+    if (keyword && !words) { words = transactionWords(txnText); }
+    var length = keyword ? keywordMatchLength(r, words) : ruleMatches(r, txnText) ? String(r.match_text).length : 0;
+    if (length > bestLength || (length > 0 && length === bestLength && !keyword && isKeywordMatch(best.match_mode))) {
+      best = r; bestLength = length;
+    }
   });
   return best;
 }

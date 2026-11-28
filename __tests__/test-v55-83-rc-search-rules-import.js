@@ -37,7 +37,8 @@ function loadEsm(src, extra) {
 console.log('RC — search, rules, statement import');
 
 // ── rules: real matcher
-var M = loadEsm(R('src/lib/expense-rules.js'));
+require('sucrase/register');
+var M = require('../src/lib/expense-rules.js');
 ok('1a: "Public Service" matches however the bank spaces or punctuates it',
   M.ruleMatches({ match_text: 'Public Service' }, 'PUBLIC  SERVICE ELEC & GAS') &&
   M.ruleMatches({ match_text: 'public service' }, 'PUBLIC-SERVICE*PYMT 0042') &&

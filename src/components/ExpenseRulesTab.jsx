@@ -13,6 +13,8 @@ import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of'; // v55.83-PQ — Wave link
 import DuplicateCheckPanel from './DuplicateCheckPanel'; // v55.83-SO
+import BankRuleMatchFields from './BankRuleMatchFields';
+import { ALL_KEYWORDS_MATCH, ANY_KEYWORD_MATCH, parseRuleMatch, ruleMatchLabel } from '../lib/bank-rule-match';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 
 var KINDS = ['income', 'cogs', 'expense', 'other_income', 'other_expense', 'transfer', 'not_pnl']; // v55.83-PW — QuickBooks-style types
@@ -37,11 +39,11 @@ export default function ExpenseRulesTab(props) {
   var s5 = useState(false); var busy = s5[0]; var setBusy = s5[1];
   var s6 = useState(''); var newCat = s6[0]; var setNewCat = s6[1];
   var sK = useState('expense'); var newKind = sK[0]; var setNewKind = sK[1]; // v55.83-PW
-  var s7 = useState({ match_text: '', classification: '', third_party_payer: '' }); var nr = s7[0]; var setNr = s7[1];
+  var s7 = useState({ match_text: '', match_mode: ALL_KEYWORDS_MATCH, classification: '', third_party_payer: '' }); var nr = s7[0]; var setNr = s7[1];
   // v55.83-SW — find a rule / a bank description, and rules that mark a line as sent to RTM / NextTrade
   var sFq = useState(''); var findQ = sFq[0]; var setFindQ = sFq[1];
   var sPt = useState([]); var parties = sPt[0]; var setParties = sPt[1];
-  var sFr = useState(true); var flagReady = sFr[0]; var setFlagReady = sFr[1];
+  var sFr = useState(false); var flagReady = sFr[0]; var setFlagReady = sFr[1];
   var sSh = useState(false); var sqlHelp = sSh[0]; var setSqlHelp = sSh[1]; // v55.83-SX — the one-time setup steps, shown on the screen
   var s8 = useState(null); var needsSql = s8[0]; var setNeedsSql = s8[1];
   var s9 = useState({}); var catDraft = s9[0]; var setCatDraft = s9[1];
@@ -105,25 +107,29 @@ export default function ExpenseRulesTab(props) {
       if (j && j.ok) { loadAll(); } else { toast.error((j && j.error) || 'Could not update.'); }
     }).finally(function () { setBusy(false); });
   }
+  function rulePayload(rule) {
+    var payload = { id: rule.id, match_text: rule.match_text, match_mode: rule.match_mode, classification: rule.classification || '', auto_apply: rule.auto_apply !== false, active: true };
+    if (flagReady) { payload.third_party_payer = rule.third_party_payer || ''; }
+    return payload;
+  }
   function addRule() {
     setBusy(true);
-    api('save_rule', { match_text: nr.match_text, classification: nr.classification, third_party_payer: nr.third_party_payer || '' }).then(function (j) {
+    api('save_rule', rulePayload(nr)).then(function (j) {
       if (j && j.ok && j.applied_now && j.applied_now.flagged > 0) { toast.success('🏢 ' + j.applied_now.flagged + ' money-out line(s) marked as sent to ' + nr.third_party_payer + '.'); }
-      if (j && j.ok) { setNr({ match_text: '', classification: '', third_party_payer: '' }); }
-      if (j && j.ok) { toast.success('Rule saved and applied now to ' + ((j.applied_now && j.applied_now.applied) || 0) + ' matching line(s)' + (j.applied_now && j.applied_now.left_people ? ' · ' + j.applied_now.left_people + ' kept a person\'s pick (use 🔍 test → apply to all to replace them)' : '') + '. It keeps applying automatically.'); setNr({ match_text: '', classification: '' }); loadAll(); }
+      if (j && j.ok) { toast.success('Rule saved and applied now to ' + ((j.applied_now && j.applied_now.applied) || 0) + ' matching line(s)' + (j.applied_now && j.applied_now.left_people ? ' · ' + j.applied_now.left_people + ' kept a person\'s pick (use 🔍 test → apply to all to replace them)' : '') + '. It keeps applying automatically.'); setNr({ match_text: '', match_mode: nr.match_mode, classification: '', third_party_payer: '' }); loadAll(); }
       else { toast.error((j && j.error) || 'Could not save the rule.'); }
     }).finally(function () { setBusy(false); });
   }
   function ruleActive(r, active) {
     setBusy(true);
-    var call = active ? api('save_rule', { id: r.id, match_text: r.match_text, classification: r.classification, third_party_payer: r.third_party_payer || '', auto_apply: r.auto_apply !== false, active: true }) : api('deactivate_rule', { id: r.id });
+    var call = active ? api('save_rule', rulePayload(r)) : api('deactivate_rule', { id: r.id });
     call.then(function (j) {
       if (j && j.ok) { loadAll(); } else { toast.error((j && j.error) || 'Could not update the rule.'); }
     }).finally(function () { setBusy(false); });
   }
-  function testRule(r, text) {
+  function testRule(r, text, draft) {
     setBusy(true);
-    api('rule_preview', r ? { id: r.id } : { match_text: text, third_party_payer: nr.third_party_payer || '' }).then(function (j) {
+    api('rule_preview', r ? { id: r.id } : Object.assign({ match_text: text }, draft && rulePayload(draft))).then(function (j) {
       if (j && j.ok) { setPreview(Object.assign({ rule: r || null }, j)); }
       else { toast.error((j && j.error) || 'Could not test the rule.'); }
     }).finally(function () { setBusy(false); });
@@ -149,7 +155,7 @@ export default function ExpenseRulesTab(props) {
   function saveEdit() {
     if (!editRule) { return; }
     setBusy(true);
-    api('save_rule', { id: editRule.id, match_text: editRule.match_text, classification: editRule.classification || '', third_party_payer: editRule.third_party_payer || '', auto_apply: true, active: true }).then(function (j) {
+    api('save_rule', rulePayload(editRule)).then(function (j) {
       if (j && j.ok && j.applied_now && j.applied_now.flagged > 0) { toast.success('🏢 ' + j.applied_now.flagged + ' money-out line(s) marked as sent to ' + editRule.third_party_payer + '.'); }
       if (j && j.ok) { toast.success('Rule updated and applied now to ' + ((j.applied_now && j.applied_now.applied) || 0) + ' line(s); it keeps applying automatically.'); setEditRule(null); loadAll(); }
       else { toast.error((j && j.error) || 'Could not save the rule.'); }
@@ -261,12 +267,13 @@ export default function ExpenseRulesTab(props) {
   var activeCats = cats.filter(function (c) { return c.active !== false; });
   var labelOf = {}; cats.forEach(function (c) { labelOf[c.key] = c.label; });
   // v55.83-SW — the rules shown: removed ones only when asked, then narrowed by the find box (description, category or company)
-  var ruleReady = nr.match_text.trim().length >= 3 && (!!nr.classification || !!nr.third_party_payer);
+  var match = parseRuleMatch(nr.match_text, nr.match_mode);
+  var ruleReady = !match.error && (!!nr.classification || !!nr.third_party_payer);
   var ruleParts = [];
   if (nr.classification) { ruleParts.push('gets the category “' + (labelOf[nr.classification] || nr.classification) + '”'); }
   if (nr.third_party_payer) { ruleParts.push('is marked as money sent to ' + nr.third_party_payer + ' (money-out lines only)'); }
-  var ruleSummary = nr.match_text.trim().length < 3 ? 'Step 1: type at least 3 characters the bank writes on the line.'
-    : (!ruleParts.length ? 'Step 2: pick a category, a company, or both.' : 'This rule: every bank line containing “' + nr.match_text.trim() + '” ' + ruleParts.join(' and ') + '.');
+  var ruleSummary = match.error ? match.error
+    : (!ruleParts.length ? 'Pick a category, a company, or both.' : 'Every bank line ' + (match.match_mode === ALL_KEYWORDS_MATCH ? 'containing all of ' + match.match_text : match.match_mode === ANY_KEYWORD_MATCH ? 'containing any of ' + match.match_text : 'containing “' + match.match_text + '”') + ' ' + ruleParts.join(' and ') + '.');
   var findKey = findQ.trim().toLowerCase();
   var shownRules = rules.filter(function (r0) { return showRemoved || r0.active !== false; }).filter(function (r0) {
     if (!findKey) { return true; }
@@ -336,9 +343,8 @@ export default function ExpenseRulesTab(props) {
         <div className="text-[13px] font-extrabold mb-2" style={{ color: '#0f172a' }}>➕ Make a new rule</div>
         <div className="flex gap-2 items-center flex-wrap mb-3">
           <span className="text-[12px] font-extrabold" style={{ color: '#0f172a' }}>1 · When the bank description contains</span>
-          <input value={nr.match_text} onChange={function (e) { setNr(Object.assign({}, nr, { match_text: e.target.value })); }} placeholder="a word the bank writes, e.g. rtm capital"
-            className="px-2 py-1.5 rounded-lg border border-slate-300 text-[12px] nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 260 }} />
-          <button onClick={function () { testRule(null, nr.match_text); }} disabled={busy || nr.match_text.trim().length < 3} title="See which bank lines this text would catch BEFORE saving" className="px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: (busy || nr.match_text.trim().length < 3) ? 0.5 : 1 }}>🔍 Show me the lines this catches</button>
+          <BankRuleMatchFields rule={nr} onChange={setNr} disabled={busy} />
+          <button onClick={function () { testRule(null, nr.match_text, nr); }} disabled={busy || !!match.error} title="See which bank lines this text would catch BEFORE saving" className="px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: (busy || !!match.error) ? 0.5 : 1 }}>🔍 Show me the lines this catches</button>
         </div>
         <div className="text-[12px] font-extrabold mb-1" style={{ color: '#0f172a' }}>2 · Then do this — pick one, or both</div>
         <div className="flex gap-2 items-center flex-wrap mb-1.5 pl-3">
@@ -373,7 +379,7 @@ export default function ExpenseRulesTab(props) {
         <div className="flex gap-2 items-center flex-wrap pt-2" style={{ borderTop: '1px solid #e2e8f0' }}>
           <span className="text-[12px] font-bold" style={{ color: ruleReady ? '#065f46' : '#92400e' }}>{ruleSummary}</span>
           <div className="flex-1" />
-          <button onClick={addRule} disabled={busy || nr.match_text.trim().length < 3 || (!nr.classification && !nr.third_party_payer)} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || nr.match_text.trim().length < 3 || (!nr.classification && !nr.third_party_payer)) ? 0.5 : 1 }}>✓ Save this rule</button>
+          <button onClick={addRule} disabled={busy || !ruleReady} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || !ruleReady) ? 0.5 : 1 }}>✓ Save this rule</button>
         </div>
       </div>
       <div className="flex items-center mb-2">
@@ -381,7 +387,7 @@ export default function ExpenseRulesTab(props) {
       </div>
       {preview && <div className="rounded-lg p-2 mb-2" style={{ background: '#eef2ff', border: '1px solid #c7d2fe' }}>
         <div className="flex gap-2 items-center flex-wrap mb-1">
-          <span className="text-[11px] font-extrabold" style={{ color: '#312e81' }}>🔍 "{preview.match_text}" appears on {preview.matches} of {preview.scanned} bank lines (money in and out, all dates)</span>
+          <span className="text-[11px] font-extrabold" style={{ color: '#312e81' }}>🔍 {ruleMatchLabel(preview)} matches {preview.matches} of {preview.scanned} bank lines (money in and out, all dates)</span>
           <div className="flex-1" />
           <button onClick={function () { setPreview(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e0e7ff', color: '#312e81' }}>✕</button>
         </div>
@@ -395,7 +401,7 @@ export default function ExpenseRulesTab(props) {
           {'🏢 ' + (preview.would_flag == null ? 'Could not count the lines for ' + preview.flag_party : preview.would_flag + ' money-out line(s) would be marked as sent to ' + preview.flag_party) + ' — only lines nobody has marked yet; never money in, never a transfer between our own accounts.'}
           {(preview.flag_sample || []).map(function (f0, fi) { return <div key={fi} className="font-semibold" style={{ color: '#0f172a' }}>{f0.date + ' · ' + f0.text + ' · −$' + Number(f0.amount || 0).toFixed(2)}</div>; })}
         </div>}
-        {!preview.rule && preview.matches > 0 && <button onClick={function () { setNr(Object.assign({}, nr, { match_text: preview.match_text })); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold mb-1" style={{ background: '#047857', color: '#ffffff' }}>＋ Use “{preview.match_text}” for a new rule</button>}
+        {!preview.rule && preview.matches > 0 && <button onClick={function () { setNr(Object.assign({}, nr, { match_text: preview.match_text, match_mode: preview.match_mode })); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold mb-1" style={{ background: '#047857', color: '#ffffff' }}>＋ Use “{preview.match_text}” for a new rule</button>}
         {preview.matches === 0 && <div className="text-[10px] font-bold mb-1" style={{ color: '#7f1d1d' }}>No bank line contains this text — that is why Hits stays at 0. Rules match the words AS THE BANK WRITES THEM (e.g. PSE&G shows as "Pse&g", not "Public Service"). Copy a word from the actual bank line.</div>}
         {(preview.sample || []).map(function (s0, si) {
           return <div key={si} className="flex gap-2 text-[10px] py-0.5" style={{ borderBottom: '1px solid #e0e7ff', color: '#0f172a' }}>
@@ -428,7 +434,7 @@ export default function ExpenseRulesTab(props) {
               var on = r.active !== false;
               var ed = editRule && editRule.id === r.id;
               return <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9', opacity: on ? 1 : 0.45 }}>
-                <td className="py-1.5 pr-2 font-semibold">{ed ? <input value={editRule.match_text} onChange={function (e) { setEditRule(Object.assign({}, editRule, { match_text: e.target.value })); }} className="px-1.5 py-0.5 rounded border border-slate-300 text-[11px] nt-light" style={{ width: 180 }} /> : '"' + r.match_text + '"'}</td>
+                <td className="py-1.5 pr-2 font-semibold">{ed ? <BankRuleMatchFields rule={editRule} onChange={setEditRule} disabled={busy} /> : ruleMatchLabel(r)}</td>
                 <td className="py-1.5 pr-2">{ed ? <select value={editRule.classification} onChange={function (e) { setEditRule(Object.assign({}, editRule, { classification: e.target.value })); }} className="px-1.5 py-0.5 rounded border border-slate-300 text-[11px] nt-light">
                   <option value="">(no category)</option>
                   {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select> : (r.classification ? (labelOf[r.classification] || r.classification) : <span style={{ color: '#64748b' }}>—</span>)}
@@ -440,11 +446,11 @@ export default function ExpenseRulesTab(props) {
                 <td className="py-1.5 pr-2 text-right tabular-nums">{r.hit_count || 0}</td>
                 <td className="py-1.5 whitespace-nowrap">
                   {ed ? <span>
-                    <button onClick={saveEdit} disabled={busy || String(editRule.match_text || '').trim().length < 3 || (!editRule.classification && !editRule.third_party_payer)} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#047857', color: '#ffffff' }}>✓ save</button>
+                    <button onClick={saveEdit} disabled={busy || !!parseRuleMatch(editRule.match_text, editRule.match_mode).error || (!editRule.classification && !editRule.third_party_payer)} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#047857', color: '#ffffff' }}>✓ save</button>
                     <button onClick={function () { setEditRule(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>cancel</button>
                   </span> : <span>
                     <button onClick={function () { testRule(r); }} disabled={busy} title="See which bank lines this rule catches, and apply it now" className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#e0e7ff', color: '#312e81' }}>🔍 test</button>
-                    {on && <button onClick={function () { setEditRule({ id: r.id, match_text: r.match_text, classification: r.classification || '', third_party_payer: r.third_party_payer || '' }); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>✏ edit</button>}
+                    {on && <button onClick={function () { setEditRule({ id: r.id, match_text: r.match_text, match_mode: r.match_mode, classification: r.classification || '', third_party_payer: r.third_party_payer || '', auto_apply: r.auto_apply }); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>✏ edit</button>}
                     {on ? <button onClick={function () { removeRule(r); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>🗑 remove</button>
                       : <button onClick={function () { ruleActive(r, true); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#d1fae5', color: '#065f46' }}>↺ restore</button>}
                   </span>}</td></tr>;

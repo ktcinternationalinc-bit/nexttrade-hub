@@ -339,6 +339,25 @@ function rulesOf(db, company) { return db.t.company_rules.filter(function (r) { 
   check('The Nextrade tax endpoint reads its own transactions and shows restricted scope', taxResult.ok && taxResult.report.currencies[0].summary.review_count === 1 && taxResult.report.currencies[0].rows[0].count === 1 && taxResult.payroll_restricted && taxResult.accounts_restricted, taxResult);
   var invalidTax = await call(Object.assign({}, taxRequest, { to: '2026-02-30' }));
   check('An invalid calendar date is rejected by the tax report', invalidTax._status === 400, invalidTax);
+  var fromDetail = taxResult.report.currencies[0].rows[0].transactions[0];
+  check('The tax detail identifies the row and its current category for editing', fromDetail.id === 'N1' && fromDetail.company_category === null && !fromDetail.paired_transfer);
+
+  nexttradeLine.name = 'ENERGY ACH CENTERPOINT';
+  var keywordRule = await call({ company: 'nextrade', action: 'save_rule', rule: { match_text: 'centerpoint, energy', match_mode: 'all_keywords', category_key: 'elec', direction: 'out' } });
+  var savedKeywords = await call({ company: 'nextrade', action: 'rules' });
+  check('Nextrade stores and reads the selected keyword mode', keywordRule.ok && savedKeywords.rules.some(function (r) { return r.id === keywordRule.id && r.match_mode === 'all_keywords'; }));
+  var keywordPreview = await call({ company: 'nextrade', action: 'apply_rules', from: '2026-01-01', to: '2026-11-27', preview: true, rule_ids: [keywordRule.id] });
+  check('Nextrade previews separated keywords in any order without writing', keywordPreview.ok && keywordPreview.would === 1 && !nexttradeLine.company_category, keywordPreview);
+  var keywordApply = await call({ company: 'nextrade', action: 'apply_rules', from: '2026-01-01', to: '2026-11-27', rule_ids: [keywordRule.id] });
+  check('Nextrade applies a saved keyword rule through its guarded categorization', keywordApply.ok && keywordApply.categorized === 1 && nexttradeLine.company_category === 'elec', keywordApply);
+  db.t.company_categories.push({ id: 'software', company_id: 'NEXTRADE_BOOKS', key: 'software', label: 'Software', kind: 'expense', active: true, direction: 'out' });
+  delete state.perms['company.nextrade.manage'];
+  var viewOnly = await call({ company: 'nextrade', action: 'set_category', ids: [fromDetail.id], category_key: 'software' });
+  check('Tax-report view access cannot authorize a category change', viewOnly._status === 403 && nexttradeLine.company_category === 'elec');
+  state.perms['company.nextrade.manage'] = true;
+  var changedFromDetail = await call({ company: 'nextrade', action: 'set_category', ids: [fromDetail.id], category_key: 'software' });
+  var refreshedTax = await call(taxRequest);
+  check('A category save on the report detail moves the transaction to the new group on refresh', changedFromDetail.ok && refreshedTax.report.currencies[0].rows[0].label === 'Software' && refreshedTax.report.currencies[0].rows[0].transactions[0].company_category === 'software' && refreshedTax.report.currencies[0].summary.review_count === 0);
   state.perms = { 'company.rtm.manage': true, 'company.rtm.view': true };
   var n2 = await call({ company: 'rtm', action: 'lines', from: '2026-10-01', to: '2026-11-30' });
   check('RTM lines carry no KTC mapping (RTM makes no KTC bills)', n2.ok && n2.ktc_map === undefined && n2.ktc_categories === undefined);

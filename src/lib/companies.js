@@ -5,6 +5,7 @@
 // refused — never quietly put under KTC.
 // Pure + safe on both server and browser. SWC-safe.
 import { US_WAVE_BUSINESS_ID } from './business-of';
+import { isKeywordMatch, keywordMatchLength, transactionWords } from './bank-rule-match';
 
 // The silo id each company's bank lines carry (bank_transactions / plaid_accounts / bank_connections .wave_business_id).
 export var NEXTRADE_COMPANY_ID = 'NEXTRADE_BOOKS';
@@ -46,12 +47,21 @@ export function normMatch(s) { return String(s == null ? '' : s).toLowerCase().r
 
 // The best rule for a line: the LONGEST match text found inside the line's description / merchant (most specific wins).
 export function bestCompanyRule(rules, text) {
-  var t = ' ' + normMatch(text) + ' '; var best = null;
+  var t = ' ' + normMatch(text) + ' '; var best = null; var bestLength = 0; var words;
   (rules || []).forEach(function (r) {
     if (!r || r.active === false) { return; }
-    var m = normMatch(r.match_text);
-    if (m.length < 3) { return; }
-    if (t.indexOf(' ' + m + ' ') >= 0 || t.indexOf(m) >= 0) { if (!best || m.length > normMatch(best.match_text).length) { best = r; } }
+    var keyword = isKeywordMatch(r.match_mode);
+    var length;
+    if (keyword) {
+      if (!words) { words = transactionWords(text); }
+      length = keywordMatchLength(r, words);
+    } else {
+      var phrase = normMatch(r.match_text);
+      length = phrase.length >= 3 && t.indexOf(phrase) >= 0 ? phrase.length : 0;
+    }
+    if (length > bestLength || (length > 0 && length === bestLength && !keyword && isKeywordMatch(best.match_mode))) {
+      best = r; bestLength = length;
+    }
   });
   return best;
 }

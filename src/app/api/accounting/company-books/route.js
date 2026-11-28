@@ -21,6 +21,8 @@ import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
 import { PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
 import { payrollScope, payrollKeys, maskPayrollLine, maskPayrollBill, isPayrollVendorName, PAYROLL_NOTE } from '../../../../lib/payroll-visibility'; // v55.83-XE — warehouse salaries only for 'payroll.view'
+import { isKeywordMatch, parseRuleMatch } from '../../../../lib/bank-rule-match';
+import { readRuleModes, writeRuleMode } from '../../../../lib/bank-rule-storage';
 import { learnPlan, linesForRule } from '../../../../lib/company-rule-learn'; // v55.83-VK — the books learn a rule from what a person categorizes
 var SQL_MISSING_UD = '"KTC pays this" on a category needs one database update first: run sql/v55-83-UD-pay-nextrade.sql in Supabase (SQL Editor).';
 var SQL_MISSING_VK = 'Rules need one small database update before they can categorize lines: run sql/v55-83-VK-rule-apply-guard.sql in Supabase (SQL Editor). Nothing was changed. You can still categorize lines by hand.';
@@ -274,7 +276,7 @@ export async function POST(req) {
     }
 
     if (action === 'rules') {
-      var rr = await db.from('company_rules').select('id, match_text, category_key, direction, active, hit_count, updated_at').eq('company_id', cid).order('updated_at', { ascending: false }).limit(2000);
+      var rr = await readRuleModes(function (mode) { return db.from('company_rules').select('id, match_text, category_key, direction, active, hit_count, updated_at' + mode).eq('company_id', cid).order('updated_at', { ascending: false }).limit(2000); });
       if (rr.error) { return missingRel(rr.error) ? NextResponse.json({ ok: true, rules: [], sql_missing: SQL_MISSING }) : readFail('the rules', rr.error); }
       return NextResponse.json({ ok: true, rules: rr.data || [] });
     }
@@ -297,26 +299,27 @@ export async function POST(req) {
         if (seedAccount.error && !missingPrivateColumn(seedAccount.error)) { return readFail('the source account', seedAccount.error); }
         if (seedAccount.data && seedAccount.data.is_private) { return fail('Rules are shared across the company. Use the Rules tab to enter a rule without copying a private transaction.', 403); }
       }
-      var mt = normMatch(rp.match_text);
-      if (mt.length < 3) { return fail('Type at least 3 letters the description contains.'); }
+      var match = parseRuleMatch(rp.match_text, rp.match_mode, normMatch);
+      if (match.error) { return fail(match.error); }
+      if (comp.key !== 'nextrade' && isKeywordMatch(match.match_mode)) { return fail('Keyword matching is available for Nextrade rules.'); }
       var dir = rp.direction === 'in' || rp.direction === 'out' ? rp.direction : 'any';
       var catsR = await loadCats(db, cid);
       if (catsR.error) { return readFail('the categories', catsR.error); }
       var okCat = (catsR.data || []).filter(function (c) { return c.key === rp.category_key && c.active; })[0];
       if (!okCat) { return fail('Pick one of ' + comp.label + '’s categories.'); }
       if (dir !== 'any' && okCat.direction && okCat.direction !== 'any' && okCat.direction !== dir) { return fail('The rule’s direction must match its category.'); }
-      var rrow = { match_text: mt, category_key: okCat.key, direction: dir, active: true, updated_by: userId, updated_at: new Date().toISOString() };
+      var rrow = { match_text: match.match_text, match_mode: match.match_mode, category_key: okCat.key, direction: dir, active: true, updated_by: userId, updated_at: new Date().toISOString() };
       if (rp.id) {
-        var ru = await db.from('company_rules').update(rrow).eq('id', rp.id).eq('company_id', cid).select('id');
+        var ru = await writeRuleMode(rrow, function (row) { return db.from('company_rules').update(row).eq('id', rp.id).eq('company_id', cid).select('id'); });
         if (ru.error) { return fail(ru.error.code === '23505' ? 'There is already a rule for that text.' : 'Not saved (' + ru.error.message + ').', 409); }
         if (!ru.data || !ru.data.length) { return fail('Rule not found in ' + comp.label + '.', 404); }
-        await audit(db, userId, 'company_rule_edited', 'company_rule', rp.id, { company: comp.label, match_text: mt, category: okCat.key, direction: dir });
+        await audit(db, userId, 'company_rule_edited', 'company_rule', rp.id, { company: comp.label, match_text: match.match_text, match_mode: match.match_mode, category: okCat.key, direction: dir });
         return NextResponse.json({ ok: true, id: rp.id });
       }
       rrow.company_id = cid; rrow.created_by = userId;
-      var rins = await db.from('company_rules').insert(rrow).select('id').maybeSingle();
+      var rins = await writeRuleMode(rrow, function (row) { return db.from('company_rules').insert(row).select('id').maybeSingle(); });
       if (rins.error) { return fail(rins.error.code === '23505' ? 'There is already a rule for that text — edit it instead.' : 'Not saved (' + rins.error.message + ').', 409); }
-      await audit(db, userId, 'company_rule_created', 'company_rule', rins.data.id, { company: comp.label, match_text: mt, category: okCat.key, direction: dir });
+      await audit(db, userId, 'company_rule_created', 'company_rule', rins.data.id, { company: comp.label, match_text: match.match_text, match_mode: match.match_mode, category: okCat.key, direction: dir });
       return NextResponse.json({ ok: true, id: rins.data.id });
     }
 
@@ -470,7 +473,7 @@ export async function POST(req) {
         // (Codex 20:27 P2) fail CLOSED: only the exact "column is not there" answer (TP SQL never run: nothing is private) lets learning go on
         if (pq.error) { if (!missingPrivateColumn(pq.error)) { return [{ state: 'failed', error: 'Could not check private accounts — no rule learned.' }]; } }
         else { (pq.data || []).forEach(function (a) { priv[a.plaid_account_id] = true; }); }
-        var rq = await db.from('company_rules').select('id, match_text, category_key, direction, active, hit_count').eq('company_id', cid).limit(5000);
+        var rq = await readRuleModes(function (mode) { return db.from('company_rules').select('id, match_text, category_key, direction, active, hit_count' + mode).eq('company_id', cid).limit(5000); });
         if (rq.error) { return [{ state: 'failed', error: 'Could not read the rules — no rule learned.' }]; }
         var rulesL = rq.data || []; var seen = {}; var touched = [];
         for (var li = 0; li < linesDone.length && touched.length < 20; li++) {
@@ -550,7 +553,7 @@ export async function POST(req) {
     }
 
     if (action === 'apply_rules') {
-      var catsA = await loadCats(db, cid); var rulesA = await db.from('company_rules').select('id, match_text, category_key, direction, active, hit_count').eq('company_id', cid).eq('active', true);
+      var catsA = await loadCats(db, cid); var rulesA = await readRuleModes(function (mode) { return db.from('company_rules').select('id, match_text, category_key, direction, active, hit_count' + mode).eq('company_id', cid).eq('active', true); });
       if (catsA.error || rulesA.error) { return readFail('the rules', catsA.error || rulesA.error); }
       var byKeyA = {}; (catsA.data || []).forEach(function (c) { if (c.active) { byKeyA[c.key] = c; } });
       if (!(rulesA.data || []).length) { return NextResponse.json({ ok: true, categorized: 0, bills_made: 0, skipped: 0, would: 0, would_bills: 0, problems: [], more: false }); } // no rules: nothing to do
