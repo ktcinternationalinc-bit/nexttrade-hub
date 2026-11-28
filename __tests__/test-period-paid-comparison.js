@@ -39,6 +39,7 @@ const bankMonth = assemble({ spendingRows: [row('supplier', 'vendor_payment', 18
   incomeRows: [row('old-customer', 'customer_payment', 409782.20, { invoice_id: 'older-invoice' }), row('unknown-in', '', 9330), row('interest', 'interest', 120), row('returned-deposit', 'customer_payment', 2072, { returned_deposit: true })] });
 assert.equal(bankMonth.paid.cents, 19184494);
 assert.equal(bankMonth.funding.cents, 7500000);
+assert.equal(bankMonth.bank_cash.cents, 26684494);
 assert.equal(bankMonth.funded_paid.cents, 0);
 assert.equal(bankMonth.receipts.cents, 40978220);
 assert.equal(bankMonth.receipts.rows[0].invoice_id, 'older-invoice');
@@ -47,6 +48,8 @@ assert.equal(bankMonth.review.cents, 11000);
 assert.equal(bankMonth.partner_billed.cents, 4525000);
 assert.equal(bankMonth.partner_billed.rows[0].bill_id, '14277');
 assert.equal(bankMonth.partner_paid_cents, 0);
+assert.equal(bankMonth.billed.cents, 9050000);
+assert.equal(bankMonth.billed.rows.filter(r => r.category === 'partner_fees').length, 1);
 const receiptMatches = assemble({ incomeRows: [row('partial', '', 1000), row('classified', 'customer_payment', 400), row('internal', 'transfer', 200)], customerPayments: [
   { bank_transaction_id: 'partial', accounting_invoice_id: 'older-invoice', amount: 300 },
   { bank_transaction_id: 'classified', accounting_invoice_id: 'invoice', amount: 400 },
@@ -71,6 +74,8 @@ const juneFunding = assemble({ spendingRows: [transfer, row('direct-unlinked', '
 assert.equal(juneFunding.paid.cents, 7105000);
 assert.equal(juneFunding.funded_paid.cents, 7075000);
 assert.equal(juneFunding.funding.cents, 8000000);
+assert.equal(juneFunding.bank_cash.cents, 8030000);
+assert.equal(juneFunding.bank_cash.rows.filter(r => r.category === 'partner_fees').length, 0);
 assert.equal(juneFunding.partner_paid_cents, 4525000);
 assert.equal(juneFunding.review.rows[0].id, 'duplicated-partner');
 assert.deepEqual(juneFunding.funded_paid.rows.filter(r => r.transfer_id === 'rtm').map(r => [r.category, r.cents]), [
@@ -80,9 +85,11 @@ assert.deepEqual(juneFunding.funded_paid.rows.filter(r => r.transfer_id === 'rtm
 const julyFunding = assemble({ date: july, partnerFeeLines: [{ id: 'july-fee', bill_id: '14487', description: 'Operational Fee July 2026', amount: 45250 }], funds: funding({ applied_rows: [fundedBill('july-portion', 'freight', 4250, { paid_date: '2026-07-03' })] }) });
 assert.equal(julyFunding.funding.cents, 0);
 assert.equal(julyFunding.paid.cents, 425000);
+assert.equal(julyFunding.bank_cash.cents, 0);
 assert.equal(julyFunding.paid.rows[0].transfer_date, '2026-06-25');
 assert.equal(julyFunding.partner_billed.rows[0].bill_id, '14487');
 assert.equal(combinePaidComparisons([juneFunding, julyFunding]).paid.cents, 7530000);
+assert.equal(combinePaidComparisons([juneFunding, julyFunding]).bank_cash.cents, 8030000);
 assert.equal(combinePaidComparisons([juneFunding, null]), null);
 assert.ok(assemble({ funds: null }).unavailable);
 
@@ -103,6 +110,11 @@ assert.equal(mixed.partner_schedule.cents, 9050000);
 assert.equal(mixed.partner_schedule.rows[0].date, '2026-07-31');
 assert.equal(mixed.partner_schedule.rows[0].bill_id, mixedBill.id);
 assert.match(mixed.partner_schedule.rows[1].source, /source bill missing/);
+const duplicateJulyFee = { ...bills['14487'], category: 'partner_fees' };
+const sameObligation = assemble({ bills: { [duplicateJulyFee.id]: duplicateJulyFee, mixed: mixedBill }, date: { from: '2026-07-01', to: '2026-08-31' }, partnerFeeLines: mixedLines });
+assert.equal(sameObligation.billed.cents, 5025000);
+assert.equal(sameObligation.billed.rows.filter(r => r.category === 'partner_fees').length, 1);
+assert.equal(sameObligation.billed.rows.find(r => r.bill_id === 'mixed').cents, 500000);
 assert.deepEqual(nexPacFeeSchedule(identifyNexPacFeeLines({}, []), '2026-11-01', '2026-11-28'), []);
 const proofPay = pay('proof-payment', 'freight', 5000, 'rtm', { method: 'rtm' });
 const proof = { bill_id: 'freight', payment_id: proofPay.id, rtm_file_id: 'proof', rtm_confirmed_at: '2026-07-04', rtm_paid_date: '2026-07-03', is_open: false };
@@ -128,7 +140,7 @@ addPeriodCell(period, { goods_revenue: 88159.26, goods_profit: null });
 const html = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], comparison: bankMonth, invoiceRows: [], onFixCosts() {}, onOpenBill() {} }));
 for (const text of ['Goods invoiced less payments', 'Customer receipts less payments', '$336,148.51', '$98,316.74', '$4,409.00', '$88,159.26', 'Fix missing costs', 'Partner fee billed', 'Bill 14277', 'RTM / NextTrade bills and fees paid']) assert.ok(html.includes(text), text);
 const juneReport = renderToStaticMarkup(React.createElement(PeriodPaidComparison, {
-  period, periods: [period], invoiceRows: [], pnl: { cents: -2842386, complete: false }, onOpenPnl() {},
+  period, periods: [period], invoiceRows: [], basis: 'vendor', pnl: { cents: -2842386, complete: false }, onOpenPnl() {},
   comparison: { ...bankMonth, paid: { cents: 26988926, count: 0, rows: [] }, receipts: { cents: 40978220, count: 0, rows: [] },
     funding: { cents: 7600000, count: 4, rows: [] }, funded_paid: { cents: 1344736, count: 2, rows: [] } },
 }));
@@ -140,4 +152,13 @@ const fundingReport = renderToStaticMarkup(React.createElement(PeriodPaidCompari
   period, periods: [period], invoiceRows: [], comparison: juneFunding, onOpenBill() {},
 }));
 for (const text of ['by category', 'Payments this transfer funded', 'Category</th>', 'Funding transfer 2026-06-25', '$65,750.00', 'Bill 14277']) assert.ok(fundingReport.includes(text), text);
+const bankReport = renderToStaticMarkup(React.createElement(PeriodPaidComparison, {
+  period, periods: [period], invoiceRows: [], comparison: { ...bankMonth, bank_cash: { cents: 33244190, count: 0, rows: [] } },
+}));
+for (const text of ['Cash out for expenses and funding', '-$332,441.90', '= $3,706.61', '= $77,340.30']) assert.ok(bankReport.includes(text), text);
+const accruedReport = renderToStaticMarkup(React.createElement(PeriodPaidComparison, {
+  period, periods: [period], invoiceRows: [], comparison: bankMonth, basis: 'billed', onOpenBill() {},
+}));
+for (const text of ['Goods invoiced less bills dated this period', '-$90,500.00', 'Bill 14277']) assert.ok(accruedReport.includes(text), text);
+assert.doesNotMatch(accruedReport, /Customer receipts less payments/);
 console.log('PASS: period comparison reconciliation, source records, RTM funding and refunds, partner duplicates, account transfers, foreign currency, access, and missing costs.');

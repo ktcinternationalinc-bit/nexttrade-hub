@@ -101,7 +101,7 @@ async function loadBills(db) {
         try { // v55.83-WX — + where the category came from (a person, a bill rule, the vendor memory)
           bills = await fetchAll(function () {
             return db.from('vendor_bills')
-              .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via, release_number, other_reference, shipment_direction, bill_type, bill_type_source, direction_source, category_source, category_rule_id, category_rule_version')
+              .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via, release_number, other_reference, shipment_direction, bill_type, bill_type_source, direction_source, category_source, category_rule_id, category_rule_version, wave_business_id')
               .order('due_date', { ascending: true, nullsFirst: false });
           });
         } catch (eWX) {
@@ -2345,7 +2345,7 @@ export async function POST(req) {
               paidComparison = buildPaidComparison({
               bills: billNameById, payments: xoPays, customerPayments: paysP.filter(function (payment) { return !isPaymentVoid(payment) && usInv[payment.accounting_invoice_id]; }),
               spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: spTx, partnerFeeLines: partnerFeeLines,
-              funds: partyFunds, labels: catLabels, kinds: catKinds, from: pFrom, to: pTo,
+              funds: partyFunds, labels: catLabels, kinds: catKinds, from: pFrom, to: pTo, billBusinessId: US_WAVE_BUSINESS_ID,
               privateBills: callerIsSuper ? {} : payZD.pay.ids, showRows: canRows
             }); }
           } catch (compareError) { paidComparison = { unavailable: 'The payment breakdown could not be reconciled.' }; }

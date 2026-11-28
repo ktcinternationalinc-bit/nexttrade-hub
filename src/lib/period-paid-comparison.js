@@ -1,6 +1,7 @@
 import { vendorKeyOf } from './bill-payments-report';
 import { isPartnerFeeCategory } from './partner-fee';
 import { NEXPAC_FEE_CENTS, identifyNexPacFeeLines, nexPacFeeSchedule } from './partner-fee-months';
+import { billIdentity } from './bill-duplicates';
 
 const cents = amount => Math.round((Number(amount) || 0) * 100);
 const sum = rows => rows.reduce((total, row) => total + row.cents, 0);
@@ -8,7 +9,7 @@ const isUSD = currency => String(currency || 'USD').toUpperCase() === 'USD';
 const isActive = bill => bill && (bill.record_status || 'active') === 'active';
 const reviewCategory = key => !key || ['uncategorized', 'needs_clarification'].includes(key);
 
-export function buildPaidComparison({ bills, payments, customerPayments = [], partnerFeeLines = [], spendingRows, incomeRows, bankLines, funds, labels, kinds, from, to, privateBills = {}, showRows = true }) {
+export function buildPaidComparison({ bills, payments, customerPayments = [], partnerFeeLines = [], spendingRows, incomeRows, bankLines, funds, labels, kinds, from, to, billBusinessId, privateBills = {}, showRows = true }) {
   if (!Array.isArray(funds)) return { unavailable: 'Vendor payments through RTM and NextTrade could not be verified.' };
   const inPeriod = date => date && date >= from && date <= to;
   const paid = [];
@@ -75,6 +76,33 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     }
     return { id: month.id, date: month.date, cents: month.cents, who: 'NexPac Corporation', source: choices.length > 1 ? 'Multiple bills reference this month. Please reconcile them.' : 'Expected month-end fee · source bill missing' };
   });
+
+  const billed = [];
+  const seenBills = new Set();
+  const seenPartnerMonths = new Set();
+  Object.values(bills).filter(bill => isActive(bill) && isUSD(bill.currency) && bill.bill_date && cents(bill.total_amount) > 0
+    && !/^credit/i.test(bill.bill_type || '') && (!billBusinessId || !bill.wave_business_id || bill.wave_business_id === billBusinessId))
+    .sort((a, b) => a.bill_date.localeCompare(b.bill_date) || Number(!!b.category) - Number(!!a.category) || String(a.created_at || '').localeCompare(String(b.created_at || '')) || a.id.localeCompare(b.id))
+    .forEach(bill => {
+      const identity = billIdentity(bill);
+      if (identity && seenBills.has(identity)) return;
+      if (identity) seenBills.add(identity);
+      const source = bill.disputed ? 'Disputed vendor bill' : 'Vendor bill by invoice date';
+      const fees = feeLinesByBill.get(bill.id) || [];
+      let remaining = cents(bill.total_amount);
+      for (const fee of fees) {
+        if (fee.cents > remaining) break;
+        remaining -= fee.cents;
+        if (seenPartnerMonths.has(fee.month)) continue;
+        seenPartnerMonths.add(fee.month);
+        if (inPeriod(bill.bill_date)) {
+          billed.push({ ...billRow(bill, bill.bill_date, fee.cents, source, fee.id), category: 'partner_fees', label: 'Partner Fees' });
+        }
+      }
+      if (!inPeriod(bill.bill_date) || !remaining) return;
+      const base = billRow(bill, bill.bill_date, remaining, source, bill.id);
+      billed.push(fees.length && base.category === 'partner_fees' ? { ...base, category: 'other_bill_charges', label: 'Other bill charges' } : base);
+    });
 
   const bankPayments = new Map();
   const recorded = new Set();
@@ -199,6 +227,8 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
 
   const group = rows => ({ cents: sum(rows), count: rows.length, rows: showRows ? rows : [] });
   return { rows_visible: showRows, paid: group(paid), receipts: group(receipts), funding: group(funding), funded_paid: group(paid.filter(row => row.party)), review: group(review),
+    bank_cash: group(paid.filter(row => !row.party).concat(funding.map(row => ({ ...row, category: 'company_funding', label: 'RTM / NextTrade funding' })))),
+    billed: group(billed),
     unclassified_receipts: group(unclassifiedReceipts), partner_billed: group(partnerBilled), partner_schedule: group(expectedPartnerFees), partner_paid_cents: sum(paid.filter(row => row.category === 'partner_fees')) };
 }
 
@@ -206,7 +236,7 @@ export function combinePaidComparisons(parts) {
   if (!parts.length || parts.some(part => !part || part.unavailable)) return null;
   const totals = { rows_visible: parts.every(part => part.rows_visible), partner_paid_cents: parts.reduce((total, part) => total + part.partner_paid_cents, 0) };
   totals.notice = parts.find(part => part.notice)?.notice;
-  for (const key of ['paid', 'receipts', 'funding', 'funded_paid', 'review', 'unclassified_receipts', 'partner_billed', 'partner_schedule']) {
+  for (const key of ['paid', 'receipts', 'funding', 'funded_paid', 'bank_cash', 'billed', 'review', 'unclassified_receipts', 'partner_billed', 'partner_schedule']) {
     totals[key] = parts.reduce((total, part) => ({ cents: total.cents + part[key].cents, count: total.count + part[key].count, rows: total.rows.concat(part[key].rows) }), { cents: 0, count: 0, rows: [] });
   }
   return totals;

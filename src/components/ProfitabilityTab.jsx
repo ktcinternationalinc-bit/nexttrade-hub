@@ -145,6 +145,7 @@ export default function ProfitabilityTab(props) {
   // report, grouping or person throws the old answers away and ignores late ones; a failed period can be asked again.
   var s19 = useState({}); var pExp = s19[0]; var setPExp = s19[1];
   var [comparisonKey, setComparisonKey] = useState(null);
+  var [expenseBasis, setExpenseBasis] = useState('bank');
   var s20 = useState({ from: '', to: '' }); var applied = s20[0]; var setApplied = s20[1]; // the dates the report on screen was loaded with
   var expGen = useRef(0); var expAuto = useRef(-1);
   var s21 = useState({ busy: false, report: null, error: '' }); var inb = s21[0]; var setInb = s21[1]; var inbGen = useRef(0); // v55.83-VR — inbound trucking tracker
@@ -754,6 +755,7 @@ export default function ProfitabilityTab(props) {
         window.requestAnimationFrame(function () { window.requestAnimationFrame(function () { document.getElementById('nt-fix-list')?.scrollIntoView({ block: 'start' }); }); });
       }
       return <PeriodPaidComparison key={picked.key} period={picked} periods={options} onPeriod={setComparisonKey} comparison={compare} status={status} invoiceRows={invoiceRows} onOpenInvoice={setPeekId}
+        basis={expenseBasis} onBasisChange={setExpenseBasis}
         onOpenBill={function (bill) { openBill(Object.assign({}, bill, { vendor: bill.who, bill_number: bill.ref, paid_date: bill.date, comparison_record: true })); }}
         pnl={pnl} onOpenPnl={function () { setFShow({ key: picked.key, pinned: true }); }}
         onFixCosts={picked.key === 'total' ? null : fixCosts} />;
