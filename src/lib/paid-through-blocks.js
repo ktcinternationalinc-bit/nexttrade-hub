@@ -54,6 +54,13 @@ export function buildPaidThroughBlocks(o) {
         payByCat[k].count++;
       });
       var allocByCat = {}, allocTotal = 0, rows = [];
+      var reimbursementsByCategory = {};
+      function isReimbursement(payment, key, amount) {
+        if (!o.nextradeBillIds?.has(payment.bill_id)) { return false; }
+        var item = reimbursementsByCategory[key] || (reimbursementsByCategory[key] = { count: 0, amount: 0 });
+        item.count++; item.amount = r2(item.amount + amount);
+        return true;
+      }
       (o.pays || []).forEach(function (p) {
         if (p.party_opening_id) { return; } // v55.83-XO — paid from a starting balance: counted below, never from this period's transfers
         if (p.voided === true || !inP(p.paid_date)) { return; }
@@ -64,7 +71,8 @@ export function buildPaidThroughBlocks(o) {
         var k = b.category || 'uncategorized'; var am = r2(p.amount);
         if (!allocByCat[k]) { allocByCat[k] = { key: k, label: catLabels[k] || k, kind: kindOf(k), count: 0, total: 0 }; }
         allocByCat[k].count++; allocByCat[k].total = r2(allocByCat[k].total + am); allocTotal = r2(allocTotal + am);
-        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: b.bill_number || '—', category: k, amount: am, bill_id: p.bill_id, bill_date: b.bill_date || null, release: b.release_number || null, bill_total: b.total_amount === undefined ? null : r2(b.total_amount), bank_line: p.bank_transaction_id || null }); }
+        var reimbursement = isReimbursement(p, k, am);
+        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: b.bill_number || '—', category: k, amount: am, bill_id: p.bill_id, bill_date: b.bill_date || null, release: b.release_number || null, bill_total: b.total_amount === undefined ? null : r2(b.total_amount), bank_line: p.bank_transaction_id || null, nextrade_reimbursement: reimbursement || undefined }); }
       });
       // v55.83-TX — bills paid FROM THE ADVANCE in the period: in the tax view they are professional fees (the server adds them
       // to that line); the real-cost view moves them into the bills' real categories (payments_by_cat out, allocations in)
@@ -76,7 +84,8 @@ export function buildPaidThroughBlocks(o) {
         var k = b.category || 'uncategorized'; var am = r2(p.amount);
         if (!advByCat[k]) { advByCat[k] = { key: k, label: catLabels[k] || k, kind: kindOf(k), count: 0, total: 0 }; }
         advByCat[k].count++; advByCat[k].total = r2(advByCat[k].total + am); advApplied = r2(advApplied + am);
-        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: (b.bill_number || '—') + ' · from the advance', category: k, amount: am }); }
+        var reimbursement = isReimbursement(p, k, am);
+        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: (b.bill_number || '—') + ' · from the advance', category: k, amount: am, nextrade_reimbursement: reimbursement || undefined }); }
       });
       // v55.83-XO (Max's (b)) — bills paid FROM A STARTING BALANCE on / after 1 June 2026: in the tax view they are professional
       // fees on their paid date (the server adds them to that line, from the shared calculation); the real-cost view takes them
@@ -89,7 +98,8 @@ export function buildPaidThroughBlocks(o) {
         var k = b.category || 'uncategorized'; var am = r2(p.amount);
         if (!sbByCat[k]) { sbByCat[k] = { key: k, label: catLabels[k] || k, kind: kindOf(k), count: 0, total: 0 }; }
         sbByCat[k].count++; sbByCat[k].total = r2(sbByCat[k].total + am); sbApplied = r2(sbApplied + am); sbCount++;
-        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: (b.bill_number || '—') + ' · from the starting balance', category: k, amount: am, bill_id: p.bill_id }); }
+        var reimbursement = isReimbursement(p, k, am);
+        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: (b.bill_number || '—') + ' · from the starting balance', category: k, amount: am, bill_id: p.bill_id, nextrade_reimbursement: reimbursement || undefined }); }
       });
       if (!(payCount > 0 || allocTotal > 0 || advApplied > 0 || sbApplied > 0 || mbRows.length > 0)) { return; }
       // bills / service fee / waiting — line by line, only for lines from provider_from on
@@ -148,6 +158,7 @@ export function buildPaidThroughBlocks(o) {
           if (hitS) { hitS.total = r2(hitS.total + sbByCat[k].total); hitS.count += sbByCat[k].count; } else { blk.allocations_by_cat.push(sbByCat[k]); }
         });
       }
+      if (Object.keys(reimbursementsByCategory).length) { blk.nextrade_reimbursements = reimbursementsByCategory; }
       out.push(blk);
     });
   });

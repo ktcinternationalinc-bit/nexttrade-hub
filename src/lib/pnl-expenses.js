@@ -202,6 +202,34 @@ export function expensesOffReason(releasesAll, hasFrom) {
   if (!hasFrom) { return { code: 'no_from', short: 'set a From date to see expenses', long: 'Set a From date at the top and press Apply to see expenses and the final P&L — without a start date the months before the first sale cannot be known.' }; }
   return null;
 }
+
+function operatingSpending(spending, nexttrade) {
+  if (!nexttrade) return spending;
+  const direct = nexttrade.direct_by_category || {};
+  const byBank = new Map();
+  for (const row of nexttrade.direct_rows || []) byBank.set(row.bank_id, (byBank.get(row.bank_id) || 0) + row.cents);
+  const unc = spending.uncategorized;
+  return {
+    ...spending,
+    categories: (spending.categories || []).map(item => direct[item.key] ? { ...item, total: (cents(item.total) - direct[item.key]) / 100 } : item),
+    uncategorized: unc && { ...unc, total: (cents(unc.total) - (direct.uncategorized || 0)) / 100 },
+    rows: Array.isArray(spending.rows) ? spending.rows.flatMap(row => {
+      if (!byBank.has(row.id)) return [row];
+      const remaining = cents(row.amount) - byBank.get(row.id);
+      return remaining ? [{ ...row, amount: remaining / 100 }] : [];
+    }) : spending.rows,
+    paid_through: (spending.paid_through || (spending.rtm ? [spending.rtm] : [])).map(block => {
+      if (!block.nextrade_reimbursements) return block;
+      return { ...block,
+        rows: (block.rows || []).filter(row => !row.nextrade_reimbursement),
+        allocations_by_cat: (block.allocations_by_cat || []).map(category => {
+          const reimbursed = block.nextrade_reimbursements[category.key];
+          return reimbursed ? { ...category, total: (cents(category.total) - cents(reimbursed.amount)) / 100, count: category.count - reimbursed.count } : category;
+        }),
+      };
+    }),
+  };
+}
 export function expenseScope(gran, reportFrom, reportTo, userId) { return [gran || '', reportFrom || '', reportTo || '', userId || ''].join('|'); }
 
 // One request per period, with the period's dates CUT to the report's own dates — a report for 10–19 Nov asks for 10–19 Nov,
@@ -231,11 +259,24 @@ export function readExpenseAnswer(j, req, adjust, fold) {
   if (j.from !== req.from || j.to !== req.to) { return { status: 'outside', why: 'Expenses for ' + req.from + ' → ' + req.to + ' are not open to you (the Income Statement only answers for ' + j.from + ' → ' + j.to + ').', from: req.from, to: req.to, partial: !!req.partial }; }
   if (j.spending_restricted) { return { status: 'locked', why: (j.spending_restricted.words || 'Expenses for these dates are withheld: they include a starting balance only the super admin may see.'), restricted: true, from: req.from, to: req.to, partial: !!req.partial }; } // v55.83-XO (Codex 14:52 P1)
   if (!j.spending) { return { status: 'locked', why: 'Expenses are shown only to people with the “see totals” switch.', from: req.from, to: req.to, partial: !!req.partial }; }
-  var rc = realCostCategories(j.spending, adjust, fold);
+  if (j.internal_expenses_error) { return { status: 'error', why: j.internal_expenses_error, from: req.from, to: req.to, partial: !!req.partial }; }
+  var charges = j.paid_comparison?.nextrade_operating;
+  var spending = operatingSpending(j.spending, charges);
+  var rc = realCostCategories(spending, adjust, fold);
+  var nextrade = new Map();
+  for (const category of charges?.charges_by_category || []) {
+    const existing = rc.cats.find(item => item.key === category.key);
+    if (existing) {
+      existing.total = (cents(existing.total) + cents(category.total)) / 100;
+    } else {
+      rc.cats.push({ key: category.key, label: category.label, kind: category.kind, total: category.total });
+    }
+    nextrade.set(category.key, category);
+  }
   var colsR = expenseColumns(rc.cats, rc.uncategorized);
   if (rc.funds) { colsR.unconfirmed = rc.funds.unconfirmed; colsR.duplicates = rc.funds.duplicates; colsR.funds_need_reconciliation = rc.funds.needs_reconciliation; colsR.held_is_balance = true; }
   var ptb = paidThroughBreakdown(j.spending); colsR.paid_through_cents = ptb.total; colsR.paid_through_unlinked_cents = ptb.unlinked; // v55.83-XQ — view-only: bills RTM / NextTrade settled this period (linked + unlinked); never added to the P&L
-  return { status: 'ok', cols: colsR, detail: expenseDetail(j.spending, rc), paidComparison: j.paid_comparison || null, from: j.from, to: j.to, partial: !!req.partial };
+  return { status: 'ok', cols: colsR, detail: expenseDetail(spending, rc, nextrade), paidComparison: j.paid_comparison || null, from: j.from, to: j.to, partial: !!req.partial };
 }
 
 // Asks for the periods one after another. o = { requests, fetchOne(req) → Promise of the answer, put(key, result),

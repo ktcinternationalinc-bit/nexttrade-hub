@@ -43,6 +43,7 @@ export default function ExpenseDetail(props) {
       {m.from_advances_cents !== 0 && <Row label="+ Bills paid from an advance, booked here" value={money(m.from_advances_cents)} />}
       {m.taken_out.map(function (t, i) { return <Row key={'t' + i} label={'− Money sent to ' + t.payer + (t.era_note ? ' (' + t.era_note + ')' : '') + ', taken out of here'} note={'It is replaced by the bills ' + t.payer + ' paid, so the same money is not counted twice.'} value={'−' + money(t.cents).replace('−', '')} />; })}
       {m.bills.cents !== 0 && <Row label="+ Bills paid through RTM / NextTrade that belong to this category" value={money(m.bills.cents)} />}
+      {m.nextrade && <Row label={'+ NextTrade charges (' + m.nextrade.count + ')'} value={money(m.nextrade.cents)} />}
       {m.other_cents !== 0 && <Row label="Other adjustments (not explained by the lists below)" note="Shown so nothing is hidden. Tell Claude if you see this." value={money(m.other_cents)} />}
       <Row label={'= ' + m.label + (m.adds_up ? ' — adds up' : '')} value={money(m.cents)} strong />
     </tbody></table>
@@ -57,6 +58,17 @@ export default function ExpenseDetail(props) {
       {b.unlisted_cents !== 0 && <div className="px-2 py-1" style={{ color: '#b45309' }}>{'The lines listed add up to ' + money(b.listed_cents) + '; the other ' + money(b.unlisted_cents) + ' is an advance moved in or out of this category, or lines beyond what one list can hold (open a shorter period to see them all).'}</div>}
     </div>}
     {b.rows.length === 0 && b.cents !== 0 && props.rowsListed !== false && <div className="px-2 py-1" style={{ color: '#b45309' }}>No bank lines could be listed for this amount (open a shorter period, or it is an advance moved between categories).</div>}
+    {m.nextrade?.rows.length > 0 && <div className="mt-1">
+      <div className="px-2 py-1 font-extrabold" style={{ background: '#f8fafc' }}>NextTrade charges by transaction date</div>
+      <table className="w-full"><tbody>{m.nextrade.rows.map(function (row, index) {
+        return <tr key={row.id || index} style={{ borderTop: '1px solid ' + LINE }}>
+          <td className="px-2 py-1 whitespace-nowrap">{row.date}</td>
+          <td className="px-2 py-1">{row.who || row.label}{row.bill_id && props.onOpenBill && <button type="button"
+            className="ml-2 font-semibold underline" style={{ color: '#1d4ed8' }} onClick={() => props.onOpenBill({ ...row, vendor: row.who, bill_number: row.ref })}>{'Bill ' + row.ref}</button>}</td>
+          <td className="px-2 py-1 text-right tabular-nums">{money(row.cents)}</td>
+        </tr>;
+      })}</tbody></table>
+    </div>}
     {m.bills.rows.length > 0 && <div className="mt-1">
       <div className="px-2 py-1 font-extrabold" style={{ background: '#f8fafc', color: INK }}>{'Bills paid through RTM / NextTrade (' + m.bills.rows.length + ') — to change one, change the category on the bill'}</div>
       <div className="overflow-auto pl-scroll" style={{ maxHeight: 260 }}><table className="w-full text-[11px]"><tbody>

@@ -7,6 +7,7 @@ const { buildPaidThroughBlocks, spendingCategoryBankRows, uniquePaidThroughBankR
 const { rtmAdjust, foldUnc } = require('../src/components/PeriodStatsTab.jsx');
 const { fundingIdentity, partyFundsBreakdown } = require('../src/lib/party-funds');
 const { finalPnl, readExpenseAnswer } = require('../src/lib/pnl-expenses');
+const { buildPaidComparison } = require('../src/lib/period-paid-comparison');
 
 const category = 'professional_fees';
 const direct = { id: 'fee', category, amount: 247350 };
@@ -15,6 +16,53 @@ const nt = { id: 'nextrade', category, amount: 29000 };
 const rtReturn = { id: 'rtm-return', category, amount: -195, money_in: true };
 const rows = [direct, rt, nt, rtReturn];
 const parties = [{ name: 'RTM Capital', kind: 'service_provider' }, { name: 'NextTrade Industries', kind: 'affiliate' }];
+
+const nextradeBill = { id: 'nt-bill', vendor_name: 'Power company', bill_number: 'NXT-1', bill_date: '2026-06-12', category: 'utilities', total_amount: 458.18, paid_via: 'NextTrade Industries' };
+const nexttradeInvoices = { [nextradeBill.id]: nextradeBill };
+const nextradeExpenses = [
+  { id: 'nt-utility', date: '2026-06-12', category: 'utilities', label: 'Utilities', kind: 'expense', who: 'Power company', cents: 45818, bill_id: nextradeBill.id },
+  { id: 'nt-internet', date: '2026-06-21', category: 'internet', label: 'Internet', kind: 'expense', who: 'Internet service', cents: 19342 },
+];
+const directUtilities = { id: 'ktc-utility', date: '2026-06-14', category: 'utilities', amount: 60 };
+const reimbursement = { id: 'nt-reimbursement', bill_id: nextradeBill.id, paid_date: '2026-07-04', method: 'rtm', amount: 458.18 };
+const fundingRow = { id: 'nt-transfer', date: '2026-07-02', classification: category, category, amount: 500, payer: 'NextTrade Industries', funds_sent_to: 'NextTrade Industries' };
+const paidThrough = { party: 'NextTrade Industries', period: { applied_rows: [
+  { payment_id: reimbursement.id, bill_id: nextradeBill.id, paid_date: reimbursement.paid_date, portion: reimbursement.amount, transfer_id: fundingRow.id },
+] } };
+function nexttradeReport(from, to, bank, categories, payments, funds, fundingLines) {
+  const paid_through = buildPaidThroughBlocks({ parties, from, to, lines: fundingLines, billById: nexttradeInvoices, pays: payments, nextradeBillIds: new Set([nextradeBill.id]) });
+  const paid_comparison = buildPaidComparison({ bills: nexttradeInvoices, payments, spendingRows: bank, bankLines: bank,
+    incomeRows: [], labels: { utilities: 'Utilities' }, kinds: {}, nextradeExpenses, funds, from, to });
+  const spending = { categories, paid_through, rows: bank, uncategorized: { total: 0 } };
+  const view = readExpenseAnswer({ ok: true, from, to, spending, paid_comparison }, { from, to }, rtmAdjust, foldUnc);
+  return { paid_comparison, view, spending };
+}
+const juneNexttrade = nexttradeReport('2026-06-01', '2026-06-30', [directUtilities],
+  [{ key: 'utilities', label: 'Utilities', kind: 'expense', total: 60, count: 1 }], [], [], []);
+assert.equal(juneNexttrade.view.cols.A.cents, 71160);
+assert.equal(juneNexttrade.view.detail.byKey.utilities.bank.cents, 6000);
+assert.equal(juneNexttrade.view.detail.byKey.utilities.nextrade.rows[0].bill_id, nextradeBill.id);
+assert.equal(juneNexttrade.view.detail.byKey.utilities.other_cents, 0);
+assert.equal(juneNexttrade.paid_comparison.billed.cents, 65160);
+assert.equal(juneNexttrade.paid_comparison.bank_cash.cents, 6000);
+assert.equal(juneNexttrade.paid_comparison.paid.cents, 71160);
+const julyNexttrade = nexttradeReport('2026-07-01', '2026-07-31', [fundingRow],
+  [{ key: category, label: 'Professional Fees', kind: 'expense', total: 500, count: 1 }], [reimbursement], [paidThrough], [fundingRow]);
+assert.equal(julyNexttrade.view.cols.A.cents, 0);
+assert.equal(julyNexttrade.paid_comparison.paid.cents, 0);
+assert.equal(julyNexttrade.paid_comparison.bank_cash.cents, 50000);
+assert.equal(julyNexttrade.paid_comparison.nextrade_reimbursements.cents, 45818);
+assert.equal(julyNexttrade.paid_comparison.funded_paid.rows[0].transfer_id, fundingRow.id);
+assert.equal(julyNexttrade.spending.paid_through[0].allocations_by_cat.find(row => row.key === 'utilities').total, 458.18);
+assert.equal(julyNexttrade.spending.categories[0].total, 500);
+const directReimbursement = { ...reimbursement, method: 'bank', bank_transaction_id: 'mixed-debit' };
+const julyDirect = nexttradeReport('2026-07-01', '2026-07-31', [{ id: 'mixed-debit', date: '2026-07-04', category: 'utilities', amount: 500 }],
+  [{ key: 'utilities', label: 'Utilities', kind: 'expense', total: 500, count: 1 }], [directReimbursement], [], []);
+assert.equal(julyDirect.view.cols.A.cents, 4182);
+assert.equal(julyDirect.view.detail.byKey.utilities.bank.rows[0].cents, 4182);
+assert.equal(julyDirect.paid_comparison.bank_cash.cents, 50000);
+assert.equal(julyDirect.paid_comparison.paid.cents, 4182);
+console.log('PASS: NextTrade expense month, bank-only KTC charge, exact reimbursement matching, partial direct debits, and untouched tax source.');
 const blockRows = [rt, nt, rtReturn].map((row, index) => ({ ...row, date: '2026-09-30', classification: category,
   payer: parties[index === 1 ? 1 : 0].name, money_back: row.money_in === true }));
 const blocks = buildPaidThroughBlocks({ from: '2026-01-01', to: '2026-11-28', parties, lines: blockRows });

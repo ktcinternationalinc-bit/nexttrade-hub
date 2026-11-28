@@ -12,6 +12,7 @@
 import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess, payrollBillsNote, payrollLinesNote, SPENDING_WITHHELD } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { buildPaidThroughBlocks, uniquePaidThroughBankRows } from '../../../../lib/paid-through-blocks';
 import { buildPaidComparison } from '../../../../lib/period-paid-comparison';
+import { loadNextradeExpenses } from '../../../../lib/nextrade-expenses-server';
 import { NEXPAC_FEE_CENTS } from '../../../../lib/partner-fee-months';
 import { applyVendorWirePaymentDates } from '../../../../lib/vendor-wire-payment-dates';
 import { fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
@@ -1991,6 +1992,8 @@ export async function POST(req) {
       var spend = null;
       var comparePaid = body.paid_comparison === true && pnlPS;
       var paidComparison = null;
+      var nextradeExpenseError = null;
+      var nextradeExpenses = [];
       // v55.83-XO (Codex 22 Nov 14:52) — set inside the spending block, answered after it (never swallowed by its catch):
       //   xoStop     — the starting balances could not be read (not "not installed"): 503, nothing shown, no pack
       //   xoRestrict — a starting balance this caller may not see counts in these dates: spending withheld, said so
@@ -2242,6 +2245,14 @@ export async function POST(req) {
             });
           }
         }
+        if (comparePaid && pTo >= '2026-06-01') {
+          try {
+            var privateNexttrade = await privateScope(db, userId);
+            if (privateNexttrade.error) { throw new Error(privateNexttrade.error); }
+            nextradeExpenses = await loadNextradeExpenses(db, fetchAll, privateNexttrade);
+          } catch (expenseError) { nextradeExpenseError = 'NextTrade expenses could not be verified for these dates. Retry the report.'; }
+        }
+        var nextradeBillIds = new Set(nextradeExpenses.map(function (row) { return row.bill_id; }).filter(Boolean));
         var rtmBlk = null; var ptBlocks = [];
         try {
           var partiesP = await loadParties(db);
@@ -2269,9 +2280,12 @@ export async function POST(req) {
                 if (!wq.error) { ptReqs = ptReqs.concat(wq.data || []); }
               }
             } catch (eWq) { ptReqs = []; }
-            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, historicalPayerByPayment: historicalPayerByPayment, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, refunds: ptRefunds, profKey: taxKeyP }); // TX: + extra fees · WF step C: the one tax key
+            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, historicalPayerByPayment: historicalPayerByPayment, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, refunds: ptRefunds, profKey: taxKeyP, nextradeBillIds }); // TX: + extra fees · WF step C: the one tax key
             ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
-        } catch (eR9) { rtmBlk = null; ptBlocks = []; }
+        } catch (eR9) {
+          rtmBlk = null; ptBlocks = [];
+          if (nextradeBillIds.size) { nextradeExpenseError = 'NextTrade reimbursements could not be verified for these dates. Retry the report.'; }
+        }
         // v55.83-VY (Codex 13:07: "integrate helper into the actual route -> report -> FundsSent -> totals/export path") — the shared
         // funds calculation, fed with the WHOLE history of each company (a fee or a bill payment dated in this period can belong
         // to a transfer of an earlier one). Read-only. null when it cannot be worked out — the screen then says so.
@@ -2339,14 +2353,15 @@ export async function POST(req) {
             money_back: { count: moneyBackTax.count, total: moneyBackTax.total, by_party: moneyBackTax.by_party }, net: mbUnavailable ? null : r2(fundingTax.total - moneyBackTax.total) } };
         if (comparePaid && !xoRestrict) {
           try {
-            if (!comparisonCategoriesOK) { paidComparison = { unavailable: 'Payment categories could not be loaded.' }; }
+            if (nextradeExpenseError) { paidComparison = { unavailable: nextradeExpenseError }; }
+            else if (!comparisonCategoriesOK) { paidComparison = { unavailable: 'Payment categories could not be loaded.' }; }
             else if (mbUnavailable || advNote) { paidComparison = { unavailable: 'The funding ledger could not be read completely.' }; }
             else { var partnerFeeLines = await fetchAll(function () { return db.from('vendor_bill_lines').select('id,bill_id,description,amount').eq('amount', NEXPAC_FEE_CENTS / 100).order('id'); });
               paidComparison = buildPaidComparison({
               bills: billNameById, payments: xoPays, customerPayments: paysP.filter(function (payment) { return !isPaymentVoid(payment) && usInv[payment.accounting_invoice_id]; }),
               spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: spTx, partnerFeeLines: partnerFeeLines,
               funds: partyFunds, labels: catLabels, kinds: catKinds, from: pFrom, to: pTo, billBusinessId: US_WAVE_BUSINESS_ID,
-              privateBills: callerIsSuper ? {} : payZD.pay.ids, showRows: canRows
+              nextradeExpenses, privateBills: callerIsSuper ? {} : payZD.pay.ids, showRows: canRows, showPayrollDetails: callerIsSuper
             }); }
           } catch (compareError) { paidComparison = { unavailable: 'The payment breakdown could not be reconciled.' }; }
           if (vendorProofUnavailable && paidComparison && !paidComparison.unavailable) {
@@ -2382,6 +2397,9 @@ export async function POST(req) {
       }
       psPayload = maskPeriodStats(psPayload, vis); // v55.83-RE — invoice figures P3, bank/financial P2, bills owed P1
       if (comparePaid && rsPs.canSee && canTotals && vis.fin && psPayload.spending) { psPayload.paid_comparison = paidComparison || { unavailable: 'The payment comparison could not be loaded.' }; }
+      if (comparePaid && pTo >= '2026-06-01' && rsPs.canSee && canTotals && vis.fin && psPayload.spending && !paidComparison?.nextrade_operating) {
+        psPayload.internal_expenses_error = nextradeExpenseError || paidComparison?.unavailable || 'The expense sources could not be reconciled. Retry the report.';
+      }
       if (body.view === 'books' && !userHasPermission(rsPs.ctx, MARGIN_PERMISSION)) { psPayload = booksOpenInvoices(psPayload); }
       if (!rsPs.canSee) { psPayload.revenue_restricted = true; }
       if (xoRestrict) { psPayload.spending = null; psPayload.spending_restricted = { reason: xoRestrict.reason, hidden_starting_balances: xoRestrict.hidden_starting_balances, words: 'Spending, tax and P&L figures for these dates are withheld: they ' + xoRestrict.reason + '. Ask the super admin.' }; } // v55.83-XO

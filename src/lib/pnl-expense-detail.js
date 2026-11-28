@@ -16,7 +16,7 @@ function cents(x) { return Math.round((Number(x) || 0) * 100); }
 
 // spending = the Income Statement's spending block; rc = realCostCategories(spending, adjust, fold) → { cats, uncategorized }.
 // Returns { byKey: { <category key>: makeup }, not_pnl: [{ key, label, cents }], transfers_cents, rows_listed }.
-export function expenseDetail(spending, rc) {
+export function expenseDetail(spending, rc, nextrade) {
   var sp = spending || {}; var out = { byKey: {}, not_pnl: [], transfers_cents: cents(sp.transfers && sp.transfers.total), rows_listed: Array.isArray(sp.rows) };
   var blocks = sp.paid_through || (sp.rtm ? [sp.rtm] : []);
   var orig = {}; (sp.categories || []).forEach(function (c) { orig[c.key] = c; });
@@ -51,7 +51,9 @@ export function expenseDetail(spending, rc) {
       (b.rows || []).forEach(function (r) { if ((r.category || 'uncategorized') === key) { var v2 = cents(r.amount); m.bills.rows.push({ date: r.date || '', who: r.who || '', ref: r.ref || '', cents: v2, payer: b.payer || '' }); m.bills.listed_cents += v2; } });
     });
     m.bills.rows.sort(function (a, c) { return c.cents - a.cents; });
-    m.other_cents = figure - (bankCents + fromAdv - m.taken_out_cents + m.bills.cents);
+    const charges = nextrade?.get(key);
+    if (charges) m.nextrade = { cents: cents(charges.total), count: charges.count, rows: charges.rows };
+    m.other_cents = figure - (bankCents + fromAdv - m.taken_out_cents + m.bills.cents + (m.nextrade?.cents || 0));
     m.adds_up = m.other_cents === 0;
     return m;
   }
@@ -134,7 +136,7 @@ export function pnlFormula(r, e, hidden) {
     (det.not_pnl || []).forEach(function (z) { not.push({ label: z.label, cents: z.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });
     if (det.transfers_cents) { not.push({ label: 'Transfers between our own accounts', cents: det.transfers_cents, why: 'money moved, not spent' }); }
   }
-  var notes = ['Sales margins follow the customer invoice date. Operating expenses and RTM activity follow recorded payment dates.'];
+  var notes = ['Sales margins follow invoice dates. Direct KTC expenses and RTM activity follow payment dates. NextTrade charges follow the date NextTrade incurred them.'];
   if (!hidden && (x.goods_lines > 0 || x.transport_lines > 0)) { notes.push('The table’s Goods revenue and Transport charged columns show ALL sale lines; the sums above use only the lines whose cost is known, which is why they can be smaller.'); }
   if (!ok) { notes.push('The expense columns are not loaded or not shown for this row, so the final figure is not worked out.'); }
   return { lines: lines, not_used: not, notes: notes, funding: (det && det.funding) || [] };

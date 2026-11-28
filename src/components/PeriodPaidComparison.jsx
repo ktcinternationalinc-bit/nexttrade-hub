@@ -5,8 +5,8 @@ const money = cents => dollars.format(cents / 100);
 const link = 'font-semibold text-left text-[#1d4ed8] underline underline-offset-2';
 const expenseBases = [
   { key: 'bank', label: 'Bank cash', expense: 'Cash out for expenses and funding', description: 'Uses KTC’s bank dates. Includes RTM / NextTrade transfers once. Vendor payments funded by those transfers appear below for reconciliation.' },
-  { key: 'vendor', label: 'Vendor payments', expense: 'Bills and expenses paid', description: 'Uses recorded payment dates. Payments by RTM or NextTrade count here under the bill category. The transfers that funded them are shown separately.' },
-  { key: 'billed', label: 'Bills by date · accrual', expense: 'Vendor bills dated this period', description: 'Includes paid and unpaid vendor bills by bill date. Bank-only expenses without a bill are outside this comparison.' },
+  { key: 'vendor', label: 'Vendor payments', expense: 'Bills and expenses paid', description: 'Uses recorded payment dates, including the date NextTrade paid each categorized charge. Later reimbursements are shown under funding activity.' },
+  { key: 'billed', label: 'Bills by date · accrual', expense: 'Bills and NextTrade charges', description: 'Includes paid and unpaid vendor bills by bill date and NextTrade charges by transaction date. A linked bill and its charge count once.' },
 ];
 
 function RecordList({ rows, visible, onOpenInvoice, onOpenBill, showCategory, paymentsByTransfer }) {
@@ -112,9 +112,11 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
       </details>}
       {(comparison.partner_billed.count > 0 || comparison.partner_paid_cents !== 0) && <Records title="Partner fee billed" group={comparison.partner_billed} visible={visible} onOpenBill={onOpenBill}><p className="mb-1.5 text-slate-700">{money(comparison.partner_paid_cents)} in recorded partner-fee payments this period. An RTM-funded payment explains the transfer in Bank cash. The bill itself is included by its date in Bills by date.</p></Records>}
       {comparison.partner_schedule?.count > 0 && <Records title="Scheduled NexPac partner fee" group={comparison.partner_schedule} visible={visible} onOpenBill={onOpenBill}><p className="mb-1.5 text-slate-700">$45,250 at each month-end starting June 30, 2026. Open a source bill where one is on file. The schedule shows expected charges and does not add a payment.</p></Records>}
+      {comparison.nextrade_charges?.count > 0 && <Records title="NextTrade charges incurred for KTC" group={comparison.nextrade_charges} visible={visible} onOpenBill={onOpenBill} showCategory><p className="mb-1.5 text-slate-700">These charges enter the internal P&amp;L once, in the month of the NextTrade transaction.</p></Records>}
+      {comparison.nextrade_reimbursements?.count > 0 && <Records title="Reimbursements of recorded NextTrade charges" group={comparison.nextrade_reimbursements} visible={visible} onOpenBill={onOpenBill} showCategory><p className="mb-1.5 text-slate-700">The expense stays in the original charge period. The reimbursement settles its bill.</p></Records>}
       {(comparison.funding.count > 0 || comparison.funded_paid.count > 0) && <>
         <Records title="RTM / NextTrade funding activity" group={comparison.funding} visible={visible} onOpenBill={onOpenBill} paymentsByTransfer={paymentsByTransfer}><p className="mb-1.5 text-slate-700">These transfers enter Bank cash on their bank dates. Open a transfer’s linked payments to see its bills and categories for this period.</p></Records>
-        <Records title="RTM / NextTrade bills and fees paid" group={comparison.funded_paid} visible={visible} onOpenBill={onOpenBill} showCategory><p className="mb-1.5 text-slate-700">{comparison.funded_paid.count ? 'Each payment enters Vendor payments under its bill category on its recorded payment date.' : 'No bill payments or service fees were recorded through these companies in this period.'}</p></Records>
+        <Records title="RTM / NextTrade bills and fees paid" group={comparison.funded_paid} visible={visible} onOpenBill={onOpenBill} showCategory><p className="mb-1.5 text-slate-700">{comparison.funded_paid.count ? 'Payments show the bill category and recorded date. Reimbursements of recorded NextTrade charges are labeled on their rows.' : 'No bill payments or service fees were recorded through these companies in this period.'}</p></Records>
       </>}
       {comparison.review.count > 0 && <Records title="Money out to reconcile" group={comparison.review} visible={visible} onOpenBill={onOpenBill}><p className="mb-1.5 text-[#713f12]">These items need a category or a verified payment link before they can be included. Some may already appear in the bank total.</p></Records>}
       {comparison.unclassified_receipts.count > 0 && <Records title="Deposits to identify" group={comparison.unclassified_receipts} visible={visible} onOpenInvoice={onOpenInvoice}><p className="mb-1.5 text-amber-900">Confirm these deposits as customer receipts to include them.</p></Records>}
@@ -125,7 +127,7 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
         {pnl?.cents != null && <button type="button" className={link + ' tabular-nums'} onClick={onOpenPnl}>{period.label + ' P&L · ' + money(pnl.cents) + (pnl.complete ? '' : ' · Provisional')} <span aria-hidden="true">↗</span></button>}
       </div>
       <p className="mt-1">Goods profit + transport profit − warehouse and office − partner fees − payroll − taxes.</p>
-      <p className="mt-1 text-slate-600">Shipment margins follow invoice dates. Operating expenses follow payment dates.</p>
+      <p className="mt-1 text-slate-600">Shipment margins follow invoice dates. Direct KTC expenses follow bank dates. NextTrade charges follow the original transaction date.</p>
       {pnl?.rtm_provisional_cents > 0 && <p className="mt-1"><b>{money(pnl.rtm_provisional_cents)}</b> of the RTM funding is in Warehouse / Office as provisional Professional Fees. Linked payments reduce that amount.</p>}
       <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">
         <span>Goods profit <b className="tabular-nums">{money(period.goods_profit)}</b></span>

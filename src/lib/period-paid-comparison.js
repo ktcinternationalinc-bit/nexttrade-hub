@@ -9,7 +9,7 @@ const isUSD = currency => String(currency || 'USD').toUpperCase() === 'USD';
 const isActive = bill => bill && (bill.record_status || 'active') === 'active';
 const reviewCategory = key => !key || ['uncategorized', 'needs_clarification'].includes(key);
 
-export function buildPaidComparison({ bills, payments, customerPayments = [], partnerFeeLines = [], spendingRows, incomeRows, bankLines, funds, labels, kinds, from, to, billBusinessId, privateBills = {}, showRows = true }) {
+export function buildPaidComparison({ bills, payments, customerPayments = [], partnerFeeLines = [], nextradeExpenses = [], spendingRows, incomeRows, bankLines, funds, labels, kinds, from, to, billBusinessId, privateBills = {}, showRows = true, showPayrollDetails = true }) {
   if (!Array.isArray(funds)) return { unavailable: 'Vendor payments through RTM and NextTrade could not be verified.' };
   const inPeriod = date => date && date >= from && date <= to;
   const paid = [];
@@ -29,6 +29,16 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   const monthlySchedule = nexPacFeeSchedule(feeLinesByBill, from, to);
   const categoryOf = b => isPartnerFeeCategory(b.category) || isPartnerFeeCategory(labels[b.category]) || partnerMatch(b) || sum(feeLinesByBill.get(b.id) || []) === cents(b.total_amount) && feeLinesByBill.has(b.id) ? 'partner_fees' : b.category;
   const labelFor = key => labels[key] || key || 'Uncategorized';
+  const nextradeBills = new Set(nextradeExpenses.map(row => row.bill_id).filter(Boolean));
+  const charges = nextradeExpenses.filter(row => inPeriod(row.date)).map(row => {
+    const bill = bills[row.bill_id];
+    const category = row.category;
+    const label = labels[category] || row.label;
+    const source = 'NextTrade expense · transaction date';
+    if (privateBills[row.bill_id] || row.payroll && !showPayrollDetails) return { date: row.date, cents: row.cents, category, label, kind: row.kind, source };
+    return { ...row, category, label, source, ...(isActive(bill) ? { ref: bill.bill_number, bill_date: bill.bill_date,
+      bill_total_cents: cents(bill.total_amount), attachment_path: bill.attachment_path } : { bill_id: undefined }) };
+  });
 
   function billRow(bill, date, amount, source, id, bank) {
     const category = categoryOf(bill);
@@ -40,6 +50,7 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
 
   function recordBillPayment(bill, date, amount, source, id, bank, party, funding) {
     const row = { ...billRow(bill, date, amount, source, id, bank), party,
+      nexttrade_reimbursement: nextradeBills.has(bill.id), bank_id: bank?.id, bank_category: bank?.classification,
       transfer_id: funding?.transfer_id, transfer_date: funding?.transfer_date };
     const fees = feeLinesByBill.get(bill.id) || [];
     const feeAmount = sum(fees);
@@ -80,12 +91,14 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   const billed = [];
   const seenBills = new Set();
   const seenPartnerMonths = new Set();
+  const nextradeBillIdentities = new Set(Array.from(nextradeBills, id => bills[id]).filter(isActive).map(billIdentity).filter(Boolean));
   Object.values(bills).filter(bill => isActive(bill) && isUSD(bill.currency) && bill.bill_date && cents(bill.total_amount) > 0
     && !/^credit/i.test(bill.bill_type || '') && (!billBusinessId || !bill.wave_business_id || bill.wave_business_id === billBusinessId))
     .sort((a, b) => a.bill_date.localeCompare(b.bill_date) || Number(!!b.category) - Number(!!a.category) || String(a.created_at || '').localeCompare(String(b.created_at || '')) || a.id.localeCompare(b.id))
     .forEach(bill => {
+      if (nextradeBills.has(bill.id)) return;
       const identity = billIdentity(bill);
-      if (identity && seenBills.has(identity)) return;
+      if (identity && (seenBills.has(identity) || nextradeBillIdentities.has(identity))) return;
       if (identity) seenBills.add(identity);
       const source = bill.disputed ? 'Disputed vendor bill' : 'Vendor bill by invoice date';
       const fees = feeLinesByBill.get(bill.id) || [];
@@ -184,7 +197,7 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
         review.push(billRow(bill, row.date, portion, 'Bill allocations exceed the bank transaction', payment.id));
         return;
       }
-      recordBillPayment(bill, row.date, portion, 'Bill matched to bank payment', payment.id, bank);
+      recordBillPayment(bill, row.date, portion, 'Bill matched to bank payment', payment.id, { ...bank, classification: row.category });
       remaining -= portion;
     });
     if (!remaining) return;
@@ -226,9 +239,29 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   });
 
   const group = rows => ({ cents: sum(rows), count: rows.length, rows: showRows ? rows : [] });
-  return { rows_visible: showRows, paid: group(paid), receipts: group(receipts), funding: group(funding), funded_paid: group(paid.filter(row => row.party)), review: group(review),
+  const reimbursements = paid.filter(row => row.nexttrade_reimbursement);
+  const chargeCategories = new Map();
+  charges.forEach(row => {
+    const old = chargeCategories.get(row.category) || { key: row.category, label: row.label, kind: kinds[row.category] || row.kind, total: 0, count: 0, rows: [] };
+    old.total = (cents(old.total) + row.cents) / 100;
+    old.count++;
+    if (showRows) old.rows.push(row);
+    chargeCategories.set(row.category, old);
+  });
+  const directReimbursements = reimbursements.filter(row => row.bank_id);
+  const directCategoryCents = Object.create(null);
+  directReimbursements.forEach(row => {
+    const key = row.bank_category || 'uncategorized';
+    directCategoryCents[key] = (directCategoryCents[key] || 0) + row.cents;
+  });
+  return { rows_visible: showRows, paid: group(paid.filter(row => !row.nexttrade_reimbursement).concat(charges)), receipts: group(receipts), funding: group(funding),
+    funded_paid: group(paid.filter(row => row.party).map(row => row.nexttrade_reimbursement ? { ...row, source: row.source + ' · reimburses a recorded NextTrade charge' } : row)),
+    nextrade_charges: group(charges), nextrade_reimbursements: group(reimbursements),
+    nextrade_operating: { charges_by_category: Array.from(chargeCategories.values()), direct_by_category: directCategoryCents,
+      direct_rows: showRows ? directReimbursements.map(({ bank_id, cents: amount }) => ({ bank_id, cents: amount })) : [] },
+    review: group(review),
     bank_cash: group(paid.filter(row => !row.party).concat(funding.map(row => ({ ...row, category: 'company_funding', label: 'RTM / NextTrade funding' })))),
-    billed: group(billed),
+    billed: group(billed.concat(charges)),
     unclassified_receipts: group(unclassifiedReceipts), partner_billed: group(partnerBilled), partner_schedule: group(expectedPartnerFees), partner_paid_cents: sum(paid.filter(row => row.category === 'partner_fees')) };
 }
 
@@ -236,8 +269,11 @@ export function combinePaidComparisons(parts) {
   if (!parts.length || parts.some(part => !part || part.unavailable)) return null;
   const totals = { rows_visible: parts.every(part => part.rows_visible), partner_paid_cents: parts.reduce((total, part) => total + part.partner_paid_cents, 0) };
   totals.notice = parts.find(part => part.notice)?.notice;
-  for (const key of ['paid', 'receipts', 'funding', 'funded_paid', 'bank_cash', 'billed', 'review', 'unclassified_receipts', 'partner_billed', 'partner_schedule']) {
-    totals[key] = parts.reduce((total, part) => ({ cents: total.cents + part[key].cents, count: total.count + part[key].count, rows: total.rows.concat(part[key].rows) }), { cents: 0, count: 0, rows: [] });
+  for (const key of ['paid', 'receipts', 'funding', 'funded_paid', 'bank_cash', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'review', 'unclassified_receipts', 'partner_billed', 'partner_schedule']) {
+    totals[key] = parts.reduce((total, part) => {
+      const group = part[key];
+      return group ? { cents: total.cents + group.cents, count: total.count + group.count, rows: total.rows.concat(group.rows) } : total;
+    }, { cents: 0, count: 0, rows: [] });
   }
   return totals;
 }
