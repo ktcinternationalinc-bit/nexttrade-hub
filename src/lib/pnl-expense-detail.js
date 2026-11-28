@@ -105,7 +105,7 @@ export function pnlFormula(r, e, hidden) {
   function of(k) { return k + ' sale line' + (k === 1 ? '' : 's'); }
   var lines = [
     { sign: '', label: 'Goods revenue of the ' + of(u.goods_lines) + ' whose cost is known', cents: n(u.goods_revenue) },
-    { sign: '−', label: 'Goods cost of those lines = supplier cost + commission + inbound allowance + brokerage + bonded', cents: n(u.goods_cost) },
+    { sign: '−', label: 'Goods cost of those lines = supplier cost + commission + inbound allowance + bonded / brokerage', cents: n(u.goods_cost) },
     { sign: '=', label: 'GOODS PROFIT', cents: n(row.goods_profit), strong: true },
     { sign: '', label: 'Transport charged on the ' + of(u.transport_lines) + ' whose shipping cost is known', cents: n(u.transport_revenue) },
     { sign: '−', label: 'Trucking (our cost: bill, else typed figure, else estimate)', cents: n(u.trucking) },
