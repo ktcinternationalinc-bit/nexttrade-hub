@@ -33,6 +33,7 @@ import { pnlFormula, periodInvoices } from '../lib/pnl-expense-detail';
 import { rtmAdjust, foldUnc } from './PeriodStatsTab'; // v55.83-VQ — the Income Statement's own real-cost rule (one copy) // v55.83-VL — P&L by period: periods and the breakdown of one period
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
 import { singleLineWords } from '../lib/category-clear-words'; // v55.83-XU (Codex 20:34)
+import { KTC_EXPENSES_CHANGED } from '../lib/expense-report-events';
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 // v55.83-TC (Max, Nov 16: "you need a bottom and side scroll bar to move within the square") — the Hub's dark theme draws 6 px white
@@ -370,6 +371,18 @@ export default function ProfitabilityTab(props) {
     expAuto.current = expGen.current;
     startExpenses({ ignoreCache: true, first: date });
   }
+  useEffect(function () {
+    function updateExpenses(event) {
+      if (view === 'period' && pPre === 'all' && data?.cells && effFrom) {
+        refreshExpenseCategories(event.detail?.date);
+      } else {
+        expGen.current += 1;
+        setPExp({});
+      }
+    }
+    window.addEventListener(KTC_EXPENSES_CHANGED, updateExpenses);
+    return function () { window.removeEventListener(KTC_EXPENSES_CHANGED, updateExpenses); };
+  });
   // a new report, another grouping or another person: the answers kept so far no longer apply
   useEffect(function () { expGen.current += 1; setPExp({}); }, [data, pGran, userProfile && userProfile.id]); // eslint-disable-line react-hooks/exhaustive-deps
   // 13 periods or fewer load by themselves, once per report; more than that wait for the “Load expenses” button (same loader)

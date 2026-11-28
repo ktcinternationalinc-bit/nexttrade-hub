@@ -5,9 +5,9 @@ const money = cents => dollars.format(cents / 100);
 export const negativeInk = cents => cents < 0 ? { color: '#991b1b' } : undefined;
 const link = 'font-semibold text-left text-[#1d4ed8] underline underline-offset-2';
 const expenseBases = [
-  { key: 'bank', label: 'Bank cash', expense: 'Cash out for expenses and funding', description: 'Posted KTC bank and credit-card activity for expenses and funding this period.' },
-  { key: 'vendor', label: 'Vendor payments', expense: 'Bills and expenses paid', description: 'What KTC, RTM and NextTrade paid toward expenses in this period. NextTrade charges use their original transaction dates.' },
-  { key: 'billed', label: 'Bills by date · accrual', expense: 'Bills and NextTrade charges', description: 'Includes paid and unpaid vendor bills by bill date and NextTrade charges by transaction date. A linked bill and its charge count once.' },
+  { key: 'bank', label: 'KTC Bank & Card Activity', expense: 'Cash out for expenses and funding', description: 'KTC bank and card transactions by posting date, including funding transfers to RTM and NextTrade.' },
+  { key: 'vendor', label: 'Expenses Paid This Period', expense: 'Bills and expenses paid', description: 'Payments toward expenses by KTC, RTM, and NextTrade. Bill payments use the payment date. NextTrade expenses use the original transaction date.' },
+  { key: 'billed', label: 'Bills & Charges Incurred', expense: 'Bills and NextTrade charges', description: 'Vendor bills by bill date, including unpaid bills, plus NextTrade charges by transaction date. A linked bill and its charge count once.' },
 ];
 function Amount({ cents }) {
   return cents < 0 ? <span style={negativeInk(cents)}>{money(cents)}</span> : money(cents);
@@ -23,12 +23,15 @@ function PaymentBasisReconciliation({ comparison }) {
   const reimbursements = comparison.nextrade_reimbursements?.cents || 0;
   const nexttradeCharges = comparison.nextrade_charges?.cents || 0;
   const vendorKtc = comparison.paid.cents - comparison.funded_paid.cents - nexttradeCharges + reimbursements;
+  const companyFunding = Object.entries(comparison.funding_by_company || {});
   return <details className="mb-3 rounded-lg border border-slate-200 bg-[#f8fafc] px-3 py-2 tabular-nums">
-    <summary className="cursor-pointer font-semibold">How Bank cash and Vendor payments compare</summary>
+    <summary className="cursor-pointer font-semibold">Why bank and card activity differs from expenses paid</summary>
     <div className="mt-1 space-y-1">
-      <p><b>Bank cash <Amount cents={comparison.bank_cash.cents} /></b> = <Amount cents={bankExpenses} /> in posted KTC transactions
-        <Adjustment cents={comparison.funding.cents} label="net funding sent to RTM / NextTrade" />.</p>
-      <p><b>Vendor payments <Amount cents={comparison.paid.cents} /></b> = <Amount cents={vendorKtc} /> in categorized or matched KTC payments
+      <p><b>KTC Bank &amp; Card Activity <Amount cents={comparison.bank_cash.cents} /></b> = <Amount cents={bankExpenses} /> in posted KTC transactions
+        {companyFunding.length
+          ? companyFunding.map(([key, company]) => <Adjustment key={key} cents={company.cents} label={company.label} />)
+          : <Adjustment cents={comparison.funding.cents} label="net funding" />}.</p>
+      <p><b>Expenses Paid This Period <Amount cents={comparison.paid.cents} /></b> = <Amount cents={vendorKtc} /> in categorized or matched KTC payments
         <Adjustment cents={comparison.funded_paid.cents} label="bills and fees paid through RTM / NextTrade" />
         <Adjustment cents={nexttradeCharges} label="NextTrade’s own expense transactions" />
         <Adjustment cents={-reimbursements} label="reimbursements of charges already counted" />.</p>
@@ -41,7 +44,7 @@ function RecordList({ rows, visible, onOpenInvoice, onOpenBill, showCategory, pa
   if (!rows.length) return <p className="py-2 text-slate-600">No records for this period.</p>;
   return <div className="max-h-72 overflow-auto rounded border border-slate-200">
     <table className="w-full text-left">
-      <thead className="sticky top-0 bg-[#f1f5f9] text-slate-700"><tr><th scope="col" className="px-2 py-1">Date</th><th scope="col" className="px-2 py-1">Source record</th>{showCategory && <th scope="col" className="px-2 py-1">Category</th>}<th scope="col" className="px-2 py-1 text-right">Amount</th></tr></thead>
+      <thead className="sticky top-0 z-10 bg-[#f1f5f9] text-slate-700"><tr><th scope="col" className="px-2 py-1">Date</th><th scope="col" className="px-2 py-1">Source record</th>{showCategory && <th scope="col" className="px-2 py-1">Category</th>}<th scope="col" className="px-2 py-1 text-right">Amount</th></tr></thead>
       <tbody>{rows.map((row, index) => {
         const linked = row.source === 'Funds sent' && paymentsByTransfer?.get(row.id);
         return <React.Fragment key={row.id + '|' + index}>
@@ -84,7 +87,7 @@ function Records({ title, group, children, initiallyOpen, nexttradeCents, ...det
   </details>;
 }
 
-function CategoryRecords({ title, group, nexttrade, visible, children, initiallyOpen, fundingSummary, ...detail }) {
+function CategoryRecords({ title, group, nexttrade, visible, children, initiallyOpen, fundingByCompany, ...detail }) {
   const categories = new Map();
   function addRow(row, fromNextTrade) {
     const key = row.category || '';
@@ -105,10 +108,16 @@ function CategoryRecords({ title, group, nexttrade, visible, children, initially
       {visible && !categories.size && <p className="text-slate-600">No records for this period.</p>}
       {Array.from(categories, ([key, entry]) => ({ key, ...entry })).sort((a, b) => b.cents + (b.nexttradeCents || 0) - a.cents - (a.nexttradeCents || 0)).map(entry =>
         <Records key={entry.key} title={entry.label || 'Uncategorized'} group={entry} nexttradeCents={entry.nexttradeCents} visible={visible} {...detail}>
-          {entry.key === 'company_funding' ? fundingSummary : null}
+          {fundingByCompany?.[entry.key]?.reconciliation && <FundingSummary reconciliation={fundingByCompany[entry.key].reconciliation} />}
         </Records>)}
     </div>
   </details>;
+}
+
+function FundingSummary({ reconciliation: r }) {
+  return <p className="mb-2 font-semibold">Transfers this period <Amount cents={r.sent} /> − linked bills <Amount cents={r.bills} />
+    {r.fees !== 0 && <> − booked fees <Amount cents={r.fees} /></>}{r.refunded !== 0 && <> − funds returned <Amount cents={r.refunded} /></>}
+    {' = '}<Amount cents={r.left} /> unallocated at period-end.</p>;
 }
 
 export default function PeriodPaidComparison({ period, periods, onPeriod, comparison, status, invoiceRows, onOpenInvoice, onOpenBill, onOpenTransactions, onFixCosts, pnl, pnlExpenses, onOpenPnl, basis = 'bank', onBasisChange, canSeeSources = true, categoryPicker }) {
@@ -122,7 +131,6 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
   const nexttradeInBankView = bankView && comparison?.nextrade_charges?.count > 0 ? comparison.nextrade_charges : undefined;
   const review = available ? comparison.other_review ?? comparison.review : null;
   const paymentsByTransfer = new Map();
-  const rtm = comparison?.rtm_reconciliation;
   const partnerBilled = comparison?.partner_billed;
   const partnerExpected = comparison?.partner_schedule;
   const partnerPaid = comparison?.partner_paid_cents || 0;
@@ -135,9 +143,6 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
       linked.cents += row.cents;
     }
   });
-  const fundingSummary = bankView && rtm && <p className="mb-2 font-semibold">RTM transfers this period <Amount cents={rtm.sent} /> − linked bills <Amount cents={rtm.bills} />
-    {rtm.fees !== 0 && <> − booked fees <Amount cents={rtm.fees} /></>}{rtm.refunded !== 0 && <> − funds returned <Amount cents={rtm.refunded} /></>}
-    {' = '}<Amount cents={rtm.left} /> unallocated at period-end.</p>;
 
   function panel(title, total, detail, showBalance = true) {
     const balance = expenseGroup && showBalance ? total - expenseGroup.cents : null;
@@ -173,20 +178,23 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
     </p>}
     <div className={'grid gap-3' + (mode.key === 'billed' ? '' : ' sm:grid-cols-2')}>
       {panel(mode.key === 'billed' ? 'Goods invoiced less bills dated this period' : 'Goods invoiced less payments', period.goods_revenue, <Records title="Goods invoiced" group={invoices} visible={canSeeSources} onOpenInvoice={onOpenInvoice} />, !period.miss.goods_revenue)}
-      {mode.key !== 'billed' && panel('Customer receipts less payments', available ? comparison.receipts.cents : 0, available ? <Records title="Customer receipts from the bank" group={comparison.receipts} visible={visible} onOpenInvoice={onOpenInvoice} categoryPicker={categoryPicker} /> : null)}
+      {mode.key !== 'billed' && panel('Bank receipts less payments', available ? comparison.receipts.cents : 0, available ?
+        <CategoryRecords title="Cash receipts from the bank" group={comparison.receipts} visible={visible} onOpenInvoice={onOpenInvoice} categoryPicker={categoryPicker}>
+          <p className="text-slate-700">Customer collections and other categorized income received this period, by bank posting date.</p>
+        </CategoryRecords> : null)}
     </div>
     {!available && <p role="status" className="mt-2 text-slate-700">{comparison?.unavailable || status || 'Loading payments…'}</p>}
     {available && comparison.notice && <p role="status" className="mt-2 rounded border border-[#d8bc7f] bg-[#fffbeb] px-3 py-2 text-[#713f12]">{comparison.notice}</p>}
     {available && <div className="mt-2 space-y-1.5">
       {expenseGroup && <CategoryRecords key={mode.key} title={bankView ? mode.expense : mode.expense + ' · by category'} group={expenseGroup}
         visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} initiallyOpen={bankView} nexttrade={nexttradeInBankView}
-        paymentsByTransfer={bankView ? paymentsByTransfer : undefined} fundingSummary={fundingSummary}>
+        paymentsByTransfer={bankView ? paymentsByTransfer : undefined} fundingByCompany={bankView ? comparison.funding_by_company : undefined}>
         {bankView && <p className="text-slate-700">KTC bank and credit-card transactions use the saved categories and posting dates from {onOpenTransactions
           ? <button type="button" className={link} onClick={onOpenTransactions}>Daily Work → All Transactions</button>
           : 'Daily Work → All Transactions'}. Open a category to see the payments.</p>}
-        {nexttradeInBankView && <p className="text-slate-700">Each category shows its KTC cash amount first. NextTrade charges appear in the same category with their own subtotal and are included in Vendor payments.</p>}
+        {nexttradeInBankView && <p className="text-slate-700">NextTrade charges appear in the same expense categories. Amounts marked (NextTrade) are included in Expenses Paid This Period.</p>}
       </CategoryRecords>}
-      {!bankView && comparison.bank_review?.count > 0 && <Records title="KTC bank payments awaiting an expense category" group={comparison.bank_review} visible={visible} categoryPicker={categoryPicker} showCategory><p className="mb-1.5 text-[#713f12]">These amounts are included in Bank cash. Assign an expense category to include them in Vendor payments.</p></Records>}
+      {!bankView && comparison.bank_review?.count > 0 && <Records title="KTC bank payments awaiting an expense category" group={comparison.bank_review} visible={visible} categoryPicker={categoryPicker} showCategory><p className="mb-1.5 text-[#713f12]">These amounts appear in KTC Bank &amp; Card Activity. Assign an expense category to include them in Expenses Paid This Period.</p></Records>}
       {!bankView && review?.count > 0 && <Records title="Other payments to reconcile" group={review} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker}><p className="mb-1.5 text-[#713f12]">Review the underlying bills and funding links. Some amounts are already represented by a bank transaction.</p></Records>}
       {!bankView && showPartnerFee && <Records
         title={partnerBilled?.count ? 'Partner fee billed' : partnerExpected?.count ? 'Partner fee expected' : 'Partner fee'}
@@ -198,7 +206,7 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
         <p className="mb-1.5 text-slate-700">Recorded payments this period <Amount cents={partnerPaid} />.</p>
         {partnerBilled?.count > 0 && partnerExpected?.count > 0 && <p className="mb-1.5 text-slate-700">Another <Amount cents={partnerExpected.cents} /> in expected fees needs a source bill or reconciliation.</p>}
       </Records>}
-      {!bankView && comparison.nextrade_reimbursements?.count > 0 && <Records title="Reimbursements of recorded NextTrade charges" group={comparison.nextrade_reimbursements} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} showCategory><p className="mb-1.5 text-slate-700">The expense stays in the original charge period. The reimbursement settles its bill.</p></Records>}
+      {!bankView && comparison.nextrade_reimbursements?.count > 0 && <Records title="Reimbursements of NextTrade charges" group={comparison.nextrade_reimbursements} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} showCategory><p className="mb-1.5 text-slate-700">These payments settle linked bills. The original NextTrade transaction controls whether the expense is included in KTC P&amp;L.</p></Records>}
       {comparison.unclassified_receipts.count > 0 && <Records title="Deposits to identify" group={comparison.unclassified_receipts} visible={visible} onOpenInvoice={onOpenInvoice} categoryPicker={categoryPicker}><p className="mb-1.5 text-amber-900">Choose the bank category on each deposit. Customer payments go under Customer receipts.</p></Records>}
       {comparison.other_deposits?.count > 0 && <CategoryRecords title="Other categorized deposits" group={comparison.other_deposits} visible={visible} categoryPicker={categoryPicker} />}
     </div>}

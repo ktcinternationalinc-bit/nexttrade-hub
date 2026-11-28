@@ -14,6 +14,7 @@ import BankRuleMatchFields from './BankRuleMatchFields';
 import { ALL_KEYWORDS_MATCH, PHRASE_MATCH, parseRuleMatch, ruleMatchLabel } from '../lib/bank-rule-match';
 import { NEXTRADE_SOURCE_LABELS } from '../lib/nextrade-tax-report';
 import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
+import { notifyKtcExpensesChanged } from '../lib/expense-report-events';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function iso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
@@ -53,6 +54,7 @@ export default function CompanyBooksTab(props) {
   var s18 = useState(''); var sqlMissing = s18[0]; var setSqlMissing = s18[1];
   var s19 = useState({}); var kinds = s19[0]; var setKinds = s19[1];
   var [cutoff, setCutoff] = useState(null);
+  const [pnlChoiceError, setPnlChoiceError] = useState('');
   var s20 = useState(null); var rowPanel = s20[0]; var setRowPanel = s20[1]; // v55.83-UB — { id, mode: 'newcat' | 'transfer', ... } under one row
 
   var companyKey = comp?.key;
@@ -78,6 +80,7 @@ export default function CompanyBooksTab(props) {
     return api({ action: 'lines', from: start, to: end }).then(function (j) {
       if (j && j.ok) {
         setLines(j.lines || []); setCats(j.categories || cats); setErr(''); setSqlMissing(j.sql_missing || ''); setSel({});
+        setPnlChoiceError(j.ktc_pnl_error || '');
         if (j.ktc_categories) { setKtc({ map: j.ktc_map || {}, cats: j.ktc_categories || [] }); }
         var waiting = (j.lines || []).some(function (l) { return !l.company_category && !l.pending && !l.transfer_group_id; });
         if (canManage && waiting && !j.sql_missing) {
@@ -162,11 +165,13 @@ export default function CompanyBooksTab(props) {
       var ruleWords = fresh.length ? ' · 📏 rule ' + (fresh[0].state === 'updated' ? 'updated' : 'learned') + ': “' + fresh[0].match_text + '” → ' + catLabel + (fresh.length > 1 ? ' (+' + (fresh.length - 1) + ' more)' : '') : '';
       if (j && j.ok) { toast.success('Saved ' + j.saved + ' line(s)' + (made.length ? ' · KTC bills: ' + made.map(function (r) { return r.ktc.action + (r.ktc.bill_number ? ' ' + r.ktc.bill_number : ''); }).join(', ') : '') + ruleWords); }
       else { toast.error((j && j.error) || 'Not saved.'); }
+      if (comp.key === 'nextrade' && j?.saved > 0) { notifyKtcExpensesChanged(); }
       if (failedL.length) { toast.error('The line is saved, but no rule was learned: ' + (failedL[0].error || 'error')); }
       var withMore = learned.filter(function (x) { return x.rule_id && x.matches > 0; }); var nMore = 0; withMore.forEach(function (x) { nMore += x.matches; });
       if (withMore.length && window.confirm(nMore + ' other line(s) not categorized yet have the same description (' + withMore.map(function (x) { return '“' + x.match_text + '”'; }).join(', ') + ').\n\nPut them in “' + catLabel + '” too?' + (comp.key === 'nextrade' ? '\n\n(For a category KTC pays, each line also makes its KTC bill.)' : ''))) {
         return api({ action: 'apply_rules', all_dates: true, rule_ids: withMore.map(function (x) { return x.rule_id; }) }).then(function (a) {
           sayRuleRun(a, ' by the new rule');
+          if (comp.key === 'nextrade' && a?.categorized > 0) { notifyKtcExpensesChanged(); }
           return refreshReport ? refreshReport() : loadLines();
         });
       }
@@ -177,6 +182,16 @@ export default function CompanyBooksTab(props) {
       if (refreshReport) { return refreshReport(); }
     }).finally(function () { setBusy(false); });
   }
+  async function setKtcPnlChoice(line, excluded) {
+    setBusy(true);
+    try {
+      const result = await api({ action: 'set_ktc_pnl_exclusion', transaction_id: line.id, excluded });
+      if (!result.ok) { toast.error(result.error || 'The KTC P&L choice could not be saved.'); return; }
+      setLines(current => current?.map(row => row.id === line.id ? { ...row, ktc_pnl_excluded: result.excluded } : row));
+      notifyKtcExpensesChanged(line.date);
+      toast.success(result.excluded ? 'Excluded from KTC P&L.' : 'Included in KTC P&L.');
+    } finally { setBusy(false); }
+  }
   function openKtcCategory(nextradeKey) {
     setKtcCategoryForm({ nextradeKey: nextradeKey, label: '', kind: 'expense' });
   }
@@ -184,6 +199,7 @@ export default function CompanyBooksTab(props) {
     if (ktcKey === '__new') { openKtcCategory(nextradeKey); return; }
     var j = await api({ action: 'save_mapping', category_key: nextradeKey, ktc_category: ktcKey || null });
     if (!j || !j.ok) { toast.error((j && j.error) || 'KTC mapping could not be saved.'); return false; }
+    notifyKtcExpensesChanged();
     toast.success('KTC category saved for “' + ((catByKey[nextradeKey] || {}).label || nextradeKey) + '”' + (j.bills_updated ? ' · ' + j.bills_updated + ' KTC bill(s) updated' : ''));
     var value = ktcKey || null;
     setKtc(function (current) { return Object.assign({}, current, { map: Object.assign({}, current.map, { [nextradeKey]: value }) }); });
@@ -317,6 +333,7 @@ export default function CompanyBooksTab(props) {
     </div>}
 
     {view === 'lines' && <div>
+      {pnlChoiceError && <p role="alert" className="mb-2 text-[11px]" style={{ color: '#991b1b' }}>{pnlChoiceError}</p>}
       {comp.key === 'nextrade' && accounts && <div className="flex items-center flex-wrap gap-2 mb-2 text-[11px]" style={{ color: '#475569' }}>
         <span>{feedAccounts.length ? 'Plaid checks for new transactions every 2 hours' + (lastFeedSync ? ' · Latest pull ' + new Date(lastFeedSync).toLocaleString() : ' · Waiting for the first pull') : 'No Plaid feed connected'}</span>
         {feedNeedsAttention && <span style={{ color: '#92400e' }}>A connection needs attention</span>}
@@ -347,7 +364,7 @@ export default function CompanyBooksTab(props) {
       <div style={{ overflowX: 'auto' }}>
         <table className="w-full text-[13px]" style={{ color: '#0f172a' }}><thead><tr style={{ background: '#e2e8f0', color: '#1e293b' }}>
           <th className="p-1">{canManage && <input type="checkbox" checked={shown.length > 0 && shown.every(function (l) { return sel[l.id]; })} onChange={function (e) { var n = {}; if (e.target.checked) { shown.forEach(function (l) { n[l.id] = true; }); } setSel(n); }} />}</th>
-          <th className="p-1 text-left">Date</th><th className="p-1 text-left">Account</th><th className="p-1 text-left">Description</th><th className="p-1 text-right">Amount</th><th className="p-1 text-left">Category</th>{comp.key === 'nextrade' && <th className="p-1 text-left">KTC bill</th>}</tr></thead>
+          <th className="p-1 text-left">Date</th><th className="p-1 text-left">Account</th><th className="p-1 text-left">Description</th><th className="p-1 text-right">Amount</th><th className="p-1 text-left">Category</th>{comp.key === 'nextrade' && <th className="p-1 text-left">KTC bill &amp; P&amp;L</th>}</tr></thead>
           <tbody>{shown.map(function (l) {
             var panel = rowPanel && rowPanel.id === l.id ? rowPanel : null;
             return <React.Fragment key={l.id}><tr style={{ borderTop: '1px solid #e2e8f0', background: l.company_category ? '#f0fdf4' : '#ffffff' }}>
@@ -368,7 +385,14 @@ export default function CompanyBooksTab(props) {
                 {l.ktc_bill && l.company_category ? (canManage
                   ? <select aria-label="KTC category mapping" className={inp + ' ml-1'} style={Object.assign({}, inpS, ktc.map[l.company_category] ? {} : { borderColor: '#d97706', background: '#fffbeb' })} disabled={busy} value={ktc.map[l.company_category] || ''} title="KTC category shared by bills that follow this Nextrade category’s mapping." onChange={function (e) { pickKtcCategory(l.company_category, e.target.value); }}>
                       <option value="">KTC category — not set</option>{ktc.cats.map(function (k) { return <option key={k.key} value={k.key}>{'KTC: ' + k.label}</option>; })}{canCreateKtcCategory && <option value="__new">Create KTC category…</option>}</select>
-                  : <span className="ml-1" style={{ color: '#475569' }}>{ktc.map[l.company_category] ? 'KTC: ' + ((ktc.cats.filter(function (k) { return k.key === ktc.map[l.company_category]; })[0] || {}).label || ktc.map[l.company_category]) : 'KTC category not set'}</span>) : null}</td>}
+                  : <span className="ml-1" style={{ color: '#475569' }}>{ktc.map[l.company_category] ? 'KTC: ' + ((ktc.cats.filter(function (k) { return k.key === ktc.map[l.company_category]; })[0] || {}).label || ktc.map[l.company_category]) : 'KTC category not set'}</span>) : null}
+                {typeof l.ktc_pnl_excluded === 'boolean' && (canManage
+                  ? <fieldset disabled={busy} className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px]" aria-label={'KTC P&L for ' + l.name + ' on ' + l.date}>
+                      <legend className="font-semibold">KTC P&amp;L</legend>
+                      <label className="inline-flex items-center gap-1"><input type="radio" name={'ktc-pnl-' + l.id} checked={!l.ktc_pnl_excluded} onChange={() => setKtcPnlChoice(l, false)} /> Include</label>
+                      <label className="inline-flex items-center gap-1"><input type="radio" name={'ktc-pnl-' + l.id} checked={l.ktc_pnl_excluded} onChange={() => setKtcPnlChoice(l, true)} /> Exclude</label>
+                    </fieldset>
+                  : <div className="mt-1 text-[11px]">{l.ktc_pnl_excluded ? 'Excluded from KTC P&L' : 'Included in KTC P&L'}</div>)}</td>}
             </tr>
             {ruleForm && ruleForm.lineId === l.id && <tr><td colSpan={comp.key === 'nextrade' ? 7 : 6} className="p-2">{renderRuleForm()}</td></tr>}
             {panel && panel.mode === 'newcat' && <tr><td colSpan={comp.key === 'nextrade' ? 7 : 6} className="p-2" style={{ background: '#f8fafc' }}>

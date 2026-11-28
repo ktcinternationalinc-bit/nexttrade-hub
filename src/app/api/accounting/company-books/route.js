@@ -16,6 +16,7 @@ import { audit } from '../../../../lib/audit-server';
 import { companyByKey, COMPANY_KINDS, categoryKey, bestCompanyRule, companyTotals, normMatch, NEXTRADE_COMPANY_ID } from '../../../../lib/companies';
 import { NEXTRADE_WAVE_TD_SOURCE, nextradeTaxReport } from '../../../../lib/nextrade-tax-report';
 import { categorizeLine, partyName, wantsBill, loadBillCutoff, beforeCutoff, NEXTRADE_BILL_CUTOFF } from '../../../../lib/nextrade-bills-server'; // v55.83-TW (Codex P1-2): one database function, all or nothing
+import { isNextradeKtcExpense, NEXTRADE_KTC_PNL_EXCLUSIONS } from '../../../../lib/nextrade-expenses-server';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP private bank accounts — respected here too
 import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
@@ -61,8 +62,8 @@ function readFail(what, e) { return NextResponse.json({ ok: false, error: missin
 async function pageLines(db, companyId, from, to, taxReport) {
   var out = [];
   for (var pg = 0; pg < 30; pg++) {
-    var columns = LINE_COLS + (companyId === NEXTRADE_COMPANY_ID ? ', bank_source, plaid_transaction_id' : '');
-    if (taxReport) { columns += ', iso_currency, source_file:raw->>source_file, source_row:raw->>source_row'; }
+    var columns = LINE_COLS + (companyId === NEXTRADE_COMPANY_ID ? ', bank_source, plaid_transaction_id, iso_currency' : '');
+    if (taxReport) { columns += ', source_file:raw->>source_file, source_row:raw->>source_row'; }
     var query = db.from('bank_transactions').select(columns).eq('wave_business_id', companyId)
       .or('review_status.is.null,review_status.neq.duplicate');
     if (taxReport) {
@@ -154,11 +155,32 @@ export async function POST(req) {
 
     var comp = companyByKey(body.company);
     if (!comp) { return fail('Say which company: Nextrade or RTM.'); }
-    var WRITES = { set_category: 1, save_category: 1, category_active: 1, save_rule: 1, rule_active: 1, apply_rules: 1, save_mapping: 1, pair_transfer: 1, unpair_transfer: 1, make_missing_bills: 1, set_bill_cutoff: 1 };
+    var WRITES = { set_category: 1, save_category: 1, category_active: 1, save_rule: 1, rule_active: 1, apply_rules: 1, save_mapping: 1, pair_transfer: 1, unpair_transfer: 1, make_missing_bills: 1, set_bill_cutoff: 1, set_ktc_pnl_exclusion: 1 };
     var g = await assertPermission(db, userId, WRITES[action] ? comp.managePerm : comp.viewPerm, req);
     if ((!g || g.ok !== true) && !WRITES[action]) { g = await assertPermission(db, userId, comp.managePerm, req); }
     if (!g || g.ok !== true) { return fail('This needs the "' + comp.label + (WRITES[action] ? ': Manage' : ': View') + '" permission — ask the super admin to grant it in Settings.', 403); }
     var cid = comp.id;
+    if (action === 'set_ktc_pnl_exclusion') {
+      if (cid !== NEXTRADE_COMPANY_ID || typeof body.excluded !== 'boolean' ||
+        typeof body.transaction_id !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(body.transaction_id)) {
+        return fail('Choose Include or Exclude for a NextTrade transaction.');
+      }
+      var target = await db.from('bank_transactions').select(LINE_COLS + ', iso_currency')
+        .eq('wave_business_id', cid).eq('id', body.transaction_id).maybeSingle();
+      if (target.error) { return readFail('the transaction', target.error); }
+      if (!target.data || isPrivateRow(target.data, scope)) { return fail('NextTrade transaction not found.', 404); }
+      var choices = await loadCats(db, cid);
+      if (choices.error) { return readFail('the categories', choices.error); }
+      var targetCategory = (choices.data || []).find(function (category) { return category.key === target.data.company_category; });
+      if (targetCategory?.is_payroll && !payZD.isSuper) { return fail('NextTrade transaction not found.', 404); }
+      if (!isNextradeKtcExpense(target.data, targetCategory)) { return fail('Choose a posted NextTrade expense for KTC dated June 1, 2026 or later.', 409); }
+      var savedChoice = await db.from(NEXTRADE_KTC_PNL_EXCLUSIONS).upsert({
+        transaction_id: target.data.id, excluded: body.excluded, updated_by: userId, updated_at: new Date().toISOString(),
+      }, { onConflict: 'transaction_id' });
+      if (savedChoice.error) { return fail('The KTC P&L choice could not be saved. Try again.', 503); }
+      await audit(db, userId, 'nextrade_ktc_pnl_choice', 'bank_transaction', target.data.id, { excluded: body.excluded });
+      return NextResponse.json({ ok: true, excluded: body.excluded });
+    }
     // v55.83-XN (Max, 21 Nov: "JUST ONE BUTTON TO IGNORE ALL OF THEM FROM CREATING KTC BILLS PRIOR TO JUNE 1 2026") — the button.
     // bill_cutoff: is it on, and how many KTC bills from earlier Nextrade lines it would stop (count; the total only with the totals
     // permission). set_bill_cutoff: ON / OFF, super admin only, one database function (sql/v55-83-XN-nextrade-june-cutoff.sql).
@@ -372,6 +394,17 @@ export async function POST(req) {
         return NextResponse.json({ ok: true, totals: totNp, from: from, to: to, capped: !!pl.capped, payroll_restricted: PAYROLL_NOTE });
       }
       var links = {}; var ktcMapL = null; var ktcCatsL = null;
+      var pnlChoices = new Map(); var pnlChoiceError = null;
+      if (comp.key === 'nextrade') {
+        var eligible = linesOut.filter(function (l) { return !l.payroll_restricted && isNextradeKtcExpense(l, byKey[l.company_category]); }).map(function (l) { return l.id; });
+        for (var pi = 0; pi < eligible.length; pi += 200) {
+          var choiceBatch = eligible.slice(pi, pi + 200);
+          var excludedResult = await db.from(NEXTRADE_KTC_PNL_EXCLUSIONS).select('transaction_id').eq('excluded', true).in('transaction_id', choiceBatch);
+          if (excludedResult.error) { pnlChoices.clear(); pnlChoiceError = 'KTC P&L choices could not be loaded. Use Show to retry.'; break; }
+          choiceBatch.forEach(function (id) { pnlChoices.set(id, false); });
+          (excludedResult.data || []).forEach(function (row) { pnlChoices.set(row.transaction_id, true); });
+        }
+      }
       if (comp.key === 'nextrade' && linesOut.length) {
         var lnk = await db.from('company_bill_links').select('source_bank_transaction_id, bill_id, mode, status').eq('company_id', cid).eq('status', 'active').limit(20000);
         if (!lnk.error) { (lnk.data || []).forEach(function (x) { links[x.source_bank_transaction_id] = x; }); }
@@ -395,10 +428,12 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, lines: linesOut.map(function (l) {
         var a = accts[l.account_id] || {};
         var row = Object.assign({}, l, { source: transactionSource(l), account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', ktc_bill: links[l.id] || null, transfer_with: otherLeg(l) });
+        if (pnlChoices.has(l.id)) { row.ktc_pnl_excluded = pnlChoices.get(l.id); }
         delete row.bank_source;
         delete row.plaid_transaction_id;
         return row;
-      }), categories: catsL.data || [], capped: !!pl.capped, ktc_map: ktcMapL || undefined, ktc_categories: ktcCatsL || undefined, payroll_restricted: hiddenPay ? PAYROLL_NOTE : undefined });
+      }), categories: catsL.data || [], capped: !!pl.capped, ktc_map: ktcMapL || undefined, ktc_categories: ktcCatsL || undefined,
+        ktc_pnl_error: pnlChoiceError || undefined, payroll_restricted: hiddenPay ? PAYROLL_NOTE : undefined });
     }
 
     // the KTC side needs: the party name and the Nextrade → KTC category mapping

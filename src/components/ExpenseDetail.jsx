@@ -36,6 +36,9 @@ export default function ExpenseDetail(props) {
     </div>;
   }
   var b = m.bank || { cents: 0, count: 0, rows: [], listed_cents: 0, unlisted_cents: 0 };
+  var transactions = b.rows.map(row => ({ row, nexttrade: false })).concat(
+    (m.nextrade?.rows || []).map(row => ({ row, nexttrade: true })),
+  ).sort((a, b) => String(b.row.date || '').localeCompare(String(a.row.date || '')));
   return <div className="text-[11px]" style={{ color: INK }}>
     <table className="w-full text-[11px]"><tbody>
       {m.net ? <Row label={'Returns taken out by the bank (' + m.net.debit_count + ')'} cents={m.net.debits_cents} /> : null}
@@ -49,27 +52,22 @@ export default function ExpenseDetail(props) {
       <Row label={'= ' + m.label + (m.adds_up ? ' — adds up' : '')} cents={m.cents} strong />
     </tbody></table>
     {props.rowsListed === false && <div className="px-2 py-1" style={{ color: '#b45309' }}>The bank lines themselves are not shown to you.</div>}
-    {b.rows.length > 0 && <div className="mt-1">
-      <div className="px-2 py-1 font-extrabold" style={{ background: '#f8fafc', color: INK }}>{'Bank lines (' + b.rows.length + ')'}</div>
+    {transactions.length > 0 && <div className="mt-1">
+      <div className="px-2 py-1 font-extrabold" style={{ background: '#f8fafc', color: INK }}>Transactions in this category</div>
       <div className="overflow-auto pl-scroll" style={{ maxHeight: 260 }}><table className="w-full text-[11px]"><tbody>
-        {b.rows.map(function (r, i) { return <tr key={r.id || i} style={{ borderTop: '1px solid ' + LINE }}>
-          <td className="px-2 py-1 whitespace-nowrap">{r.date}</td><td className="px-2 py-1 font-semibold">{String(r.who).substring(0, 70)}{r.money_in && <div style={{ color: '#065f46', fontWeight: 800 }}>{'money IN: the deposit that was returned' + (r.matched_invoice ? ' · it is matched to an invoice: check that invoice is not shown as paid' : '')}</div>}</td>
-          <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap" style={negativeInk(r.cents)}>{money(r.cents)}</td><td className="px-2 py-1 text-right">{picker(r)}</td></tr>; })}
+        {transactions.map(function ({ row, nexttrade }, i) { return <tr key={(nexttrade ? 'nexttrade-' : 'bank-') + (row.id || i)} style={{ borderTop: '1px solid ' + LINE }}>
+          <td className="px-2 py-1 whitespace-nowrap">{row.date}</td>
+          <td className="px-2 py-1 font-semibold">{String(row.who || row.label || 'Transaction').substring(0, 70)}{nexttrade && ' (NextTrade)'}
+            {nexttrade && row.bill_id && props.onOpenBill && <button type="button" className="ml-2 font-semibold underline" style={{ color: '#1d4ed8' }}
+              onClick={() => props.onOpenBill({ ...row, vendor: row.who, bill_number: row.ref })}>{'Bill ' + row.ref}</button>}
+            {row.money_in && <div style={{ color: '#065f46', fontWeight: 800 }}>{'money IN: the deposit that was returned' + (row.matched_invoice ? ' · it is matched to an invoice: check that invoice is not shown as paid' : '')}</div>}
+          </td>
+          <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap" style={negativeInk(row.cents)}>{money(row.cents)}</td>
+          <td className="px-2 py-1 text-right">{picker(row)}</td></tr>; })}
       </tbody></table></div>
       {b.unlisted_cents !== 0 && <div className="px-2 py-1" style={{ color: '#b45309' }}>{'The lines listed add up to ' + money(b.listed_cents) + '; the other ' + money(b.unlisted_cents) + ' is an advance moved in or out of this category, or lines beyond what one list can hold (open a shorter period to see them all).'}</div>}
     </div>}
     {b.rows.length === 0 && b.cents !== 0 && props.rowsListed !== false && <div className="px-2 py-1" style={{ color: '#b45309' }}>No bank lines could be listed for this amount (open a shorter period, or it is an advance moved between categories).</div>}
-    {m.nextrade?.rows.length > 0 && <div className="mt-1">
-      <div className="px-2 py-1 font-extrabold" style={{ background: '#f8fafc' }}>NextTrade charges by transaction date</div>
-      <table className="w-full"><tbody>{m.nextrade.rows.map(function (row, index) {
-        return <tr key={row.id || index} style={{ borderTop: '1px solid ' + LINE }}>
-          <td className="px-2 py-1 whitespace-nowrap">{row.date}</td>
-          <td className="px-2 py-1">{row.who || row.label} (NextTrade){row.bill_id && props.onOpenBill && <button type="button"
-            className="ml-2 font-semibold underline" style={{ color: '#1d4ed8' }} onClick={() => props.onOpenBill({ ...row, vendor: row.who, bill_number: row.ref })}>{'Bill ' + row.ref}</button>}<div>{picker(row)}</div></td>
-          <td className="px-2 py-1 text-right tabular-nums" style={negativeInk(row.cents)}>{money(row.cents)}</td>
-        </tr>;
-      })}</tbody></table>
-    </div>}
     {m.bills.rows.length > 0 && <div className="mt-1">
       <div className="px-2 py-1 font-extrabold" style={{ background: '#f8fafc', color: INK }}>{'Bills paid through RTM / NextTrade (' + m.bills.rows.length + ') — to change one, change the category on the bill'}</div>
       <div className="overflow-auto pl-scroll" style={{ maxHeight: 260 }}><table className="w-full text-[11px]"><tbody>

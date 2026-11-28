@@ -19,6 +19,7 @@ import WireQuickView from './WireQuickView'; // v55.83-RM
 import { matchesTransaction, searchFragments } from '../lib/transaction-search';
 import PendingBankRepair from './PendingBankRepair';
 import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
+import { notifyKtcExpensesChanged } from '../lib/expense-report-events';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -153,6 +154,7 @@ export default function AllTransactionsTab(props) {
     setBusy(true);
     api('bulk_classify', { ids: selIds, classification: bulkCat }).then(function (j) {
       if (j && j.ok) {
+        if (j.updated > 0) { notifyKtcExpensesChanged(); }
         if (bulkCat === 'transfer') { toast.success('Marked ' + j.updated + ' as TRANSFERS — they never count as income or spending in any report; click ↔ on a row to pair its other leg.'); }
         else { toast.success('Category applied to ' + j.updated + ' transaction(s); ' + (j.rules_learned || 0) + ' rule(s) learned' + (j.look_alikes_updated ? '; ' + j.look_alikes_updated + ' similar transaction(s) updated too' : '') + (j.wave_updated ? '; Wave category set on ' + j.wave_updated + ' (queued to sync)' : '; no compatible Wave account — Wave left empty') + '.'); }
         if (j.look_alikes_error) { toast.error('Look-alike lines NOT updated: ' + j.look_alikes_error, { duration: 9000 }); } // v55.83-TZ (Codex 19:55): a refused spread is said on every screen
@@ -168,6 +170,7 @@ export default function AllTransactionsTab(props) {
     setBusy(true);
     api('clear_category', { ids: selIds, confirm: true }).then(function (j) {
       if (j && j.ok) {
+        notifyKtcExpensesChanged();
         var left = (j.refused || []).length;
         if (left) { toast.error(j.message, { duration: 9000 }); setLeftList(j.refused); } else { toast.success(j.message); setLeftList(null); }
         load();
@@ -279,6 +282,7 @@ export default function AllTransactionsTab(props) {
       if (j && j.ok) {
         setUndoPt(j.undo_id ? { id: j.undo_id, who: t.merchant_name || t.name, label: key, hours: j.undo_hours, ready: j.undo_ready !== false } : null);
         patchRow(t.id, { classification: key, _saving: false, _saved: true });
+        notifyKtcExpensesChanged(t.posted_date || t.date);
         if (key === 'transfer') { toast.success('Marked as a TRANSFER — never income, never spending in any report.'); openTransfer(t); }
         else { toast.success('Category saved' + ((j.rules_learned || 0) > 0 ? ' · rule learned for next time' : '') + (j.look_alikes_updated ? ' · ' + j.look_alikes_updated + ' similar transaction(s) updated too' : '') + (j.look_alikes_left_people ? ' · ' + j.look_alikes_left_people + ' set by hand left as they are' : '') + (j.wave_updated ? ' · Wave category set (queued to sync)' : ' · no compatible Wave account — Wave left empty') + ((j.reviewed || 0) > 0 ? ' · marked reviewed → reaches the ClickBooks ledger within 15 min' : '') + '.'); }
         if (j.look_alikes_error) { toast.error('Look-alike lines NOT updated: ' + j.look_alikes_error, { duration: 9000 }); } // v55.83-TZ (Codex 19:55): a refused spread is said on every screen

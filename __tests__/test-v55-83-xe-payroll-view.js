@@ -160,6 +160,20 @@ function hasFullOut(j) { var s = JSON.stringify(j); var full = Math.round((SAL1 
   var mv4 = await call('tok-super', { action: 'set_category', ids: ['P1'], category_key: 'electricity', learn: false });
   check('super admin passes the payroll check', mv4.status === 200, mv4);
 
+  fresh();
+  var electricity = '55555555-5555-4555-8555-555555555555';
+  var salary = '66666666-6666-4666-8666-666666666666';
+  world.db.t.bank_transactions[2].id = electricity;
+  world.db.t.bank_transactions[0].id = salary;
+  var excluded = await call('tok-staff', { action: 'set_ktc_pnl_exclusion', transaction_id: electricity, excluded: true });
+  var refreshed = await call('tok-staff', { action: 'lines' });
+  check('NextTrade manager can exclude a KTC expense and the posted transaction retains its category', excluded.j.ok && refreshed.j.lines.some(function (l) { return l.id === electricity && l.ktc_pnl_excluded === true && l.company_category === 'electricity'; }), excluded);
+  var inaccessible = await call('tok-staff', { action: 'set_ktc_pnl_exclusion', transaction_id: salary, excluded: true });
+  check('a manager cannot change P&L inclusion on a restricted payroll transaction', inaccessible.status === 404, inaccessible);
+  var included = await call('tok-staff', { action: 'set_ktc_pnl_exclusion', transaction_id: electricity, excluded: false });
+  var refreshedAgain = await call('tok-staff', { action: 'lines' });
+  check('Include reverses the choice on the same record, and no bill was voided', included.j.ok && refreshedAgain.j.lines.some(function (l) { return l.id === electricity && l.ktc_pnl_excluded === false; }) && world.db.t.nextrade_ktc_pnl_exclusions.length === 1 && world.db.t.vendor_bills.every(function (b) { return b.record_status === 'active'; }), included);
+
   // ── transfers ──
   fresh();
   var tc1 = await call('tok-staff', { action: 'transfer_candidates', line_id: 'P1' });

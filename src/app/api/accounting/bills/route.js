@@ -12,7 +12,7 @@
 import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess, payrollBillsNote, payrollLinesNote, SPENDING_WITHHELD } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { buildPaidThroughBlocks, uniquePaidThroughBankRows } from '../../../../lib/paid-through-blocks';
 import { buildPaidComparison } from '../../../../lib/period-paid-comparison';
-import { loadNextradeExpenses } from '../../../../lib/nextrade-expenses-server';
+import { loadNextradeExpenses, NEXTRADE_KTC_PNL_FROM } from '../../../../lib/nextrade-expenses-server';
 import { NEXPAC_FEE_CENTS } from '../../../../lib/partner-fee-months';
 import { applyVendorWirePaymentDates } from '../../../../lib/vendor-wire-payment-dates';
 import { fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
@@ -2053,8 +2053,8 @@ export async function POST(req) {
         var spTx = await fetchAll(function () {
           return db.from('bank_transactions')
             .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction, third_party_payer, account_id, account_subtype, iso_currency')
-            .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out']).neq('pending', true)
-            .neq('review_status', 'duplicate') // v55.83-QM — duplicates never count in spending/income
+            .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out']).not('pending', 'is', true)
+            .or('review_status.is.null,review_status.neq.duplicate') // v55.83-QM — duplicates never count in spending/income
             .or('and(posted_date.gte.' + pFrom + ',posted_date.lte.' + pTo + '),and(posted_date.is.null,date.gte.' + pFrom + ',date.lte.' + pTo + ')')
             .order('date', { ascending: false }).order('id');
         });
@@ -2292,7 +2292,7 @@ export async function POST(req) {
             });
           }
         }
-        if (comparePaid && pTo >= '2026-06-01') {
+        if (comparePaid && pTo >= NEXTRADE_KTC_PNL_FROM) {
           try {
             var privateNexttrade = await privateScope(db, userId);
             if (privateNexttrade.error) { throw new Error(privateNexttrade.error); }
