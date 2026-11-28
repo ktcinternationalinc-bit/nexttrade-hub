@@ -63,8 +63,8 @@
       "waitingFor": "The chart build preserves the live Closed payment changes. Verify the exact chart package on staging after the shipped-date guard.",
       "desc": "New skin (fonts, outlines, bigger logo/titles, colour-coded order status), click-a-tile inbound/outbound charts (monthly + by-year + multi-select), commas, full grade names.",
       "files": "ktc-skin.css, app.blade.php, dashboard/index.blade.php, inventory summaries, DashboardController.php (gradeFlow, read-only), routes/web.php",
-      "backup": "staging ~/code-backups/skin-B-20261122, ktc-skin-20261119/before.tar, grade-flow-20261122",
-      "rollback": "restore those tars + remove ktc-skin.css + php artisan view:clear"
+      "backup": "The worker backs up the exact production files before moving the package.",
+      "rollback": "Restore the recorded production code backup and clear route and view caches."
     },
     {
       "id": "wh-order-queue",
@@ -155,17 +155,19 @@
       "title": "Order Queue and stock cards: Rolls / Not rolls (boxes, bales), version history",
       "repo": "nextrade_WAREHOUSE",
       "build": "b5bdd6356cc608b438a9f6fe34b26ff489d1f4d6",
+      "proposedBuild": "3f98347581aead1705abd3379ec5ab4be1e06593",
       "date": "2026-11-26",
       "where": "staging",
       "status": "queued",
       "needsCodex": true,
       "needsMax": true,
       "dataChange": true,
-      "waitingFor": "Production has no duplicate open reservation groups. Rehearse the three migrations and check that older code preserves split reservations before approval.",
+      "waitingFor": "Reconciled candidate 3f98347 passed 52 reference checks. Rehearse the three migrations, signed-in reservation flows and restore compatibility before approval.",
       "routesChanged": false,
       "configChanged": false,
       "dependsOn": [
-        "wh-order-queue"
+        "wh-order-queue",
+        "wh-stage-rules"
       ],
       "meta": "26 Nov · Max: \"install on staging now\" · this change was installed and verified on fix staging as build 2026.11.26-e (b5bdd63) · production: not installed · later staging builds: see environments.staging.observations (dated, not certified for this change)",
       "desc": "The Order Queue shows Rolls and Not rolls (boxes, bales) separately and reserves them separately; reservations made before the split stay \"not yet split\" (held in both) until a person splits them, and a split must keep the reserved weight. The Dashboard and Inventory Summary cards show the same split and open to the grades inside each card. The warehouse footer shows the installed build and its version history.",
@@ -315,24 +317,25 @@
       "desc": "Blocks future shipped dates and removes the fallback to today. The candidate preserves the three live Closed payment code changes.",
       "waitingFor": "The live source is reconciled. Test the exact package on staging before enabling approval.",
       "files": "shipped-date validation + display",
-      "backup": "staging backup bundle",
-      "rollback": "restore bundle + php artisan view:clear"
+      "backup": "The worker backs up the exact production files before moving the package.",
+      "rollback": "Restore the recorded production code backup and clear view caches."
     },
     {
       "id": "wh-stage-rules",
       "title": "Order stage checklist rules + ACID (Egypt/Kenya) + Hub feed",
       "repo": "nextrade_WAREHOUSE",
-      "build": "",
+      "build": "052bd5618a6ac07ad276ca7b3d6e5e3d67d87290",
       "date": "2026-11",
       "where": "staging",
       "status": "queued",
       "needsCodex": false,
       "needsMax": true,
-      "dataChange": false,
-      "waitingFor": "Reconcile the checklist with the live Closed payment code and rehearse adding the four missing database columns.",
-      "meta": "various · Nov",
-      "desc": "Stage requirements and ACID checklist rules. Production already has the read-only feed and is missing checklist columns. This release needs its own migration review and must preserve the live feed.",
-      "files": "App\\Services\\OrderStageRules, HubFeedController",
+      "dataChange": true,
+      "dependsOn": ["wh-skin-b-charts"],
+      "waitingFor": "Reconciled candidate 052bd56 preserves the live Closed payment code and feeds. Rehearse the additive migrations and test the signed-in checklist before approval.",
+      "meta": "Local release candidate 052bd56 · 28 Nov",
+      "desc": "Adds order-stage requirements and ACID checklist rules while preserving the live read-only Hub feeds. Production has four missing checklist columns.",
+      "files": "Order controller, checklist service and Blade templates, optional Hub ping configuration, and three migrations",
       "backup": "staging backup bundle",
       "rollback": "restore bundle + php artisan view:clear"
     },
