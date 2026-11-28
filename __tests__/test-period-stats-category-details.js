@@ -39,11 +39,11 @@ const pays = [
   { id: 'june-portion', bill_id: 'rent', bank_transaction_id: transfer.id, method: 'rtm', paid_date: '2026-06-28', amount: 75000 },
   { id: 'july-portion', bill_id: 'later', bank_transaction_id: transfer.id, method: 'rtm', paid_date: '2026-07-03', amount: 5000 },
 ];
-function report(from, to, payments = pays, bills = billById) {
+function report(from, to, payments = pays, bills = billById, historicalPayerByPayment = {}) {
   const hasTransfer = from <= transfer.date && transfer.date <= to;
   const categories = hasTransfer ? [{ key: category, label: 'Professional Fees', kind: 'expense', total: 80000, count: 1 }] : [];
   const lines = hasTransfer ? [{ ...transfer, payer: 'RTM Capital', classification: category, amount: transfer.amount_abs }] : [];
-  const paid_through = buildPaidThroughBlocks({ parties, pays: payments, billById: bills, lines, from, to });
+  const paid_through = buildPaidThroughBlocks({ parties, pays: payments, billById: bills, historicalPayerByPayment, lines, from, to });
   const party_funds = partyFundsBreakdown({ parties, bankLines: [transfer, copy], pays: payments, bills, from, to });
   return readExpenseAnswer({ ok: true, from, to, spending: { categories, paid_through, party_funds } }, { from, to }, rtmAdjust, foldUnc);
 }
@@ -64,8 +64,9 @@ console.log('PASS: An $80,000 transfer with $75,000 in linked bills leaves $5,00
 
 const shipmentCosts = { goods_cost: 47000, commission: 5000, inbound_allowance: 3000, bonded: 2000, outbound_transport: 18000 };
 const shipmentBills = Object.fromEntries(Object.entries(shipmentCosts).map(([key, amount]) => [key, { category: key, total_amount: amount, paid_via: 'RTM Capital' }]));
-const shipmentPayments = Object.entries(shipmentCosts).map(([key, amount]) => ({ ...pays[0], id: key, bill_id: key, amount }));
-const shipmentReport = report('2026-06-01', '2026-06-30', shipmentPayments, shipmentBills);
+const shipmentPayments = Object.entries(shipmentCosts).map(([key, amount]) => ({ ...pays[0], id: key, bill_id: key, amount, method: 'historical_reconciliation' }));
+const historicalShipmentPayers = Object.fromEntries(shipmentPayments.map(({ id }) => [id, 'RTM Capital']));
+const shipmentReport = report('2026-06-01', '2026-06-30', shipmentPayments, shipmentBills, historicalShipmentPayers);
 assert.equal(shipmentReport.detail.funding[0].applied_rows.length, 5);
 assert.equal(shipmentReport.detail.funding[0].period.tax_cents, 8000000);
 assert.equal(shipmentReport.cols.in_profit.cents, 7500000);

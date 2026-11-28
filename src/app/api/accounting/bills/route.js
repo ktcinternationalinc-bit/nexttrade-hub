@@ -2193,15 +2193,15 @@ export async function POST(req) {
         var notPnlIn = { count: 0, total: 0 }; var taxable = 0;
         catRowsIn.forEach(function (c8) { if (c8.kind === 'not_pnl') { notPnlIn.count += c8.count; notPnlIn.total = r2(notPnlIn.total + c8.total); } else { taxable = r2(taxable + c8.total); } });
         // v55.83-QB — RTM third-party block. Payments = out-txns stamped
-        // third_party_payer in the period; covered bills = method='rtm'
-        // payments joined to their bill's category. The DEFAULT reports keep
+        // third_party_payer in the period; covered bills include wire payments
+        // and historical reconciliations in their bill's category. The DEFAULT reports keep
         // the payment under its own category (ONE professional-fee line for
         // tax); the Stats radio re-buckets into the bills' REAL categories
         // client-side — both views total identically by construction.
         // v55.83-QY — the same block, PER paid-through company (RTM Capital,
         // NextTrade Industries, …). Payments are attributed by the company
-        // stamped on the bank transaction; covered bills by the company the
-        // bill is "paid via". The unlinked remainder is labeled by the
+        // stamped on the bank transaction; historical payments use the payer
+        // recorded in the reconciliation even if the bill's "paid via" is blank or edited. The unlinked remainder is labeled by the
         // company's kind: service_provider → its FEE; affiliate → an ADVANCE
         // awaiting its costs (NextTrade: never a fee by default).
         // v55.83-XO — which bill payments were paid FROM A STARTING BALANCE (sql/v55-83-XO-starting-balance.sql). Read once: the
@@ -2224,6 +2224,23 @@ export async function POST(req) {
         if (!xoOb.error) {
           var xoHidden = hiddenStartingBalances(xoOb.data || [], callerIsSuper, pTo, xoPays);
           if (xoHidden.length) { xoRestrict = { reason: HIDDEN_STARTING_BALANCE_REASON, hidden_starting_balances: xoHidden.length }; }
+        }
+        var historicalPayments = xoPays.filter(function (p) {
+          return p.method === 'historical_reconciliation' && p.voided !== true && p.bank_transaction_id && p.paid_date >= pFrom && p.paid_date <= pTo;
+        });
+        var historicalPayerByPayment = Object.create(null);
+        if (historicalPayments.length) {
+          var historicalFundingIds = [...new Set(historicalPayments.map(function (p) { return p.bank_transaction_id; }))];
+          var historicalFundingByPayment = new Map(historicalPayments.map(function (p) { return [p.id, p.bank_transaction_id]; }));
+          for (var hi = 0; hi < historicalFundingIds.length; hi += 200) {
+            var history = await db.from('party_reconciliations').select('party, bank_transaction_id, payment_ids').in('bank_transaction_id', historicalFundingIds.slice(hi, hi + 200));
+            if (history.error) { return readFail('historical RTM / NextTrade bill payments', history.error); }
+            (history.data || []).forEach(function (row) {
+              (row.payment_ids || []).forEach(function (id) {
+                if (historicalFundingByPayment.get(id) === row.bank_transaction_id) { historicalPayerByPayment[id] = row.party; }
+              });
+            });
+          }
         }
         var rtmBlk = null; var ptBlocks = [];
         try {
@@ -2252,7 +2269,7 @@ export async function POST(req) {
                 if (!wq.error) { ptReqs = ptReqs.concat(wq.data || []); }
               }
             } catch (eWq) { ptReqs = []; }
-            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, refunds: ptRefunds, profKey: taxKeyP }); // TX: + extra fees · WF step C: the one tax key
+            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, historicalPayerByPayment: historicalPayerByPayment, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, refunds: ptRefunds, profKey: taxKeyP }); // TX: + extra fees · WF step C: the one tax key
             ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
         } catch (eR9) { rtmBlk = null; ptBlocks = []; }
         // v55.83-VY (Codex 13:07: "integrate helper into the actual route -> report -> FundsSent -> totals/export path") — the shared

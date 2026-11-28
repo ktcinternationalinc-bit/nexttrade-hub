@@ -25,9 +25,10 @@ export function isSplitLine(party, date) { var p = party || {}; return !!(p.prov
 
 // o: { parties, lines:[{id,date,amount,classification,payer}], pays:[{bill_id,amount,paid_date,bank_transaction_id,method,voided}],
 //      billById:{id:{vendor_name,bill_number,category,paid_via}}, requests:[{bank_transaction_id,fee_amount,status,funding_txn_id}],
-//      catLabels, kindOf, from, to }
+//      historicalPayerByPayment, catLabels, kindOf, from, to }
 export function buildPaidThroughBlocks(o) {
   var catLabels = o.catLabels || {}; var kindOf = o.kindOf || function () { return 'expense'; };
+  var historicalPayerByPayment = o.historicalPayerByPayment || {};
   var from = o.from, to = o.to; var out = [];
   var inP = function (d) { return !!d && d >= from && d <= to; };
   (o.parties || []).forEach(function (party) {
@@ -55,9 +56,11 @@ export function buildPaidThroughBlocks(o) {
       var allocByCat = {}, allocTotal = 0, rows = [];
       (o.pays || []).forEach(function (p) {
         if (p.party_opening_id) { return; } // v55.83-XO — paid from a starting balance: counted below, never from this period's transfers
-        if (p.method !== 'rtm' || p.voided === true || !inP(p.paid_date)) { return; }
+        if (p.voided === true || !inP(p.paid_date)) { return; }
         var b = (o.billById || {})[p.bill_id];
-        if (!b || partyKeyOf(b.paid_via || 'RTM Capital') !== pk || eraOf(party, p.paid_date) !== era) { return; }
+        if (!b) { return; }
+        var payer = p.method === 'historical_reconciliation' ? historicalPayerByPayment[p.id] : p.method === 'rtm' ? b.paid_via || 'RTM Capital' : null;
+        if (partyKeyOf(payer) !== pk || eraOf(party, p.paid_date) !== era) { return; }
         var k = b.category || 'uncategorized'; var am = r2(p.amount);
         if (!allocByCat[k]) { allocByCat[k] = { key: k, label: catLabels[k] || k, kind: kindOf(k), count: 0, total: 0 }; }
         allocByCat[k].count++; allocByCat[k].total = r2(allocByCat[k].total + am); allocTotal = r2(allocTotal + am);

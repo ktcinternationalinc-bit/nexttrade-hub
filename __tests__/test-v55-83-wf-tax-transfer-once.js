@@ -75,6 +75,15 @@ async function stats(from, to) { var j = await call({ action: 'period_stats', fr
   var juneRow = (sp.rows || []).filter(function (r) { return r.id === 'J3'; })[0];
   check('each such row on the list shows which company it went to and what the bank line itself said', juneRow && juneRow.funds_sent_to === NT && juneRow.category === 'professional_fees' && juneRow.bank_category === 'transfer', juneRow);
 
+  var historical = { id: 'history-paid', bill_id: 'history-bill', amount: 3000, paid_date: '2026-06-11', bank_transaction_id: 'J2', voided: false, method: 'historical_reconciliation' };
+  var hdb = world([], [historical, Object.assign({}, historical, { id: 'history-void', amount: 500, voided: true })]);
+  hdb.t.vendor_bills.push({ id: 'history-bill', wave_business_id: US, vendor_name: 'Vendor', bill_number: 'INV-5132', bill_date: '2026-06-10', total_amount: 3000, category: 'trucking', record_status: 'active', paid_via: null });
+  hdb.t.party_reconciliations = [{ bank_transaction_id: 'J2', party: RTM, payment_ids: ['history-paid', 'history-void'] }];
+  var historyReport = await stats('2026-06-01', '2026-06-30');
+  var historyBlock = historyReport.sp.paid_through.find(function (b) { return b.payer === RTM; });
+  check('a settled historical payment belongs to its audited payer and original bill category even if the bill payer is blank', historyBlock.allocations_total === 3000 && historyBlock.allocations_by_cat[0].key === 'trucking' && historyBlock.rows[0].bill_id === 'history-bill', historyBlock);
+  check('historical bills lower the internal RTM remainder, and the tax view keeps the full bank transfer amounts', historyBlock.service_fee === 3500 && cat(historyReport.sp, 'professional_fees').total === 20200 && historyReport.sp.funds_sent_tax.by_party[RTM] === 6500, historyReport.sp.funds_sent_tax);
+
   // ── July: held money is USED — a bill paid from the June transfer, a services-rendered entry, its reversal, a wire fee ──
   var pays = [{ id: 'p1', bill_id: 'b1', amount: 6000, paid_date: '2026-07-10', bank_transaction_id: 'J1', voided: false, method: 'rtm' }];
   var entries = [{ id: 'e1', party: NT, bucket: 'fee', kind: 'fee_from_transfer', amount: 500, source_bank_transaction_id: 'J1', entry_date: '2026-07-12', created_at: '2026-07-12T00:00:00Z' },
