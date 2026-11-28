@@ -34,6 +34,47 @@ import { statementMoney } from '../lib/vendor-statement'; // v55.83-WT
 import { allocateBankLine } from '../lib/bill-bank-pay'; // v55.83-TH
 import { describeAudit, niceWhen, niceDate } from '../lib/audit-words'; // v55.83-TH
 import { partnerFeeLookalikes } from '../lib/partner-fee'; // v55.83-ZP — a bill that looks like the monthly partner fee but has no category
+import tableStyles from './BillsTable.module.css';
+
+function BillsTableViewport({ children }) {
+  const top = useRef(null);
+  const spacer = useRef(null);
+  const viewport = useRef(null);
+  const [overflows, setOverflows] = useState(false);
+
+  function syncScroll(from, to) {
+    if (Math.abs(from.scrollLeft - to.scrollLeft) >= 1) to.scrollLeft = from.scrollLeft;
+  }
+
+  useEffect(function () {
+    const tableViewport = viewport.current;
+    const topBar = top.current;
+    const topSpacer = spacer.current;
+    function resize() {
+      const overflow = tableViewport.scrollWidth - tableViewport.clientWidth;
+      topSpacer.style.width = Math.max(0, overflow + topBar.clientWidth) + 'px';
+      setOverflows(overflow > 0);
+      syncScroll(tableViewport, topBar);
+    }
+    const observer = new ResizeObserver(resize);
+    observer.observe(tableViewport);
+    observer.observe(tableViewport.firstElementChild);
+    resize();
+    return function () { observer.disconnect(); };
+  }, []);
+
+  return <div className={tableStyles.wrap}>
+    <div ref={top} className={tableStyles.top} data-overflow={overflows}
+      aria-hidden={!overflows} aria-label="Scroll bill columns" role="region" tabIndex={overflows ? 0 : -1}
+      onScroll={function (event) { syncScroll(event.currentTarget, viewport.current); }}>
+      <div ref={spacer} className={tableStyles.spacer} />
+    </div>
+    <div ref={viewport} className={tableStyles.viewport} tabIndex={0} role="region" aria-label="Bills table"
+      onScroll={function (event) { syncScroll(event.currentTarget, top.current); }}>
+      {children}
+    </div>
+  </div>;
+}
 // v55.83-RP — where an imported value came from, said plainly to the person validating it
 var SRC_WORDS = { vendor_default: '🏷 this vendor’s bills are always this way', read_from_bill: '🤖 read from the bill', vendor_history: '🧠 from this vendor’s past bills', release_number: '🤖 release # on the bill → outbound', validator: '✓ set at validation', manual: '✍ set by hand' };
 
@@ -757,14 +798,14 @@ export default function BillsTab(props) {
     </div>}
 
 
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs text-left">
+    <BillsTableViewport>
+      <table className={tableStyles.table + ' w-full text-xs text-left'}>
         <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
           {th('Vendor', 'vendor')}{th('Bill #', 'bill_number')}
           {th('Bill date', 'bill_date')}{th('Due', 'due')}
           {th('Amount', 'amount', true)}<th className="py-2 pr-2 font-semibold text-right">Paid</th>
           {th('Open', 'open', true)}<th className="py-2 pr-2 font-semibold">Category</th>
-          <th className="py-2 pr-2 font-semibold">Status</th><th className="py-2 pr-2 font-semibold">Validation</th><th className="py-2 font-semibold"></th></tr></thead>
+          <th className="py-2 pr-2 font-semibold">Status</th><th className="py-2 pr-2 font-semibold">Validation</th><th className="py-2 font-semibold"><span className="sr-only">Actions</span></th></tr></thead>
         <tbody>
           {renderBillList(function (b) {
             var late = b.record_status === 'active' && b.open > 0.005 && b.due_date && b.due_date < TODAY;
@@ -1072,6 +1113,6 @@ export default function BillsTab(props) {
           {shown.length === 0 && <tr><td colSpan={11} className="py-4 text-center text-slate-500 text-[11px]">{busy ? 'Loading…' : (searching ? 'No bill matches “' + billQ + '”. Clear the search, or look under another tab (Open / Paid / All).' : 'No bills here yet.')}</td></tr>}
         </tbody>
       </table>
-    </div>
+    </BillsTableViewport>
   </div>;
 }
