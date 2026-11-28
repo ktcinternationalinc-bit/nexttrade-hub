@@ -195,15 +195,17 @@ export default function WorkFeed(props) {
           <div className="text-[12px] mt-1" style={{ color: SUB }}>Nothing is waiting for you on the screens you can open.</div></div>}
         {feed && sortMineFirst(feed.groups.filter(function (g) { return (g.lane || 'main') === lane; }), mine).map(function (g) {
           var own = ownerLine(asg, g.key, me);
-          return <div key={g.key} className="mb-4">
-            <div className="flex items-center gap-2 flex-wrap pb-1.5 mb-2" style={{ borderBottom: '1px solid ' + LINE }}>
-              <span className="px-1.5 py-0.5" style={{ fontSize: 9, fontWeight: 900, letterSpacing: '0.12em', background: '#262626', color: SUB }}>{(g.area || '').toUpperCase()}</span>
-              <span style={{ fontSize: 13, fontWeight: 900, color: INK }}>{g.title}</span>
-              {g.stale && <span className="px-1.5 py-0.5" style={{ fontSize: 10, fontWeight: 900, background: AMBER, color: '#000000' }} data-testid="feed-group-stale">NOT REFRESHED — last good list</span>}
-              <span className="tabular-nums" style={{ fontSize: 12, fontWeight: 900, color: SUB }}>{g.items.length}</span>
-              {mine[g.key] && <span className="px-1.5 py-0.5" style={{ fontSize: 10, fontWeight: 900, background: INK, color: '#000000' }} data-testid="feed-group-mine">{mine[g.key] === 'primary' ? 'YOURS' : 'YOU ARE BACKUP'}</span>}
-              {own && <span style={{ fontSize: 11, color: SUB }} data-testid="feed-group-owner">{own}</span>}
-            </div>
+          return <section key={g.key} className="mb-6" aria-labelledby={'work-feed-heading-' + g.key}>
+            <header className="mb-2 px-4 py-3 sm:px-5" style={{ background: '#151a23', border: '1px solid #475569', borderLeft: '4px solid #93c5fd' }}>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                {g.area && <span className="px-2 py-1 text-[11px] font-extrabold uppercase tracking-wider" style={{ background: '#26364d', color: '#dbeafe' }}>{g.area}</span>}
+                <h3 id={'work-feed-heading-' + g.key} className="min-w-0 break-words text-lg font-extrabold leading-tight sm:text-xl" style={{ color: INK }}>{g.title}</h3>
+                <span className="min-w-8 px-2 py-0.5 text-center text-sm font-extrabold tabular-nums" style={{ background: '#e2e8f0', color: '#0f172a' }}>{g.items.length}</span>
+                {mine[g.key] && <span className="px-2 py-1 text-[11px] font-extrabold tracking-wide" style={{ background: mine[g.key] === 'primary' ? '#dbeafe' : '#fde68a', color: '#111827' }} data-testid="feed-group-mine">{mine[g.key] === 'primary' ? 'YOURS' : 'YOU ARE BACKUP'}</span>}
+                {g.stale && <span className="px-2 py-1 text-[11px] font-extrabold" style={{ background: AMBER, color: '#000000' }} data-testid="feed-group-stale">NOT REFRESHED — last good list</span>}
+              </div>
+              {own && <p className="mt-2 break-words text-[13px] font-semibold" style={{ color: '#e2e8f0' }} data-testid="feed-group-owner">{own}</p>}
+            </header>
             {g.items.slice(0, 15).map(function (x) {
               var opened = since && since.openedKey === x.key && (since.openedStillOpen || since.unverified);
               var edge = x.stuck ? RED : opened ? AMBER : '#525252';
@@ -230,7 +232,7 @@ export default function WorkFeed(props) {
               </div>;
             })}
             {g.items.length > 15 && <div className="px-3 py-2 text-[12px] font-bold" style={{ color: SUB }}>{'+ ' + (g.items.length - 15) + ' more of these — resolve the ones above and the next ones move up.'}</div>}
-          </div>;
+          </section>;
         })}
       </div>}
 
