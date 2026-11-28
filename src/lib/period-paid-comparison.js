@@ -37,8 +37,9 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
       release: bill.release_number, bill_total_cents: cents(bill.total_amount), attachment_path: bill.attachment_path };
   }
 
-  function recordBillPayment(bill, date, amount, source, id, bank, party) {
-    const row = { ...billRow(bill, date, amount, source, id, bank), party };
+  function recordBillPayment(bill, date, amount, source, id, bank, party, funding) {
+    const row = { ...billRow(bill, date, amount, source, id, bank), party,
+      transfer_id: funding?.transfer_id, transfer_date: funding?.transfer_date };
     const fees = feeLinesByBill.get(bill.id) || [];
     const feeAmount = sum(fees);
     const total = cents(bill.total_amount);
@@ -103,11 +104,11 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
       if (directBank && row.on_bank_line === directBank) return;
       if (row.payment_id) recorded.add(row.payment_id);
       const proof = paymentById.get(row.payment_id)?.vendor_payment_proof;
-      recordBillPayment(bill, row.paid_date, amount, company.party + (proof ? ' · vendor payment confirmation' : ' paid'), row.payment_id, null, company.party);
+      recordBillPayment(bill, row.paid_date, amount, company.party + (proof ? ' · vendor payment confirmation' : ' paid'), row.payment_id, null, company.party, row);
     });
     (period.fee_rows || []).concat(period.loose_fee_rows || []).forEach(fee => {
       const amount = cents(fee.amount);
-      const row = { id: fee.id, date: fee.date, cents: amount, who: company.party, category: 'professional_fees', label: 'Professional Fees', source: 'Recorded service fee' };
+      const row = { id: fee.id, date: fee.date, cents: amount, who: company.party, category: 'professional_fees', label: 'Professional Fees', source: 'Recorded service fee', transfer_id: fee.transfer_id };
       if (partnerFunding.has([fee.transfer_id, Math.abs(amount)].join('|'))) {
         review.push({ ...row, source: 'Fee overlaps a partner bill on the same funding transfer' });
       } else if (fee.bank_transaction_id && !fee.transfer_id) {

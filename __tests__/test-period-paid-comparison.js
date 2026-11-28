@@ -65,18 +65,22 @@ assert.equal(overlap.paid.cents, 100000);
 assert.equal(overlap.review.cents, 160000);
 
 const transfer = row('rtm', 'professional_fees', 80000, { funds_sent_to: 'RTM Capital' });
-const fundedBill = (payment_id, bill_id, portion, extra) => ({ payment_id, bill_id, portion, transfer_id: 'rtm', paid_date: '2026-06-30', ...extra });
+const fundedBill = (payment_id, bill_id, portion, extra) => ({ payment_id, bill_id, portion, transfer_id: 'rtm', transfer_date: '2026-06-25', paid_date: '2026-06-30', ...extra });
 const partner = fundedBill('pt-partner', '14277', 45250);
-const juneFunding = assemble({ spendingRows: [transfer, row('direct-unlinked', 'freight', 300)], payments: [pay('same-bank', 'freight', 300, 'direct-unlinked')], funds: funding({ applied_rows: [partner, fundedBill('pt-truck', 'trucking', 20000)], from_starting_balance_rows: [fundedBill('old-balance', 'freight', 5000)], fee_rows: [{ id: 'actual-fee', date: '2026-06-30', amount: 500, transfer_id: 'rtm' }, { id: 'duplicated-partner', date: '2026-06-30', amount: 45250, transfer_id: 'rtm' }] }, { paid_without_a_transfer: { period_rows: [partner, fundedBill('same-bank', 'freight', 300, { on_bank_line: 'direct-unlinked', transfer_id: null })] } }) });
+const juneFunding = assemble({ spendingRows: [transfer, row('direct-unlinked', 'freight', 300)], payments: [pay('same-bank', 'freight', 300, 'direct-unlinked')], funds: funding({ applied_rows: [partner, fundedBill('pt-truck', 'trucking', 20000)], from_starting_balance_rows: [fundedBill('old-balance', 'freight', 5000, { transfer_id: null, transfer_date: null })], fee_rows: [{ id: 'actual-fee', date: '2026-06-30', amount: 500, transfer_id: 'rtm' }, { id: 'duplicated-partner', date: '2026-06-30', amount: 45250, transfer_id: 'rtm' }] }, { paid_without_a_transfer: { period_rows: [partner, fundedBill('same-bank', 'freight', 300, { on_bank_line: 'direct-unlinked', transfer_id: null })] } }) });
 assert.equal(juneFunding.paid.cents, 7105000);
 assert.equal(juneFunding.funded_paid.cents, 7075000);
 assert.equal(juneFunding.funding.cents, 8000000);
 assert.equal(juneFunding.partner_paid_cents, 4525000);
 assert.equal(juneFunding.review.rows[0].id, 'duplicated-partner');
+assert.deepEqual(juneFunding.funded_paid.rows.filter(r => r.transfer_id === 'rtm').map(r => [r.category, r.cents]), [
+  ['partner_fees', 4525000], ['trucking', 2000000], ['professional_fees', 50000],
+]);
 
 const julyFunding = assemble({ date: july, partnerFeeLines: [{ id: 'july-fee', bill_id: '14487', description: 'Operational Fee July 2026', amount: 45250 }], funds: funding({ applied_rows: [fundedBill('july-portion', 'freight', 4250, { paid_date: '2026-07-03' })] }) });
 assert.equal(julyFunding.funding.cents, 0);
 assert.equal(julyFunding.paid.cents, 425000);
+assert.equal(julyFunding.paid.rows[0].transfer_date, '2026-06-25');
 assert.equal(julyFunding.partner_billed.rows[0].bill_id, '14487');
 assert.equal(combinePaidComparisons([juneFunding, julyFunding]).paid.cents, 7530000);
 assert.equal(combinePaidComparisons([juneFunding, null]), null);
@@ -132,4 +136,8 @@ for (const text of ['$336,148.51', '-$269,889.26', '= $66,259.25', '$409,782.20'
   'Jun 2026 P&amp;L · -$28,423.86 · Provisional', 'Goods profit + transport profit', 'nt-paper']) assert.ok(juneReport.includes(text), text);
 assert.equal(juneReport.split('-$269,889.26').length - 1, 2);
 assert.doesNotMatch(juneReport, /class="[^"]*\b(?:bg-white|bg-slate-50|text-red-800)\b/);
+const fundingReport = renderToStaticMarkup(React.createElement(PeriodPaidComparison, {
+  period, periods: [period], invoiceRows: [], comparison: juneFunding, onOpenBill() {},
+}));
+for (const text of ['by category', 'Payments this transfer funded', 'Category</th>', 'Funding transfer 2026-06-25', '$65,750.00', 'Bill 14277']) assert.ok(fundingReport.includes(text), text);
 console.log('PASS: period comparison reconciliation, source records, RTM funding and refunds, partner duplicates, account transfers, foreign currency, access, and missing costs.');
