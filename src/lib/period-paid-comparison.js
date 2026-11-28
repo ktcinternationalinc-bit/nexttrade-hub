@@ -82,15 +82,15 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
       if (ref) references.add(ref);
       partnerBilled.push(billRow(bill, bill.bill_date, cents(bill.total_amount), partnerMatch(bill) ? 'Recurring vendor and amount match' : 'Partner fee bill', bill.id));
     });
-  const expectedPartnerFees = monthlySchedule.map(month => {
+  const expectedPartnerFees = monthlySchedule.flatMap(month => {
     const choices = month.sources.filter(fee => !privateBills[fee.bill_id]);
     if (choices.length === 1) {
       const fee = choices[0];
       const row = billRow(bills[fee.bill_id], month.date, fee.cents, fee.description, fee.id);
       partnerBilled.push(row);
-      return row;
+      return [];
     }
-    return { id: month.id, date: month.date, cents: month.cents, who: 'NexPac Corporation', source: choices.length > 1 ? 'Multiple bills reference this month. Please reconcile them.' : 'Expected month-end fee · source bill missing' };
+    return [{ id: month.id, date: month.date, cents: month.cents, who: 'NexPac Corporation', source: choices.length > 1 ? 'Multiple bills reference this month. Please reconcile them.' : 'Expected month-end fee · source bill missing' }];
   });
 
   const billed = [];

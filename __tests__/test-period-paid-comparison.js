@@ -55,6 +55,7 @@ assert.equal(categorizedDeposit.receipts.rows[0].id, 'unknown-in');
 assert.equal(bankMonth.review.cents, 11000);
 assert.equal(bankMonth.partner_billed.cents, 4525000);
 assert.equal(bankMonth.partner_billed.rows[0].bill_id, '14277');
+assert.deepEqual(bankMonth.partner_schedule, { cents: 0, count: 0, rows: [] });
 assert.equal(bankMonth.partner_paid_cents, 0);
 assert.equal(bankMonth.billed.cents, 9050000);
 assert.equal(bankMonth.billed.rows.filter(r => r.category === 'partner_fees').length, 1);
@@ -118,10 +119,11 @@ const mixed = assemble({ bills: { ...bills, mixed: mixedBill }, date: { from: '2
 assert.equal(mixed.paid.cents, 5025000);
 assert.equal(mixed.partner_paid_cents, 4525000);
 assert.equal(mixed.partner_billed.cents, 4525000);
-assert.equal(mixed.partner_schedule.cents, 9050000);
-assert.equal(mixed.partner_schedule.rows[0].date, '2026-07-31');
-assert.equal(mixed.partner_schedule.rows[0].bill_id, mixedBill.id);
-assert.match(mixed.partner_schedule.rows[1].source, /source bill missing/);
+assert.equal(mixed.partner_billed.rows[0].date, '2026-07-31');
+assert.equal(mixed.partner_billed.rows[0].bill_id, mixedBill.id);
+assert.equal(mixed.partner_schedule.cents, 4525000);
+assert.equal(mixed.partner_schedule.count, 1);
+assert.match(mixed.partner_schedule.rows[0].source, /source bill missing/);
 const duplicateJulyFee = { ...bills['14487'], category: 'partner_fees' };
 const sameObligation = assemble({ bills: { [duplicateJulyFee.id]: duplicateJulyFee, mixed: mixedBill }, date: { from: '2026-07-01', to: '2026-08-31' }, partnerFeeLines: mixedLines });
 assert.equal(sameObligation.billed.cents, 5025000);
@@ -154,6 +156,13 @@ assert.equal(periodInvoices([{ invoice_id: 'a', goods_revenue: 40, transport_rev
 assert.deepEqual(pnlFormula(period, null, false).lines.slice(0, 3).map(r => r.cents), [33614851, 8815926, 24798925]);
 const html = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], comparison: bankMonth, invoiceRows: [], onFixCosts() {}, onOpenBill() {} }));
 for (const text of ['Goods invoiced less payments', 'Customer receipts less payments', '$336,148.51', '$98,316.74', '$4,409.00', '$88,159.26', 'Fix missing costs', 'Partner fee billed', 'Bill 14277', 'RTM / NextTrade bills and fees paid']) assert.ok(html.includes(text), text);
+assert.doesNotMatch(html, /Scheduled NexPac partner fee|Partner fee expected/);
+assert.equal(html.match(/Partner fee billed/g).length, 1);
+const expectedHtml = renderToStaticMarkup(React.createElement(PeriodPaidComparison, {
+  period, periods: [period], invoiceRows: [], comparison: assemble({ bills: {} }),
+}));
+assert.match(expectedHtml, /Partner fee expected[\s\S]*source bill missing/);
+assert.doesNotMatch(expectedHtml, /Partner fee billed/);
 const juneReport = renderToStaticMarkup(React.createElement(PeriodPaidComparison, {
   period, periods: [period], invoiceRows: [], basis: 'vendor', pnl: { cents: -2842386, complete: false }, onOpenPnl() {},
   comparison: { ...bankMonth, paid: { cents: 26988926, count: 0, rows: [] }, receipts: { cents: 40978220, count: 0, rows: [] },

@@ -77,6 +77,10 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
   const expenseGroup = available ? comparison[{ bank: 'bank_cash', vendor: 'paid', billed: 'billed' }[mode.key]] : null;
   const paymentsByTransfer = new Map();
   const rtm = comparison?.rtm_reconciliation;
+  const partnerBilled = comparison?.partner_billed;
+  const partnerExpected = comparison?.partner_schedule;
+  const partnerPaid = comparison?.partner_paid_cents || 0;
+  const showPartnerFee = partnerBilled?.count > 0 || partnerExpected?.count > 0 || partnerPaid !== 0;
   if (visible) comparison.funded_paid.rows.forEach(row => {
     if (row.transfer_id) {
       if (!paymentsByTransfer.has(row.transfer_id)) paymentsByTransfer.set(row.transfer_id, { cents: 0, rows: [] });
@@ -126,8 +130,16 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
     {available && <div className="mt-2 space-y-1.5">
       {expenseGroup && <CategoryRecords key={mode.key} title={mode.expense + ' · by category'} group={expenseGroup} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} />}
       {comparison.direct_ktc_expenses?.count > 0 && <CategoryRecords title="Direct KTC bank expenses · by category" group={comparison.direct_ktc_expenses} visible={visible} categoryPicker={categoryPicker}><p className="text-slate-700">Posted KTC payments grouped by their bank category and bank date.</p></CategoryRecords>}
-      {(comparison.partner_billed.count > 0 || comparison.partner_paid_cents !== 0) && <Records title="Partner fee billed" group={comparison.partner_billed} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker}><p className="mb-1.5 text-slate-700">{money(comparison.partner_paid_cents)} in recorded partner-fee payments this period. An RTM-funded payment explains the transfer in Bank cash. The bill itself is included by its date in Bills by date.</p></Records>}
-      {comparison.partner_schedule?.count > 0 && <Records title="Scheduled NexPac partner fee" group={comparison.partner_schedule} visible={visible} onOpenBill={onOpenBill}><p className="mb-1.5 text-slate-700">$45,250 at each month-end starting June 30, 2026. Open a source bill where one is on file. The schedule shows expected charges and does not add a payment.</p></Records>}
+      {showPartnerFee && <Records
+        title={partnerBilled?.count ? 'Partner fee billed' : partnerExpected?.count ? 'Partner fee expected' : 'Partner fee'}
+        group={{
+          cents: partnerBilled?.count ? partnerBilled.cents : partnerExpected?.cents || partnerPaid,
+          rows: [...(partnerBilled?.rows || []), ...(partnerExpected?.rows || [])].sort((a, b) => a.date.localeCompare(b.date)),
+        }}
+        visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker}>
+        <p className="mb-1.5 text-slate-700">Recorded payments this period {money(partnerPaid)}.</p>
+        {partnerBilled?.count > 0 && partnerExpected?.count > 0 && <p className="mb-1.5 text-slate-700">Another {money(partnerExpected.cents)} in expected fees needs a source bill or reconciliation.</p>}
+      </Records>}
       {comparison.nextrade_charges?.count > 0 && <Records title="NextTrade charges incurred for KTC" group={comparison.nextrade_charges} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} showCategory><p className="mb-1.5 text-slate-700">These charges enter the internal P&amp;L once, in the month of the NextTrade transaction.</p></Records>}
       {comparison.nextrade_reimbursements?.count > 0 && <Records title="Reimbursements of recorded NextTrade charges" group={comparison.nextrade_reimbursements} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} showCategory><p className="mb-1.5 text-slate-700">The expense stays in the original charge period. The reimbursement settles its bill.</p></Records>}
       {(comparison.funding.count > 0 || comparison.funded_paid.count > 0) && <>
