@@ -56,6 +56,7 @@ function RecordList({ rows, visible, onOpenInvoice, onOpenBill, showCategory, pa
               <div>{row.who || row.label}{row.source_company === 'NextTrade' && ' (NextTrade)'}</div>
               {row.account_label && <div className="text-slate-600">{row.account_label}{row.credit_card ? ' · Credit card' : ''}</div>}
               {!row.account_label && row.credit_card && <div className="text-slate-600">Credit card</div>}
+              {row.status && <div className="text-slate-600">{row.status}</div>}
               {row.reimbursement_cents != null && <div className="text-slate-600">Reimburses NextTrade charges · <Amount cents={row.reimbursement_cents} /></div>}
               {row.source && row.source !== 'Bank transaction' && row.source_company !== 'NextTrade' && <div className="text-slate-600">{row.source}</div>}
               {row.review_reason && <div className="text-[#713f12]">{row.review_reason}</div>}
@@ -66,7 +67,7 @@ function RecordList({ rows, visible, onOpenInvoice, onOpenBill, showCategory, pa
               {paymentsByTransfer && row.source === 'Funds sent' && !linked && <div className="text-slate-600">No linked payments in this period</div>}
             </td>
             {showCategory && <td className="px-2 py-1.5">{row.label || 'Uncategorized'}</td>}
-            <td className="whitespace-nowrap px-2 py-1.5 text-right font-semibold tabular-nums" style={negativeInk(row.cents)}>{money(row.cents)}</td>
+            <td className="whitespace-nowrap px-2 py-1.5 text-right font-semibold tabular-nums" style={negativeInk(row.cents)}>{row.currency && row.currency !== 'USD' ? row.currency + ' ' + (row.cents / 100).toFixed(2) : money(row.cents)}</td>
           </tr>
           {linked && <tr><td colSpan={showCategory ? 4 : 3} className="px-2 pb-2"><Records title={'Payments this transfer funded · ' + row.date} group={linked} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} showCategory /></td></tr>}
         </React.Fragment>;
@@ -126,6 +127,26 @@ function FundingSummary({ reconciliation: r }) {
   return <p className="mb-2 font-semibold">Transfers this period <Amount cents={r.sent} /> − linked bills <Amount cents={r.bills} />
     {r.fees !== 0 && <> − booked fees <Amount cents={r.fees} /></>}{r.refunded !== 0 && <> − funds returned <Amount cents={r.refunded} /></>}
     {' = '}<Amount cents={r.left} /> unallocated at period-end.</p>;
+}
+
+function KtcAccountTransactions({ group, onOpenTransactions }) {
+  const accounts = new Map();
+  group.rows.forEach(row => {
+    const key = row.account_id || '';
+    if (!accounts.has(key)) accounts.set(key, { label: row.account_label, rows: [], cents: 0 });
+    const account = accounts.get(key);
+    account.rows.push(row);
+    if (!row.pending && row.currency === 'USD') account.cents += row.cents;
+  });
+  return <Records title={'KTC transactions by account · ' + group.count + ' records'} group={group} showRecords={false}>
+    <p className="mb-2 text-slate-700">Transactions for the selected dates from {onOpenTransactions
+      ? <button type="button" className={link} onClick={onOpenTransactions}>Daily Work → All Transactions</button>
+      : 'Daily Work → All Transactions'}. Amounts at the right show net posted USD activity, including transfers.</p>
+    <div className="space-y-1">
+      {[...accounts].sort(([, a], [, b]) => a.label.localeCompare(b.label)).map(([key, account]) =>
+        <Records key={key} title={account.label + ' · ' + account.rows.length + (account.rows.length === 1 ? ' record' : ' records')} group={account} visible showCategory />)}
+    </div>
+  </Records>;
 }
 
 function ManagedSalesBalance({ balance }) {
@@ -227,6 +248,7 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
           : 'Daily Work → All Transactions'}. Open a category to see the payments.</p>}
         {bankView && comparison.nextrade_charges?.count > 0 && <p className="text-slate-700">Category totals combine KTC payments and NextTrade expenses. The KTC bank and card figure above includes any reimbursements it paid.</p>}
       </CategoryRecords>}
+      {visible && comparison.ktc_transactions?.count > 0 && <KtcAccountTransactions group={comparison.ktc_transactions} onOpenTransactions={onOpenTransactions} />}
       {!bankView && comparison.bank_review?.count > 0 && <Records title="KTC bank payments awaiting an expense category" group={comparison.bank_review} visible={visible} categoryPicker={categoryPicker} showCategory><p className="mb-1.5 text-[#713f12]">These amounts appear in KTC Bank &amp; Card Activity. Assign an expense category to include them in Expenses Paid This Period.</p></Records>}
       {!bankView && review?.count > 0 && <Records title="Other payments to reconcile" group={review} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker}><p className="mb-1.5 text-[#713f12]">Review the underlying bills and funding links. Some amounts are already represented by a bank transaction.</p></Records>}
       {!bankView && showPartnerFee && <Records

@@ -344,6 +344,23 @@ assert.deepEqual(cardActivity.combined_expenses.rows.map(row => [row.category, r
   [['bond', 75000, true], ['insurance', 9413, true], ['food_entertainment', 4541, true], ['uncategorized', 1683, true]]);
 const cardHtml = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], invoiceRows: [], comparison: cardActivity }));
 assert.match(cardHtml, /Rsc<\/div><div[^>]*>KTC card •3774 · Credit card/);
+const accountAudit = assemble({ sourceKtcTransactions: [
+  { id: 'fees', date: june.from, direction: 'out', amount_abs: 10000, classification: 'professional_fees', account_id: 'platinum', account_label: 'PLAT BUS CHECKING •6338' },
+  { id: 'amex', date: june.from, direction: 'out', amount_abs: 20280, classification: 'transfer', account_id: 'platinum', account_label: 'PLAT BUS CHECKING •6338' },
+  { id: 'receipt', date: june.from, direction: 'in', amount_abs: 1950, classification: 'customer_payment', account_id: 'pnc', account_label: 'PNC Checking •9704' },
+  { id: 'pending-card', date: june.from, direction: 'out', amount_abs: 3.19, pending: true, account_id: 'card', ...screenshotCard },
+] });
+assert.equal(accountAudit.ktc_transactions.count, 4);
+assert.deepEqual(accountAudit.ktc_transactions.rows.map(row => [row.cents, row.status]), [
+  [-1000000, 'Posted'], [-2028000, 'Transfer'], [195000, 'Posted'], [-319, 'Pending'],
+]);
+assert.equal(accountAudit.ktc_transactions.cents, -2833000);
+assert.equal(accountAudit.bank_cash.cents, 0);
+const accountHtml = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], invoiceRows: [], comparison: accountAudit }));
+assert.match(accountHtml, /KTC transactions by account · 4 records/);
+assert.match(accountHtml, /PLAT BUS CHECKING •6338 · 2 records/);
+assert.match(accountHtml, /PNC Checking •9704 · 1 record/);
+assert.match(accountHtml, /KTC card •3774 · 1 record/);
 assert.doesNotMatch(reconciledJune, /NextTrade charges incurred for KTC · reference/);
 assert.match(reconciledJune, /Customer payment[\s\S]*?misclassified-debit[\s\S]*?Money out is categorized as Customer payment/);
 assert.match(reconciledJune, /style="color:#991b1b">-\$4,144\.00<\/td>/);

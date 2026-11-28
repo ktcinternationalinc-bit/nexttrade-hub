@@ -21,7 +21,7 @@ function fundingCategory(name) {
   return fundingCategories.get(party) || { key: 'other_funding', label: 'Other company funding' };
 }
 
-export function buildPaidComparison({ bills, payments, customerPayments = [], partnerFeeLines = [], nextradeExpenses = [], managedSalesLines = [], managedSalesBalance = null, spendingRows, incomeRows, bankLines, funds, labels, kinds, from, to, billBusinessId, privateBills = {}, showRows = true, showPayrollDetails = true }) {
+export function buildPaidComparison({ bills, payments, customerPayments = [], partnerFeeLines = [], nextradeExpenses = [], managedSalesLines = [], managedSalesBalance = null, spendingRows, incomeRows, bankLines, sourceKtcTransactions = [], funds, labels, kinds, from, to, billBusinessId, privateBills = {}, showRows = true, showPayrollDetails = true }) {
   if (!Array.isArray(funds)) return { unavailable: 'Vendor payments through RTM and NextTrade could not be verified.' };
   const inPeriod = date => date && date >= from && date <= to;
   const paid = [];
@@ -283,6 +283,15 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   });
 
   const group = rows => ({ cents: sum(rows), count: rows.length, rows: showRows ? rows : [] });
+  const ktcTransactionRows = showRows ? sourceKtcTransactions.filter(line => inPeriod(line.date)).map(line => ({
+    id: line.id, date: line.date, who: line.merchant_name || line.name, category: line.classification,
+    label: labelFor(line.classification), cents: cents(line.amount_abs) * (line.direction === 'in' ? 1 : -1),
+    currency: String(line.iso_currency || 'USD').toUpperCase(), account_id: line.account_id,
+    account_label: line.account_label || 'Account unavailable', credit_card: line.is_credit_card || line.account_subtype === 'credit card',
+    pending: line.pending === true, status: line.pending === true ? 'Pending' : line.transfer_group_id || kinds[line.classification] === 'transfer' || line.classification === 'transfer' ? 'Transfer' : 'Posted',
+  })) : [];
+  const ktcTransactions = { count: ktcTransactionRows.length, rows: ktcTransactionRows,
+    cents: sum(ktcTransactionRows.filter(row => !row.pending && row.currency === 'USD')) };
   const cashReceipts = managedCashReceipts(managedSalesLines, bankLines, receipts, from, to);
   const reimbursements = paid.filter(row => row.nexttrade_reimbursement);
   const chargeCategories = new Map();
@@ -344,7 +353,7 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     nextrade_operating: { charges_by_category: Array.from(chargeCategories.values()), direct_by_category: directCategoryCents,
       direct_rows: showRows ? directReimbursements.map(({ bank_id, cents: amount }) => ({ bank_id, cents: amount })) : [] },
     review: group(review.concat(bankReview)), bank_review: group(bankReview), other_review: group(review),
-    bank_cash: bankCash, combined_expenses: combinedExpenses,
+    bank_cash: bankCash, combined_expenses: combinedExpenses, ktc_transactions: ktcTransactions,
     billed: group(billed.concat(charges)),
     unclassified_receipts: group(unclassifiedReceipts), other_deposits: group(otherDeposits), partner_billed: group(partnerBilled), partner_schedule: group(expectedPartnerFees), partner_paid_cents: sum(paid.filter(row => row.category === 'partner_fees')) };
 }
@@ -359,7 +368,7 @@ export function combinePaidComparisons(parts) {
       return group ? { cents: total.cents + group.cents, count: total.count + group.count, rows: total.rows.concat(group.rows) } : total;
     }, { cents: 0, count: 0, rows: [] });
   }
-  for (const key of ['paid', 'receipts', 'bank_receipts', 'managed_sales_receipts', 'managed_sales_remittances', 'funding', 'funded_paid', 'bank_cash', 'combined_expenses', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'review', 'unclassified_receipts', 'other_deposits', 'partner_billed', 'partner_schedule']) {
+  for (const key of ['paid', 'receipts', 'bank_receipts', 'managed_sales_receipts', 'managed_sales_remittances', 'funding', 'funded_paid', 'bank_cash', 'combined_expenses', 'ktc_transactions', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'review', 'unclassified_receipts', 'other_deposits', 'partner_billed', 'partner_schedule']) {
     totals[key] = combineGroups(part => part[key]);
   }
   const balances = parts.map(part => part.managed_sales_balance).filter(Boolean).sort((a, b) => a.from.localeCompare(b.from));

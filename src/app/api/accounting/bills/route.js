@@ -2052,13 +2052,20 @@ export async function POST(req) {
         // bank feed IS the dated 2026 money record (both directions, cash
         // basis). Fetch in AND out; the income side mirrors the spending side.
         var spTx = await fetchAll(function () {
-          return db.from('bank_transactions')
-            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction, third_party_payer, account_id, account_subtype, iso_currency')
-            .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out']).not('pending', 'is', true)
-            .or('review_status.is.null,review_status.neq.duplicate') // v55.83-QM — duplicates never count in spending/income
-            .or('and(posted_date.gte.' + pFrom + ',posted_date.lte.' + pTo + '),and(posted_date.is.null,date.gte.' + pFrom + ',date.lte.' + pTo + ')')
-            .order('date', { ascending: false }).order('id');
+          var bankQuery = db.from('bank_transactions')
+            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction, third_party_payer, account_id, account_subtype, iso_currency, pending')
+            .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out'])
+            .or('review_status.is.null,review_status.neq.duplicate');
+          var postedWindow = 'and(posted_date.gte.' + pFrom + ',posted_date.lte.' + pTo + ')';
+          var transactionWindow = 'date.gte.' + pFrom + ',date.lte.' + pTo;
+          if (comparePaid) {
+            bankQuery = bankQuery.or(postedWindow + ',and(' + transactionWindow + ')');
+          } else {
+            bankQuery = bankQuery.not('pending', 'is', true).or(postedWindow + ',and(posted_date.is.null,' + transactionWindow + ')');
+          }
+          return bankQuery.order('date', { ascending: false }).order('id');
         });
+        var sourceKtcTransactions = comparePaid ? spTx.filter(function (t) { return t.date >= pFrom && t.date <= pTo; }) : [];
         var catLabels = {}; var catKinds = {}; var comparisonCategoriesOK = false;
         try {
           var catsSp = await db.from('expense_categories').select('key, label, kind');
@@ -2081,7 +2088,7 @@ export async function POST(req) {
         var taxKeyP = profKeyP || '__professional_fees_pt';
         var fundingTax = { count: 0, total: 0, recategorized: 0, recategorized_total: 0, by_party: {} };
         var isFundingLine = function (tF) { if (tF.direction !== 'out' || tF.transfer_group_id) { return null; } return fundingIdentity({ direction: 'out', third_party_payer: tF.third_party_payer, name: tF.name, merchant_name: tF.merchant_name }); };
-        spTx = uniquePaidThroughBankRows(spTx.filter(function (t) { var date = t.posted_date || t.date; return date >= pFrom && date <= pTo; }), isFundingLine);
+        spTx = uniquePaidThroughBankRows(spTx.filter(function (t) { var date = t.posted_date || t.date; return t.pending !== true && date >= pFrom && date <= pTo; }), isFundingLine);
         // v55.83-WO (Max screenshots via Codex, 21 Nov 00:05, P1) — RETURNED CHECKS are counted NET. A deposit that the bank later
         // returned is two bank lines in this one category: money IN (the deposit) and money OUT (the return). The category's
         // expense is the returns MINUS the deposits categorized into it — a matched pair is 0, not a cost and not income. Both bank
@@ -2417,21 +2424,23 @@ export async function POST(req) {
             else if (!comparisonCategoriesOK) { paidComparison = { unavailable: 'Payment categories could not be loaded.' }; }
             else if (mbUnavailable || advNote) { paidComparison = { unavailable: 'The funding ledger could not be read completely.' }; }
             else { var partnerFeeLines = await fetchAll(function () { return db.from('vendor_bill_lines').select('id,bill_id,description,amount').eq('amount', NEXPAC_FEE_CENTS / 100).order('id'); });
-              var accountIds = Array.from(new Set(spTx.map(function (line) { return line.account_id; }).filter(Boolean)));
+              var visibleKtcTransactions = dropPrivate(sourceKtcTransactions, privateNexttrade);
+              var accountIds = Array.from(new Set(spTx.concat(visibleKtcTransactions).map(function (line) { return line.account_id; }).filter(Boolean)));
               var comparisonAccounts = new Map();
               for (var ca = 0; ca < accountIds.length; ca += 200) {
                 var accountRead = await db.from('plaid_accounts').select('plaid_account_id,name,mask,type').in('plaid_account_id', accountIds.slice(ca, ca + 200));
                 if (accountRead.error) { throw new Error('Could not read KTC transaction accounts.'); }
                 (accountRead.data || []).forEach(function (account) { comparisonAccounts.set(account.plaid_account_id, account); });
               }
-              var comparisonBankLines = spTx.map(function (line) {
+              function withBankAccount(line) {
                 var account = comparisonAccounts.get(line.account_id);
-                return account ? { ...line, is_credit_card: account.type === 'credit',
+                return account && !isPrivateRow(line, privateNexttrade) ? { ...line, is_credit_card: account.type === 'credit',
                   account_label: (account.name || 'Account') + (account.mask ? ' •' + account.mask : '') } : line;
-              });
+              }
               paidComparison = buildPaidComparison({
               bills: billNameById, payments: xoPays, customerPayments: paysP.filter(function (payment) { return !isPaymentVoid(payment) && usInv[payment.accounting_invoice_id]; }),
-              spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: comparisonBankLines, partnerFeeLines: partnerFeeLines,
+              spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: spTx.map(withBankAccount),
+              sourceKtcTransactions: visibleKtcTransactions.map(withBankAccount), partnerFeeLines: partnerFeeLines,
               funds: partyFunds, labels: catLabels, kinds: catKinds, from: pFrom, to: pTo, billBusinessId: US_WAVE_BUSINESS_ID,
               nextradeExpenses, managedSalesLines: managedSalesPeriod?.lines, managedSalesBalance: managedSalesPeriod?.balance,
               privateBills: callerIsSuper ? {} : payZD.pay.ids, showRows: canRows, showPayrollDetails: callerIsSuper
