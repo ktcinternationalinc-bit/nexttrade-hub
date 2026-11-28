@@ -28,7 +28,7 @@ export function CustomersOverviewView(p) {
   var head = [['Customer', 'left'], ['Invoices', 'right'], ['Invoiced in the period', 'right'], ['Paid on those invoices (to date)', 'right'], ['Received in the period', 'right'], ['Still owed on those invoices (today)', 'right'], ['Overdue (today)', 'right']];
   function invoiceTable(r) {
     return <table className="w-full text-[11px]" style={{ background: '#ffffff', border: '1px solid ' + LINE }}>
-      <thead><tr style={{ background: '#f1f5f9', color: '#334155' }}>{['Invoice', 'Date', 'Release', 'Arrival date', 'Status', 'Total', 'Paid', 'Left to pay', 'Due'].map(function (h, i) { return <th key={h} className={'px-2 py-1 font-bold ' + (i >= 5 && i <= 7 ? 'text-right' : 'text-left')}>{h}</th>; })}</tr></thead>
+      <thead><tr style={{ background: '#f1f5f9', color: '#334155' }}>{['Invoice', 'Invoice date', 'Release', 'NT Warehouse arrival date', 'Status', 'Total', 'Paid', 'Left to pay'].map(function (h, i) { return <th key={h} className={'px-2 py-1 font-bold ' + (i >= 5 ? 'text-right' : 'text-left')}>{h}</th>; })}</tr></thead>
       <tbody>{r.invoices.map(function (v) {
         var s = STATUS[v.status] || STATUS.unpaid;
         var tone = invoiceTone(v);
@@ -46,9 +46,8 @@ export function CustomersOverviewView(p) {
           <td className="px-2 py-1 text-right tabular-nums">{sym + fmt(v.total)}</td>
           <td className="px-2 py-1 text-right tabular-nums">{v.paid === null ? 'not shown' : sym + fmt(v.paid)}{v.paid_in_wave_undated > 0 && <div style={{ color: SUB, fontSize: 9 }}>{sym + fmt(v.paid_in_wave_undated) + ' paid in Wave, date not recorded'}</div>}</td>
           <td className="px-2 py-1 text-right tabular-nums font-extrabold" style={{ color: v.balance > 0 ? '#991b1b' : (v.balance === null ? SUB : '#065f46') }}>{v.balance === null ? 'not shown' : (v.balance > 0 ? sym + fmt(v.balance) : '—')}</td>
-          <td className="px-2 py-1">{v.due_date || '—'}{v.days_overdue > 0 && <span style={{ color: '#b45309', fontWeight: 800 }}>{' · ' + v.days_overdue + ' day(s) late'}</span>}</td>
         </tr>; })}
-        {r.invoices.length === 0 && <tr><td colSpan={9} className="px-2 py-2" style={{ color: SUB }}>No invoice dated in this period — the amount received was on other invoices (older ones, or ones dated after the period).</td></tr>}</tbody>
+        {r.invoices.length === 0 && <tr><td colSpan={8} className="px-2 py-2" style={{ color: SUB }}>No invoice dated in this period — the amount received was on other invoices (older ones, or ones dated after the period).</td></tr>}</tbody>
     </table>;
   }
   return <div>
