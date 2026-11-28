@@ -126,6 +126,16 @@ async function send(b) { return post({ json: async () => b }); }
   check(rules.itemSignState(receipt).where === 'live' && !rules.itemSignState(receipt).canRollback &&
     rules.historyList([], liveRegister).some(row => row.item === receipt.id && row.action === 'manual-data-correction' && row.backup === receipt.backup),
     'the manually verified receipt correction is live with its backup recorded and no code rollback');
+  const guard = liveRegister.items.find(it => it.id === 'wh-bug-002');
+  const charts = liveRegister.items.find(it => it.id === 'wh-skin-b-charts');
+  const codeStates = { [guard.id]: rules.itemSignState(guard), [charts.id]: rules.itemSignState(charts) };
+  const sharedPath = 'app/Http/Controllers/Admin/OrderController.php';
+  check(selection.selectionPlan(liveRegister.items, codeStates, [guard.id], 'go').ok &&
+    !selection.selectionPlan(liveRegister.items, codeStates, [guard.id, charts.id], 'go').ok &&
+    charts.manifest.files.find(file => file.path === sharedPath).before === guard.manifest.files.find(file => file.path === sharedPath).after,
+    'the staged shipped-date package can be approved first and the chart manifest requires its installed controller');
+  check(selection.selectionPlan(liveRegister.items, { ...codeStates, [guard.id]: { where: 'deployed' } }, [charts.id], 'go').ok,
+    'the staged chart release can be approved after the shipped-date package moves');
   const palletData = liveRegister.items.find(it => it.id === 'wh-bug-001');
   check(selection.candidateProblems(palletData).length === 0, 'pallet correction binds its exact approved record snapshot and script');
   check(!selection.supportedDataPlan({ ...palletData, id: 'arbitrary-sql' }), 'only the named pallet correction is supported');

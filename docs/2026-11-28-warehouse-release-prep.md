@@ -10,11 +10,11 @@ The reviewed program is `release-management/deploy/receipt-1325-correction.php`.
 
 Candidate `4471602b4a84fb6bdc3ee4eaa20fcaf072c22069` is on local branch `codex/warehouse-bug-002-candidate` in `.codex-warehouse-bug-002-prep`. It applies the six application-file changes from `f9d89d4` to the production baseline. The three copied source files matched their production hashes and preserve the Closed payment workflow. The candidate returns a validation message for malformed Scan Out dates before that handler starts a transaction.
 
-The installed fix-staging date and checklist services passed 14 synthetic PHP checks without a database connection. The date cases covered future, unreadable, valid, and confirmable dates. Exercise the exact reconciled package in the signed-in date editor, both order-edit screens, Shipping, Reopen, and Scan Out.
+The exact six files were fingerprint-checked in an isolated fix-staging folder. The PHP fixtures invoked the actual quick editor, Shipped step and Scan Out entry points. Valid dates saved, the Shipped step kept an existing date or accepted a supplied valid date, and future, unreadable, blank and unusable fallback dates were rejected. Both order forms compiled with the Closed payment section preserved.
 
 ## Warehouse look and inventory charts
 
-Local candidate `8909f8c65d8bc93dcab93532ac3b088af4a7273c` combines the skin and chart work with the follow-up history and badge corrections on top of the reconciled shipped-date candidate. It labels the charts as all-warehouse historical movements and starts month ranges at the first of the month. The candidate excludes the intervening customer reminder migration. Verify the exact production baselines and the chart's signed-in results, including the corrected receipt date and a valid older receipt.
+Candidate `8909f8c65d8bc93dcab93532ac3b088af4a7273c` combines the skin and chart work with the follow-up history and badge corrections on top of the reconciled shipped-date candidate. Its fingerprint-checked chart handler ran on isolated fix staging and included older February receipts, included only shipped outbound weight, and counted pallets once when several grades matched. The Blade templates compiled. The modal labels the charts as all-warehouse historical movements. Deploy after the shipped-date guard because both change the order controller.
 
 ## Order checklist, ACID and the Hub feed
 
@@ -23,3 +23,9 @@ Local candidate `052bd5618a6ac07ad276ca7b3d6e5e3d67d87290` preserves the live Cl
 ## Order Queue Rolls / Not rolls
 
 Local candidate `3f98347581aead1705abd3379ec5ab4be1e06593` applies the Rolls / Not rolls changes after the checklist candidate and passed 52 reference checks. Production has zero duplicate open reservation groups. The `form` and `not_rolls` columns are absent and none of the three Rolls / Not rolls migrations was recorded. Finish the signed-in reservation, legacy split, release and picking PDF checks. Rehearse the migrations and restore compatibility on a disposable restored copy. Generate install version files on the verified target so the footer describes what is actually installed there. Its migrations require a supported execution plan before Change Schedule can queue it.
+
+## Approval evidence for code packages
+
+The approved disposable fixture received 51 changed files across the four candidates. SHA-256 checks matched the committed bytes. The staging PHP fixtures exercised the date and chart handlers using synthetic rows, and compiled and parsed the candidate Blade templates. A separate MariaDB rehearsal ran the six checklist and Rolls migrations twice on connection-local temporary tables. The existing load timestamp, reservation weights, timestamps, and release history matched the test baseline. This is fixture evidence. The two data releases still need a reviewed production execution plan and signed-in workflow checks.
+
+The production file fingerprint precheck matched all 15 expected file states. The office worker's Git checkout contains both exact code commits. The two code manifests use the checked production baseline for unchanged files and the shipped-date build's installed controller fingerprint for the chart prerequisite. Both releases use code backups and leave the database schema in place.

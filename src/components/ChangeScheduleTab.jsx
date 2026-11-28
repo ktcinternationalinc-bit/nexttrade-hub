@@ -108,20 +108,25 @@ function activeRequest(sign) {
   return !!(sign && (sign.kind === 'go' || sign.kind === 'rollback' || sign.executing || sign.where === 'unknown'));
 }
 
-function missingDependency(item, signs, selected) {
+function sharesFiles(item, prerequisite) {
+  var files = new Set((prerequisite?.manifest?.files || []).map(function (file) { return file.path; }));
+  return (item.manifest?.files || []).some(function (file) { return files.has(file.path); });
+}
+
+function missingDependency(item, signs, selected, itemsById) {
   return (item.dependsOn || []).find(function (id) {
-    return !['live', 'deployed'].includes(signs[id]?.where) && !selected.has(id);
+    return !['live', 'deployed'].includes(signs[id]?.where) && (!selected.has(id) || sharesFiles(item, itemsById.get(id)));
   });
 }
 
-function selectedDeployments(candidates, signs, picked) {
+function selectedDeployments(candidates, signs, picked, itemsById) {
   // A dependent is selected only while its prerequisites are selected or on production.
   var selected = new Set();
   var previousSize;
   do {
     previousSize = selected.size;
     candidates.forEach(function (item) {
-      if (picked[item.id] && !missingDependency(item, signs, selected)) selected.add(item.id);
+      if (picked[item.id] && !missingDependency(item, signs, selected, itemsById)) selected.add(item.id);
     });
   } while (selected.size !== previousSize);
   return selected;
@@ -311,9 +316,11 @@ export default function ChangeScheduleTab() {
   var canSign = !!(data && data.canSign);
   var version = data?.warehouseVersion;
   var pendingChecks = live.filter(function (item) { return signs[item.id]?.where === 'deployed'; });
+  var itemsById = new Map(items.map(function (item) { return [item.id, item]; }));
   var candidates = queued.filter(function (it) { return signs[it.id]?.canGo; });
-  var selected = selectionAction === 'go' ? selectedDeployments(candidates, signs, picked) :
+  var selected = selectionAction === 'go' ? selectedDeployments(candidates, signs, picked, itemsById) :
     new Set(rollbackItems.filter(function (it) { return picked[it.id]; }).map(function (it) { return it.id; }));
+  var readyToSelect = candidates.some(function (item) { return !missingDependency(item, signs, selected, itemsById); });
   var selectedIds = Array.from(selected);
   useEffect(function () {
     if (statusReadable && Object.keys(picked).some(function (id) { return !selected.has(id); })) {
@@ -454,7 +461,7 @@ export default function ChangeScheduleTab() {
             <button disabled={!selectedIds.length || reviewOpen} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
           </div>
           {!selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>
-            {selectionAction === 'go' ? (candidates.length ? 'Select a ready change to review and approve.' : 'No changes are ready for deployment review.') : 'Select deployed changes under Already on production.'}
+            {selectionAction === 'go' ? (readyToSelect ? 'Select a ready change to review and approve.' : 'No changes are ready for deployment review.') : 'Select deployed changes under Already on production.'}
           </div>}
         </div>}
         {message && !review && <div role="status" style={{ color: C.prod }}>{message}</div>}
@@ -524,9 +531,10 @@ export default function ChangeScheduleTab() {
           <div style={{ display: 'grid', gap: 10 }}>
             {queued.length ? [...candidates, ...queued.filter(function (it) { return !signs[it.id]?.canGo; })].map(function (it) {
               var canDeploy = canSign && selectionAction === 'go' && signs[it.id]?.canGo;
-              var dependency = canDeploy ? missingDependency(it, signs, selected) : null;
-              var prerequisite = dependency && items.find(function (item) { return item.id === dependency; });
-              var dependencyNote = dependency && (signs[dependency]?.canGo ? 'Select ' + (prerequisite?.title || dependency) + ' first.' : 'Waiting for ' + (prerequisite?.title || dependency) + ' to reach production.');
+              var dependency = canDeploy ? missingDependency(it, signs, selected, itemsById) : null;
+              var prerequisite = dependency && itemsById.get(dependency);
+              var dependencyNote = dependency && (signs[dependency]?.canGo && !sharesFiles(it, prerequisite) ?
+                'Select ' + (prerequisite?.title || dependency) + ' first.' : 'Waiting for ' + (prerequisite?.title || dependency) + ' to reach production.');
               return <Row key={it.id} item={it} sign={signs[it.id]} onDone={load} selection={canDeploy ? 'go' : null} selected={selected.has(it.id)} selectLocked={reviewOpen || !!dependency} dependencyNote={dependencyNote} onSelect={select} />;
             })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'No upcoming changes.'}</div>}

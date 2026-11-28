@@ -1,6 +1,6 @@
 {
   "updated": "2026-11-28",
-  "updatedBy": "Warehouse production release review",
+  "updatedBy": "Warehouse staging verification",
   "intro": "Review upcoming Warehouse changes, see which approvals are queued, and check what is on production.",
   "legend": [
     {
@@ -55,16 +55,89 @@
       "date": "2026-11-22",
       "where": "staging",
       "status": "queued",
-      "needsCodex": true,
+      "needsCodex": false,
       "needsMax": true,
       "dataChange": false,
-      "meta": "Local release candidate 8909f8c · 28 Nov",
-      "dependsOn": ["wh-bug-002"],
-      "waitingFor": "The chart build preserves the live Closed payment changes. Verify the exact chart package on staging after the shipped-date guard.",
+      "meta": "Staging verified · 8909f8c · 28 Nov",
+      "dependsOn": [
+        "wh-bug-002"
+      ],
       "desc": "New skin (fonts, outlines, bigger logo/titles, colour-coded order status), click-a-tile inbound/outbound charts (monthly + by-year + multi-select), commas, full grade names.",
       "files": "ktc-skin.css, app.blade.php, dashboard/index.blade.php, inventory summaries, DashboardController.php (gradeFlow, read-only), routes/web.php",
       "backup": "The worker backs up the exact production files before moving the package.",
-      "rollback": "Restore the recorded production code backup and clear route and view caches."
+      "rollback": "Restore the recorded production code backup and clear route and view caches.",
+      "routesChanged": true,
+      "manifest": {
+        "sha": "8909f8c65d8bc93dcab93532ac3b088af4a7273c",
+        "target": "production",
+        "dataCompatible": true,
+        "files": [
+          {
+            "path": "app/Http/Controllers/Admin/DashboardController.php",
+            "before": "ebf87110475a6391d4fa8e235fbfa6242ddd24ba66a185fa2f03ac5edb50b06f",
+            "after": "dafac7eb3ebb32cf7f9b798fe876f73a240d7ffb84fb5c1a2741232a3c0fb33f"
+          },
+          {
+            "path": "app/Http/Controllers/Admin/OrderController.php",
+            "before": "9f6e50876c6ac838a75a36d159cfc19c21c7a28987d957bc61771ca157398c03",
+            "after": "f66e855dcc624598ca32870c338af16a6a8627f4a376f2da01416cffb20ab85c"
+          },
+          {
+            "path": "public/assets/css/ktc-skin.css",
+            "before": "",
+            "after": "641b41f1622687c25860c1ba9f75d0ae7ab4fb994e6a8d93319f588947029846"
+          },
+          {
+            "path": "resources/views/admin/layout/app.blade.php",
+            "before": "19a4748be17bfb682cafd75509ef280ce019e2c1abcc9e9bc7a284a076e3d44e",
+            "after": "439de75ccef81e9a5204cda8d24727338db324085ff8508e5ad25753dfe3145f"
+          },
+          {
+            "path": "resources/views/admin/modules/dashboard/cgt_inventory_summary.blade.php",
+            "before": "d765d8aa2994df6bfbc6d69f1a394c805588676889f4c2bc03bc132574f0b59b",
+            "after": "1fecd95b4da5e7c9b95c32e110c04a88b2528019714d8626b7d09578651f2da0"
+          },
+          {
+            "path": "resources/views/admin/modules/dashboard/index.blade.php",
+            "before": "6db8da84e8a4669b7b44d65294d29ecfbc13cdeb904f01342faf4947d8e13d3a",
+            "after": "32b3724921bc9c0701a0f74438fea1081d09726c793b85862cf0fb987584bc58"
+          },
+          {
+            "path": "resources/views/admin/modules/dashboard/nt_inventory_summary.blade.php",
+            "before": "1c177ef5caba385f8cd98fbb5da935a476badcf4ec20651bb8d3b51a0a71ad99",
+            "after": "4d99e64ff7d95d0c4427a512dd00beedadd996b7e29403df37781e1afccba13f"
+          },
+          {
+            "path": "resources/views/admin/partials/footer.blade.php",
+            "before": "8d010581332519c4f93a41500d8056b87c38e6bb4caf28908551a7b67273a79d",
+            "after": "6d9c54b9f2444e61da0bc813e800340ec4939869d41739bf371f4d32c66a20c2"
+          },
+          {
+            "path": "resources/views/admin/partials/header.blade.php",
+            "before": "b29bbd6f6ccef1145b34d71f2b174dd64d1cd91ad838f6169e841701fde74526",
+            "after": "970b78b225e09389e172dfd8bced2dc18a049cde32aacfa2ec5ffdfa16155494"
+          },
+          {
+            "path": "routes/web.php",
+            "before": "f22e4846cf8bc7ed51c1b7fa00804e5a0546f0c169f4194ccfe03bb3ffeeab2f",
+            "after": "25993a2b10a27529d033305208b59d6373a6f18181325663b6d7704490bd46a0"
+          }
+        ]
+      },
+      "codexRef": {
+        "sha": "8909f8c65d8bc93dcab93532ac3b088af4a7273c",
+        "target": "production",
+        "manifestDigest": "5b14dd5f367986bd0412d84f027ea4d34686eef9d17fcb064283f9fba1591c85",
+        "feedbackRef": "docs/2026-11-28-warehouse-release-prep.md#approval-evidence-for-code-packages"
+      },
+      "behavioralQa": {
+        "sha": "8909f8c65d8bc93dcab93532ac3b088af4a7273c",
+        "target": "production",
+        "manifestDigest": "5b14dd5f367986bd0412d84f027ea4d34686eef9d17fcb064283f9fba1591c85",
+        "kind": "behavioral",
+        "result": "PASS",
+        "summary": "The exact ten files passed isolated fix-staging chart tests for older February receipts, shipped outbound weight and overlapping grades. The candidate templates compiled. The chart modal identifies the all-warehouse scope."
+      }
     },
     {
       "id": "wh-order-queue",
@@ -162,7 +235,7 @@
       "needsCodex": true,
       "needsMax": true,
       "dataChange": true,
-      "waitingFor": "Reconciled candidate 3f98347 passed 52 reference checks. Rehearse the three migrations, signed-in reservation flows and restore compatibility before approval.",
+      "waitingFor": "The isolated staging migration rehearsal passed and preserved fixture weights and history. Complete signed-in reservation and restore-compatibility checks and prepare a production migration plan.",
       "routesChanged": false,
       "configChanged": false,
       "dependsOn": [
@@ -313,12 +386,62 @@
       "needsCodex": false,
       "needsMax": true,
       "dataChange": false,
-      "meta": "Local release candidate 4471602 · 28 Nov",
+      "meta": "Staging verified · 4471602 · 28 Nov",
       "desc": "Blocks future shipped dates and removes the fallback to today. The candidate preserves the three live Closed payment code changes.",
-      "waitingFor": "The live source is reconciled. Test the exact package on staging before enabling approval.",
       "files": "shipped-date validation + display",
       "backup": "The worker backs up the exact production files before moving the package.",
-      "rollback": "Restore the recorded production code backup and clear view caches."
+      "rollback": "Restore the recorded production code backup and clear view caches.",
+      "manifest": {
+        "sha": "4471602b4a84fb6bdc3ee4eaa20fcaf072c22069",
+        "target": "production",
+        "dataCompatible": true,
+        "files": [
+          {
+            "path": "app/Http/Controllers/Admin/OrderController.php",
+            "before": "6a9970097ac49e7e05e69d945ed9f63fdda9e1025690a8d22d186aa009ba89ee",
+            "after": "9f6e50876c6ac838a75a36d159cfc19c21c7a28987d957bc61771ca157398c03"
+          },
+          {
+            "path": "app/Http/Controllers/Admin/ScanOutController.php",
+            "before": "cf8cebabfc44a99e3a2c0d031dd89936a8e9f915c4915fffd849ababa6f2b18e",
+            "after": "2208ef53bc4ad17f8d68161eaa112f5885e131588214d35cd6a3e2fc18f3a936"
+          },
+          {
+            "path": "app/Services/OrderDateGuard.php",
+            "before": "",
+            "after": "8fa29b1d884b90471ce43411e96cd6e07392bf51da17d76d91225b8acc4abbef"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/edit.blade.php",
+            "before": "07bca100f3256a45363a498468673b3c54a6a68f236dc391db6da3574749af84",
+            "after": "178c2b10b01f05156896c616c97c3ed93b7b9fc813f4af987461e8864ce8c919"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/edit_OrderUSA.blade.php",
+            "before": "ffc1e5e95bcfb70c468c812b471290d8b08c5afd73e2170fd3f339e60f2bc541",
+            "after": "44408e74f623ebbe871cee867ae70d6475642b9c919af70b04c993f3d8b064af"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/order_list.blade.php",
+            "before": "8996440df3227e0f25b38c2fa4f27e5b7f3a3c750f1e767d4f29126a195b5176",
+            "after": "a0b2ef70f75be03104e44b9d447e26634151936a34e8226b027429359512019c"
+          }
+        ]
+      },
+      "codexRef": {
+        "sha": "4471602b4a84fb6bdc3ee4eaa20fcaf072c22069",
+        "target": "production",
+        "manifestDigest": "759d22fb66e84a57bbc6a4236c3567a3781fbb8a145abf2b925cf9aed08ad498",
+        "feedbackRef": "docs/2026-11-28-warehouse-release-prep.md#approval-evidence-for-code-packages"
+      },
+      "behavioralQa": {
+        "sha": "4471602b4a84fb6bdc3ee4eaa20fcaf072c22069",
+        "target": "production",
+        "manifestDigest": "759d22fb66e84a57bbc6a4236c3567a3781fbb8a145abf2b925cf9aed08ad498",
+        "kind": "behavioral",
+        "result": "PASS",
+        "summary": "The exact six files passed fix-staging PHP fixtures for valid saves, existing shipped dates, future and malformed input, blank dates and future load-date fallback. Both order edit templates compiled and retain Closed payments."
+      }
     },
     {
       "id": "wh-stage-rules",
@@ -331,8 +454,10 @@
       "needsCodex": false,
       "needsMax": true,
       "dataChange": true,
-      "dependsOn": ["wh-skin-b-charts"],
-      "waitingFor": "Reconciled candidate 052bd56 preserves the live Closed payment code and feeds. Rehearse the additive migrations and test the signed-in checklist before approval.",
+      "dependsOn": [
+        "wh-skin-b-charts"
+      ],
+      "waitingFor": "The isolated staging migration rehearsal passed. This release needs a signed-in checklist test and a production migration plan the worker can execute.",
       "meta": "Local release candidate 052bd56 · 28 Nov",
       "desc": "Adds order-stage requirements and ACID checklist rules while preserving the live read-only Hub feeds. Production has four missing checklist columns.",
       "files": "Order controller, checklist service and Blade templates, optional Hub ping configuration, and three migrations",
