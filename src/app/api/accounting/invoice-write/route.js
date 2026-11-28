@@ -9,7 +9,9 @@
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-WQ — the route acts only for the verified signed-in person
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { assertPermission } from '../../../../lib/server-permissions';
+import { isScopedUsInvoice, US_INVOICE_EDIT_PERMISSION } from '../../../../lib/business-of';
+import { windowFloorFor } from '../../../../lib/visibility-window-server';
+import { assertPermission, loadUserPermissions, userHasPermission } from '../../../../lib/server-permissions';
 import { readInvoiceFromBase64 } from '../../../../lib/invoice-extract-server'; // v55.83-PQ
 import { SHIPPING_TERMS, basisOfTerms, markupShortfall, markupOverrideNote, releaseKeysOfText, breakdownIsComplete } from '../../../../lib/shipping-terms'; // v55.83-TG (+ XV override)
 import { isTransportLine } from '../../../../lib/profitability'; // v55.83-XV — the same shipping-line test the invoice screen and the profit report use
@@ -22,6 +24,72 @@ var API_BUILD_MARKER = 'v55.83-JD-invoice-write';
 
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+}
+
+function editError(error, status) { return NextResponse.json({ ok: false, error: error }, { status: status }); }
+
+async function editUsInvoice(db, by, invoiceId, body) {
+  var ctx = await loadUserPermissions(db, by);
+  if (!userHasPermission(ctx, US_INVOICE_EDIT_PERMISSION) || !userHasPermission(ctx, 'invoices.view')) {
+    return editError('You need U.S. invoice edit access and invoice viewing access.', 403);
+  }
+  var win = await windowFloorFor(db, ctx);
+  if (win.error) return editError(win.error, 503);
+  var result = await db.from('accounting_invoices')
+    .select('id, wave_business_id, currency, record_status, invoice_date, approval_status, updated_at')
+    .eq('id', invoiceId).maybeSingle();
+  if (result.error) return editError('Could not check the invoice.', 503);
+  var invoice = result.data;
+  if (!isScopedUsInvoice(invoice) || (win.floor && (!invoice.invoice_date || invoice.invoice_date < win.floor))) {
+    return editError('This invoice is outside your U.S. invoice edit access.', 403);
+  }
+  if (!body.expected_updated_at || body.expected_updated_at !== invoice.updated_at) {
+    return editError('The invoice changed. Close and reopen the editor before saving.', 409);
+  }
+  var reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  if (reason.length > 500 || (invoice.approval_status === 'approved' && !reason)) {
+    return editError('Enter a reason of up to 500 characters for the approved invoice change.', 400);
+  }
+  if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 500) {
+    return editError('Enter between 1 and 500 invoice lines.', 400);
+  }
+  var current = await db.from('accounting_invoice_items').select('id, description, quantity, unit_price')
+    .eq('invoice_id', invoiceId);
+  if (current.error) return editError('Could not check the existing invoice lines.', 503);
+  var original = new Map(current.data.map(function (line) { return [line.id, line]; }));
+  var seen = new Set();
+  var lines = [];
+  for (var item of body.items) {
+    if (!item || typeof item.description !== 'string' || item.description.length > 4000 ||
+        !['string', 'number'].includes(typeof item.quantity) || !['string', 'number'].includes(typeof item.unit_price)) {
+      return editError('Enter a valid description, quantity and price on each line.', 400);
+    }
+    var line = { id: item.id || null, description: item.description, quantity: Number(item.quantity), unit_price: Number(item.unit_price) };
+    var old = original.get(line.id);
+    if ((line.id && (!old || seen.has(line.id))) || !Number.isFinite(line.quantity) || !Number.isFinite(line.unit_price)) {
+      return editError('Invalid invoice line. Reload the invoice and try again.', 400);
+    }
+    if ((isTransportLine(line.description) || (old && isTransportLine(old.description))) &&
+        (!old || line.description !== old.description || line.quantity !== Number(old.quantity) || line.unit_price !== Number(old.unit_price))) {
+      return editError('Shipping lines require the regular invoice editor.', 400);
+    }
+    if (line.id) seen.add(line.id);
+    lines.push(line);
+  }
+  if (current.data.some(function (line) { return isTransportLine(line.description) && !seen.has(line.id); })) {
+    return editError('Shipping lines require the regular invoice editor.', 400);
+  }
+  var saved = await db.rpc('hub_edit_us_invoice', {
+    p_invoice: invoiceId, p_actor: by, p_expected: body.expected_updated_at, p_floor: win.floor || null,
+    p_due: body.due_date || null, p_notes: body.notes || null, p_terms: body.terms || null,
+    p_reason: reason, p_items: lines, p_original: current.data,
+  });
+  if (saved.error) {
+    if (saved.error.code === 'P0001') return editError(saved.error.message, 409);
+    if (saved.error.code === 'PGRST202') return editError('U.S. invoice editing needs its database migration installed.', 503);
+    return editError('Could not save invoice changes.', 500);
+  }
+  return NextResponse.json({ ok: true, reopened: invoice.approval_status === 'approved' });
 }
 
 var ALLOWED_STATUS = { 'draft': 1, 'internal_review': 1, 'approved': 1 };
@@ -64,6 +132,8 @@ export async function POST(req) {
 
     var invoiceId = body.invoice_id || null;
     if (!invoiceId) { return NextResponse.json({ ok: false, error: 'invoice_id is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+
+    if (action === 'edit_us_invoice') return await editUsInvoice(db, by, invoiceId, body);
 
     // ── set_approval: draft -> internal_review -> approved ──
     if (action === 'set_approval') {

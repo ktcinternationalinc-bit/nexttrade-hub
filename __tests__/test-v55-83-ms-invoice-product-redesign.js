@@ -76,7 +76,7 @@ ok('16 (Codex QA #1): mapping-only server action set_line_product updates ONLY w
   /assertPermission\(db, by, 'invoices\.edit', req\)/.test(invwrite));
 ok('16b: invoice editor can map a product on a LOCKED (approved) existing line + persists via set_line_product',
   /function onLineProductChange\(i, productId\)/.test(invui) && /action: 'set_line_product'/.test(invui) &&
-  /disabled=\{locked\(editing\) && !it\.id\}/.test(invui));
+  /disabled=\{scopedEditor\(editing\) \|\| \(locked\(editing\) && !it\.id\)\}/.test(invui));
 ok('17 (Codex QA #2): invoice dry-run runs the REAL product preflight (returns blocked) + the queue routes invoice dry-run to push-invoice-v2',
   /for \(dk = 0; dk < items\.length; dk\+\+\) \{ if \(!items\[dk\]\.wave_product_id && !dryDefault\)/.test(push) &&
   /dry_run: true, blocked: true/.test(push) &&

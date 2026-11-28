@@ -10,6 +10,7 @@
 // them. Bank Balances + the company financial overview stay super-admin grants
 // (their own protected table), shown here in the same box.
 import React, { useState, useEffect } from 'react';
+import { US_INVOICE_EDIT_PERMISSION } from '../lib/business-of';
 import { effectiveSwitch } from '../lib/permission-aliases'; // v55.83-UG
 import { canOpenTypedPnl, LEDGER_PNL_PERMISSION, TYPED_PNL_PERMISSION } from '../lib/margin-visibility';
 import { supabase } from '../lib/supabase';
@@ -48,6 +49,7 @@ export var BANKING_GROUPS = [
   ] },
   { title: '3b · Invoices, customers & payments', note: 'Needs Wave Hub (or ClickBooks) in group 1.', items: [
     { key: 'invoice.view', label: 'See invoices', desc: 'Invoices and proformas, read only.', needsBooks: true },
+    { key: US_INVOICE_EDIT_PERMISSION, label: 'Edit existing U.S. invoices', desc: 'Edit existing KTC U.S. invoices you can already see. Saving changes to an approved invoice sends it back for approval.', needsBooks: true },
     { key: 'invoice.create', label: 'Create / edit invoices', desc: 'Make and change invoices and proformas.', needsBooks: true },
     { key: 'invoice.delete', label: 'Delete / void invoices 🔒', desc: 'Delete, void, cancel, archive and restore invoices and proformas (also “Delete incl. Wave”). Only the super admin can switch it on; no role (Accounting Manager, Owner, Admin) has it by itself.', needsBooks: true },
     { key: 'accounting.customers.view', label: 'See customers', desc: 'Accounting customers (not the CRM).', needsBooks: true },

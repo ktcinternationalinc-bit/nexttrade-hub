@@ -7,7 +7,7 @@ import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
-import { businessOfInvoice, US_WAVE_BUSINESS_ID } from '../lib/business-of';
+import { businessOfInvoice, US_WAVE_BUSINESS_ID, isScopedUsInvoice, US_INVOICE_EDIT_PERMISSION } from '../lib/business-of';
 import { canViewInvoices, canCreateInvoice, canApproveInvoices } from '../lib/bank-permissions';
 import { roundMoney, isPaymentVoid } from '../lib/payment-matching';
 import { canDeleteInvoices, INVOICE_DELETE_DENIED } from '../lib/invoice-delete-access'; // v55.83-UM
@@ -74,6 +74,7 @@ export default function AccountingInvoicesTab(props) {
   var _role = userProfile && userProfile.role;
   var mayView = canViewInvoices(isSuperAdmin, modulePerms, _role);
   var mayEdit = canCreateInvoice(isSuperAdmin, modulePerms, _role);
+  function mayScopedEdit(row) { return isInvoice() && mayView && modulePerms[US_INVOICE_EDIT_PERMISSION] === true && isScopedUsInvoice(row); }
   var mayApprove = canApproveInvoices(isSuperAdmin, modulePerms, _role);
   // v55.83-UM — delete / void / cancel / archive / restore: the super admin, or the “Delete / void invoices 🔒” switch ON (no role gives it)
   var mayLifecycle = canDeleteInvoices(isSuperAdmin, modulePerms);
@@ -375,7 +376,7 @@ export default function AccountingInvoicesTab(props) {
     if (!id || !isInvoice() || !mayView) { return; }
     supabase.from('accounting_invoices').select('*').eq('id', id).maybeSingle().then(function (r) {
       if (!r || !r.data) { toast.error('Could not open that invoice.'); return; }
-      if (locked(r.data) || !mayEdit) { setEditing(null); openView(r.data); }
+      if (!mayScopedEdit(r.data) && (locked(r.data) || !mayEdit)) { setEditing(null); openView(r.data); }
       else { startEdit(r.data); }
     });
   }
@@ -396,7 +397,7 @@ export default function AccountingInvoicesTab(props) {
     function onEvt(e) { if (e && e.detail) { window.__ntOpenInvoiceEdit = null; openEditById(e.detail); } }
     window.addEventListener('nt-open-invoice-edit', onEvt);
     return function () { window.removeEventListener('nt-open-invoice-edit', onEvt); };
-  }, [mayView, mayEdit, mode]); // eslint-disable-line
+  }, [mayView, mayEdit, modulePerms[US_INVOICE_EDIT_PERMISSION], mode]); // eslint-disable-line
   // v55.83-TG — the invoice's shipping terms live in pl_invoice_terms (server route; the browser cannot read that table)
   function loadShippingTerms(invId, cb) {
     if (!invId) { return; }
@@ -405,12 +406,20 @@ export default function AccountingInvoicesTab(props) {
       .then(function (j) { if (j && j.ok) { /* v55.83-YU: the server already knows whether the actual costs are typed — no need to open the breakdown box */ setShipActualFor(j.cost_is_actual === true && String(j.release_number || '').trim() ? String(j.release_number).trim() : null); cb({ shipping_terms: j.shipping_terms || '', shipping_cost_estimate: j.shipping_cost_estimate === null || j.shipping_cost_estimate === undefined ? '' : String(j.shipping_cost_estimate), markup_override_note: j.markup_override_note || '' /* v55.83-XV */ }); } })
       .catch(function () {});
   }
+  var [scopedLinesReady, setScopedLinesReady] = useState(null);
+  var editRead = useRef(null);
   function startEdit(row) {
+    var request = { id: row.id };
+    editRead.current = request;
+    setScopedLinesReady(null);
     var tbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
     var key = isInvoice() ? 'invoice_id' : 'proforma_id';
     setHdr(Object.assign({ shipping_terms: '', shipping_cost_estimate: '' }, row)); setEditing(row); setItems([blankItem()]);
-    if (isInvoice()) { loadShippingTerms(row.id, function (t) { setHdr(function (h) { return Object.assign({}, h, t); }); }); } // v55.83-TG
+    if (isInvoice() && !scopedEditor(row)) { loadShippingTerms(row.id, function (t) { setHdr(function (h) { return Object.assign({}, h, t); }); }); } // v55.83-TG
     supabase.from(tbl).select('*').eq(key, row.id).order('sort_order', { ascending: true }).then(function (r) {
+      if (editRead.current !== request) return;
+      if (!r || r.error) { toast.error('Could not load invoice lines.'); return; }
+      setScopedLinesReady(row.id);
       var its = ((r && r.data) || []).map(function (it) { return { id: it.id, description: it.description || '', quantity: String(it.quantity != null ? it.quantity : 1), unit_price: String(it.unit_price != null ? it.unit_price : 0), sku: it.sku || '', product_ref: it.product_ref || '', wave_product_id: it.wave_product_id || '', wave_product_name: it.wave_product_name || '' }; });
       setItems(its.length ? its : [blankItem()]);
     });
@@ -423,6 +432,7 @@ export default function AccountingInvoicesTab(props) {
   // brand-new DRAFT — nothing about the original (payments, Wave link,
   // approval) is copied.
   function startDuplicate(row) {
+    editRead.current = null;
     var tbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
     var key = isInvoice() ? 'invoice_id' : 'proforma_id';
     var today = new Date().toISOString().substring(0, 10);
@@ -529,7 +539,25 @@ export default function AccountingInvoicesTab(props) {
   function addItem() { setItems(items.concat([blankItem()])); }
   function rmItem(i) { var c = items.slice(); c.splice(i, 1); setItems(c.length ? c : [blankItem()]); }
 
-  function locked(row) { return isInvoice() && getInvStatus(row) === 'approved'; }
+  function scopedEditor(row) { return mayScopedEdit(row) && (!mayEdit || (getInvStatus(row) === 'approved' && !mayApprove)); }
+  function locked(row) { return isInvoice() && getInvStatus(row) === 'approved' && !scopedEditor(row); }
+  function saveScopedInvoice() {
+    if (scopedLinesReady !== editing.id) return;
+    var reason = getInvStatus(editing) === 'approved' ? window.prompt('Why are you changing this approved invoice?') : null;
+    if (getInvStatus(editing) === 'approved' && (!reason || !reason.trim())) return;
+    setBusy(true);
+    hubFetch('/api/accounting/invoice-write', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'edit_us_invoice', invoice_id: editing.id, expected_updated_at: editing.updated_at,
+        due_date: hdr.due_date || null, notes: hdr.notes || null, terms: hdr.terms || null, reason: reason,
+        items: items.filter(function (it) { return it.id || (it.description || '').trim() || Number(it.unit_price); }) }),
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) throw new Error(j.error || 'The invoice was not saved.');
+      toast.success(j.reopened ? 'Saved and returned for approval' : 'Saved');
+      setEditing(null); load();
+    }).catch(function (e) { toast.error(e.message || 'The invoice was not saved.'); })
+      .finally(function () { setBusy(false); });
+  }
 
   // v55.83-TZ (Yasmeen, Nov 17: "the system will not allow me to save") — why Save stopped, in red next to the button (the pop-up alone was missed)
   var sSb = useState(''); var saveBlock = sSb[0]; var setSaveBlock = sSb[1];
@@ -545,6 +573,7 @@ export default function AccountingInvoicesTab(props) {
     if (a.changed) { setItems(a.items); setAutoShip(a.amount); toast.success(a.why === 'added' ? ('Shipping line added at $' + Number(a.amount).toFixed(2) + ' (the cost you typed). Change the amount if you charge more or less.') : ('The shipping line now follows the cost: $' + Number(a.amount).toFixed(2) + '.')); }
   }
   function save() {
+    if (scopedEditor(editing)) { saveScopedInvoice(); return; }
     if (!mayEdit) { toast.error('You do not have permission to edit.'); return; }
     if (editing !== 'new' && locked(editing)) { toast.error('Approved invoice is locked. Reopen to edit.'); return; }
     if (!hdr.accounting_customer_id) { toast.error('Pick an accounting customer.'); return; }
@@ -932,6 +961,7 @@ export default function AccountingInvoicesTab(props) {
                     {mayEdit && <button onClick={function () { startDuplicate(row); }} className="text-[10px] bg-teal-700 hover:bg-teal-600 text-white rounded px-1.5 py-0.5 font-bold" title="Duplicate — opens a NEW draft with the same customer and lines; give it its own number and edit anything">⧉ Duplicate</button>}
                     {isInvoice() && invActions(row).canSubmit && <button onClick={function () { setApproval(row, 'internal_review'); }} disabled={busy} className="text-[10px] bg-amber-600 text-white rounded px-1.5 py-0.5 font-bold">Submit</button>}
                     {isInvoice() && invActions(row).canApprove && <button onClick={function () { setApproval(row, 'approved'); }} disabled={busy} className="text-[10px] bg-blue-700 text-white rounded px-1.5 py-0.5 font-bold">Approve</button>}
+                    {scopedEditor(row) && <button onClick={function () { startEdit(row); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 text-white rounded px-1.5 py-0.5 font-bold">Edit</button>}
                     {isInvoice() && invActions(row).canReopen && <button onClick={function () { reopenInvoice(row); }} disabled={busy} className="text-[10px] bg-slate-700 text-white rounded px-1.5 py-0.5 font-bold">Reopen</button>}
                     {isInvoice() && invActions(row).canUpdateWave && <button onClick={function () { updateInWave(row); }} disabled={busy} className="text-[10px] bg-violet-700 hover:bg-violet-600 text-white rounded px-1.5 py-0.5 font-bold" title="Wave has no edit — deletes the old Wave copy and recreates it from this amended invoice">🔁 Update in Wave</button>}
                     {!isInvoice() && mayEdit && row.status !== 'converted' && <button onClick={function () { convertProforma(row); }} disabled={busy} className="text-[10px] bg-emerald-700 text-white rounded px-1.5 py-0.5 font-bold">Convert</button>}
@@ -958,7 +988,7 @@ export default function AccountingInvoicesTab(props) {
                   {isInvoice() && mayApprove && viewing.approval_status === 'internal_review' && <button onClick={function () { var row = viewing; setApproval(row, 'approved'); setViewing(null); }} disabled={busy} className="text-[11px] bg-blue-700 hover:bg-blue-600 text-white rounded px-2 py-1 font-bold">Approve</button>}
                   {invActions(viewing).canReopen && <button onClick={function () { reopenInvoice(viewing); }} disabled={busy} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Reopen</button>}
                   {isInvoice() && invActions(viewing).canUpdateWave && <button onClick={function () { var row = viewing; updateInWave(row); }} disabled={busy} className="text-[11px] bg-violet-700 hover:bg-violet-600 text-white rounded px-2 py-1 font-bold" title="Wave has no edit — deletes the old Wave copy and recreates it from this amended invoice">🔁 Update in Wave</button>}
-                  {editable && mayEdit && <button onClick={function () { var row = viewing; setViewing(null); startEdit(row); }} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Edit</button>}
+                  {((editable && mayEdit) || mayScopedEdit(viewing)) && <button onClick={function () { var row = viewing; setViewing(null); startEdit(row); }} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Edit</button>}
                   {mayEdit && <button onClick={function () { var row = viewing; setViewing(null); startDuplicate(row); }} className="text-[11px] bg-teal-700 hover:bg-teal-600 text-white rounded px-2 py-1 font-bold">⧉ Duplicate</button>}
                   <button onClick={function () { setViewing(null); }} className="text-slate-300 hover:text-white text-sm px-2">✕</button>
                 </div>
@@ -1031,18 +1061,19 @@ export default function AccountingInvoicesTab(props) {
               <button onClick={function () { setEditing(null); }} className="text-slate-400 hover:text-slate-200 text-xs">✕ close</button>
             </div>
           </div>
+          {scopedEditor(editing) && <p className="mb-2 text-xs text-slate-300">You can change the due date, notes, terms and non-shipping lines.{getInvStatus(editing) === 'approved' ? ' Saving sends this invoice back for approval.' : ''}</p>}
           <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Accounting customer *</span>
-              <MiniTypeahead items={scopedCustomers} value={hdr.accounting_customer_id} disabled={locked(editing)} getLabel={function (c) { return c.company_name || c.contact_name || c.id; }} onPick={function (id) { uh('accounting_customer_id', id); }} placeholder="Search customer…" /></label>
-            <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Invoice #' : 'Proforma #'}</span><input value={(isInvoice() ? hdr.invoice_number : hdr.proforma_number) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'invoice_number' : 'proforma_number', e.target.value); }} className={inp} /></label>
+              <MiniTypeahead items={scopedCustomers} value={hdr.accounting_customer_id} disabled={locked(editing) || scopedEditor(editing)} getLabel={function (c) { return c.company_name || c.contact_name || c.id; }} onPick={function (id) { uh('accounting_customer_id', id); }} placeholder="Search customer…" /></label>
+            <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Invoice #' : 'Proforma #'}</span><input value={(isInvoice() ? hdr.invoice_number : hdr.proforma_number) || ''} disabled={locked(editing) || scopedEditor(editing)} onChange={function (e) { uh(isInvoice() ? 'invoice_number' : 'proforma_number', e.target.value); }} className={inp} /></label>
             {/* v55.83-NO — the SECOND reference. NextTrade orders only carry a
                 release number; joining the two systems needs it here too. */}
-            <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Release # <span className="text-slate-500">(warehouse order, e.g. 1002-1193)</span></span><input value={hdr.release_number || ''} disabled={locked(editing)} onChange={function (e) { uh('release_number', e.target.value); }} placeholder="optional" className={inp} /></label>
-            <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Invoice date' : 'Date'}</span><input type="date" value={(isInvoice() ? hdr.invoice_date : hdr.proforma_date) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'invoice_date' : 'proforma_date', e.target.value); }} className={inp} /></label>
+            <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Release # <span className="text-slate-500">(warehouse order, e.g. 1002-1193)</span></span><input value={hdr.release_number || ''} disabled={locked(editing) || scopedEditor(editing)} onChange={function (e) { uh('release_number', e.target.value); }} placeholder="optional" className={inp} /></label>
+            <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Invoice date' : 'Date'}</span><input type="date" value={(isInvoice() ? hdr.invoice_date : hdr.proforma_date) || ''} disabled={locked(editing) || scopedEditor(editing)} onChange={function (e) { uh(isInvoice() ? 'invoice_date' : 'proforma_date', e.target.value); }} className={inp} /></label>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Due date' : 'Valid until'}</span><input type="date" value={(isInvoice() ? hdr.due_date : hdr.valid_until) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'due_date' : 'valid_until', e.target.value); }} className={inp} /></label>
           </div>
 
-          {isInvoice() && (function () { // v55.83-TG — shipping terms: required, one value
+          {isInvoice() && !scopedEditor(editing) && (function () { // v55.83-TG — shipping terms: required, one value
             var st = hdr.shipping_terms || '';
             var shipAmt = items.reduce(function (t, it) { return t + (isTransportLine(it.description) ? itemTotal(it) : 0); }, 0);
             var c = Number(hdr.shipping_cost_estimate) || 0;
@@ -1085,15 +1116,15 @@ export default function AccountingInvoicesTab(props) {
                     line. Options show the Wave name + description to help pick; selecting it is metadata only and
                     does NOT change your line description, which pushes to Wave exactly as typed. Optional — a
                     line with no product uses the Settings default product as the fallback carrier. */}
-                <select value={it.wave_product_id || ''} disabled={locked(editing) && !it.id} onChange={function (e) { onLineProductChange(i, e.target.value); }} className="w-44 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" title="Wave product carrier for this line (optional — falls back to the Settings default). You can set/change this even on an approved invoice: it's saved as sync metadata only and does NOT change the description, amount, or approval. Your line description pushes to Wave exactly as typed. Pull the silo's products in Wave Sync Center if empty.">
+                <select value={it.wave_product_id || ''} disabled={scopedEditor(editing) || (locked(editing) && !it.id)} onChange={function (e) { onLineProductChange(i, e.target.value); }} className="w-44 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" title="Wave product carrier for this line (optional — falls back to the Settings default). You can set/change this even on an approved invoice: it's saved as sync metadata only and does NOT change the description, amount, or approval. Your line description pushes to Wave exactly as typed. Pull the silo's products in Wave Sync Center if empty.">
                   <option value="">{siloProducts.length ? '— Wave product (uses default) —' : '— no products pulled —'}</option>
                   {siloProducts.map(function (p) { var d = (p.description && p.description.trim()) ? (' — ' + p.description.substring(0, 40)) : ''; return <option key={p.wave_product_id} value={p.wave_product_id}>{(p.name || p.wave_product_id) + d}</option>; })}
                 </select>
-                <input value={it.description} disabled={locked(editing)} onChange={function (e) { ui(i, 'description', e.target.value); }} placeholder="Line description (sent to Wave)" title="This text is the Wave line description on push — it pushes exactly as typed. Picking a Wave product above is just the accounting carrier and does NOT change this text." className={inp + ' flex-1'} />
-                <input value={it.quantity} disabled={locked(editing)} onChange={function (e) { ui(i, 'quantity', e.target.value); }} placeholder="Qty" className="w-16 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
-                <input value={it.unit_price} disabled={locked(editing)} onChange={function (e) { ui(i, 'unit_price', e.target.value); }} placeholder="Unit" className="w-20 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
+                <input value={it.description} disabled={locked(editing) || (scopedEditor(editing) && it.id && isTransportLine(it.description))} onChange={function (e) { ui(i, 'description', e.target.value); }} placeholder="Line description (sent to Wave)" title="This text is the Wave line description on push — it pushes exactly as typed. Picking a Wave product above is just the accounting carrier and does NOT change this text." className={inp + ' flex-1'} />
+                <input value={it.quantity} disabled={locked(editing) || (scopedEditor(editing) && it.id && isTransportLine(it.description))} onChange={function (e) { ui(i, 'quantity', e.target.value); }} placeholder="Qty" className="w-16 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
+                <input value={it.unit_price} disabled={locked(editing) || (scopedEditor(editing) && it.id && isTransportLine(it.description))} onChange={function (e) { ui(i, 'unit_price', e.target.value); }} placeholder="Unit" className="w-20 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
                 <div className="w-24 text-right text-xs font-mono text-slate-200">{fmt(itemTotal(it))}</div>
-                {!locked(editing) && <button onClick={function () { rmItem(i); }} className="text-rose-300 text-xs px-1 font-bold">✕</button>}
+                {!locked(editing) && !(scopedEditor(editing) && it.id && isTransportLine(it.description)) && <button onClick={function () { rmItem(i); }} className="text-rose-300 text-xs px-1 font-bold">✕</button>}
               </div>
             );
             });
@@ -1111,10 +1142,10 @@ export default function AccountingInvoicesTab(props) {
           {editing !== 'new' && editing.id && <div className="mb-2"><ProformaLinkBox kind={isInvoice() ? 'invoice' : 'proforma'} docId={editing.id} doc={editing} mayEdit={mayEdit} toast={toast}
                   invoices={scopeIfRegistered(invoices, waveBiz, waveReg, true)} proformas={scopeIfRegistered(proformas, waveBiz, waveReg, true)} customerName={custName} linkMap={linkMap}
                   onOpenInvoice={openPeekInvoice} onOpenProforma={openPeekProforma} onChanged={loadLinkMap} /></div>}
-          {mayEdit && !locked(editing) && (
+          {(mayEdit || scopedEditor(editing)) && !locked(editing) && (
             <div className="flex gap-2 flex-wrap">
               {saveBlock && <span className="text-[11px] font-bold mr-2" style={{ color: '#fca5a5', maxWidth: 520 }}>⛔ Not saved: {saveBlock}</span>}
-              <button onClick={save} disabled={busy} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
+              <button onClick={save} disabled={busy || (scopedEditor(editing) && scopedLinesReady !== editing.id)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
               <button onClick={function () { setEditing(null); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-bold">Cancel</button>
               {isInvoice() && editing !== 'new' && invActions(editing).canSubmit && <button onClick={function () { var row = editing; setApproval(row, 'internal_review'); }} disabled={busy} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold">Submit for Review</button>}
               {isInvoice() && editing !== 'new' && invActions(editing).canApprove && <button onClick={function () { var row = editing; setApproval(row, 'approved'); }} disabled={busy} className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-xs font-bold">Approve</button>}

@@ -46,3 +46,11 @@ export function businessOfInvoice(inv, custTagById) {
   if (inv.wave_business_id) { return 'US'; }
   return 'EG';
 }
+
+export const US_INVOICE_EDIT_PERMISSION = 'invoices.us.edit';
+
+export function isScopedUsInvoice(invoice) {
+  return !!invoice && invoice.wave_business_id === US_WAVE_BUSINESS_ID &&
+    businessOfInvoice(invoice) === 'US' &&
+    (!invoice.record_status || invoice.record_status === 'active');
+}
