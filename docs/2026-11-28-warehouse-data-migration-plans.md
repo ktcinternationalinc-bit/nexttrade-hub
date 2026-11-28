@@ -5,12 +5,15 @@ The release order is BUG-002, Warehouse look and inventory charts, Order stage c
 ## Checks completed on November 28
 
 - Warehouse production moved BUG-002 approval #14 as history entry #15 at 3:37 a.m. ET. All six production file fingerprints matched build `4471602b4a84fb6bdc3ee4eaa20fcaf072c22069`. Ten behavioral checks executed the live date handlers with an isolated in-memory database, and all three changed Blade templates compiled and parsed.
-- The charts build `8909f8c65d8bc93dcab93532ac3b088af4a7273c` has its own approval in Change Schedule. The exact build passed an isolated staging check for historical receipts, shipped-only outbound totals and no duplicate weight when grades overlap.
+- The charts build `8909f8c65d8bc93dcab93532ac3b088af4a7273c` passed an isolated staging check for historical receipts, shipped-only outbound totals and no duplicate weight when grades overlap. The November 28 production check found all ten pre-charts file fingerprints and no charts request in the release ledger.
+- The live verification established Warehouse version #20 at 4:10 a.m. ET. The 15 managed code files matched the active builds. All five code backup manifests and their saved files matched the worker's recorded fingerprints. Production read-only Order Queue, pallet correction and authenticated receipts and shipping feeds passed. The release audit identifies Codex as the verifier.
 - A read-only production snapshot showed the five tables used by these plans are InnoDB. The checklist's `load_date` is already `DATETIME`. The new checklist and Rolls columns are absent. None of the six migration names are recorded. There were zero duplicate open reservation groups and zero fractional open reservations. Three grades matched the reviewed boxes/bales seed.
 - The live code fingerprint check agrees with the planned sequence when the chart and ACID changes are applied in order. Eight Rolls baseline files had different line endings. Their exact live fingerprints matched existing local copies, and the manifest records the live byte fingerprints for those paths.
 - On fix staging, the exact six migration files passed both a clean run and a simulated interrupted run, with repeats. All four checklist fields appeared. Existing load timestamps, reservation weights, grade timestamps and release history were preserved. The revised Rolls build completed missing metadata after interruption and preserved later explicit choices.
 - The exact checklist handler passed synthetic tests for Egypt, Kenya, other and blank destinations, explicit midnight and date-only inputs, saved document/payment selections, omitted ACID fields, and preservation of a Closed payment row. The exact Rolls handlers passed synthetic tests for legacy holds in both blocks, separate Canadian stock, rejecting an unbalanced split, conserving all 1,500 lb through a valid split, preserving the original history, selecting the correct picking PDF rows, and releasing one block without changing the other. These tests ran on isolated fixtures, with an in-memory database and a simulated signed-in user.
-- A separate fixture interleaved two reservation submissions between validation and the write transaction. Both succeeded, leaving 4,250 lb reserved against 2,500 lb of stock. Rolls must reject the second reservation against the current total before this build can be approved.
+- The prior Rolls candidate let two overlapping submissions reserve 4,250 lb against 2,500 lb. The revised candidate takes one InnoDB lock before reading availability. Two independent MariaDB requests waited for the lock. One succeeded and the other was refused, leaving 2,250 lb held and the original reservation intact.
+- The revised checklist refused “No,” “N/A,” a missing ACID number and a blank destination in the mandatory Shipping check. The End Stage check required the applicable original BL, bank documents and cargoX fields. Invalid load dates returned an error with the stored row unchanged.
+- The fingerprinted live shipping feed passed authenticated checks against synthetic pre-migration and post-migration schemas. Invalid credentials returned HTTP 401. The feed reported unknown time for earlier rows and explicit midnight when entered. Document type, payment type and the status-history note were returned after migration, with the same orders and Closed stage.
 
 ## Before either production window
 
@@ -22,7 +25,7 @@ The release order is BUG-002, Warehouse look and inventory charts, Order stage c
 
 ## Order stage checklist and ACID
 
-Candidate `052bd5618a6ac07ad276ca7b3d6e5e3d67d87290` contains ten files, including these three migrations under `database/migrations`.
+Candidate `6e40a733f1ab344d10b1bb6fa0f32d66f391b0c7` contains ten files, including these three migrations under `database/migrations`.
 
 1. `2026_11_16_000001_add_stage_rule_columns_to_order_status_requirements.php`
 2. `2026_11_16_000002_add_note_to_order_statuses.php`
@@ -36,7 +39,7 @@ Candidate `052bd5618a6ac07ad276ca7b3d6e5e3d67d87290` contains ten files, includi
 
 ## Rolls / Not rolls and stock cards
 
-Candidate `a1d74b708315b76e4129866d104f70f03470735a` contains 25 files, including these three migrations under `database/migrations`.
+Candidate `dbd633c8d141f55e20787b17aa02674793580c10` contains 25 files, including these three migrations under `database/migrations`.
 
 1. `2026_11_25_000001_add_not_rolls_to_c_g_t_grades.php`
 2. `2026_11_25_000002_add_form_to_order_queues.php`
@@ -44,7 +47,7 @@ Candidate `a1d74b708315b76e4129866d104f70f03470735a` contains 25 files, includin
 
 **Scope and baseline.** Back up `c_g_t_grades`, `order_queues`, the migration ledger and the existing code files in the manifest. Pause allocation, grade changes, reservation saves, release, picking, and scan operations that change related stock or holds. Record open and historical rows and pounds separately, and capture counts and weights of on-hand pallets by warehouse and grade using the queue's stock filters. Require zero duplicate open legacy groups by order, colour and NT grade. Stop for review if the grade seed matches change.
 
-**Acceptance.** Original IDs, weights, order/colour/grade links, release reason, user, release date and original timestamps must match. The first migration seeds exactly the reviewed slug/name matches. After the third migration, all legacy lines are marked `mixed` with empty classification metadata. Require zero duplicate open groups by order, colour, NT grade and form. Each of the two explicit forms can legitimately have a separate open hold. Reconcile the combined inventory counts and weight to the baseline and confirm the two sections and their CGT/NT drill-downs. On an authenticated disposable copy, finish reserve, split, pick, release and rendered/printed PDF checks, including partly picked holds and orders across warehouse sections. Resolve and retest simultaneous reservations for the last pounds before production approval. Generate and verify the Warehouse footer and installed-build fingerprint on the actual target using the verified archive.
+**Acceptance.** Original IDs, weights, order/colour/grade links, release reason, user, release date and original timestamps must match. The first migration seeds exactly the reviewed slug/name matches. After the third migration, all legacy lines are marked `mixed` with empty classification metadata. Require zero duplicate open groups by order, colour, NT grade and form. Each of the two explicit forms can legitimately have a separate open hold. Reconcile the combined inventory counts and weight to the baseline and confirm the two sections and their CGT/NT drill-downs. On an authenticated disposable copy, finish reserve, split, pick, release and rendered/printed PDF checks, including partly picked holds and orders across warehouse sections. Retest concurrent reservation requests in the shared application workflow. Generate and verify the Warehouse footer and installed-build fingerprint on the actual target using the verified archive.
 
 **Recovery.** Preserve the data columns, original lines, split history and all subsequent writes. Before the first split or explicit form-specific write, a code restore requires a successful rehearsal proving that the older code protects every active hold. After any form-specific write, use forward recovery or a verified code version that understands the two forms. The pre-split code cannot safely operate on separate active holds. Keep that version out of one-click restore across this release. Restoring table dumps over current records or collapsing active holds is outside this plan.
 

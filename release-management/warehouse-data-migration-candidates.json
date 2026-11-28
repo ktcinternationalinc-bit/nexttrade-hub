@@ -2,12 +2,12 @@
   {
     "id": "wh-stage-rules",
     "prerequisite": "8909f8c65d8bc93dcab93532ac3b088af4a7273c",
-    "build": "052bd5618a6ac07ad276ca7b3d6e5e3d67d87290",
+    "build": "6e40a733f1ab344d10b1bb6fa0f32d66f391b0c7",
     "files": [
       {
         "path": "app/Http/Controllers/Admin/OrderController.php",
         "expectedBefore": "f66e855dcc624598ca32870c338af16a6a8627f4a376f2da01416cffb20ab85c",
-        "expectedAfter": "8ae3cea8d8d94d6b97ef04b9058c2f8ee725a4827167f506fb5383baa6478f0e"
+        "expectedAfter": "d48fbbe6dcc41a06919d7c68439c992c38e60add492db47917d390227c995ca3"
       },
       {
         "path": "app/Services/HubPing.php",
@@ -58,8 +58,8 @@
   },
   {
     "id": "wh-oq-rolls",
-    "prerequisite": "052bd5618a6ac07ad276ca7b3d6e5e3d67d87290",
-    "build": "a1d74b708315b76e4129866d104f70f03470735a",
+    "prerequisite": "6e40a733f1ab344d10b1bb6fa0f32d66f391b0c7",
+    "build": "dbd633c8d141f55e20787b17aa02674793580c10",
     "files": [
       {
         "path": "app/Http/Controllers/Admin/CGTGradeController.php",
@@ -78,8 +78,8 @@
       },
       {
         "path": "app/Http/Controllers/Admin/OrderController.php",
-        "expectedBefore": "8ae3cea8d8d94d6b97ef04b9058c2f8ee725a4827167f506fb5383baa6478f0e",
-        "expectedAfter": "4d5431b551fb518ef930510cf93f2db4cadb661282bd5f313b92233ab644be4d"
+        "expectedBefore": "d48fbbe6dcc41a06919d7c68439c992c38e60add492db47917d390227c995ca3",
+        "expectedAfter": "71004319d1307aad03b05002656a18fb6a5366498ef9fe738a69ed603d8f7fc8"
       },
       {
         "path": "app/Http/Requests/CGTGrade/StoreRequest.php",
@@ -104,7 +104,7 @@
       {
         "path": "app/Services/OrderQueueService.php",
         "expectedBefore": "7fba57306b21f16820d6a513fbef5c87e08924edf53b24ac394676ecfcc5cabb",
-        "expectedAfter": "9d32dcb2a9413ea672f258c95e904b97719225cfaa71860897c94def68ea59a2"
+        "expectedAfter": "af906b4e4681fd09c3baa582cce7129a90e9e0bad2e9ee79d0d81d30ab4ddbf8"
       },
       {
         "path": "app/Services/StockBlocks.php",

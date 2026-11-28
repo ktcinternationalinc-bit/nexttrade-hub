@@ -20,11 +20,11 @@ Candidate `8909f8c65d8bc93dcab93532ac3b088af4a7273c` combines the skin and chart
 
 ## Order checklist, ACID and the Hub feed
 
-Local candidate `052bd5618a6ac07ad276ca7b3d6e5e3d67d87290` preserves the live Closed payments workflow and read-only endpoints. It scopes new checklist field writes without replacing the live model. It adds `shipping_doc_type`, `order_payment_type`, `load_time_known`, and the order-history `note` column. Production already has `load_date` as `DATETIME`, and the new migration leaves that type in place. The live feed can read newly added fields without replacing the controller. The close-order write endpoint is outside this package. Test Egypt, Kenya, other and blank destinations, required document fields, known and unknown load times, and feed continuity after rehearsing the three migrations.
+Local candidate `6e40a733f1ab344d10b1bb6fa0f32d66f391b0c7` preserves the live Closed payments workflow and read-only endpoints. It adds `shipping_doc_type`, `order_payment_type`, `load_time_known`, and the order-history `note` column. The migrations leave the production `load_date` as `DATETIME`. The revised checklist retains existing dates when the load date is omitted, refuses malformed input before writing, and requires confirmed receipt and an ACID number for Egypt and Kenya. The migration plan lists the checks and remaining operational prerequisites.
 
 ## Order Queue Rolls / Not rolls
 
-Local candidate `a1d74b708315b76e4129866d104f70f03470735a` applies Rolls / Not rolls after ACID and passed 52 reference checks. The revised migrations preserve history even after a partial run. The isolated workflow checks and remaining authenticated checks are listed in the migration plan. Its migrations require a supported executor before Change Schedule can queue them.
+Local candidate `dbd633c8d141f55e20787b17aa02674793580c10` applies Rolls / Not rolls after ACID and passed 52 reference checks. The revised migrations preserve history even after a partial run. Two independent MariaDB requests confirmed that an overlapping reservation rechecks capacity after the first request commits. The migration plan lists the checks and remaining operational prerequisites.
 
 ## Approval evidence for code packages
 
