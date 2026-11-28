@@ -14,6 +14,7 @@ import { acctAccess, screenHub } from '../lib/accounting-access';
 import { hubFetch } from '../lib/hub-fetch';
 import WorkAssignmentsPanel from './WorkAssignmentsPanel'; // v55.83-AAH — admin / super admin pick who owns each task
 import { canAssign, taskOf } from '../lib/work-feed-tasks';
+import { COST_FEED_KEYS } from '../lib/profitability-work-feed';
 
 // Kept only in this open page (never stored): the feed as it was when the person pressed a button (so Back can tell Resolved / Still
 // open), and the Resolved group of this person while the page is open.
@@ -32,7 +33,8 @@ export function feedAccess(isSuper, mp, role) {
   if (!canWires) { perms.prepare = false; perms.signoff = false; perms.send = false; }
   // same gate as the home screen's "awaiting bank confirmation" card (PendingBankConfirmationsWidget)
   var canInvoices = boss || m['Treasury'] === true || m['View Financial Reports'] === true;
-  return { perms: perms, canBills: canBills, canWires: canWires, canInvoices: canInvoices, any: canBills || canWires || canInvoices };
+  var canCosts = revenueOk && hubOk('profitability') && (boss || (m['pnl.view'] === true && m['pnl.view_margin'] === true && m['pnl.edit_costs'] === true));
+  return { perms: perms, canBills: canBills, canWires: canWires, canInvoices: canInvoices, canCosts: canCosts, any: canBills || canWires || canInvoices || canCosts };
 }
 
 var BG = '#000000'; var PANEL = '#0b0b0b'; var LINE = '#2a2a2a'; var INK = '#fafafa'; var SUB = '#a3a3a3'; var GREEN = '#22c55e'; var RED = '#dc2626'; var AMBER = '#f59e0b';
@@ -64,10 +66,14 @@ export default function WorkFeed(props) {
   function load(prev) {
     seqRef.current++; var mySeq = seqRef.current;
     setBusy(true);
-    Promise.all([acc.canBills ? post('/api/accounting/bills', { action: 'list' }) : Promise.resolve(null), acc.canWires ? post('/api/accounting/wire-packages', { action: 'list' }) : Promise.resolve(null)]).then(function (r) {
+    Promise.all([acc.canBills ? post('/api/accounting/bills', { action: 'list' }) : Promise.resolve(null), acc.canWires ? post('/api/accounting/wire-packages', { action: 'list' }) : Promise.resolve(null), acc.canCosts ? post('/api/accounting/profitability', { action: 'cost_work_feed', date_from: '2026-06-01' }) : Promise.resolve(null)]).then(function (r) {
+      if (seqRef.current !== mySeq) { return; }
       var e = [];
       if (r[0] && !r[0].ok) { e.push('Bills: ' + (r[0].error || 'not loaded')); }
       if (r[1] && !r[1].ok) { e.push('Wires: ' + (r[1].error || 'not loaded')); }
+      var othersOk = !e.length;
+      var costsOk = !!(r[2] && r[2].ok && Array.isArray(r[2].tasks));
+      if (acc.canCosts && !costsOk) { e.push('Profitability cost tasks: ' + (r[2]?.error || 'not loaded')); }
       setErrs(e);
       var w = (acc.canBills || acc.canWires) ? waitingFor({ bills: (r[0] && r[0].ok && r[0].bills) || [], wires: (r[1] && r[1].ok && r[1].packages) || [], funding: (r[1] && r[1].ok && r[1].funding_open) || [], perms: acc.perms, userId: me }) : null;
       // Codex AAA-02: the home screen's invoices count only when the page says they loaded (invoicesStatus.ok); otherwise the last good
@@ -78,8 +84,12 @@ export default function WorkFeed(props) {
       // feed (same person) or the on-screen copy is used. Either way the group is marked not-refreshed and is never compared.
       var invFailed = !!(props.invoicesStatus && props.invoicesStatus.ok === false);
       var jumpCopy = lastJump && lastJump.user === me ? lastJump.before : null;
-      var f = buildFeed({ waiting: w, invoices: acc.canInvoices && (invOk || invFailed) ? (props.invoices || []) : null });
+      var f = buildFeed({ waiting: w, invoices: acc.canInvoices && (invOk || invFailed) ? (props.invoices || []) : null, costTasks: costsOk ? r[2].tasks : [] });
       if (acc.canInvoices && invFailed) { f = keepLastGoodInvoices(f, prevRef.current || jumpCopy); }
+      if (acc.canCosts && !costsOk) {
+        var keptCosts = ((prevRef.current || jumpCopy)?.groups || []).filter(function (g) { return COST_FEED_KEYS.includes(g.key); });
+        f = tally(f.groups.concat(keptCosts.map(function (g) { return Object.assign({}, g, { stale: true }); })));
+      }
       var stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       // Which feed to compare with: the one from before the jump (only right after the Back button: backN moved on by one; a home
       // visit through the menu is a fresh start), else the one on screen when ↻ Refresh was pressed.
@@ -94,7 +104,7 @@ export default function WorkFeed(props) {
       } else {
         var keepR = addResolved(resolvedMem.list, [], f, ''); resolvedMem.list = keepR; setResolved(keepR); // a reopened item leaves Resolved
       }
-      setSince(openedKey ? backVerdict(openedKey, openedTitle, f, { invoicesOk: invOk, othersOk: !e.length }) : null);
+      setSince(openedKey ? backVerdict(openedKey, openedTitle, f, { invoicesOk: invOk, othersOk: othersOk, costsOk: costsOk }) : null);
       if (seqRef.current !== mySeq) { return; } // a newer load (other person / other switches) started meanwhile: drop this answer
       prevRef.current = f; setFeed(f);
       setAt(stamp);
@@ -102,7 +112,7 @@ export default function WorkFeed(props) {
   }
   // Codex AAA-01: on a normal sign-in the page shows before the person and their switches are known. Load when they are ready, and
   // again whenever the signed-in person or their effective access changes (a new person starts with an empty feed and no comparison).
-  var accessKey = (me || '') + '|' + [acc.canBills, acc.canWires, acc.canInvoices, acc.perms.bills, acc.perms.prepare, acc.perms.signoff, acc.perms.send].map(function (b) { return b ? 1 : 0; }).join('');
+  var accessKey = (me || '') + '|' + [acc.canBills, acc.canWires, acc.canInvoices, acc.canCosts, acc.perms.bills, acc.perms.prepare, acc.perms.signoff, acc.perms.send].map(function (b) { return b ? 1 : 0; }).join('');
   useEffect(function () {
     if (!me || !acc.any) { seqRef.current++; prevRef.current = null; setFeed(null); setErrs([]); setSince(null); setBusy(false); return; }
     if (userRef.current !== me) { userRef.current = me; prevRef.current = null; setFeed(null); setSince(null); if (lastJump && lastJump.user !== me) { lastJump = null; } }
@@ -276,6 +286,7 @@ export function feedShowsTask(acc, key) {
   if (key === 'wire_sign') { return !!p.signoff; }
   if (key === 'wire_send' || key === 'wire_bank' || key === 'wire_proof') { return !!p.send; }
   if (key === 'invoice_bank') { return !!(acc && acc.canInvoices); }
+  if (COST_FEED_KEYS.includes(key)) { return !!acc?.canCosts; }
   return false; // a task whose feed items are not built yet
 }
 export function ownerLine(asg, key, me) {
@@ -301,7 +312,8 @@ export function keepLastGoodInvoices(f, lastGood) {
 // Still open; otherwise: could not verify, still needs review.
 export function backVerdict(openedKey, openedTitle, f, ok) {
   var isInvoice = String(openedKey || '').indexOf('invoice_bank:') === 0;
-  var sourceOk = isInvoice ? !!(ok && ok.invoicesOk) : !!(ok && ok.othersOk);
+  var isCost = COST_FEED_KEYS.some(function (key) { return String(openedKey || '').startsWith(key + ':'); });
+  var sourceOk = !!(isInvoice ? ok?.invoicesOk : isCost ? ok?.costsOk : ok?.othersOk);
   if (!sourceOk) { return { openedKey: openedKey, openedTitle: openedTitle || '', unverified: true, openedStillOpen: false }; }
   var there = false; ((f && f.groups) || []).forEach(function (g) { g.items.forEach(function (x) { if (x.key === openedKey) { there = true; } }); });
   return { openedKey: openedKey, openedTitle: openedTitle || '', unverified: false, openedStillOpen: there };

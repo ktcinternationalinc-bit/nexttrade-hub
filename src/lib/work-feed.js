@@ -6,6 +6,9 @@
 // already filtered for this person) and the invoices awaiting bank confirmation (same filter + gate as the home screen's existing card).
 // No new business rule, nothing written.
 
+import { COST_FEED_KEYS } from './profitability-work-feed';
+import { taskOf } from './work-feed-tasks';
+
 // The short line shown next to the Back button on the screen the button opens (the ZN "What to do here" line)
 var TODO = {
   bill_flags: 'Look at the flagged price or amount on this bill and say what is right.',
@@ -85,6 +88,10 @@ export function buildFeed(input) {
         }) });
     }
   }
+  COST_FEED_KEYS.forEach(function (key) {
+    var items = (i.costTasks || []).filter(function (task) { return task.group === key; });
+    if (items.length) { groups.push({ key: key, lane: 'main', area: 'USA Accounting', title: taskOf(key).label, items: items }); }
+  });
   return tally(groups);
 }
 // counts per lane: total / stuck = the main feed only; payTotal / payStuck = 💸 Bills not paid

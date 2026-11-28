@@ -546,7 +546,9 @@ export default function WirePackagesPanel(props) {
     // v55.83-XC — or the confirmation already attached to this wire from 📥 Bank confirmations (the server checks it belongs to this wire)
     var readyPath = sendF.path && sendF.pkgId === det.package.id && (sendF.path.indexOf('pv/wire-' + det.package.id + '-') === 0 || (sendF.file && sendF.file.inbox === true && sendF.path.indexOf('pv/wire-inbox-') === 0));
     (readyPath ? Promise.resolve({ path: sendF.path, name: sendF.file.name }) : upload(sendF.file, det.package.id)).then(function (u) {
-      return act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date, bank_reference: sendF.ref, proof_path: u.path, proof_name: u.name }, '📤 Marked SENT. When the money-out shows in the bank feed, attach it here.');
+      return act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date, bank_reference: sendF.ref, proof_path: u.path, proof_name: u.name }, function (j) {
+        return j.matched ? 'Bank transaction matched and ' + j.bills_paid + ' bill payment(s) recorded.' : 'Marked sent. The Hub will retry the bank match on sync. Review the bank line in Wires if it needs a manual match.';
+      });
     }).catch(function (e) { toast.error((e && e.message) || 'Upload failed.'); setBusy(false); });
   }
   // v55.83-WV (Max 21 Nov: "it should be able to read the pdf or screenshot to update the reference ... and the sent on dates") — the

@@ -67,12 +67,14 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
       {panel('Customer receipts less payments', available ? comparison.receipts.cents : 0, available ? <Records title="Customer receipts from the bank" group={comparison.receipts} visible={visible} onOpenInvoice={onOpenInvoice} /> : null)}
     </div>
     {!available && <p role="status" className="mt-2 text-slate-700">{comparison?.unavailable || status || 'Loading payments…'}</p>}
+    {available && comparison.notice && <p role="status" className="mt-2 text-amber-900">{comparison.notice}</p>}
     {available && <div className="mt-2 space-y-1.5">
       <details className="rounded border border-slate-200 bg-white px-2 py-1.5">
         <summary className="cursor-pointer font-semibold text-blue-900">Bills and expenses paid in both views <span className="float-right tabular-nums">{money(comparison.paid.cents)}</span></summary>
         <div className="my-1.5 space-y-1.5">{!visible && <p className="text-slate-600">Your access includes the totals. Source records require transaction detail access.</p>}{visible && !paidGroups.size && <p className="text-slate-600">No recorded payments in this period.</p>}{Array.from(paidGroups.values()).sort((a, b) => b.cents - a.cents).map(group => <Records key={group.label} title={group.label} group={group} visible={visible} onOpenBill={onOpenBill} />)}</div>
       </details>
       {(comparison.partner_billed.count > 0 || comparison.partner_paid_cents !== 0) && <Records title="Partner fee billed" group={comparison.partner_billed} visible={visible} onOpenBill={onOpenBill}><p className="mb-1.5 text-slate-700">{money(comparison.partner_paid_cents)} paid this period. The paid amount is already included in the shared payment total.</p></Records>}
+      {comparison.partner_schedule?.count > 0 && <Records title="Scheduled NexPac partner fee" group={comparison.partner_schedule} visible={visible} onOpenBill={onOpenBill}><p className="mb-1.5 text-slate-700">$45,250 at each month-end starting June 30, 2026. Open a source bill where one is on file. The schedule shows expected charges and does not add a payment.</p></Records>}
       {(comparison.funding.count > 0 || comparison.funded_paid.count > 0) && <div className="grid gap-1.5 sm:grid-cols-2">
         <Records title="RTM / NextTrade funding activity" group={comparison.funding} visible={visible}><p className="mb-1.5 text-slate-700">These bank transfers are for reconciliation. Both comparisons use the recorded bills and fees.</p></Records>
         <Records title="RTM / NextTrade bills and fees paid" group={comparison.funded_paid} visible={visible} onOpenBill={onOpenBill}><p className="mb-1.5 text-slate-700">{comparison.funded_paid.count ? 'These payments are part of the shared total above.' : 'No bill payments or service fees were recorded through these companies in this period.'}</p></Records>

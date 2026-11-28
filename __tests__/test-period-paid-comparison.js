@@ -5,6 +5,9 @@ require('sucrase/register');
 
 const { buildPaidComparison, combinePaidComparisons } = require('../src/lib/period-paid-comparison');
 const { addPeriodCell, blankPeriodRow } = require('../src/lib/pnl-period');
+const { identifyNexPacFeeLines, nexPacFeeSchedule } = require('../src/lib/partner-fee-months');
+const { applyVendorWirePaymentDates } = require('../src/lib/vendor-wire-payment-dates');
+const { profitabilityWorkItems } = require('../src/lib/profitability-work-feed');
 const PeriodPaidComparison = require('../src/components/PeriodPaidComparison.jsx').default;
 
 const june = { from: '2026-06-01', to: '2026-06-30' };
@@ -71,7 +74,7 @@ assert.equal(juneFunding.funding.cents, 8000000);
 assert.equal(juneFunding.partner_paid_cents, 4525000);
 assert.equal(juneFunding.review.rows[0].id, 'duplicated-partner');
 
-const julyFunding = assemble({ date: july, funds: funding({ applied_rows: [fundedBill('july-portion', 'freight', 4250, { paid_date: '2026-07-03' })] }) });
+const julyFunding = assemble({ date: july, partnerFeeLines: [{ id: 'july-fee', bill_id: '14487', description: 'Operational Fee July 2026', amount: 45250 }], funds: funding({ applied_rows: [fundedBill('july-portion', 'freight', 4250, { paid_date: '2026-07-03' })] }) });
 assert.equal(julyFunding.funding.cents, 0);
 assert.equal(julyFunding.paid.cents, 425000);
 assert.equal(julyFunding.partner_billed.rows[0].bill_id, '14487');
@@ -84,6 +87,33 @@ assert.equal(restricted.paid.cents, 70000);
 assert.ok(!restricted.paid.rows[0].bill_id);
 assert.ok(!restricted.paid.rows[0].bank_ref);
 assert.deepEqual(assemble({ spendingRows: [row('debit', 'rent', 12)], showRows: false }).paid, { cents: 1200, count: 1, rows: [] });
+
+const mixedBill = bill('mixed', 'freight', 50250, '2026-08-02');
+const mixedLines = [{ id: 'line-3', bill_id: mixedBill.id, description: 'Operational Fee July 2026', amount: 45250 }];
+const mixed = assemble({ bills: { ...bills, mixed: mixedBill }, date: { from: '2026-07-01', to: '2026-08-31' }, partnerFeeLines: mixedLines,
+  spendingRows: [row('part-bank', 'freight', 50250, { date: '2026-08-02' })], payments: [pay('all', mixedBill.id, 50250, 'part-bank', { paid_date: '2026-08-02' })] });
+assert.equal(mixed.paid.cents, 5025000);
+assert.equal(mixed.partner_paid_cents, 4525000);
+assert.equal(mixed.partner_billed.cents, 4525000);
+assert.equal(mixed.partner_schedule.cents, 9050000);
+assert.equal(mixed.partner_schedule.rows[0].date, '2026-07-31');
+assert.equal(mixed.partner_schedule.rows[0].bill_id, mixedBill.id);
+assert.match(mixed.partner_schedule.rows[1].source, /source bill missing/);
+assert.deepEqual(nexPacFeeSchedule(identifyNexPacFeeLines({}, []), '2026-11-01', '2026-11-28'), []);
+const proofPay = pay('proof-payment', 'freight', 5000, 'rtm', { method: 'rtm' });
+const proof = { bill_id: 'freight', payment_id: proofPay.id, rtm_file_id: 'proof', rtm_confirmed_at: '2026-07-04', rtm_paid_date: '2026-07-03', is_open: false };
+assert.equal(applyVendorWirePaymentDates([proofPay], [proof])[0].paid_date, '2026-07-03');
+assert.equal(applyVendorWirePaymentDates([proofPay], [{ ...proof, bill_id: 'different' }])[0].paid_date, '2026-06-30');
+assert.equal(applyVendorWirePaymentDates([{ ...proofPay, voided: true }], [proof])[0].paid_date, '2026-06-30');
+
+const cell = { invoice_date: '2026-06-24', invoice: 'America 1747', release: '1002-1158', description: 'Stock PVC Rolls BY KGs', goods_profit: null, profit: null, transport_profit: null, transport_revenue: null, pounds: null, trucking_cost: 0, freight_cost: 0 };
+const supplierCell = { ...cell, invoice: 'AMERICA 1746', description: 'Miatex Goods', pounds: 100, transport_revenue: 100, transport_profit: 100, base_cost: null };
+const tasks = profitabilityWorkItems([cell, supplierCell, supplierCell]);
+assert.equal(tasks.length, 2);
+assert.equal(tasks.find(task => task.group === 'supplier_costs_missing').detail, 'Jun 2026 · 2 sale lines');
+const shippingTask = tasks.find(task => task.group === 'shipment_costs_missing');
+assert.match(shippingTask.issue, /also blocks the shipping calculation/);
+assert.deepEqual(shippingTask.target, { kind: 'profitability', month: '2026-06', task: 'pounds:Stock PVC Rolls BY KGs' });
 
 const period = blankPeriodRow('2026-06', 'Jun 2026');
 addPeriodCell(period, { goods_revenue: 247989.25, goods_profit: 98316.74, transport_revenue: 59524.25, transport_profit: 4409 });

@@ -88,6 +88,7 @@ var UNIT_WORDS = { lb: 'pounds', kg: 'kilograms', t: 'tons', yd: 'yards', lm: 'l
 var COLS = [['goods_revenue', 'Goods revenue'], ['transport_revenue', 'Transport charged'], ['base_cost', 'Goods cost'], ['commission', 'Commission'], ['inbound_allowance', 'Inbound allowance'], ['outbound_cost', 'Outbound transport'], ['bonded', 'Bonded / brokerage']];
 
 export default function ProfitabilityTab(props) {
+  var feedTask = props.deepLink?.profitabilityTask;
   var userProfile = props.userProfile;
   var toast = props.toast || { success: function () {}, error: function () {} };
   var s1 = useState('2026-06-01'); var from = s1[0]; var setFrom = s1[1];
@@ -95,7 +96,7 @@ export default function ProfitabilityTab(props) {
   var s3 = useState(null); var data = s3[0]; var setData = s3[1];
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
   var sEF = useState(true); var onlyDiff = sEF[0]; var setOnlyDiff = sEF[1]; // v55.83-TG — Estimate vs Final: show only differences
-  var s5 = useState('product'); var view = s5[0]; var setView = s5[1];
+  var s5 = useState(feedTask ? 'period' : 'product'); var view = s5[0]; var setView = s5[1];
   // v55.83-VG (Max, Nov 19: "need a search on this page" · "click on the view invoice and see a copy of the invoice and edit it from there")
   var sQ = useState(''); var searchQ = sQ[0]; var setSearchQ = sQ[1];
   var sPk = useState(null); var peekId = sPk[0]; var setPeekId = sPk[1];
@@ -135,7 +136,7 @@ export default function ProfitabilityTab(props) {
   var fullBtn = useRef(null);
   useEffect(function () { if (fullBtn.current) { try { fullBtn.current.focus(); } catch (eF) {} } if (!full) { return undefined; } var prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return function () { document.body.style.overflow = prev; }; }, [full]);
   var s16 = useState('month'); var pGran = s16[0]; var setPGran = s16[1]; // v55.83-TN — P&L by period: week / month / quarter / year
-  var s18 = useState(null); var pOpen = s18[0]; var setPOpen = s18[1];
+  var s18 = useState(feedTask?.month || null); var pOpen = s18[0]; var setPOpen = s18[1];
   var s17 = useState('all'); var pPre = s17[0]; var setPPre = s17[1]; // v55.83-TN — release prefix: all / 1001 / 1002 / 1003 / other
   // v55.83-VQ (Max, Nov 19: "where are the rest of the columns and the total final pnl per month") — each period's expenses come from
   // the Income Statement (period_stats), asked for exactly the days of that period that are INSIDE this report. The rules of what is
@@ -358,6 +359,14 @@ export default function ProfitabilityTab(props) {
     return runReportLoad({ seqRef: loadSeq, call: call, setRefresh: setRefresh, setBusy: setBusy, setData: setData, setApplied: setApplied, toastError: function (m) { toast.error(m); } }, f === undefined ? from : f, t === undefined ? to : t);
   }
   useEffect(function () { load('2026-06-01', ''); }, []);
+  var feedTaskOpened = useRef(false);
+  useEffect(function () {
+    if (!feedTask || !data || feedTaskOpened.current || view !== 'period' || pOpen !== feedTask.month) { return; }
+    feedTaskOpened.current = true;
+    var taskRow = Array.from(document.querySelectorAll('[data-task-key]')).find(function (el) { return el.getAttribute('data-task-key') === feedTask.task; });
+    if (taskRow) { taskRow.scrollIntoView({ block: 'center' }); markEl(taskRow); }
+    else { document.getElementById('nt-fix-list')?.scrollIntoView({ block: 'start' }); }
+  }, [data, feedTask, pOpen, view]);
   function act(payload, okMsg) {
     setBusy(true);
     return call(payload).then(function (j) {

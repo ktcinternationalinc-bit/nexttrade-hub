@@ -900,7 +900,9 @@ export async function POST(req) {
       } catch (eRk) { rdKeep = null; }
       await audit(db, userId, 'wire_package_sent', 'wire_package', pkg.id, { total: P.live.total, sent_date: body.sent_date, bank_reference: refT, proof: pathT, wire_date: pkg.planned_send_date || null,
         server_read: rdKeep, date_as_read: rdKeep && rdKeep.sent_date ? rdKeep.sent_date === String(body.sent_date) : null, reference_as_read: rdKeep && rdKeep.reference ? rdKeep.reference === refT : null });
-      return NextResponse.json({ ok: true });
+      var sentMatch = await autoMatchSentWires(db, { packageId: pkg.id, actorId: userId, budgetMs: 6000 });
+      var match = sentMatch.matched[0];
+      return NextResponse.json({ ok: true, matched: !!match, bills_paid: match ? match.bills_paid : 0 });
     }
 
     // ── bank lines that could be this wire: money out, same amount, around the sent date, not used yet
@@ -1042,6 +1044,7 @@ export async function POST(req) {
       var mineIds = P.rawLines.map(function (l) { return l.id; });
       if (!lineIds.length || lineIds.some(function (x) { return mineIds.indexOf(x) < 0; })) { return fail('Tick the bills this proof covers.'); }
       if (!isDate(body.paid_date)) { return fail('The date RTM paid is required.'); }
+      if (body.paid_date > businessToday()) { return fail('The vendor payment date cannot be in the future.'); }
       var pathQ = String(body.proof_path || '');
       if (pathQ.indexOf('pv/wire-') !== 0) { return fail("Attach RTM's proof (PDF or screenshot)."); }
       var fQ = await db.from('wire_package_files').insert({ package_id: pkg.id, kind: 'rtm_proof', path: pathQ, file_name: String(body.proof_name || '').substring(0, 120) || null, uploaded_by: userId }).select('id').single();

@@ -96,10 +96,10 @@ console.log('RZ — bills go OPEN → READY → SENT → PAID; the Hub finds the
     db.t.bank_transactions.filter(function (t) { return t.id === bt1.id; })[0].classification === 'prof_fees' && hist('bank_line_filed_professional_fees').length === 1);
   // ── 4. a wire straight to a vendor + a $25 extra charge (Max: "2 yes"; 16:37: it goes toward the bill, not a bank fee)
   var W2 = await wireFor('vendor', 'Trinity Logistics', [{ bill_id: V1, amount: 1000 }]);
-  await approve(W2); await send(W2, '2026-11-09');
+  await approve(W2);
   bankLine('2026-11-11', 1025, 'WIRE OUT TRINITY + FEE');
-  var m2 = await call(wires, 'u1', { action: 'match_now', id: W2 });
-  check('4a: the bank line is $25 more (extra charge) → still matched by itself; the extra is kept on the wire', m2.ok && m2.matched && pkg(W2).status === 'attached' && pkg(W2).bank_fee === 25 && (await billRow(V1)).status === 'PAID', { m2: m2, fee: pkg(W2).bank_fee });
+  var m2 = await send(W2, '2026-11-09');
+  check('4a: marking sent immediately matches the existing bank line, records the extra on the wire, and settles the bill', m2.ok && m2.matched && m2.bills_paid === 1 && pkg(W2).status === 'attached' && pkg(W2).bank_fee === 25 && (await billRow(V1)).status === 'PAID', { m2: m2, fee: pkg(W2).bank_fee });
   check('4b: the payment is the bill amount ($1,000), not the bank amount; a vendor wire’s bank line is NOT filed as professional fees', paysOf(V1).length === 1 && paysOf(V1)[0].amount === 1000 && paysOf(V1)[0].method === 'wire' && hist('bank_line_filed_professional_fees').length === 1);
   // ── 5. two bank lines fit → the Hub never guesses
   var W3 = await wireFor('vendor', 'AMB Logistic', [{ bill_id: V2, amount: 500 }]);

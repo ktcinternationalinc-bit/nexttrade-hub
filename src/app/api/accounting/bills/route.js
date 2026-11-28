@@ -12,6 +12,8 @@
 import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess, payrollBillsNote, payrollLinesNote, SPENDING_WITHHELD } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { buildPaidThroughBlocks, uniquePaidThroughBankRows } from '../../../../lib/paid-through-blocks';
 import { buildPaidComparison } from '../../../../lib/period-paid-comparison';
+import { NEXPAC_FEE_CENTS } from '../../../../lib/partner-fee-months';
+import { applyVendorWirePaymentDates } from '../../../../lib/vendor-wire-payment-dates';
 import { fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
 import { loadPartyFunds, isMissingOpeningsTable, openingsUnavailable } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
 // v55.83-WF step C — periodAdjustments (the TX tax adjustments) is no longer used here: a transfer to RTM / NextTrade counts once, in full
@@ -1943,6 +1945,16 @@ export async function POST(req) {
       });
       // Bills side
       var LS = await loadBills(db);
+      var liveRtmPayments = (LS.pays || []).filter(function (p) { return p.method === 'rtm' && p.voided !== true; });
+      var vendorProofUnavailable = false;
+      if (liveRtmPayments.length) {
+        try {
+          var proofLines = await fetchAll(function () { return db.from('wire_package_lines').select('id,package_id,bill_id,payment_id,is_open,rtm_paid_date,rtm_file_id,rtm_confirmed_at').not('rtm_file_id', 'is', null).order('id'); });
+          var activeProofPackages = await fetchAll(function () { return db.from('wire_packages').select('id').eq('status', 'attached').order('id'); });
+          var activeProofIds = new Set(activeProofPackages.map(function (pkg) { return pkg.id; }));
+          LS.pays = applyVendorWirePaymentDates(LS.pays || [], proofLines.filter(function (line) { return activeProofIds.has(line.package_id); }));
+        } catch (eVendorProof) { vendorProofUnavailable = true; }
+      }
       var allB = decorate(LS.bills, LS.pays, LS.credits);
       var billed = 0, billCount = 0, billsOpen = 0, billsDisputed = 0;
       var rowsBilled = []; var rowsOpenBills = []; var rowsBillsPaid = [];
@@ -2312,13 +2324,17 @@ export async function POST(req) {
           try {
             if (!comparisonCategoriesOK) { paidComparison = { unavailable: 'Payment categories could not be loaded.' }; }
             else if (mbUnavailable || advNote) { paidComparison = { unavailable: 'The funding ledger could not be read completely.' }; }
-            else { paidComparison = buildPaidComparison({
+            else { var partnerFeeLines = await fetchAll(function () { return db.from('vendor_bill_lines').select('id,bill_id,description,amount').eq('amount', NEXPAC_FEE_CENTS / 100).order('id'); });
+              paidComparison = buildPaidComparison({
               bills: billNameById, payments: xoPays, customerPayments: paysP.filter(function (payment) { return !isPaymentVoid(payment) && usInv[payment.accounting_invoice_id]; }),
-              spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: spTx,
+              spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: spTx, partnerFeeLines: partnerFeeLines,
               funds: partyFunds, labels: catLabels, kinds: catKinds, from: pFrom, to: pTo,
               privateBills: callerIsSuper ? {} : payZD.pay.ids, showRows: canRows
             }); }
           } catch (compareError) { paidComparison = { unavailable: 'The payment breakdown could not be reconciled.' }; }
+          if (vendorProofUnavailable && paidComparison && !paidComparison.unavailable) {
+            paidComparison.notice = 'Vendor confirmation dates could not be read. These payments use their recorded Hub dates.';
+          }
         }
       } catch (eSp) { spend = null; }
       if (xoStop) { return NextResponse.json({ ok: false, unavailable: 'starting_balances', error: 'Could not read ' + xoStop + '. Nothing is shown, so no tax total, P&L or accountant pack is built without them. Try again in a moment.' }, { status: 503 }); }

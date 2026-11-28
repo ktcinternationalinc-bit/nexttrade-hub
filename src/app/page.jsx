@@ -486,6 +486,7 @@ function HubApp() {
     setAcctReturn({ tab: 'dashboard', y: y0, label: 'your work feed', note: todo });
     if (target.kind === 'bill') { setAcctDeepLink({ sub: 'bills', bill: { id: target.id, bill_number: target.bill_number || '', title: target.title || '', section: target.section || '' } }); }
     else if (target.kind === 'wire') { setAcctDeepLink({ sub: 'wires', wire: { id: target.id } }); }
+    else if (target.kind === 'profitability') { setAcctDeepLink({ sub: 'profitability', profitabilityTask: { month: target.month, task: target.task } }); }
     else { setAcctDeepLink({ sub: target.sub || 'waiting' }); }
     setTab('accounting');
   };

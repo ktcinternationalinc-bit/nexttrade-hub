@@ -32,6 +32,7 @@ import { privateScope } from '../../../../lib/private-accounts-server'; // v55.8
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { keepYardsPreview } from '../../../../lib/keep-yards-preview'; // v55.83-VX — keep in yards: before / after
 import { loadProfitabilityInput } from '../../../../lib/profitability-load-server'; // v55.83-UD — shared with the P&L
+import { profitabilityWorkItems } from '../../../../lib/profitability-work-feed';
 
 var API_BUILD_MARKER = 'v55.83-SY-profitability';
 var PAGE = 1000; var MAX_ROWS = 40000;
@@ -102,12 +103,19 @@ export async function POST(req) {
     var REV_ONLY = { customer_balances: 1, set_terms: 1, set_customer_basis: 1 }; // customer money, or a write of a revenue-side setting
     if (!rs.canSee && REV_ONLY[action]) { return bad(REVENUE_REFUSAL + (action === 'customer_balances' ? '' : ' Pricing basis and the transportation inside the price change revenue — nothing was saved.'), 403); }
 
-    if (action === 'report') {
+    if (action === 'report' || action === 'cost_work_feed') {
+      if (action === 'cost_work_feed') {
+        var costFeedGrant = await assertPermission(db, userId, 'pnl.edit_costs', req);
+        var marginFeedGrant = await assertPermission(db, userId, MARGIN_PERMISSION, req);
+        if (!rs.canSee || !costFeedGrant.ok || !marginFeedGrant.ok) { return bad('Profitability cost tasks need permission to view margins and edit costs.', 403); }
+      }
       // v55.83-UD — the data is loaded by the shared loader (the P&L uses the very same one), unchanged from before
       var ld = await loadProfitabilityInput(db);
       if (ld.setup_needed) { return NextResponse.json({ ok: true, setup_needed: true, setup_message: SQL_HINT, api_build_marker: API_BUILD_MARKER }); }
       var billsNote = ld.billsNote; var whNote = ld.whNote;
+      if (action === 'cost_work_feed' && (billsNote || whNote)) { return bad('Some supplier or shipping cost sources could not be loaded. Existing tasks stay open until the source can be verified.', 503); }
       var out = projectForWindow(assembleProfitability(Object.assign({ date_from: body.date_from || null, date_to: body.date_to || null }, ld.input)), vwin.floor);
+      if (action === 'cost_work_feed') { return NextResponse.json({ ok: true, tasks: profitabilityWorkItems(out.cells || []) }); }
       var canEdit = await assertPermission(db, userId, 'pnl.edit_costs', req);
       // v55.83-TG (Max) — profit / margin only for people with 'P&L: See profit & margin' (super admin always)
       var seeM = await assertPermission(db, userId, MARGIN_PERMISSION, req); var marginOk = !!(seeM && seeM.ok === true);
