@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { endOfMonth } from '../lib/companies';
+import { expandNextradeSplit } from '../lib/nextrade-bill-splits';
 import { TransactionDetail } from './NextradeTaxReport';
 
 const amountFormat = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -23,7 +24,7 @@ export function periodAmount(row, months) {
 
 export function totalsTransactions(lines, categories, selection) {
   const labels = new Map(categories.map(category => [category.key, category.label]));
-  return lines.filter(line => line.date && line.date >= selection.from && line.date <= selection.to &&
+  return lines.flatMap(expandNextradeSplit).filter(line => line.date && line.date >= selection.from && line.date <= selection.to &&
     line.pending !== true && !line.payroll_restricted &&
     (selection.category === null || (line.company_category || '__none') === selection.category)).map(line => ({
     id: line.id,
@@ -36,6 +37,7 @@ export function totalsTransactions(lines, categories, selection) {
     direction: line.direction,
     amount: Math.round((Number(line.amount_abs) || 0) * 100),
     paired_transfer: !!line.transfer_group_id,
+    split_category: line.split_category,
   }));
 }
 

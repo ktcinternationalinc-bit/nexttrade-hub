@@ -34,7 +34,8 @@ const bills = Object.fromEntries([
 const row = (id, category, amount, extra) => ({ id, category, amount, date: '2026-06-30', who: id, ...extra });
 const pay = (id, bill_id, amount, bank_transaction_id, extra) => ({ id, bill_id, amount, bank_transaction_id, paid_date: '2026-06-30', ...extra });
 const funding = (period, extra) => [{ party: 'RTM Capital', period, ...extra }];
-const banks = rows => rows.map(r => ({ id: r.id, name: r.who, iso_currency: r.iso_currency, matched_invoice_id: r.invoice_id, account_subtype: r.account_subtype }));
+const banks = rows => rows.map(r => ({ id: r.id, name: r.who, iso_currency: r.iso_currency, matched_invoice_id: r.invoice_id,
+  account_subtype: r.account_subtype, account_label: r.account_label, is_credit_card: r.is_credit_card }));
 function assemble({ spendingRows = [], incomeRows = [], payments = [], funds = [], date = june, ...options } = {}) {
   return buildPaidComparison({ ...date, bills, bankLines: banks(spendingRows.concat(incomeRows)), payments, spendingRows, incomeRows, funds,
     labels: { partner_fees: 'Partner Fees', payroll: 'Payroll', trucking: 'Trucking', freight: 'Freight' },
@@ -330,8 +331,19 @@ const splitTaxes = assemble({
 const taxHtml = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], invoiceRows: [], comparison: splitTaxes }));
 assert.match(taxHtml, /<span>Taxes<\/span><span[^>]*>\$69,307\.64/);
 assert.match(taxHtml, /<span>General Taxes<\/span><span[^>]*>\$53,880\.82/);
-assert.match(taxHtml, /<span>Payroll Taxes<\/span><span[^>]*>\$15,426\.82<span[^>]*> \(NextTrade\)/);
+assert.match(taxHtml, /<span>Taxes<\/span><span[^>]*>\$69,307\.64<span[^>]*>\$15,426\.82 \(NextTrade\)/);
+assert.match(taxHtml, /<span>Payroll Taxes<\/span><span[^>]*>\$15,426\.82<span[^>]*>\$15,426\.82 \(NextTrade\)/);
 assert.match(taxHtml, /Payroll tax payment \(NextTrade\)/);
+const screenshotCard = { account_label: 'KTC card •3774', is_credit_card: true };
+const cardActivity = assemble({
+  spendingRows: [row('Rsc', 'bond', 750, screenshotCard), row('First American Home Warranty', 'insurance', 94.13, screenshotCard),
+    row('Hiro Asian Bistro', 'food_entertainment', 45.41, screenshotCard), row("BJ’s Wholesale Club", '', 16.83, screenshotCard)],
+  labels: { bond: 'Bond', insurance: 'Insurance', food_entertainment: 'Food & Entertainment' },
+});
+assert.deepEqual(cardActivity.combined_expenses.rows.map(row => [row.category, row.cents, row.credit_card]),
+  [['bond', 75000, true], ['insurance', 9413, true], ['food_entertainment', 4541, true], ['uncategorized', 1683, true]]);
+const cardHtml = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], invoiceRows: [], comparison: cardActivity }));
+assert.match(cardHtml, /Rsc<\/div><div[^>]*>KTC card •3774 · Credit card/);
 assert.doesNotMatch(reconciledJune, /NextTrade charges incurred for KTC · reference/);
 assert.match(reconciledJune, /Customer payment[\s\S]*?misclassified-debit[\s\S]*?Money out is categorized as Customer payment/);
 assert.match(reconciledJune, /style="color:#991b1b">-\$4,144\.00<\/td>/);

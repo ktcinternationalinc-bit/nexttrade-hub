@@ -52,17 +52,19 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     const label = labels[category] || row.label;
     const source = 'NextTrade expense · transaction date';
     if (privateBills[row.bill_id] || row.payroll && !showPayrollDetails) return { date: row.date, cents: row.cents, category, label, kind: row.kind, source, source_company: 'NextTrade' };
-    return { ...row, category, label, source, source_company: 'NextTrade', nextrade_transaction_id: row.id, ...(isActive(bill) ? { ref: bill.bill_number, bill_date: bill.bill_date,
+    return { ...row, category, label, source, source_company: 'NextTrade', nextrade_transaction_id: row.source_transaction_id || row.id, ...(isActive(bill) ? { ref: bill.bill_number, bill_date: bill.bill_date,
       bill_total_cents: cents(bill.total_amount), attachment_path: bill.attachment_path } : { bill_id: undefined }) };
   });
 
   function billRow(bill, date, amount, source, id, bank) {
     const category = categoryOf(bill);
-    const row = { id, date, cents: amount, category, label: labelFor(category), source, bank_ref: bank ? bank.name || bank.merchant_name : null };
+    const row = { id, date, cents: amount, category, label: labelFor(category), source, bank_ref: bank ? bank.name || bank.merchant_name : null,
+      account_label: bank?.account_label, credit_card: bank?.is_credit_card || bank?.account_subtype === 'credit card' };
     if (privateBills[bill.id]) return { ...row, label: 'Payroll', who: 'Payroll bill · details restricted', bank_ref: null };
     const nexttrade = nextradeByBill.get(bill.id);
     return { ...row, who: bill.vendor_name, ref: bill.bill_number, bill_id: bill.id, bill_category: bill.category || null, bill_date: bill.bill_date,
-      ...(nexttrade && (showPayrollDetails || !nexttrade.payroll) ? { nextrade_transaction_id: nexttrade.id, nextrade_category: nexttrade.nextrade_category } : {}),
+      ...(nexttrade && (showPayrollDetails || !nexttrade.payroll) ? { nextrade_transaction_id: nexttrade.source_transaction_id || nexttrade.id,
+        nextrade_category: nexttrade.nextrade_category, split_category: nexttrade.split_category } : {}),
       release: bill.release_number, bill_total_cents: cents(bill.total_amount), attachment_path: bill.attachment_path };
   }
 
@@ -201,7 +203,8 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     const bank = banks.get(row.id);
     if (!bank || !isUSD(bank.iso_currency) || row.paired) return;
     const amount = cents(row.amount);
-    const base = { id: row.id, date: row.date, cents: amount, who: row.who, category: row.category, label: labelFor(row.category), source: 'Bank transaction' };
+    const base = { id: row.id, date: row.date, cents: amount, who: row.who, category: row.category, label: labelFor(row.category), source: 'Bank transaction',
+      account_label: bank.account_label, credit_card: bank.is_credit_card || bank.account_subtype === 'credit card' };
     if (row.funds_sent_to || row.money_back_from) {
       funding.push({ ...base, label: row.funds_sent_to || row.money_back_from, source: row.money_back_from ? 'Funding returned' : 'Funds sent' });
       eligibleBankIds.add(row.id);
@@ -213,7 +216,7 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     const incomeCategory = kind === 'income' || kind === 'other_income';
     const reviewReason = needsCategory ? 'Needs an expense category' : incomeCategory ? 'Money out is categorized as ' + base.label : null;
     const savedCategory = bank.classification || row.category;
-    const bankExpense = { ...base, bank_category: savedCategory || '', bank_edit: !row.money_in, credit_card: bank.account_subtype === 'credit card' };
+    const bankExpense = { ...base, bank_category: savedCategory || '', bank_edit: !row.money_in };
     // Cash uses the posting and saved bank category once. Bill allocations are used only for Expenses Paid.
     const cashCategory = row.money_in ? row.category : savedCategory;
     bankExpenses.push({ ...bankExpense, category: cashCategory || 'uncategorized',
@@ -261,6 +264,7 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     if (!bank || !isUSD(bank.iso_currency) || row.paired || row.returned_deposit || row.money_back_from || row.category === 'transfer') return;
     const linked = recordedReceipts.get(row.id);
     const record = { id: row.id, date: row.date, who: row.who, cents: cents(row.amount), category: row.category, label: labelFor(row.category),
+      account_label: bank.account_label, credit_card: bank.is_credit_card || bank.account_subtype === 'credit card',
       bank_category: bank.classification || '', bank_edit: !bank.matched_invoice_id && !linked, direction: 'in',
       invoice_id: bank.matched_invoice_id || (linked?.invoices.size === 1 ? Array.from(linked.invoices)[0] : null) };
     if (row.category === 'customer_payment') {

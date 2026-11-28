@@ -15,6 +15,8 @@ import { ALL_KEYWORDS_MATCH, PHRASE_MATCH, parseRuleMatch, ruleMatchLabel } from
 import { NEXTRADE_SOURCE_LABELS } from '../lib/nextrade-tax-report';
 import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
 import { notifyKtcExpensesChanged } from '../lib/expense-report-events';
+import { canSplitInto } from '../lib/nextrade-bill-splits';
+import NextradeBillSplitEditor from './NextradeBillSplitEditor';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function iso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
@@ -190,6 +192,17 @@ export default function CompanyBooksTab(props) {
       setLines(current => current?.map(row => row.id === line.id ? { ...row, ktc_pnl_excluded: result.excluded } : row));
       notifyKtcExpensesChanged(line.date);
       toast.success(result.excluded ? 'Excluded from KTC P&L.' : 'Included in KTC P&L.');
+    } finally { setBusy(false); }
+  }
+  async function saveBillSplit(line, allocations) {
+    setBusy(true);
+    try {
+      const result = await api({ action: 'save_bill_split', transaction_id: line.id, revision: line.bill_split_revision || 0, allocations });
+      if (!result.ok) { toast.error(result.error || 'The bill split could not be saved.'); return; }
+      setRowPanel(null);
+      notifyKtcExpensesChanged(line.date);
+      toast.success(allocations.length ? 'Bill category split saved.' : 'Bill category split removed.');
+      await loadLines();
     } finally { setBusy(false); }
   }
   function openKtcCategory(nextradeKey) {
@@ -376,11 +389,19 @@ export default function CompanyBooksTab(props) {
               <td className="p-1">
                 {l.transfer_group_id
                   ? <span className="text-[12px] font-bold" style={{ color: '#1e40af' }}>↔ {(catByKey[l.company_category] || {}).label || 'Transfer'}{l.transfer_with ? <span className="font-normal" style={{ color: '#334155' }}> · {l.transfer_with.private ? 'with a private account' : 'with ' + l.transfer_with.account_label + ', ' + l.transfer_with.date}</span> : null}{canManage ? <button onClick={function () { unpair(l); }} disabled={busy} className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#991b1b' }}>Unpair</button> : null}</span>
+                  : l.category_split?.length ? <div className="space-y-0.5">
+                      {l.category_split.map(part => <div key={part.category}>{(catByKey[part.category] || {}).label || part.category} · {'$' + fmt(part.cents / 100)}
+                        {part.include_ktc === false && <span className="text-[10px]"> · Excluded from KTC P&amp;L</span>}</div>)}
+                    </div>
                   : canManage
                     ? <span className="inline-flex items-center gap-1"><select className={inp} style={inpS} value={l.company_category || ''} disabled={busy || l.pending === true} onChange={function (e) { if (e.target.value === '__new') { setRowPanel({ id: l.id, mode: 'newcat', label: '', direction: l.direction, kind: l.direction === 'in' ? 'income' : 'expense', is_payroll: false }); return; } setCategory([l.id], e.target.value || null); }}><option value="">— not categorized —</option>{catsFor(l).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}<option value="__new">➕ New category…</option></select>
                       <button onClick={function () { openTransfer(l, false, ''); }} disabled={busy} title="This is money moving between two of the company's own accounts (or paying its credit card): find the other side and pair them as ONE transfer — never income or spending" className="px-1.5 py-0.5 rounded text-[11px] font-bold" style={{ background: '#dbeafe', color: '#1e40af' }}>↔</button></span>
                     : ((catByKey[l.company_category] || {}).label || '—')}
-                {l.company_category_source === 'rule' ? <span className="ml-1 text-[9px]" style={{ color: '#6d28d9' }}>📏 rule</span> : null}</td>
+                {l.company_category_source === 'rule' ? <span className="ml-1 text-[9px]" style={{ color: '#6d28d9' }}>📏 rule</span> : null}
+                {comp.key === 'nextrade' && canManage && l.ktc_bill && !l.payroll_restricted && !l.pending && !l.transfer_group_id &&
+                  l.direction === 'out' && (l.bill_split_stale || l.category_split?.length || canSplitInto(catByKey[l.company_category])) &&
+                  <button type="button" disabled={busy} className="block text-[11px] font-bold underline" style={{ color: '#1d4ed8' }}
+                    onClick={() => setRowPanel({ id: l.id, mode: 'bill_split' })}>{l.category_split?.length || l.bill_split_stale ? 'Edit split' : 'Split categories'}</button>}</td>
               {comp.key === 'nextrade' && <td className="p-1 text-[10px]">{l.ktc_bill ? KTC_BILL_WORDS[l.ktc_bill.mode] || '' : ''}
                 {l.ktc_bill && l.company_category ? (canManage
                   ? <select aria-label="KTC category mapping" className={inp + ' ml-1'} style={Object.assign({}, inpS, ktc.map[l.company_category] ? {} : { borderColor: '#d97706', background: '#fffbeb' })} disabled={busy} value={ktc.map[l.company_category] || ''} title="KTC category shared by bills that follow this Nextrade category’s mapping." onChange={function (e) { pickKtcCategory(l.company_category, e.target.value); }}>
@@ -395,6 +416,8 @@ export default function CompanyBooksTab(props) {
                   : <div className="mt-1 text-[11px]">{l.ktc_pnl_excluded ? 'Excluded from KTC P&L' : 'Included in KTC P&L'}</div>)}</td>}
             </tr>
             {ruleForm && ruleForm.lineId === l.id && <tr><td colSpan={comp.key === 'nextrade' ? 7 : 6} className="p-2">{renderRuleForm()}</td></tr>}
+            {panel?.mode === 'bill_split' && <tr><td colSpan={7} className="p-2"><NextradeBillSplitEditor line={l} categories={cats} busy={busy}
+              onSave={allocations => saveBillSplit(l, allocations)} onCancel={() => setRowPanel(null)} /></td></tr>}
             {panel && panel.mode === 'newcat' && <tr><td colSpan={comp.key === 'nextrade' ? 7 : 6} className="p-2" style={{ background: '#f8fafc' }}>
               <div className="flex gap-2 items-center flex-wrap">
                 <span className="text-[11px] font-extrabold">➕ New category for this line:</span>

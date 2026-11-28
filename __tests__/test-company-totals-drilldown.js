@@ -5,6 +5,8 @@ const { renderToStaticMarkup } = require('react-dom/server');
 const { companyTotals } = require('../src/lib/companies');
 const { default: CompanyTotalsReport, periodAmount, totalsPeriod, totalsTransactions } = require('../src/components/CompanyTotalsReport');
 const { TransactionDetail } = require('../src/components/NextradeTaxReport');
+const NextradeBillSplitEditor = require('../src/components/NextradeBillSplitEditor').default;
+const { activeSplit, billSplitCents, expandNextradeSplit } = require('../src/lib/nextrade-bill-splits');
 
 const categories = [
   { key: 'taxes', label: 'Taxes', kind: 'expense' },
@@ -68,4 +70,22 @@ const details = renderToStaticMarkup(React.createElement(TransactionDetail, {
 assert.match(details, /Transaction date/);
 assert.match(details, /Category for tax expense on 2026-06-15/);
 assert.match(details, /color:#991b1b">-13\.88/);
+const splitParts = [{ category: 'taxes', cents: 3000, include_ktc: true }, { category: 'utilities', cents: 1500, include_ktc: false }];
+const splitSource = line('split', '2026-06-17', 'out', 45, 'taxes', { category_split: splitParts });
+assert.equal(billSplitCents('45.00'), 4500);
+assert.equal(billSplitCents('45.001'), 0);
+assert.equal(activeSplit(splitSource, { bill_id: 'bill-a', allocations: splitParts }, 'bill-a'), splitParts);
+assert.deepEqual(activeSplit(splitSource, { bill_id: 'bill-a', allocations: splitParts }, 'different-bill'), []);
+assert.deepEqual(expandNextradeSplit(splitSource).map(part => [part.company_category, part.amount_abs, part.split_include_ktc]), [
+  ['taxes', 30, true], ['utilities', 15, false],
+]);
+assert.equal(totalsTransactions([splitSource], categories, selection)[0].amount, 3000);
+const freshEditor = renderToStaticMarkup(React.createElement(NextradeBillSplitEditor, {
+  line: { ...splitSource, category_split: [] }, categories: categories.map(category => ({ ...category, active: true })),
+}));
+assert.equal((freshEditor.match(/checked=""/g) || []).length, 2);
+const savedEditor = renderToStaticMarkup(React.createElement(NextradeBillSplitEditor, {
+  line: splitSource, categories: categories.map(category => ({ ...category, active: true })),
+}));
+assert.equal((savedEditor.match(/checked=""/g) || []).length, 1);
 console.log('Company totals drill-down scopes, category changes, transfers, and negative amounts passed.');

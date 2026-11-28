@@ -33,9 +33,9 @@ export function groupNextradeBills(rows, catLabelOf) {
   (rows || []).forEach(function (r) {
     // v55.83-ZD — every payroll bill (marked by the server with its reasons, for the super admin only) is in ONE "Payroll" group
     var isPay = !!(r && Array.isArray(r.payroll_reasons) && r.payroll_reasons.length);
-    var k = isPay ? '__payroll' : String((r && r.bill && r.bill.category) || '');
+    var k = isPay ? '__payroll' : r?.category_split?.length ? '__split' : String((r && r.bill && r.bill.category) || '');
     var g = by[k];
-    if (!g) { g = by[k] = { key: k, label: isPay ? 'Payroll' : (k ? (labels[k] || k.replace(/_/g, ' ')) : NO_CATEGORY_LABEL), payroll: isPay || undefined, rows: [], count: 0, owed_count: 0, owed_cents: 0, hidden: 0 }; order.push(k); }
+    if (!g) { g = by[k] = { key: k, label: isPay ? 'Payroll' : k === '__split' ? 'Split categories' : (k ? (labels[k] || k.replace(/_/g, ' ')) : NO_CATEGORY_LABEL), payroll: isPay || undefined, rows: [], count: 0, owed_count: 0, owed_cents: 0, hidden: 0 }; order.push(k); }
     g.rows.push(r); g.count += 1;
     var st = nextradeRowState(r);
     if (st === 'owed') { g.owed_count += 1; }

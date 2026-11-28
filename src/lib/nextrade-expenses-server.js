@@ -2,6 +2,7 @@ import { isExpenseKind, NEXTRADE_COMPANY_ID } from './companies';
 import { wantsBill } from './nextrade-bills-server';
 import { dropPrivate } from './private-accounts-server';
 import { MANAGED_REMITTANCE } from './nextrade-managed-sales';
+import { activeSplit, expandNextradeSplit, NEXTRADE_BILL_SPLITS } from './nextrade-bill-splits';
 
 export const NEXTRADE_KTC_PNL_FROM = '2026-06-01';
 export const NEXTRADE_KTC_PNL_EXCLUSIONS = 'nextrade_ktc_pnl_exclusions';
@@ -36,7 +37,7 @@ export function nextradeExpenseCategory(category, mappings, ktcCategories) {
 // reimbursement can settle a charge even when the original month is closed.
 export async function loadNextradeExpenses(db, fetchAll, privateAccounts) {
   const company = NEXTRADE_COMPANY_ID;
-  const [transactions, categories, mappings, links, classification, exclusions] = await Promise.all([
+  const [transactions, categories, mappings, links, classification, exclusions, splits] = await Promise.all([
     fetchAll(() => db.from('bank_transactions').select('id,date,posted_date,account_id,account_subtype,amount_abs,iso_currency,direction,name,merchant_name,company_category,transfer_group_id,review_status,pending')
       .eq('wave_business_id', company).eq('direction', 'out').gte('date', NEXTRADE_KTC_PNL_FROM).order('id')),
     fetchAll(() => db.from('company_categories').select('key,label,kind,is_payroll,makes_ktc_bill').eq('company_id', company).order('key')),
@@ -44,20 +45,28 @@ export async function loadNextradeExpenses(db, fetchAll, privateAccounts) {
     fetchAll(() => db.from('company_bill_links').select('source_bank_transaction_id,bill_id').eq('company_id', company).eq('status', 'active').order('id')),
     fetchAll(() => db.from('expense_categories').select('key,label,kind').in('kind', ['expense', 'other_expense', 'cogs']).order('key')),
     fetchAll(() => db.from(NEXTRADE_KTC_PNL_EXCLUSIONS).select('transaction_id').eq('excluded', true).order('transaction_id')),
+    fetchAll(() => db.from(NEXTRADE_BILL_SPLITS).select('transaction_id,bill_id,allocations').order('transaction_id')),
   ]);
   const categoryByKey = new Map(categories.map(category => [category.key, category]));
   const ktcByKey = new Map(mappings.map(mapping => [mapping.category_key, mapping.ktc_category]));
   const billBySource = new Map(links.map(link => [link.source_bank_transaction_id, link.bill_id]));
+  const splitsBySource = new Map(splits.map(split => [split.transaction_id, split]));
   const ktcCategories = new Map(classification.map(category => [category.key, category]));
   const excluded = new Set(exclusions.map(row => row.transaction_id));
   return dropPrivate(transactions, privateAccounts).flatMap(transaction => {
     const category = categoryByKey.get(transaction.company_category);
     if (!isNextradeKtcExpense(transaction, category)) return [];
-    const expenseCategory = nextradeExpenseCategory(category, ktcByKey, ktcCategories);
-    const cents = Math.round(Number(transaction.amount_abs) * 100);
-    return [{ id: transaction.id, date: transaction.date, cents, who: transaction.merchant_name || transaction.name,
-      category: expenseCategory.key, nextrade_category: category.key, label: expenseCategory.label, kind: expenseCategory.kind,
-      ktc_pnl_excluded: excluded.has(transaction.id) || transaction.company_category === MANAGED_REMITTANCE, payroll: category.is_payroll === true,
-      credit_card: transaction.account_subtype === 'credit card', bill_id: billBySource.get(transaction.id) }];
+    const billId = billBySource.get(transaction.id);
+    const parts = activeSplit(transaction, splitsBySource.get(transaction.id), billId);
+    return expandNextradeSplit({ ...transaction, category_split: parts }).map(part => {
+      const sourceCategory = categoryByKey.get(part.company_category) || { key: part.company_category, label: part.company_category, kind: 'expense' };
+      const expenseCategory = nextradeExpenseCategory(sourceCategory, ktcByKey, ktcCategories);
+      return { id: part.id, date: part.date, cents: Math.round(Number(part.amount_abs) * 100), who: part.merchant_name || part.name,
+        category: expenseCategory.key, nextrade_category: sourceCategory.key, label: expenseCategory.label, kind: expenseCategory.kind,
+        source_transaction_id: transaction.id, split_category: part.split_category,
+        ktc_pnl_excluded: part.split_category ? !part.split_include_ktc : excluded.has(transaction.id) || transaction.company_category === MANAGED_REMITTANCE,
+        payroll: category.is_payroll === true,
+        credit_card: transaction.account_subtype === 'credit card', bill_id: billId };
+    });
   });
 }

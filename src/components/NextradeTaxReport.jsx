@@ -52,7 +52,7 @@ export function TransactionDetail({ transactions, heading, categoriesFor, onCate
           })}
         </tr></thead>
         <tbody>{shown.slice(0, limit).map(function (line) {
-          var choices = onCategoryChange && !line.paired_transfer ? categoriesFor(line) : null;
+          var choices = onCategoryChange && !line.paired_transfer && !line.split_category ? categoriesFor(line) : null;
           return <tr key={line.id} className="border-b border-slate-200">
             <td className="px-2 py-1.5 whitespace-nowrap">{line.date}</td>
             <td className="px-2 py-1.5">{line.account}</td>

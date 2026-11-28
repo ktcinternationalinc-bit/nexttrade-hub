@@ -313,6 +313,7 @@ export default function ProfitabilityTab(props) {
   // chips use: goFix scrolls to the product card and outlines it); a description that is not under a product yet goes to the names list, filtered
   function openSetupFor(name, gid) { setFull(false); setFShow(null); if (gid) { goFix('link', gid); } else { goFix('names', null, String(name || '')); } }
   function catPicker(row) {
+    if (row.split_category) return <span className="text-[11px]" style={{ color: SUB }}>Edit split in NextTrade → Transactions</span>;
     const nexttrade = !!row.nextrade_transaction_id;
     const bill = !nexttrade && !!row.bill_id;
     const id = nexttrade ? row.nextrade_transaction_id : bill ? row.bill_id : row.id;

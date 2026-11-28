@@ -66,6 +66,7 @@ export function nextradeTaxReport(lines, categories, from, to, accounts) {
         company_category: line.company_category || null,
         category_label: label,
         paired_transfer: !!line.transfer_group_id,
+        split_category: line.split_category,
         amount: amount,
         source: line.source || '',
         source_file: wave ? line.source_file || '' : '',

@@ -18,6 +18,7 @@ import { NEXTRADE_WAVE_TD_SOURCE, nextradeTaxReport } from '../../../../lib/next
 import { categorizeLine, partyName, wantsBill, loadBillCutoff, beforeCutoff, NEXTRADE_BILL_CUTOFF } from '../../../../lib/nextrade-bills-server'; // v55.83-TW (Codex P1-2): one database function, all or nothing
 import { isNextradeKtcExpense, NEXTRADE_KTC_PNL_EXCLUSIONS } from '../../../../lib/nextrade-expenses-server';
 import { MANAGED_REMITTANCE } from '../../../../lib/nextrade-managed-sales';
+import { activeSplit, expandNextradeSplit, NEXTRADE_BILL_SPLITS } from '../../../../lib/nextrade-bill-splits';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP private bank accounts — respected here too
 import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
@@ -86,6 +87,16 @@ async function loadCats(db, companyId) {
   return r;
 }
 
+async function readBillCategorySplits(db, ids) {
+  var splits = new Map();
+  for (var i = 0; i < ids.length; i += 200) {
+    var result = await db.from(NEXTRADE_BILL_SPLITS).select('transaction_id,bill_id,allocations,revision').in('transaction_id', ids.slice(i, i + 200));
+    if (result.error) return { error: result.error };
+    (result.data || []).forEach(function (row) { splits.set(row.transaction_id, row); });
+  }
+  return { splits };
+}
+
 export async function POST(req) {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) { return fail('Server key missing.', 500); }
   var db = admin();
@@ -131,6 +142,12 @@ export async function POST(req) {
       // its own vendor name), so the whole answer is refused: no rows, no totals. Fails closed for everyone, holders included.
       if (!catsNb || catsNb.error) { return readFail('the Nextrade categories (needed to keep payroll hidden)', catsNb ? catsNb.error : null); }
       var payKeys = {}; ((catsNb && catsNb.data) || []).forEach(function (c) { if (c.is_payroll) { payKeys[c.key] = true; } }); // UD: payroll shows as Warehouse staff — no names
+      var labelByKey = new Map((catsNb.data || []).map(function (category) { return [category.key, category.label]; }));
+      var nbSplits = await readBillCategorySplits(db, links.filter(function (link) {
+        var line = lines[link.source_bank_transaction_id];
+        return link.status === 'active' && line && !isPrivateRow(line, scope) && !payKeys[link.category_key];
+      }).map(function (link) { return link.source_bank_transaction_id; }));
+      if (nbSplits.error) return readFail('the NextTrade bill category splits', nbSplits.error);
       var restrictedNb = 0;
       var rowsNb = links.map(function (l) {
         var ln0 = lines[l.source_bank_transaction_id] || null; var b0 = bills[l.bill_id] || null; var paid0 = Math.round((paid[l.bill_id] || 0) * 100) / 100;
@@ -145,7 +162,9 @@ export async function POST(req) {
         }
         // v55.83-ZD — the super admin sees why a bill is payroll (the screen groups them under "Payroll"); nobody else gets payroll rows
         var whyZD = b0 && payZD.isSuper === true ? payZD.pay.ids[b0.id] : null;
-        return whyZD && whyZD.length ? { link: l, bill: b0, line: ln0, paid: paid0, payroll_reasons: whyZD } : { link: l, bill: b0, line: ln0, paid: paid0 };
+        var categoriesSplit = ln0 && l.status === 'active' ? activeSplit(ln0, nbSplits.splits.get(l.source_bank_transaction_id), l.bill_id) : [];
+        return { link: l, bill: b0, line: ln0, paid: paid0, payroll_reasons: whyZD?.length ? whyZD : undefined,
+          category_split: categoriesSplit.length ? categoriesSplit.map(function (part) { return { ...part, label: labelByKey.get(part.category) || part.category }; }) : undefined };
       });
       var gTotN = await assertPermission(db, userId, 'accounting.view_totals', req); // the 'still owed' sum is a sensitive total (Codex P1-1)
       // XE — the "still owed" sum would contain the hidden payroll bills (or reveal them by subtraction): withheld when any is hidden
@@ -156,11 +175,32 @@ export async function POST(req) {
 
     var comp = companyByKey(body.company);
     if (!comp) { return fail('Say which company: Nextrade or RTM.'); }
-    var WRITES = { set_category: 1, save_category: 1, category_active: 1, save_rule: 1, rule_active: 1, apply_rules: 1, save_mapping: 1, pair_transfer: 1, unpair_transfer: 1, make_missing_bills: 1, set_bill_cutoff: 1, set_ktc_pnl_exclusion: 1 };
+    var WRITES = { set_category: 1, save_category: 1, category_active: 1, save_rule: 1, rule_active: 1, apply_rules: 1, save_mapping: 1, pair_transfer: 1, unpair_transfer: 1, make_missing_bills: 1, set_bill_cutoff: 1, set_ktc_pnl_exclusion: 1, save_bill_split: 1 };
     var g = await assertPermission(db, userId, WRITES[action] ? comp.managePerm : comp.viewPerm, req);
     if ((!g || g.ok !== true) && !WRITES[action]) { g = await assertPermission(db, userId, comp.managePerm, req); }
     if (!g || g.ok !== true) { return fail('This needs the "' + comp.label + (WRITES[action] ? ': Manage' : ': View') + '" permission — ask the super admin to grant it in Settings.', 403); }
     var cid = comp.id;
+    if (action === 'save_bill_split') {
+      if (cid !== NEXTRADE_COMPANY_ID || typeof body.transaction_id !== 'string' ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(body.transaction_id) ||
+        !Number.isSafeInteger(body.revision) || body.revision < 0 || !Array.isArray(body.allocations) || body.allocations.length > 12 ||
+        body.allocations.some(function (part) { return typeof part?.category !== 'string' || part.category.length > 100 || !Number.isSafeInteger(part.cents) || part.cents <= 0 ||
+          (part.include_ktc !== undefined && typeof part.include_ktc !== 'boolean'); })) {
+        return fail('Choose a bill and enter the category amounts.');
+      }
+      var source = await db.from('bank_transactions').select('id,account_id').eq('wave_business_id', cid).eq('id', body.transaction_id).maybeSingle();
+      if (source.error) return readFail('the NextTrade transaction', source.error);
+      if (!source.data || isPrivateRow(source.data, scope)) return fail('NextTrade bill transaction not found.', 404);
+      var saved = await db.rpc('hub_save_nextrade_bill_category_split', { p: {
+        transaction_id: source.data.id, allocations: body.allocations.map(function (part) { return { category: part.category, cents: part.cents, include_ktc: part.include_ktc !== false }; }),
+        revision: body.revision, actor: userId,
+      } });
+      if (saved.error) {
+        var reason = String(saved.error.message || '');
+        return /HUB_GUARD:/.test(reason) ? fail(reason.split('HUB_GUARD:').pop().trim(), 409) : readFail('the bill category split', saved.error);
+      }
+      return NextResponse.json({ ok: true, revision: saved.data.revision });
+    }
     if (action === 'set_ktc_pnl_exclusion') {
       if (cid !== NEXTRADE_COMPANY_ID || typeof body.excluded !== 'boolean' ||
         typeof body.transaction_id !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(body.transaction_id)) {
@@ -171,6 +211,9 @@ export async function POST(req) {
       if (target.error) { return readFail('the transaction', target.error); }
       if (!target.data || isPrivateRow(target.data, scope)) { return fail('NextTrade transaction not found.', 404); }
       if (target.data.company_category === MANAGED_REMITTANCE) { return fail('A managed-sales remittance is already tracked in the sales balance.', 409); }
+      var currentSplit = await readBillCategorySplits(db, [target.data.id]);
+      if (currentSplit.error) return readFail('the bill category split', currentSplit.error);
+      if (currentSplit.splits.get(target.data.id)?.allocations.length) return fail('Set KTC P&L inclusion on each split amount.', 409);
       var choices = await loadCats(db, cid);
       if (choices.error) { return readFail('the categories', choices.error); }
       var targetCategory = (choices.data || []).find(function (category) { return category.key === target.data.company_category; });
@@ -375,6 +418,26 @@ export async function POST(req) {
           return l;
         });
       }
+      var links = {};
+      if (comp.key === 'nextrade' && linesOut.length) {
+        var sourceIds = linesOut.filter(function (line) { return !line.payroll_restricted && line.direction === 'out'; }).map(function (line) { return line.id; });
+        for (var si = 0; si < sourceIds.length; si += 200) {
+          var linkResult = await db.from('company_bill_links').select('source_bank_transaction_id,bill_id,mode,status')
+            .eq('company_id', cid).eq('status','active').in('source_bank_transaction_id', sourceIds.slice(si, si + 200));
+          if (linkResult.error) return readFail('the linked NextTrade bills', linkResult.error);
+          (linkResult.data || []).forEach(function (link) { links[link.source_bank_transaction_id] = link; });
+        }
+        var splitResult = await readBillCategorySplits(db, sourceIds.filter(function (id) { return !!links[id]; }));
+        if (splitResult.error) return readFail('the NextTrade bill category splits', splitResult.error);
+        linesOut = linesOut.map(function (line) {
+          var split = splitResult.splits.get(line.id);
+          if (!split) return line;
+          var allocations = activeSplit(line, split, links[line.id]?.bill_id);
+          return { ...line, category_split: allocations, bill_split_revision: split.revision,
+            bill_split_stale: split.bill_id === links[line.id]?.bill_id && split.allocations.length > 0 && !allocations.length };
+        });
+      }
+      var reportLines = action === 'lines' ? linesOut : linesOut.flatMap(expandNextradeSplit);
       if (taxReport) {
         if (pl.capped) { return fail('This period contains too many transactions. Choose a shorter period for a complete report.', 422); }
         var reportAccounts = await db.from('plaid_accounts').select('plaid_account_id, name, mask').eq('wave_business_id', cid);
@@ -382,23 +445,23 @@ export async function POST(req) {
         var accountLabels = new Map(dropPrivate(reportAccounts.data || [], scope, 'plaid_account_id').map(function (a) {
           return [a.plaid_account_id, (a.name || 'Account') + (a.mask ? ' ••' + a.mask : '')];
         }));
-        var reportLines = linesOut.map(function (l) { return Object.assign({}, l, { source: transactionSource(l) }); });
-        return NextResponse.json({ ok: true, report: nextradeTaxReport(reportLines, catsL.data || [], from, to, accountLabels), from: from, to: to,
+        var taxLines = reportLines.map(function (l) { return Object.assign({}, l, { source: transactionSource(l) }); });
+        return NextResponse.json({ ok: true, report: nextradeTaxReport(taxLines, catsL.data || [], from, to, accountLabels), from: from, to: to,
           payroll_restricted: !pay.canSee || payZD.canSeeLines === false, accounts_restricted: !scope.all });
       }
       if (action === 'totals') {
-        if (pay.canSee || !hiddenPay) { return NextResponse.json({ ok: true, totals: companyTotals(linesOut, catsL.data || []), from: from, to: to, capped: !!pl.capped }); }
+        if (pay.canSee || !hiddenPay) { return NextResponse.json({ ok: true, totals: companyTotals(reportLines, catsL.data || []), from: from, to: to, capped: !!pl.capped }); }
         // XE (Codex 11:24: an exact total a payroll amount can be subtracted out of is not shown) — totals WITHOUT payroll, labelled
         // as such; the payroll row itself is listed with no amounts. Never presented as the company's full money out.
-        var totNp = companyTotals(linesOut.filter(function (l) { return !l.payroll_restricted; }), catsL.data || []);
+        var totNp = companyTotals(reportLines.filter(function (l) { return !l.payroll_restricted; }), catsL.data || []);
         (catsL.data || []).forEach(function (c) { if (payK[c.key] && linesOut.some(function (l) { return l.company_category === c.key; })) { totNp.rows.push({ key: c.key, label: c.label, kind: c.kind, byMonth: {}, total: null, payroll_restricted: true }); } });
         totNp.excludes_payroll = true;
         return NextResponse.json({ ok: true, totals: totNp, from: from, to: to, capped: !!pl.capped, payroll_restricted: PAYROLL_NOTE });
       }
-      var links = {}; var ktcMapL = null; var ktcCatsL = null;
+      var ktcMapL = null; var ktcCatsL = null;
       var pnlChoices = new Map(); var pnlChoiceError = null;
       if (comp.key === 'nextrade') {
-        var eligible = linesOut.filter(function (l) { return !l.payroll_restricted && l.company_category !== MANAGED_REMITTANCE && isNextradeKtcExpense(l, byKey[l.company_category]); }).map(function (l) { return l.id; });
+        var eligible = linesOut.filter(function (l) { return !l.payroll_restricted && !l.category_split?.length && !l.bill_split_stale && l.company_category !== MANAGED_REMITTANCE && isNextradeKtcExpense(l, byKey[l.company_category]); }).map(function (l) { return l.id; });
         for (var pi = 0; pi < eligible.length; pi += 200) {
           var choiceBatch = eligible.slice(pi, pi + 200);
           var excludedResult = await db.from(NEXTRADE_KTC_PNL_EXCLUSIONS).select('transaction_id').eq('excluded', true).in('transaction_id', choiceBatch);
@@ -406,10 +469,6 @@ export async function POST(req) {
           choiceBatch.forEach(function (id) { pnlChoices.set(id, false); });
           (excludedResult.data || []).forEach(function (row) { pnlChoices.set(row.transaction_id, true); });
         }
-      }
-      if (comp.key === 'nextrade' && linesOut.length) {
-        var lnk = await db.from('company_bill_links').select('source_bank_transaction_id, bill_id, mode, status').eq('company_id', cid).eq('status', 'active').limit(20000);
-        if (!lnk.error) { (lnk.data || []).forEach(function (x) { links[x.source_bank_transaction_id] = x; }); }
       }
       if (comp.key === 'nextrade') { // v55.83-VK — the KTC category per Nextrade category, shown and set right on the line
         var mpL = await db.from('company_category_map').select('category_key, ktc_category').eq('company_id', cid);

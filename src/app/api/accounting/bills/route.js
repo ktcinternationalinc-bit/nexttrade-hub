@@ -2417,9 +2417,21 @@ export async function POST(req) {
             else if (!comparisonCategoriesOK) { paidComparison = { unavailable: 'Payment categories could not be loaded.' }; }
             else if (mbUnavailable || advNote) { paidComparison = { unavailable: 'The funding ledger could not be read completely.' }; }
             else { var partnerFeeLines = await fetchAll(function () { return db.from('vendor_bill_lines').select('id,bill_id,description,amount').eq('amount', NEXPAC_FEE_CENTS / 100).order('id'); });
+              var accountIds = Array.from(new Set(spTx.map(function (line) { return line.account_id; }).filter(Boolean)));
+              var comparisonAccounts = new Map();
+              for (var ca = 0; ca < accountIds.length; ca += 200) {
+                var accountRead = await db.from('plaid_accounts').select('plaid_account_id,name,mask,type').in('plaid_account_id', accountIds.slice(ca, ca + 200));
+                if (accountRead.error) { throw new Error('Could not read KTC transaction accounts.'); }
+                (accountRead.data || []).forEach(function (account) { comparisonAccounts.set(account.plaid_account_id, account); });
+              }
+              var comparisonBankLines = spTx.map(function (line) {
+                var account = comparisonAccounts.get(line.account_id);
+                return account ? { ...line, is_credit_card: account.type === 'credit',
+                  account_label: (account.name || 'Account') + (account.mask ? ' •' + account.mask : '') } : line;
+              });
               paidComparison = buildPaidComparison({
               bills: billNameById, payments: xoPays, customerPayments: paysP.filter(function (payment) { return !isPaymentVoid(payment) && usInv[payment.accounting_invoice_id]; }),
-              spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: spTx, partnerFeeLines: partnerFeeLines,
+              spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: comparisonBankLines, partnerFeeLines: partnerFeeLines,
               funds: partyFunds, labels: catLabels, kinds: catKinds, from: pFrom, to: pTo, billBusinessId: US_WAVE_BUSINESS_ID,
               nextradeExpenses, managedSalesLines: managedSalesPeriod?.lines, managedSalesBalance: managedSalesPeriod?.balance,
               privateBills: callerIsSuper ? {} : payZD.pay.ids, showRows: canRows, showPayrollDetails: callerIsSuper

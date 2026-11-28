@@ -58,7 +58,11 @@ export default function NextradeBillsPanel(props) {
     return <React.Fragment key={r.link.id}><tr style={{ borderTop: '1px solid #e2e8f0', opacity: r.link.status === 'active' ? 1 : 0.5 }}>
       <td className="p-1 whitespace-nowrap">{b.bill_number}{r.link.mode === 'attached' ? ' 🔗' : ''}</td><td className="p-1">{b.vendor_name}</td><td className="p-1 whitespace-nowrap">{b.due_date}</td>
       <td className="p-1 text-right font-bold">{r.payroll_restricted ? <span title="Payroll amount restricted — needs the Payroll / salaries: view switch" style={{ color: '#64748b' }}>🔒</span> : fmt(b.total_amount)}</td>
-      <td className="p-1">{l.date} · {l.name}</td><td className="p-1">{st}{st === 'owed to Nextrade' && !r.payroll_restricted && <button onClick={function () { setChooser(showChooser ? null : r.link.id); }} title="Choose how NextTrade is paid for this bill: a KTC transfer to NextTrade, or the NextTrade starting balance" className="ml-2 px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>{showChooser ? 'Pay ▾' : 'Pay ▸'}</button>}</td></tr>
+      <td className="p-1">{l.date} · {l.name}
+        {r.category_split?.length > 0 && <details className="mt-1"><summary className="cursor-pointer font-bold">Category split</summary>
+          {r.category_split.map(part => <div key={part.category}>{part.label} · {fmt(part.cents / 100)}{part.include_ktc === false ? ' · Excluded from KTC P&L' : ''}</div>)}
+        </details>}
+      </td><td className="p-1">{st}{st === 'owed to Nextrade' && !r.payroll_restricted && <button onClick={function () { setChooser(showChooser ? null : r.link.id); }} title="Choose how NextTrade is paid for this bill: a KTC transfer to NextTrade, or the NextTrade starting balance" className="ml-2 px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>{showChooser ? 'Pay ▾' : 'Pay ▸'}</button>}</td></tr>
       {showChooser && <tr><td colSpan={6} className="p-2" style={{ background: '#eff6ff' }}>
         <div className="text-[11px] font-extrabold mb-1" style={{ color: '#1e3a8a' }}>{'Pay ' + (b.vendor_name || 'this bill') + ' ' + (b.bill_number || '') + ' — how is NextTrade paid for it?'}</div>
         <div className="flex gap-2 flex-wrap items-start">
