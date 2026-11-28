@@ -27,6 +27,8 @@ import KeepYardsPreview from './KeepYardsPreview'; // v55.83-VX — before / aft
 import BillPeek from './BillPeek'; // v55.83-VY — a bill paid from RTM / NextTrade funds, opened on top
 import ExpenseDetail from './ExpenseDetail'; // v55.83-VT — what is behind one expense figure
 import PnlFormula from './PnlFormula'; // v55.83-VT — the formula of a row, with its numbers
+import PeriodPaidComparison from './PeriodPaidComparison';
+import { combinePaidComparisons } from '../lib/period-paid-comparison';
 import { pnlFormula, periodInvoices } from '../lib/pnl-expense-detail';
 import { rtmAdjust, foldUnc } from './PeriodStatsTab'; // v55.83-VQ — the Income Statement's own real-cost rule (one copy) // v55.83-VL — P&L by period: periods and the breakdown of one period
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-WQ — every accounting call carries the signed-in person's token
@@ -141,6 +143,7 @@ export default function ProfitabilityTab(props) {
   // (Codex 22:20 / 22:35): the dates are the report's own; every period of the report is asked, also one with no sales; a new
   // report, grouping or person throws the old answers away and ignores late ones; a failed period can be asked again.
   var s19 = useState({}); var pExp = s19[0]; var setPExp = s19[1];
+  var [comparisonKey, setComparisonKey] = useState(null);
   var s20 = useState({ from: '', to: '' }); var applied = s20[0]; var setApplied = s20[1]; // the dates the report on screen was loaded with
   var expGen = useRef(0); var expAuto = useRef(-1);
   var s21 = useState({ busy: false, report: null, error: '' }); var inb = s21[0]; var setInb = s21[1]; var inbGen = useRef(0); // v55.83-VR — inbound trucking tracker
@@ -293,7 +296,7 @@ export default function ProfitabilityTab(props) {
     loadExpensePeriods({ requests: reqs, adjust: rtmAdjust, fold: foldUnc,
       isCurrent: function () { return expGen.current === gen; },
       put: function (k, res) { if (expGen.current !== gen) { return; } setPExp(function (prev) { var nx = Object.assign({}, prev); nx[scope + '|' + k] = res; return nx; }); },
-      fetchOne: function (q) { return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'period_stats', from: q.from, to: q.to, user_id: userProfile && userProfile.id }) }).then(function (r) { return r.json(); }); } });
+      fetchOne: function (q) { return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'period_stats', paid_comparison: true, from: q.from, to: q.to, user_id: userProfile && userProfile.id }) }).then(function (r) { return r.json(); }); } });
   }
   // a new report, another grouping or another person: the answers kept so far no longer apply
   useEffect(function () { expGen.current += 1; setPExp({}); }, [data, pGran, userProfile && userProfile.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -723,6 +726,26 @@ export default function ProfitabilityTab(props) {
     var expKeys = rows.filter(function (r0) { return r0.key !== 'zz'; }).map(function (r0) { return r0.key; });
     var totalExp = totalExpenses(expKeys, pExp, expScope);
     function expOf(r) { return r.key === 'total' ? totalExp : pExp[expScope + '|' + r.key]; }
+    function comparisonPanel() {
+      if (hidden || revH) { return null; }
+      var dated = rows.filter(function (r) { return r.key !== 'zz'; });
+      if (!dated.length) { return null; }
+      var options = dated.length > 1 && dated.length === rows.length ? dated.concat([tot]) : dated;
+      var picked = options.find(function (r) { return r.key === (comparisonKey || pOpen); }) || options[0];
+      var exp = expOn ? expOf(picked) : null;
+      var compare = picked.key === 'total' ? (expOn && combinePaidComparisons(dated.map(function (r) { return expOf(r)?.paidComparison; }))) : exp?.paidComparison;
+      var status = !expOn ? expOff.long : exp?.why || (exp?.status === 'ok' ? 'Payment comparison unavailable for these dates or permissions.' : 'Loading payments…');
+      if (expOn && picked.key === 'total' && !exp.complete) { status = 'The comparison total appears once all selected periods have loaded.'; }
+      var invoiceRows = periodInvoices(cells.filter(function (c) { return picked.key === 'total' || bucketOf(c.invoice_date, pGran).key === picked.key; }), false)
+        .map(function (iv) { return { id: iv.key, invoice_id: iv.invoice_id, ref: iv.invoice, who: iv.customer, date: iv.date, cents: iv.sold_cents }; });
+      function fixCosts() {
+        setPOpen(picked.key);
+        window.requestAnimationFrame(function () { window.requestAnimationFrame(function () { document.getElementById('nt-fix-list')?.scrollIntoView({ block: 'start' }); }); });
+      }
+      return <PeriodPaidComparison key={picked.key} period={picked} periods={options} onPeriod={setComparisonKey} comparison={compare} status={status} invoiceRows={invoiceRows} onOpenInvoice={setPeekId}
+        onOpenBill={function (bill) { openBill(Object.assign({}, bill, { vendor: bill.who, bill_number: bill.ref, paid_date: bill.date, comparison_record: true })); }}
+        onFixCosts={picked.key === 'total' ? null : fixCosts} />;
+    }
     function expCell(r, k) {
       if (!expOn) { return '—'; }
       var e = expOf(r); if (!e || e.status === 'loading') { return '…'; }
@@ -795,6 +818,7 @@ export default function ProfitabilityTab(props) {
         {expOn && totalExp.failed > 0 && totalExp.loading === 0 && <button onClick={function () { startExpenses({ retryErrors: true }); }} className="px-2.5 py-1 rounded-lg font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>{'Try again (' + totalExp.failed + ' failed)'}</button>}
         {expOn && <span style={{ color: SUB }}>{'· ' + (effFrom || 'the start') + ' → ' + effTo}</span>}
       </div>
+      {full ? <div className="max-h-[45vh] overflow-auto">{comparisonPanel()}</div> : comparisonPanel()}
       <div ref={topBar} onScroll={function () { syncFrom(topBar, tableBox); }} className="overflow-x-auto overflow-y-hidden pl-scroll" style={{ height: 16, marginBottom: 2 }}><div ref={topInner} style={{ height: 1 }} /></div>
       <div ref={tableBox} onScroll={function () { syncFrom(tableBox, topBar); }} className="overflow-auto rounded pl-scroll nt-solid-head" style={{ border: '1px solid ' + LINE, maxHeight: full ? 'none' : '65vh', flex: full ? '1 1 auto' : undefined }}>
         <table className="w-full text-[11px]" style={{ minWidth: 2050 }}>
@@ -804,7 +828,7 @@ export default function ProfitabilityTab(props) {
           </thead>
           <tbody>{rows.concat(rows.length > 1 ? [tot] : []).map(function (r, i) {
             var isT = r.key === 'total'; var isOpen = !isT && pOpen === r.key;
-            var out = [<tr key={r.key} onClick={isT ? undefined : function () { setPOpen(isOpen ? null : r.key); }} title={isT ? undefined : (isOpen ? 'Close the breakdown' : 'Open the breakdown of ' + r.label)} style={{ background: isT ? '#e2e8f0' : (isOpen ? '#e0f2fe' : (i % 2 ? '#f8fafc' : '#ffffff')), color: INK, borderTop: '1px solid ' + LINE, fontWeight: isT ? 800 : 400, cursor: isT ? 'default' : 'pointer' }}>
+            var out = [<tr key={r.key} onClick={isT ? undefined : function () { setComparisonKey(r.key); setPOpen(isOpen ? null : r.key); }} title={isT ? undefined : (isOpen ? 'Close the breakdown' : 'Open the breakdown of ' + r.label)} style={{ background: isT ? '#e2e8f0' : (isOpen ? '#e0f2fe' : (i % 2 ? '#f8fafc' : '#ffffff')), color: INK, borderTop: '1px solid ' + LINE, fontWeight: isT ? 800 : 400, cursor: isT ? 'default' : 'pointer' }}>
               <td className="px-2 py-1.5 font-bold">{isT ? '' : (isOpen ? '▾ ' : '▸ ')}{r.label}{!isT && expOf(r) && expOf(r).partial && <div style={{ color: SUB, fontSize: 9, fontWeight: 400 }}>{expOf(r).from + ' → ' + expOf(r).to + ' only'}</div>}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{fmt0(r.pounds)}{r.yards > 0 && <div style={{ color: '#1d4ed8', fontSize: 10, fontWeight: 700 }} title="Goods kept in yards — not converted to pounds">{'+ ' + fmt0(r.yards) + ' yd'}</div>}</td>
               {showProfit && <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.goods_profit >= 0 ? '#065f46' : '#7f1d1d', background: isT ? undefined : '#ecfdf5' }}>{cell(r, 'goods_profit', true)}</td>}

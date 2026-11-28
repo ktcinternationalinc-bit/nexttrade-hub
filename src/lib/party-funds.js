@@ -180,7 +180,7 @@ export function partyFundsBreakdown(o) {
         source_bill: { category: b.category || 'uncategorized', bill_date: day(b.bill_date) || null, recognition: 'unverified' } });
     });
     // explicit services rendered: (a) the fee of a request already sent from the transfer, (b) fee entries of the advances ledger
-    function feeRow(t, amount, date, why, id) { var a = r2(amount); if (!a) { return; } var row = { transfer_id: t ? t.id : null, date: day(date), amount: a, why: why, id: id }; if (t) { t.lifetime_fee_rows.push(row); } else { looseFees.push(row); } }
+    function feeRow(t, amount, date, why, id, bankId) { var a = r2(amount); if (!a) { return; } var row = { transfer_id: t ? t.id : null, date: day(date), amount: a, why: why, id: id, bank_transaction_id: bankId || null }; if (t) { t.lifetime_fee_rows.push(row); } else { looseFees.push(row); } }
     // (Codex 20 Nov 13:37) a wire that was SENT and matched to its bank line carries its explicit fee whether it was a request
     // drawn from an earlier transfer (funding_txn_id) or an ordinary wire that is itself the transfer (bank_transaction_id, no
     // funding_txn_id) — the same rule wire-funding-server.js uses. Each wire is read ONCE even if it reaches us twice.
@@ -215,7 +215,7 @@ export function partyFundsBreakdown(o) {
       if (key(e.party) !== pk || e.bucket !== 'fee') { return; }
       if (e.wire_package_id) { return; } // v55.83-WF: an entry that points at a wire is a NOTE about that wire's fee — the wire carries the fee, once (same rule as the database)
       var t = tById[e.source_bank_transaction_id || e.bank_transaction_id] || null;
-      feeRow(t, e.amount, e.entry_date || (t && t.date) || e.created_at, e.reason || 'services rendered', 'entry:' + e.id);
+      feeRow(t, e.amount, e.entry_date || (t && t.date) || e.created_at, e.reason || 'services rendered', 'entry:' + e.id, e.source_bank_transaction_id || e.bank_transaction_id);
     });
 
     var per = { funds_sent: 0, applied_rows: [], fee_rows: [], refund_rows: [], opening_held: 0 };

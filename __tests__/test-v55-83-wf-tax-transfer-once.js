@@ -91,6 +91,11 @@ async function stats(from, to) { var j = await call({ action: 'period_stats', fr
   check('the INTERNAL figures are separate and still there: July internal fee 500 (net of the reversal) + 400 old pool fee reported apart; June transfer still the source', !!pfJ && pfJ.period.fee_deduction === 900 && pfJ.period.fees_without_a_transfer === 400 && pfJ.period.applied_to_bills === 6000 && pfJ.period.tax_professional_fees === 0, pfJ && pfJ.period);
   var pfN = (jn.sp.party_funds || []).filter(function (p) { return p.party === NT; })[0];
   check('the shared calculation\'s tax figure agrees with the report line for June (NextTrade 13,000)', !!pfN && pfN.period.tax_professional_fees === 13000 && jn.sp.funds_sent_tax.by_party[NT] === 13000);
+  var viewJune = await call({ action: 'period_stats', paid_comparison: true, from: '2026-06-01', to: '2026-06-30' });
+  var viewJuly = await call({ action: 'period_stats', paid_comparison: true, from: '2026-07-01', to: '2026-07-31' });
+  var jpc = viewJune.paid_comparison; var lpc = viewJuly.paid_comparison;
+  check('the comparison route keeps June’s 19,500 funding separate from 2,200 of actual payments and 5,000 of customer receipts', jpc && jpc.paid?.cents === 220000 && jpc.funding.cents === 1950000 && jpc.receipts.cents === 500000 && viewJune.spending.funds_sent_tax.total === 19500, jpc);
+  check('the comparison route shows the July bill plus recorded net fees and rent, with the actual bill behind the 6,000 payment', lpc && lpc.paid?.cents === 770000 && lpc.funding.cents === 0 && lpc.funded_paid.cents === 690000 && lpc.paid.rows.some(function (r) { return r.bill_id === 'b1' && r.cents === 600000; }), lpc);
   var both = await stats('2026-06-01', '2026-07-31');
   check('June + July together: Professional fees 20,200 — the transfer is there once, not once per month it was used', cat(both.sp, 'professional_fees').total === 20200);
 

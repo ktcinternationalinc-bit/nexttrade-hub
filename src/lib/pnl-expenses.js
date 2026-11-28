@@ -235,7 +235,7 @@ export function readExpenseAnswer(j, req, adjust, fold) {
   var colsR = expenseColumns(rc.cats, rc.uncategorized);
   if (rc.funds) { colsR.unconfirmed = rc.funds.unconfirmed; colsR.duplicates = rc.funds.duplicates; colsR.funds_need_reconciliation = rc.funds.needs_reconciliation; colsR.held_is_balance = true; }
   var ptb = paidThroughBreakdown(j.spending); colsR.paid_through_cents = ptb.total; colsR.paid_through_unlinked_cents = ptb.unlinked; // v55.83-XQ — view-only: bills RTM / NextTrade settled this period (linked + unlinked); never added to the P&L
-  return { status: 'ok', cols: colsR, detail: expenseDetail(j.spending, rc), from: j.from, to: j.to, partial: !!req.partial };
+  return { status: 'ok', cols: colsR, detail: expenseDetail(j.spending, rc), paidComparison: j.paid_comparison || null, from: j.from, to: j.to, partial: !!req.partial };
 }
 
 // Asks for the periods one after another. o = { requests, fetchOne(req) → Promise of the answer, put(key, result),

@@ -1,0 +1,93 @@
+const assert = require('node:assert/strict');
+const React = require('react');
+const { renderToStaticMarkup } = require('react-dom/server');
+require('sucrase/register');
+
+const { buildPaidComparison, combinePaidComparisons } = require('../src/lib/period-paid-comparison');
+const { addPeriodCell, blankPeriodRow } = require('../src/lib/pnl-period');
+const PeriodPaidComparison = require('../src/components/PeriodPaidComparison.jsx').default;
+
+const june = { from: '2026-06-01', to: '2026-06-30' };
+const july = { from: '2026-07-01', to: '2026-07-31' };
+const bill = (id, category, total_amount, bill_date, extra) => ({ id, vendor_name: 'NexPac Corporation', bill_number: id, category, total_amount, bill_date, record_status: 'active', ...extra });
+const bills = Object.fromEntries([
+  bill('14277', 'partner_fees', 45250, '2026-06-30'),
+  bill('void-copy', null, 45250, '2026-06-30', { record_status: 'void', bill_number: '14277' }),
+  bill('active-copy', null, 45250, '2026-06-30', { bill_number: '14277' }),
+  bill('14487', null, 45250, '2026-07-31'),
+  bill('other', null, 45250, '2026-06-30', { vendor_name: 'Other vendor' }),
+  bill('fx', null, 45250, '2026-06-30', { currency: 'CAD' }),
+  bill('trucking', 'trucking', 20000, '2026-05-10'),
+  bill('freight', 'freight', 5000, '2026-05-19'),
+  bill('payroll', 'payroll', 700, '2026-05-19'),
+].map(b => [b.id, b]));
+
+const row = (id, category, amount, extra) => ({ id, category, amount, date: '2026-06-30', who: id, ...extra });
+const pay = (id, bill_id, amount, bank_transaction_id, extra) => ({ id, bill_id, amount, bank_transaction_id, paid_date: '2026-06-30', ...extra });
+const funding = (period, extra) => [{ party: 'RTM Capital', period, ...extra }];
+const banks = rows => rows.map(r => ({ id: r.id, name: r.who, iso_currency: r.iso_currency, matched_invoice_id: r.invoice_id }));
+function assemble({ spendingRows = [], incomeRows = [], payments = [], funds = [], date = june, ...options } = {}) {
+  return buildPaidComparison({ ...date, bills, bankLines: banks(spendingRows.concat(incomeRows)), payments, spendingRows, incomeRows, funds,
+    labels: { partner_fees: 'Partner Fees', payroll: 'Payroll', trucking: 'Trucking', freight: 'Freight' },
+    kinds: { vendor_payment: 'cogs', loan: 'not_pnl', transfer: 'transfer', customer_payment: 'income', returned_checks: 'expense' }, ...options });
+}
+
+const bankMonth = assemble({ spendingRows: [row('supplier', 'vendor_payment', 187844.94), row('freight', 'freight', 1000), row('rent', 'rent', 3000), row('loan', 'loan', 2000), row('transfer', 'transfer', 400000), row('unknown', '', 110), row('foreign', 'rent', 999, { iso_currency: 'CAD' }), row('rtm', 'professional_fees', 76000, { funds_sent_to: 'RTM Capital' }), row('rtm-back', 'professional_fees', -1000, { money_back_from: 'RTM Capital' }), row('return', 'returned_checks', 2072), row('returned-deposit', 'returned_checks', -2072)],
+  incomeRows: [row('old-customer', 'customer_payment', 409782.20, { invoice_id: 'older-invoice' }), row('unknown-in', '', 9330), row('interest', 'interest', 120), row('returned-deposit', 'customer_payment', 2072, { returned_deposit: true })] });
+assert.equal(bankMonth.paid.cents, 19184494);
+assert.equal(bankMonth.funding.cents, 7500000);
+assert.equal(bankMonth.funded_paid.cents, 0);
+assert.equal(bankMonth.receipts.cents, 40978220);
+assert.equal(bankMonth.receipts.rows[0].invoice_id, 'older-invoice');
+assert.equal(bankMonth.unclassified_receipts.cents, 933000);
+assert.equal(bankMonth.review.cents, 11000);
+assert.equal(bankMonth.partner_billed.cents, 4525000);
+assert.equal(bankMonth.partner_billed.rows[0].bill_id, '14277');
+assert.equal(bankMonth.partner_paid_cents, 0);
+const receiptMatches = assemble({ incomeRows: [row('partial', '', 1000), row('classified', 'customer_payment', 400), row('internal', 'transfer', 200)], customerPayments: [
+  { bank_transaction_id: 'partial', accounting_invoice_id: 'older-invoice', amount: 300 },
+  { bank_transaction_id: 'classified', accounting_invoice_id: 'invoice', amount: 400 },
+  { bank_transaction_id: 'internal', accounting_invoice_id: 'invoice', amount: 200 }
+] });
+assert.equal(receiptMatches.receipts.cents, 70000);
+assert.equal(receiptMatches.unclassified_receipts.cents, 70000);
+
+const direct = assemble({ spendingRows: [row('one-debit', 'vendor_payment', 50000), row('uncategorized-bank', '', 900)], payments: [pay('partner-part', '14277', 45250, 'one-debit'), pay('freight-part', 'freight', 4750, 'one-debit'), pay('linked-unknown', 'freight', 900, 'uncategorized-bank'), pay('void', 'freight', 800, 'one-debit', { voided: true }), pay('bank-missing', 'trucking', 250, 'out-of-period'), pay('legacy-no-bank', 'freight', 500, null)] });
+assert.equal(direct.paid.cents, 5090000);
+assert.equal(direct.paid.count, 3);
+assert.equal(direct.partner_paid_cents, 4525000);
+assert.equal(direct.review.cents, 75000);
+const overlap = assemble({ spendingRows: [row('debit', 'freight', 1000)], payments: [pay('a', 'freight', 800, 'debit'), pay('b', 'trucking', 800, 'debit')] });
+assert.equal(overlap.paid.cents, 100000);
+assert.equal(overlap.review.cents, 160000);
+
+const transfer = row('rtm', 'professional_fees', 80000, { funds_sent_to: 'RTM Capital' });
+const fundedBill = (payment_id, bill_id, portion, extra) => ({ payment_id, bill_id, portion, transfer_id: 'rtm', paid_date: '2026-06-30', ...extra });
+const partner = fundedBill('pt-partner', '14277', 45250);
+const juneFunding = assemble({ spendingRows: [transfer, row('direct-unlinked', 'freight', 300)], payments: [pay('same-bank', 'freight', 300, 'direct-unlinked')], funds: funding({ applied_rows: [partner, fundedBill('pt-truck', 'trucking', 20000)], from_starting_balance_rows: [fundedBill('old-balance', 'freight', 5000)], fee_rows: [{ id: 'actual-fee', date: '2026-06-30', amount: 500, transfer_id: 'rtm' }, { id: 'duplicated-partner', date: '2026-06-30', amount: 45250, transfer_id: 'rtm' }] }, { paid_without_a_transfer: { period_rows: [partner, fundedBill('same-bank', 'freight', 300, { on_bank_line: 'direct-unlinked', transfer_id: null })] } }) });
+assert.equal(juneFunding.paid.cents, 7105000);
+assert.equal(juneFunding.funded_paid.cents, 7075000);
+assert.equal(juneFunding.funding.cents, 8000000);
+assert.equal(juneFunding.partner_paid_cents, 4525000);
+assert.equal(juneFunding.review.rows[0].id, 'duplicated-partner');
+
+const julyFunding = assemble({ date: july, funds: funding({ applied_rows: [fundedBill('july-portion', 'freight', 4250, { paid_date: '2026-07-03' })] }) });
+assert.equal(julyFunding.funding.cents, 0);
+assert.equal(julyFunding.paid.cents, 425000);
+assert.equal(julyFunding.partner_billed.rows[0].bill_id, '14487');
+assert.equal(combinePaidComparisons([juneFunding, julyFunding]).paid.cents, 7530000);
+assert.equal(combinePaidComparisons([juneFunding, null]), null);
+assert.ok(assemble({ funds: null }).unavailable);
+
+const restricted = assemble({ spendingRows: [row('payroll-bank', 'payroll', 700)], payments: [pay('payroll-bill', 'payroll', 700, 'payroll-bank')], privateBills: { payroll: true } });
+assert.equal(restricted.paid.cents, 70000);
+assert.ok(!restricted.paid.rows[0].bill_id);
+assert.ok(!restricted.paid.rows[0].bank_ref);
+assert.deepEqual(assemble({ spendingRows: [row('debit', 'rent', 12)], showRows: false }).paid, { cents: 1200, count: 1, rows: [] });
+
+const period = blankPeriodRow('2026-06', 'Jun 2026');
+addPeriodCell(period, { goods_revenue: 247989.25, goods_profit: 98316.74, transport_revenue: 59524.25, transport_profit: 4409 });
+addPeriodCell(period, { goods_revenue: 88159.26, goods_profit: null });
+const html = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], comparison: bankMonth, invoiceRows: [], onFixCosts() {}, onOpenBill() {} }));
+for (const text of ['Goods invoiced less payments', 'Customer receipts less payments', '$336,148.51', '$98,316.74', '$4,409.00', '$88,159.26', 'Fix missing costs', 'Partner fee billed', 'Bill 14277', 'RTM / NextTrade bills and fees paid']) assert.ok(html.includes(text), text);
+console.log('PASS: period comparison reconciliation, source records, RTM funding and refunds, partner duplicates, account transfers, foreign currency, access, and missing costs.');

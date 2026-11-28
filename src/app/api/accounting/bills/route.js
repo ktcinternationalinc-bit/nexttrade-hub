@@ -11,6 +11,7 @@
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
 import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess, payrollBillsNote, payrollLinesNote, SPENDING_WITHHELD } from '../../../../lib/payroll-bills'; // v55.83-ZD
 import { buildPaidThroughBlocks, uniquePaidThroughBankRows } from '../../../../lib/paid-through-blocks';
+import { buildPaidComparison } from '../../../../lib/period-paid-comparison';
 import { fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
 import { loadPartyFunds, isMissingOpeningsTable, openingsUnavailable } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
 // v55.83-WF step C — periodAdjustments (the TX tax adjustments) is no longer used here: a transfer to RTM / NextTrade counts once, in full
@@ -1884,7 +1885,7 @@ export async function POST(req) {
           .order('created_at', { ascending: false });
       });
       var paysP = await fetchAll(function () {
-        return db.from('accounting_invoice_payments').select('id, accounting_invoice_id, amount, payment_date, voided, sync_status');
+        return db.from('accounting_invoice_payments').select('id, accounting_invoice_id, amount, payment_date, voided, sync_status' + (body.paid_comparison === true ? ', bank_transaction_id' : ''));
       });
       var custsP = await fetchAll(function () {
         return db.from('accounting_customers').select('id, company_name, contact_name, business_tag');
@@ -1976,6 +1977,8 @@ export async function POST(req) {
       // accounts are their own line and NEVER counted as spending. Fail-soft
       // on the transfer column until the PQ SQL runs.
       var spend = null;
+      var comparePaid = body.paid_comparison === true && pnlPS;
+      var paidComparison = null;
       // v55.83-XO (Codex 22 Nov 14:52) — set inside the spending block, answered after it (never swallowed by its catch):
       //   xoStop     — the starting balances could not be read (not "not installed"): 503, nothing shown, no pack
       //   xoRestrict — a starting balance this caller may not see counts in these dates: spending withheld, said so
@@ -1990,12 +1993,14 @@ export async function POST(req) {
             .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction, third_party_payer, account_id, iso_currency')
             .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out']).neq('pending', true)
             .neq('review_status', 'duplicate') // v55.83-QM — duplicates never count in spending/income
-            .gte('date', pFrom).lte('date', pTo).order('date', { ascending: false });
+            .or('and(posted_date.gte.' + pFrom + ',posted_date.lte.' + pTo + '),and(posted_date.is.null,date.gte.' + pFrom + ',date.lte.' + pTo + ')')
+            .order('date', { ascending: false }).order('id');
         });
-        var catLabels = {}; var catKinds = {};
+        var catLabels = {}; var catKinds = {}; var comparisonCategoriesOK = false;
         try {
           var catsSp = await db.from('expense_categories').select('key, label, kind');
           (catsSp.data || []).forEach(function (c6) { catLabels[c6.key] = c6.label; catKinds[c6.key] = c6.kind || 'expense'; });
+          comparisonCategoriesOK = !catsSp.error && Object.keys(catKinds).length > 0;
         } catch (eC) {}
         // v55.83-PW (Max): QuickBooks-style types. P&L kinds count toward
         // taxable income / deductible spending; not_pnl money (loan principal,
@@ -2025,9 +2030,11 @@ export async function POST(req) {
         var spRows = [];
         var byCatIn = {}; var trfIn = { count: 0, total: 0 }; var uncIn = { count: 0, total: 0 }; var totIn = 0;
         var inRows = [];
+        var comparisonOut = [], comparisonIn = [];
         var categoryDetailLimit = body.inline_category_details === true ? 3000 : 500;
         var categoryRowsLimited = { out: false, in: false };
         function addCategoryDetail(rows, row, limit) {
+          if (comparePaid) { (rows === inRows ? comparisonIn : comparisonOut).push(row); }
           if (rows.length < limit) { rows.push(row); }
           else { categoryRowsLimited[rows === inRows ? 'in' : 'out'] = true; }
         }
@@ -2301,6 +2308,18 @@ export async function POST(req) {
             from_starting_balance: fundingTax.from_starting_balance, from_starting_balance_count: fundingTax.from_starting_balance_count, from_starting_balance_by_party: fundingTax.from_starting_balance_by_party,
             // v55.83-XR — money back in this window, already taken off that same line; net = what the line carries for the companies
             money_back: { count: moneyBackTax.count, total: moneyBackTax.total, by_party: moneyBackTax.by_party }, net: mbUnavailable ? null : r2(fundingTax.total - moneyBackTax.total) } };
+        if (comparePaid && !xoRestrict) {
+          try {
+            if (!comparisonCategoriesOK) { paidComparison = { unavailable: 'Payment categories could not be loaded.' }; }
+            else if (mbUnavailable || advNote) { paidComparison = { unavailable: 'The funding ledger could not be read completely.' }; }
+            else { paidComparison = buildPaidComparison({
+              bills: billNameById, payments: xoPays, customerPayments: paysP.filter(function (payment) { return !isPaymentVoid(payment) && usInv[payment.accounting_invoice_id]; }),
+              spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: spTx,
+              funds: partyFunds, labels: catLabels, kinds: catKinds, from: pFrom, to: pTo,
+              privateBills: callerIsSuper ? {} : payZD.pay.ids, showRows: canRows
+            }); }
+          } catch (compareError) { paidComparison = { unavailable: 'The payment breakdown could not be reconciled.' }; }
+        }
       } catch (eSp) { spend = null; }
       if (xoStop) { return NextResponse.json({ ok: false, unavailable: 'starting_balances', error: 'Could not read ' + xoStop + '. Nothing is shown, so no tax total, P&L or accountant pack is built without them. Try again in a moment.' }, { status: 503 }); }
       if (xoRestrict) { spend = null; } // explicit: spending_restricted below says why — never figures recalculated without the balance
@@ -2329,6 +2348,7 @@ export async function POST(req) {
         }
       }
       psPayload = maskPeriodStats(psPayload, vis); // v55.83-RE — invoice figures P3, bank/financial P2, bills owed P1
+      if (comparePaid && rsPs.canSee && canTotals && vis.fin && psPayload.spending) { psPayload.paid_comparison = paidComparison || { unavailable: 'The payment comparison could not be loaded.' }; }
       if (body.view === 'books' && !userHasPermission(rsPs.ctx, MARGIN_PERMISSION)) { psPayload = booksOpenInvoices(psPayload); }
       if (!rsPs.canSee) { psPayload.revenue_restricted = true; }
       if (xoRestrict) { psPayload.spending = null; psPayload.spending_restricted = { reason: xoRestrict.reason, hidden_starting_balances: xoRestrict.hidden_starting_balances, words: 'Spending, tax and P&L figures for these dates are withheld: they ' + xoRestrict.reason + '. Ask the super admin.' }; } // v55.83-XO

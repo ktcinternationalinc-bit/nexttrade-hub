@@ -15,16 +15,17 @@ export default function BillPeek(props) {
   var b = props.row; if (!b) { return null; }
   function line(k, v, key) { return <tr key={key} style={{ borderTop: '1px solid ' + LINE }}><td className="px-3 py-1" style={{ color: SUB, width: 210 }}>{k}</td><td className="px-3 py-1 font-semibold">{v}</td></tr>; }
   var general = !!props.paidLabel;
+  var comparison = b.comparison_record === true;
   return <div role="dialog" aria-modal="true" aria-label={'Bill ' + (b.bill_number || '') + ' — ' + b.vendor} style={{ background: '#ffffff', color: INK, borderRadius: 12, border: '2px solid #0f172a', width: 520, maxWidth: '94vw', maxHeight: '88vh', overflow: 'auto', boxShadow: '0 16px 40px rgba(15,23,42,0.4)' }}>
     <div className="px-3 py-2 flex items-center gap-2 font-extrabold text-[13px]" style={{ background: '#0f172a', color: '#ffffff' }}><span style={{ flex: 1 }}>{'Bill ' + (b.bill_number || '(no number)') + ' — ' + b.vendor}</span><button onClick={props.onClose} aria-label="Close" style={{ color: '#ffffff', background: 'none', border: 0, fontWeight: 800, cursor: 'pointer' }}>✕</button></div>
     <table className="w-full text-[12px]"><tbody>
       {line('Vendor', b.vendor)}{line('Bill number', b.bill_number || '—')}{line('Bill date', b.bill_date || '—')}{line('Release', b.release || '—')}
       {line('Bill total', money(b.bill_total_cents))}
-      {general ? line(props.paidLabel, money(b.cents)) : line('Paid from ' + (props.payer || 'these') + ' funds', money(b.cents) + (b.bill_total_cents !== null && b.bill_total_cents !== undefined && b.cents !== b.bill_total_cents ? ' (part of the bill)' : ''))}
+      {comparison ? line('Report amount', money(b.cents)) : general ? line(props.paidLabel, money(b.cents)) : line('Paid from ' + (props.payer || 'these') + ' funds', money(b.cents) + (b.bill_total_cents !== null && b.bill_total_cents !== undefined && b.cents !== b.bill_total_cents ? ' (part of the bill)' : ''))}
       {general ? (props.extraLines || []).map(function (x, i) { return line(x[0], x[1], 'x' + i); }) : null}
-      {general ? null : line('Paid on', b.paid_date || '—')}{general ? null : b.starting_balance_as_of ? line('From starting balance dated', b.starting_balance_as_of) : line('From the transfer of', b.transfer_date || '—')}
+      {comparison ? line('Report record', [b.source, b.paid_date].filter(Boolean).join(' · ')) : general ? null : line('Paid on', b.paid_date || '—')}{general || comparison ? null : b.starting_balance_as_of ? line('From starting balance dated', b.starting_balance_as_of) : line('From the transfer of', b.transfer_date || '—')}
     </tbody></table>
-    <div className="px-3 py-2 text-[11px]" style={{ color: SUB }}>{general ? (props.note || '') : 'Where and in which month this report counts the bill’s cost is not verified here. To see its lines, payments and history: Accounting → Bills → search this bill number.'}</div>
+    <div className="px-3 py-2 text-[11px]" style={{ color: SUB }}>{comparison ? (b.bank_ref || '') : general ? (props.note || '') : 'Where and in which month this report counts the bill’s cost is not verified here. To see its lines, payments and history: Accounting → Bills → search this bill number.'}</div>
     <div className="px-3 py-2 flex gap-2 justify-end flex-wrap" style={{ borderTop: '1px solid ' + LINE }}>
       {b.attachment_path ? <button onClick={function () { props.onOpenDoc(b.attachment_path); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open the bill’s document ↗</button> : <span className="text-[11px] self-center" style={{ color: '#b45309' }}>No document is attached to this bill.</span>}
       {props.onGoBills ? <button onClick={props.onGoBills} className="px-3 py-1.5 rounded-lg text-[12px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>{props.goBillsLabel || 'Go to Bills'}</button> : null}
