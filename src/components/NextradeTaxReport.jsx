@@ -198,9 +198,10 @@ export default function NextradeTaxReport({ api, exportCsv, onReview, categories
               <tbody>{part.rows.map(function (row) {
                 var key = JSON.stringify([part.currency, row.key]);
                 return <Fragment key={key}>
-                  <tr className="border-t border-slate-200">
+                  <tr className={'border-t border-slate-200' + (row.transactions ? ' cursor-pointer hover:bg-slate-50' : '')}
+                    onClick={row.transactions ? function () { setOpened(opened === key ? null : key); } : undefined}>
                     <th scope="row" className="p-1 text-left font-semibold">{row.transactions
-                      ? <button type="button" aria-expanded={opened === key} className="text-left text-blue-900 underline underline-offset-2" onClick={function () { setOpened(opened === key ? null : key); }}>{row.label}</button>
+                      ? <button type="button" aria-expanded={opened === key} className="text-left text-blue-900 underline underline-offset-2">{row.label}</button>
                       : row.label}</th>
                     <td className="p-1">{TAX_REPORT_GROUPS[row.kind]}</td>
                     <td className="p-1 text-right">{row.count}</td>

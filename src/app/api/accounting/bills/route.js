@@ -2024,6 +2024,12 @@ export async function POST(req) {
         var spRows = [];
         var byCatIn = {}; var trfIn = { count: 0, total: 0 }; var uncIn = { count: 0, total: 0 }; var totIn = 0;
         var inRows = [];
+        var categoryDetailLimit = body.inline_category_details === true ? 3000 : 500;
+        var categoryRowsLimited = { out: false, in: false };
+        function addCategoryDetail(rows, row, limit) {
+          if (rows.length < limit) { rows.push(row); }
+          else { categoryRowsLimited[rows === inRows ? 'in' : 'out'] = true; }
+        }
         // v55.83-XR (Max, 22 Nov 2026: "AS PER YOUR RECOMMENDATION" = Option 1) — MONEY BACK FROM RTM / NEXTTRADE. A money-in bank line
         // recorded as a refund of a company transfer (party_money_entries kind 'refund', bank_transaction_id = that line) is the
         // company returning unused money. In the tax view it REDUCES Professional fees (the key every transfer to the company was
@@ -2066,7 +2072,7 @@ export async function POST(req) {
             var mb6 = moneyBack[t6.id] || null;
             if (mb6) {
               // XR — money back: shown on the income side as NOT income, and taken off Professional fees on the spending side
-              if (inRows.length < 3000) { inRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: '__party_money_back', paired: !!t6.transfer_group_id, money_back_from: mb6.party, bank_category: t6.classification || '' }); }
+              addCategoryDetail(inRows, { id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: '__party_money_back', paired: !!t6.transfer_group_id, money_back_from: mb6.party, bank_category: t6.classification || '' }, 3000);
               if (!byCatIn.__party_money_back) { byCatIn.__party_money_back = { key: '__party_money_back', label: 'Money back from RTM / NextTrade (taken off Professional fees; not income)', kind: 'not_pnl', count: 0, total: 0 }; }
               byCatIn.__party_money_back.count++; byCatIn.__party_money_back.total = r2(byCatIn.__party_money_back.total + amt6);
               if (!byCat[taxKeyP]) { byCat[taxKeyP] = { key: taxKeyP, label: catLabels[taxKeyP] || 'Professional fees', kind: taxKeyP === '__professional_fees_pt' ? 'expense' : kindOf(taxKeyP), count: 0, total: 0 }; }
@@ -2075,7 +2081,7 @@ export async function POST(req) {
               moneyBackTax.count++; moneyBackTax.total = r2(moneyBackTax.total + amt6);
               moneyBackTax.by_party[mb6.party] = r2((moneyBackTax.by_party[mb6.party] || 0) + amt6);
               mbLines.push({ id: t6.id, date: d6, amount: amt6, payer: mb6.party, transfer_id: mb6.transfer_id, who: t6.merchant_name || t6.name || '' });
-              if (spRows.length < 3000) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: r2(0 - amt6), category: taxKeyP, paired: false, money_in: true, money_back_from: mb6.party, bank_category: t6.classification || '' }); }
+              addCategoryDetail(spRows, { id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: r2(0 - amt6), category: taxKeyP, paired: false, money_in: true, money_back_from: mb6.party, bank_category: t6.classification || '' }, 3000);
               return;
             }
             // WO — a deposit a person categorized as a returned check is that, also when it is matched to an invoice: the match is
@@ -2085,7 +2091,7 @@ export async function POST(req) {
               // ZO — the part of this deposit the bank returned: not income, taken off the Returned checks category. Any rest of the
               // deposit (a deposit of several checks, one returned) carries on below under the line's own category.
               var kA = ap6.category; var amtA = Math.min(amt6, r2(ap6.amount)); var whoA = (t6.merchant_name || t6.name || '') + ' — matched automatically to the bank return of ' + ap6.return_date;
-              if (inRows.length < 3000) { inRows.push({ id: t6.id, date: d6, who: whoA, amount: amtA, category: kA, paired: false, returned_deposit: true, auto_paired: true, bank_category: t6.classification || '', matched_invoice: t6.matched_invoice_id ? true : undefined }); }
+              addCategoryDetail(inRows, { id: t6.id, date: d6, who: whoA, amount: amtA, category: kA, paired: false, returned_deposit: true, auto_paired: true, bank_category: t6.classification || '', matched_invoice: t6.matched_invoice_id ? true : undefined }, 3000);
               if (!byCatIn[kA]) { byCatIn[kA] = { key: kA, label: (catLabels[kA] || kA) + ' — deposits later returned (netted against the return; not income)', kind: 'not_pnl', count: 0, total: 0 }; }
               byCatIn[kA].count++; byCatIn[kA].total = r2(byCatIn[kA].total + amtA);
               if (!byCat[kA]) { byCat[kA] = { key: kA, label: catLabels[kA] || kA, kind: kindOf(kA), count: 0, total: 0 }; }
@@ -2093,12 +2099,12 @@ export async function POST(req) {
               byCat[kA].credits = r2((byCat[kA].credits || 0) + amtA); byCat[kA].credit_count = (byCat[kA].credit_count || 0) + 1;
               contra.credit_count++; contra.credits = r2(contra.credits + amtA); if (t6.matched_invoice_id) { contra.matched_invoice_credits++; }
               contra.auto_paired_count = (contra.auto_paired_count || 0) + 1; contra.auto_paired_total = r2((contra.auto_paired_total || 0) + amtA);
-              if (spRows.length < 3000) { spRows.push({ id: t6.id, date: d6, who: whoA, amount: r2(0 - amtA), category: kA, paired: false, money_in: true, auto_paired: true, bank_category: t6.classification || '', matched_invoice: t6.matched_invoice_id ? true : undefined }); }
+              addCategoryDetail(spRows, { id: t6.id, date: d6, who: whoA, amount: r2(0 - amtA), category: kA, paired: false, money_in: true, auto_paired: true, bank_category: t6.classification || '', matched_invoice: t6.matched_invoice_id ? true : undefined }, 3000);
               amt6 = r2(amt6 - amtA); if (!(amt6 > 0)) { return; }
             }
             var contraIn = !isTrf && isContraCat(t6.classification);
             var keyI = isTrf ? 'transfer' : (contraIn ? t6.classification : (t6.matched_invoice_id ? 'customer_payment' : (t6.classification || null)));
-            if (inRows.length < 500 || ((!keyI || contraIn) && inRows.length < 3000)) { inRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: keyI || '', paired: !!t6.transfer_group_id, returned_deposit: contraIn ? true : undefined, matched_invoice: contraIn && t6.matched_invoice_id ? true : undefined }); } // v55.83-TS — id lets Stats save a category right on the row; uncategorized rows are never cut by the cap
+            addCategoryDetail(inRows, { id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: keyI || '', paired: !!t6.transfer_group_id, bank_category: body.inline_category_details === true ? (t6.classification || '') : undefined, returned_deposit: contraIn ? true : undefined, matched_invoice: contraIn && t6.matched_invoice_id ? true : undefined }, (!keyI || contraIn) ? 3000 : categoryDetailLimit);
             if (isTrf) { trfIn.count++; trfIn.total = r2(trfIn.total + amt6); return; }
             if (!keyI) { uncIn.count++; uncIn.total = r2(uncIn.total + amt6); return; }
             if (contraIn) {
@@ -2109,7 +2115,7 @@ export async function POST(req) {
               byCat[keyI].count++; byCat[keyI].total = r2(byCat[keyI].total - amt6); byCat[keyI].net = true;
               byCat[keyI].credits = r2((byCat[keyI].credits || 0) + amt6); byCat[keyI].credit_count = (byCat[keyI].credit_count || 0) + 1;
               contra.credit_count++; contra.credits = r2(contra.credits + amt6); if (t6.matched_invoice_id) { contra.matched_invoice_credits++; }
-              if (spRows.length < 3000) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: r2(0 - amt6), category: keyI, paired: false, money_in: true, matched_invoice: t6.matched_invoice_id ? true : undefined }); }
+              addCategoryDetail(spRows, { id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: r2(0 - amt6), category: keyI, paired: false, money_in: true, matched_invoice: t6.matched_invoice_id ? true : undefined }, 3000);
               return;
             }
             if (!byCatIn[keyI]) { byCatIn[keyI] = { key: keyI, label: catLabels[keyI] || keyI, kind: kindOf(keyI), count: 0, total: 0 }; }
@@ -2127,7 +2133,7 @@ export async function POST(req) {
             key6 = taxKeyP; isTrf = false;
           }
           var contraOut = !isTrf && !fund6 && isContraCat(key6); // WO — the return itself: listed whatever the cap, so the pair is always inspectable
-          if (spRows.length < 500 || ((!key6 || contraOut) && spRows.length < 3000)) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id, funds_sent_to: fund6 ? fund6.payer : undefined, bank_category: fund6 ? (t6.classification || '') : undefined }); } // v55.83-TS
+          addCategoryDetail(spRows, { id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id, funds_sent_to: fund6 ? fund6.payer : undefined, bank_category: fund6 ? (t6.classification || '') : undefined }, (!key6 || contraOut) ? 3000 : categoryDetailLimit);
           if (isTrf) { trf.count++; trf.total = r2(trf.total + amt6); return; }
           if (!key6) { unc.count++; unc.total = r2(unc.total + amt6); return; }
           if (!byCat[key6]) { byCat[key6] = { key: key6, label: catLabels[key6] || (key6 === '__professional_fees_pt' ? 'Professional fees' : key6), kind: key6 === '__professional_fees_pt' ? 'expense' : kindOf(key6), count: 0, total: 0 }; }
@@ -2291,6 +2297,7 @@ export async function POST(req) {
           deductible_spending: mbUnavailable ? null : deductible, not_pnl_out: notPnlOut,
           in_categories: catRowsIn, in_transfers: trfIn, in_uncategorized: uncIn, total_in: totIn,
           real_income: r2(totIn - trfIn.total), in_rows: inRows,
+          category_rows_limited: body.inline_category_details === true ? categoryRowsLimited : undefined,
           taxable_income: mbUnavailable ? null : taxable, not_pnl_in: notPnlIn, advance_note: advNote, money_back_note: mbNote,
           // v55.83-XR — the money back could not be read: Professional fees and income are NOT complete; the screen says so and the pack refuses
           incomplete: mbUnavailable ? { reason: mbNote, affects: ['Professional fees', 'income by category', 'taxable income', 'deductible spending', 'Accountant pack'] } : null,

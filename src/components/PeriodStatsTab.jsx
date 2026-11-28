@@ -4,7 +4,7 @@
 // invoices and bills side by side; month-by-month table; CSV.
 import { remainderRows } from '../lib/paid-through-blocks'; // v55.83-SR
 import { spendingByCategoryCsv, spendingDetailCsv, incomeStatementCsv, taxPackBlocked } from '../lib/tax-pack'; // v55.83-WF step C — the accountant pack's spending files
-import React, { useState, useEffect } from 'react';
+import React, { Fragment, useState, useEffect } from 'react';
 import UndoPickBar from './UndoPickBar'; // v55.83-WP — undo the last category pick
 import { keepUndoBar, undoChangedSomething } from '../lib/undo-bar-state'; // v55.83-WS — the Undo bar stays only when the undo can be finished
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
@@ -104,29 +104,38 @@ export default function PeriodStatsTab(props) {
   // single pick): it learns a rule from the description's key words and fills every look-alike at once.
   var canPick = isSuperAdmin || modulePerms['bank.classify'] === true; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   var sCl = useState(null); var catList = sCl[0]; var setCatList = sCl[1];
+  var categoryErrorState = useState(''); var categoryError = categoryErrorState[0]; var setCategoryError = categoryErrorState[1];
   var sSv = useState({}); var saving = sSv[0]; var setSaving = sSv[1];
   // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
   var sXL = useState(null); var leftList = sXL[0]; var setLeftList = sXL[1]; // v55.83-XU — lines left by Remove category
   var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
-  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); load(from, to); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (keepUndoBar(j)) { if (undoChangedSomething(j)) { load(from, to); } } else { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
+  var editingCategory = undoBusy || Object.keys(saving).length > 0;
+  function undoPick() { if (!undoPt || busy || editingCategory) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); return load(data.from, data.to); } toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (keepUndoBar(j)) { if (undoChangedSomething(j)) { return load(data.from, data.to); } } else { setUndoPt(null); } }).finally(function () { setUndoBusy(false); }); }
   function erApi(action, payload) {
     return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
+  function loadCategoryChoices() {
+    setCategoryError('');
+    return erApi('list').then(function (j) {
+      if (j && j.ok) { setCatList((j.categories || []).filter(function (c) { return c.active !== false; })); }
+      else { setCategoryError((j && j.error) || 'Could not load categories.'); }
+    });
+  }
+  var categoryDrillOpen = spCat !== null || inCat !== null;
   useEffect(function () {
-    if (!canPick || catList || (spCat !== '' && inCat !== '')) { return; }
-    erApi('list').then(function (j) { setCatList(j && j.ok ? (j.categories || []).filter(function (c) { return c.active !== false; }) : []); });
-  }, [spCat, inCat]); // eslint-disable-line
+    if (canPick && categoryDrillOpen && !catList) { loadCategoryChoices(); }
+  }, [canPick, categoryDrillOpen]); // eslint-disable-line
   function pickCat(r, key) {
-    if (!key || !r || !r.id) { return; }
+    if (!canPick || busy || editingCategory || !key || !r || !r.id || r.paired) { return; }
     if (key === '__new__') {
       var nm = window.prompt('New category name (created as an EXPENSE type — change the type later in 🏷 Categories & Rules):');
       if (!nm || !nm.trim()) { return; }
       erApi('save_category', { label: nm.trim(), kind: 'expense' }).then(function (jc) {
         var newKey = jc && (jc.key || (jc.category && jc.category.key));
-        if (jc && jc.ok && newKey) { setCatList(null); pickCat(r, newKey); }
+        if (jc && jc.ok && newKey) { loadCategoryChoices(); return pickCat(r, newKey); }
         else { toast.error((jc && jc.error) || 'Could not create the category.'); }
       });
       return;
@@ -138,7 +147,7 @@ export default function PeriodStatsTab(props) {
         var more = Number(j.look_alikes_updated) || 0; var left = Number(j.look_alikes_left_people) || 0;
         toast.success('Saved' + (j.rules_learned ? ' — rule learned' : '') + (more ? ' — ' + more + ' more with the same description filled in' : '') +
           (left ? ' (' + left + ' a person already categorized were left as they are)' : '') + '.' + (j.look_alikes_error ? ' ⚠ ' + j.look_alikes_error : ''));
-        load(from, to);
+        return load(data.from, data.to);
       } else { toast.error((j && j.error) || 'Nothing was saved — reload the page and try again.'); }
     }).finally(function () { setSaving(function (m) { var n = Object.assign({}, m); delete n[r.id]; return n; }); });
   }
@@ -146,11 +155,11 @@ export default function PeriodStatsTab(props) {
   // (✕ on the row) or every line listed under this category; same server action and checks as All Transactions; asks first
   function removeCat(ids, what) {
     var list = (ids || []).filter(Boolean);
-    if (!canPick || !list.length) { return; }
+    if (!canPick || busy || editingCategory || !list.length) { return; }
     if (!window.confirm('Take the category off ' + (what || (list.length + ' line(s)')) + '?\n\nThey go back to Uncategorized and rules will not fill them again. Lines already in the ClickBooks ledger, sent to Wave, in a closed month, matched, paired as a transfer or verified are LEFT as they are and listed.')) { return; }
     setSaving(function (m) { var n = Object.assign({}, m); list.forEach(function (id) { n[id] = true; }); return n; });
     erApi('clear_category', { ids: list, confirm: true }).then(function (j) {
-      if (j && j.ok) { if ((j.refused || []).length) { toast.error(j.message, { duration: 9000 }); setLeftList(j.refused); } else { toast.success(j.message); setLeftList(null); } load(from, to); }
+      if (j && j.ok) { if ((j.refused || []).length) { toast.error(j.message, { duration: 9000 }); setLeftList(j.refused); } else { toast.success(j.message); setLeftList(null); } return load(data.from, data.to); }
       else { toast.error((j && j.error) || 'Nothing was changed.'); }
     }).finally(function () { setSaving(function (m) { var n = Object.assign({}, m); list.forEach(function (id) { delete n[id]; }); return n; }); });
   }
@@ -165,27 +174,95 @@ export default function PeriodStatsTab(props) {
     </div>;
   }
   function removeBtn(r) {
-    if (!canPick || !r || !r.id) { return null; }
+    if (!canPick || !r || !r.id || r.paired) { return null; }
     if (saving[r.id]) { return <span className="text-[9px] font-bold" style={{ color: '#475569' }}>saving…</span>; }
-    return <button onClick={function () { removeCat([r.id], 'this line (' + String(r.who || '').substring(0, 40) + ')'); }} title="Remove the category from this line (back to Uncategorized)" className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>✕ remove category</button>;
+    return <button type="button" disabled={busy || editingCategory} onClick={function () { removeCat([r.id], 'this line (' + String(r.who || '').substring(0, 40) + ')'); }} title="Remove the category from this line (back to Uncategorized)" className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>✕ remove category</button>;
   }
   function catPicker(r) {
-    if (!canPick || !r.id) { return null; }
+    var current = r.bank_category || '';
+    if (r.bank_category === undefined) { current = r.category || ''; }
+    if (!canPick || !r.id || r.paired) { return <span>{current ? ((catList || []).find(function (c) { return c.key === current; }) || {}).label || current : 'Uncategorized'}</span>; }
     if (saving[r.id]) { return <span className="text-[9px] font-bold" style={{ color: '#475569' }}>saving…</span>; }
-    return <select value="" onChange={function (e) { pickCat(r, e.target.value); }} className="nt-light text-[11px] font-semibold rounded px-1 py-1"
+    if (categoryError) { return <button type="button" className="underline" title={categoryError} onClick={loadCategoryChoices}>Retry loading categories</button>; }
+    return <select aria-label={'Category for ' + r.who + ' on ' + r.date} value={current} disabled={!catList || busy || editingCategory} onChange={function (e) { pickCat(r, e.target.value); }} className="nt-light text-[11px] font-semibold rounded px-1 py-1"
       style={{ border: '1px solid #fdba74', background: '#ffffff', color: '#0f172a', maxWidth: 190 }}>
-      <option value="">{catList ? '— pick a category —' : 'loading…'}</option>
+      <option value="" disabled>{catList ? 'Uncategorized' : 'Loading categories…'}</option>
+      {current && !(catList || []).some(function (c) { return c.key === current && c.key !== 'needs_clarification'; }) && <option value={current} disabled>{current}</option>}
       {(catList || []).filter(function (c) { return c.key !== 'needs_clarification'; }).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
       {catList && <option value="__new__">＋ new category…</option>}
     </select>;
   }
 
+  function bankCategoryDetails(key, title, moneyIn) {
+    var report = data.spending;
+    var bank = (moneyIn ? report.in_rows : report.rows) || [];
+    var direct = bank.filter(function (r) { return r.category === key; });
+    var blocks = moneyIn ? [] : ptBlocks().filter(ptIsOn);
+    var remainder = blocks.find(function (block) { return remainderRows(block).some(function (row) { return row.key === key; }); });
+    var support = remainder ? remainderRows(remainder).find(function (row) { return row.key === key; }) : null;
+    var billRows = blocks.flatMap(function (block) {
+      return (block.rows || []).filter(function (row) { return remainder ? block === remainder && !support.money_back : row.category === key; });
+    });
+    var bankById = new Map(bank.map(function (row) { return [row.id, row]; }));
+    var fundingRows = remainder ? (support.money_back ? support.money_back_rows : remainder.lines) || [] : [];
+    var displayedBankRows = remainder ? fundingRows : direct;
+    var editableIds = [...new Set(direct.filter(function (r) { return r.id && !r.paired && r.category !== 'transfer'; }).map(function (r) { return r.id; }))];
+    var clipped = report.category_rows_limited && report.category_rows_limited[moneyIn ? 'in' : 'out'];
+    return <tr><td colSpan={4} className="px-1 pb-2">
+      <section className="rounded border border-slate-200 p-2" style={{ background: '#ffffff', color: '#0f172a' }} aria-label={title + ' transactions'}>
+        <div className="overflow-x-auto">
+          {displayedBankRows.length > 0 && <table className="w-full min-w-[540px] text-[10px]" aria-label={title + ' bank records'}>
+            <thead><tr className="border-b border-slate-200 text-slate-600"><th scope="col" className="text-left py-1">Date</th><th scope="col" className="text-left">Description</th><th scope="col" className="text-right">Amount</th><th scope="col" className="text-right">Bank category</th></tr></thead>
+            <tbody>{displayedBankRows.map(function (r, index) {
+              var actual = remainder ? bankById.get(r.id) : r;
+              var incoming = moneyIn || r.money_in || !!(support && support.money_back);
+              return <tr key={index} className="border-b border-slate-100">
+                <td className="py-1 pr-2 whitespace-nowrap">{r.date}</td>
+                <td className="py-1 pr-2 font-semibold">{r.who || (actual && actual.who) || (support && support.money_back ? 'Returned funds' : 'Bank transfer')}{r.paired && <span className="ml-1 font-normal">Paired transfer</span>}</td>
+                <td className="py-1 pr-2 text-right tabular-nums font-bold">{incoming ? '+' : '−'}${fmt(Math.abs(r.amount))}</td>
+                <td className="py-1 text-right">{actual ? <>{catPicker(actual)}{!remainder && actual.category && actual.category !== 'transfer' && !actual.paired && <span className="ml-1">{removeBtn(actual)}</span>}</> : '—'}</td>
+              </tr>;
+            })}</tbody>
+          </table>}
+          {remainder && <p className="mt-1 text-[10px] text-slate-600">Supporting records for {remainder.payer}. Bank amounts are shown in full. The category total uses the report’s paid-through calculation.</p>}
+          {billRows.length > 0 && <table className="w-full mt-2 text-[10px]" aria-label={title + ' covered bills'}>
+            <thead><tr className="border-b border-slate-200 text-slate-600"><th scope="col" className="text-left">Paid date</th><th scope="col" className="text-left">Covered bill</th><th scope="col" className="text-right">Amount paid</th></tr></thead>
+            <tbody>{billRows.map(function (bill, index) { return <tr key={index} className="border-b border-slate-100"><td className="py-1">{bill.date}</td><td>{bill.who} · {bill.ref}</td><td className="text-right tabular-nums">${fmt(bill.amount)}</td></tr>; })}</tbody>
+          </table>}
+          {!displayedBankRows.length && !billRows.length && <p className="text-[10px] text-slate-600">No underlying records are available for this row in the current report.</p>}
+          {clipped && <p className="mt-1 text-[10px] text-slate-600">Some bank records are outside the report’s display limit. Use a shorter date range to see more.</p>}
+        </div>
+        {canPick && !remainder && editableIds.length > 1 && <div className="mt-1 text-right"><button type="button" disabled={busy || editingCategory} onClick={function () { removeCat(editableIds, 'all ' + editableIds.length + ' transactions listed here'); }} className="px-2 py-1 rounded text-[10px] font-bold bg-amber-100 text-amber-950">Remove category from all {editableIds.length} transactions listed</button></div>}
+      </section>
+    </td></tr>;
+  }
+
+  function categoryRow(category, moneyIn, percent, style) {
+    var open = (moneyIn ? inCat : spCat) === category.key;
+    var setOpen = moneyIn ? setInCat : setSpCat;
+    return <Fragment key={category.key}>
+      <tr style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', ...style }} onClick={function () { setOpen(open ? null : category.key); }}>
+        <th scope="row" className="py-1 pr-2 text-left font-bold">
+          <button type="button" aria-expanded={open} className="text-left">{category.label}
+            {category.kind && <>{' '}<span className="px-1 py-0.5 rounded text-[8px] font-extrabold" style={category.kind === 'not_pnl' ? { background: '#f3e8ff', color: '#6b21a8' } : { background: '#f1f5f9', color: '#475569' }}>{KIND_LABELS[category.kind] || category.kind}</span></>}
+            {' '}<span className="text-[9px] text-slate-600">{open ? 'Hide transactions' : 'Show transactions'}</span>
+          </button>
+        </th>
+        <td className="py-1 pr-2 text-right tabular-nums">{category.count}</td>
+        <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: style && style.color || (moneyIn ? '#065f46' : undefined) }}>${fmt(category.total)}</td>
+        <td className="py-1 text-right tabular-nums">{percent}</td>
+      </tr>
+      {open && bankCategoryDetails(category.key, category.label, moneyIn)}
+    </Fragment>;
+  }
+
   function load(f, t) {
     setBusy(true);
-    hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'period_stats', from: f, to: t, user_id: userProfile && userProfile.id }) })
+    return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'period_stats', inline_category_details: true, from: f, to: t, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (j && j.ok) { setData(j); } else { toast.error((j && j.error) || 'Could not load stats.'); setData({ denied: true, error: (j && j.error) || '' }); } })
+      .catch(function () { toast.error('Could not refresh the report. Select Go to reload it.'); setData({ denied: true, error: 'Could not load stats.' }); })
       .finally(function () { setBusy(false); });
   }
   useEffect(function () { if (canView) { load(from, to); } }, []); // eslint-disable-line
@@ -302,7 +379,7 @@ export default function PeriodStatsTab(props) {
       <input type="date" className="nt-light px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={from} onChange={function (e) { setFrom(e.target.value); }} />
       <span className="text-[10px] text-slate-500">→</span>
       <input type="date" className="nt-light px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={to} onChange={function (e) { setTo(e.target.value); }} />
-      <button onClick={function () { load(from, to); }} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>{busy ? '…' : 'Go'}</button>
+      <button onClick={function () { load(from, to); }} disabled={busy || editingCategory} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>{busy ? '…' : 'Go'}</button>
       {/* v55.83-PK (Max): "the dates has something from june 1st as selection next to month year etc" */}
       {(function () {
         var y = TODAY.substring(0, 4);
@@ -313,7 +390,7 @@ export default function PeriodStatsTab(props) {
         var P = [['Jun 1 →', '2026-06-01', TODAY], ['This month', m0, TODAY], ['Last month', lmFrom, lmEnd], ['This year', y + '-01-01', TODAY]];
         return P.map(function (p2) {
           var on = from === p2[1] && to === p2[2];
-          return <button key={p2[0]} onClick={function () { setFrom(p2[1]); setTo(p2[2]); load(p2[1], p2[2]); }}
+          return <button key={p2[0]} disabled={busy || editingCategory} onClick={function () { setFrom(p2[1]); setTo(p2[2]); load(p2[1], p2[2]); }}
             className="px-2 py-1 rounded-lg text-[10px] font-extrabold"
             style={on ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{p2[0]}</button>;
         });
@@ -424,9 +501,10 @@ export default function PeriodStatsTab(props) {
             <span className="text-[10px] font-extrabold" style={{ color: isAff ? '#115e59' : '#9d174d' }}>🏢 {pb.payer}{pb.era_note ? ' · ' + pb.era_note : ''} ({isAff ? 'booked as an advance — earlier entries stay as booked' : 'pays vendors for us — one professional-fees line'}):</span>
             <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={!onP} onChange={function () { var n0 = Object.assign({}, ptOn); n0[pb.key || pb.payer] = false; setPtOn(n0); }} /> Tax view — payments to {pb.payer} stay ONE line (${fmt(pb.payments_total)})</label>
             <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={onP} onChange={function () { var n1 = Object.assign({}, ptOn); n1[pb.key || pb.payer] = true; setPtOn(n1); }} /> Real-cost view — covered costs in their ACTUAL categories (${fmt(pb.allocations_total)} + ${fmt(pb.service_fee)} {isAff ? 'not yet linked to costs' : ((pb.waiting > 0.005 || pb.fees_booked > 0.005) ? 'not in bills' : 'service fee')}){!isAff && (pb.waiting > 0.005 || pb.fees_booked > 0.005) ? ' = bills $' + fmt(pb.allocations_total) + ' · service fee $' + fmt((Number(pb.fees_booked) || 0) + (Number(pb.remainder_other) || 0)) + ' · waiting for bills $' + fmt(pb.waiting) : ''}</label>
-            {onP && <span className="text-[9px]" style={{ color: isAff ? '#115e59' : '#9d174d' }}>{isAff ? 'This is the INTERNAL view: money sent ahead of its costs is held, not spending, until NextTrade\'s bills are linked. The accountant tax pack does NOT use it — there every transfer to NextTrade stays one Professional-fees amount, in full.' : 'Totals identical in both views. The accountant tax pack always uses the one-line tax view: each transfer once, in full.'} Row drills show direct bank rows only.</span>}
+            {onP && <span className="text-[9px]" style={{ color: isAff ? '#115e59' : '#9d174d' }}>{isAff ? 'This is the INTERNAL view: money sent ahead of its costs is held, not spending, until NextTrade\'s bills are linked. The accountant tax pack does NOT use it — there every transfer to NextTrade stays one Professional-fees amount, in full.' : 'Totals identical in both views. The accountant tax pack always uses the one-line tax view: each transfer once, in full.'}</span>}
           </div>;
         })}
+        {categoryDrillOpen && leftPanel()}
         <table className="w-full text-[11px]">
           <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
             <th className="py-1 pr-2 text-left font-semibold">Category</th><th className="py-1 pr-2 text-right font-semibold">Txns</th>
@@ -434,25 +512,15 @@ export default function PeriodStatsTab(props) {
           <tbody style={{ color: '#0f172a' }}>
             {ptAdjust(data.spending.categories).map(function (c) {
               var pct = data.spending.real_spending > 0 ? Math.round(c.total / data.spending.real_spending * 1000) / 10 : 0;
-              return <tr key={c.key} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }} onClick={function () { setSpCat(spCat === c.key ? null : c.key); }}>
-                <td className="py-1 pr-2 font-bold">{c.label} {c.kind && <span className="px-1 py-0.5 rounded text-[8px] font-extrabold" style={c.kind === 'not_pnl' ? { background: '#f3e8ff', color: '#6b21a8' } : { background: '#f1f5f9', color: '#475569' }}>{KIND_LABELS[c.kind] || c.kind}</span>} <span className="text-[9px]" style={{ color: '#64748b' }}>(click for rows)</span></td>
-                <td className="py-1 pr-2 text-right tabular-nums">{c.count}</td>
-                <td className="py-1 pr-2 text-right font-extrabold tabular-nums">${fmt(c.total)}</td>
-                <td className="py-1 text-right tabular-nums">{pct}%</td></tr>;
+              return categoryRow(c, false, pct + '%');
             })}
-            {data.spending.uncategorized && data.spending.uncategorized.count > 0 && <tr style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: '#fff7ed' }} onClick={function () { setSpCat(spCat === '' ? null : ''); }}>
-              <td className="py-1 pr-2 font-bold" style={{ color: '#9a3412' }}>⚠ Uncategorized — needs a category</td>
-              <td className="py-1 pr-2 text-right tabular-nums">{data.spending.uncategorized.count}</td>
-              <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#9a3412' }}>${fmt(data.spending.uncategorized.total)}</td><td /></tr>}
+            {data.spending.uncategorized && data.spending.uncategorized.count > 0 && categoryRow({ ...data.spending.uncategorized, key: '', label: 'Uncategorized — needs a category' }, false, null, { background: '#fff7ed', color: '#9a3412' })}
             {/* TS (Codex QA 17 Nov) — the ⚠ row shows the SAME total as the lines listed under it; the money sent to the paid-through
                 company is taken off on its own visible line, so every row on screen still adds up to the totals below. */}
             {ptAdjust(data.spending.categories).uncShift < -0.004 && <tr style={{ background: '#fff7ed', borderBottom: '1px solid #f1f5f9' }}>
               <td className="py-1 pr-2 text-[10px] font-bold" style={{ color: '#9a3412' }}>&nbsp;&nbsp;− of which sent to {ptOnNames.join(' / ')} with no category (shown above as the bills it paid)</td><td />
               <td className="py-1 pr-2 text-right font-extrabold tabular-nums text-[10px]" style={{ color: '#9a3412' }}>−${fmt(Math.abs(ptAdjust(data.spending.categories).uncShift))}</td><td /></tr>}
-            {data.spending.transfers && data.spending.transfers.count > 0 && <tr style={{ cursor: 'pointer', background: '#eff6ff' }} onClick={function () { setSpCat(spCat === 'transfer' ? null : 'transfer'); }}>
-              <td className="py-1 pr-2 font-bold" style={{ color: '#1e40af' }}>↔ Transfers between own accounts — NOT spending</td>
-              <td className="py-1 pr-2 text-right tabular-nums">{data.spending.transfers.count}</td>
-              <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#1e40af' }}>${fmt(data.spending.transfers.total)}</td><td /></tr>}
+            {data.spending.transfers && data.spending.transfers.count > 0 && categoryRow({ ...data.spending.transfers, key: 'transfer', label: 'Transfers between own accounts — excluded from spending' }, false, null, { background: '#eff6ff', color: '#1e40af' })}
           </tbody>
           <tfoot>
             {data.spending.not_pnl_out && data.spending.not_pnl_out.count > 0 && <tr style={{ color: '#6b21a8' }}>
@@ -467,23 +535,6 @@ export default function PeriodStatsTab(props) {
             <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">{(data.spending.total_out ? '' : '')}</td>
             <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">${fmt(data.spending.real_spending)}</td><td /></tr></tfoot>
         </table>
-        {spCat !== null && leftPanel()}
-        {spCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
-          <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
-            {spCat === '' && canPick && <tr><td colSpan={5} className="pb-1 text-[9px] font-bold" style={{ color: '#9a3412' }}>Pick a category on any line — it is saved at once, a rule is learned from the description, and every other line with the same description is filled in too.</td></tr>}
-            {(data.spending.rows || []).filter(function (r) { return spCat === 'transfer' ? r.category === 'transfer' : r.category === spCat; }).length === 0 && <tr><td className="py-1 text-[10px]" style={{ color: '#64748b' }}>No transactions to list for this line.</td></tr>}
-            {(data.spending.rows || []).filter(function (r) { return spCat === 'transfer' ? r.category === 'transfer' : r.category === spCat; }).map(function (r, i) {
-              return <tr key={r.id || i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                <td className="py-0.5 pr-2 whitespace-nowrap">{r.date}</td>
-                <td className="py-0.5 pr-2 font-semibold">{String(r.who).substring(0, 60)}</td>
-                <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#7f1d1d' }}>-${fmt(r.amount)}</td>
-                <td className="py-0.5 pr-2 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td>
-                {spCat === '' && <td className="py-0.5 text-right">{catPicker(r)}</td>}
-                {spCat !== '' && spCat !== 'transfer' && <td className="py-0.5 text-right">{removeBtn(r)}</td>}</tr>;
-            })}
-            {spCat !== '' && spCat !== 'transfer' && canPick && (function () { var idsX = (data.spending.rows || []).filter(function (r) { return r.category === spCat && r.id; }).map(function (r) { return r.id; }); return idsX.length > 1 ? <tr><td colSpan={5} className="pt-1 text-right"><button onClick={function () { removeCat(idsX, 'all ' + idsX.length + ' lines listed here'); }} className="px-2 py-1 rounded text-[10px] font-extrabold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>✕ Remove category from all {idsX.length} lines listed</button></td></tr> : null; })()}
-          </tbody></table>
-        </div>}
 
         {/* v55.83-PV (Max): "tax reports need data for all of 2026" — the income
             side, from the bank feed (the only DATED full-year money record). */}
@@ -496,20 +547,10 @@ export default function PeriodStatsTab(props) {
             <tbody style={{ color: '#0f172a' }}>
               {(data.spending.in_categories || []).map(function (c) {
                 var pct = data.spending.real_income > 0 ? Math.round(c.total / data.spending.real_income * 1000) / 10 : 0;
-                return <tr key={c.key} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }} onClick={function () { setInCat(inCat === c.key ? null : c.key); }}>
-                  <td className="py-1 pr-2 font-bold">{c.label} {c.kind && <span className="px-1 py-0.5 rounded text-[8px] font-extrabold" style={c.kind === 'not_pnl' ? { background: '#f3e8ff', color: '#6b21a8' } : { background: '#f1f5f9', color: '#475569' }}>{KIND_LABELS[c.kind] || c.kind}</span>} <span className="text-[9px]" style={{ color: '#64748b' }}>(click for rows)</span></td>
-                  <td className="py-1 pr-2 text-right tabular-nums">{c.count}</td>
-                  <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>${fmt(c.total)}</td>
-                  <td className="py-1 text-right tabular-nums">{pct}%</td></tr>;
+                return categoryRow(c, true, pct + '%');
               })}
-              {data.spending.in_uncategorized && data.spending.in_uncategorized.count > 0 && <tr style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: '#fff7ed' }} onClick={function () { setInCat(inCat === '' ? null : ''); }}>
-                <td className="py-1 pr-2 font-bold" style={{ color: '#9a3412' }}>⚠ Uncategorized deposits — match or categorize before filing</td>
-                <td className="py-1 pr-2 text-right tabular-nums">{data.spending.in_uncategorized.count}</td>
-                <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#9a3412' }}>${fmt(data.spending.in_uncategorized.total)}</td><td /></tr>}
-              {data.spending.in_transfers && data.spending.in_transfers.count > 0 && <tr style={{ cursor: 'pointer', background: '#eff6ff' }} onClick={function () { setInCat(inCat === 'transfer' ? null : 'transfer'); }}>
-                <td className="py-1 pr-2 font-bold" style={{ color: '#1e40af' }}>↔ Transfers between own accounts — NOT income</td>
-                <td className="py-1 pr-2 text-right tabular-nums">{data.spending.in_transfers.count}</td>
-                <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#1e40af' }}>${fmt(data.spending.in_transfers.total)}</td><td /></tr>}
+              {data.spending.in_uncategorized && data.spending.in_uncategorized.count > 0 && categoryRow({ ...data.spending.in_uncategorized, key: '', label: 'Uncategorized deposits — match or categorize before filing' }, true, null, { background: '#fff7ed', color: '#9a3412' })}
+              {data.spending.in_transfers && data.spending.in_transfers.count > 0 && categoryRow({ ...data.spending.in_transfers, key: 'transfer', label: 'Transfers between own accounts — excluded from income' }, true, null, { background: '#eff6ff', color: '#1e40af' })}
             </tbody>
             <tfoot>
               {data.spending.not_pnl_in && data.spending.not_pnl_in.count > 0 && <tr style={{ color: '#6b21a8' }}>
@@ -569,23 +610,6 @@ export default function PeriodStatsTab(props) {
             <div className="text-[9px] mt-1" style={{ color: '#64748b' }}>Cash basis = income when received, expenses when paid — the standard filing basis for most LLCs (your accountant confirms which basis you file on). Transfers and Not-P&L money (loans, owner) are excluded by the category types.</div>
           </div>;
         })()}
-        {inCat !== null && leftPanel()}
-        {inCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
-            <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
-              {inCat === '' && canPick && <tr><td colSpan={5} className="pb-1 text-[9px] font-bold" style={{ color: '#9a3412' }}>Pick a category on any deposit — saved at once, a rule is learned, and deposits with the same description are filled in too. (A customer payment is best matched to its invoice in Bank Review.)</td></tr>}
-              {(data.spending.in_rows || []).filter(function (r) { return inCat === 'transfer' ? r.category === 'transfer' : r.category === inCat; }).length === 0 && <tr><td className="py-1 text-[10px]" style={{ color: '#64748b' }}>No transactions to list for this line.</td></tr>}
-              {(data.spending.in_rows || []).filter(function (r) { return inCat === 'transfer' ? r.category === 'transfer' : r.category === inCat; }).map(function (r, i) {
-                return <tr key={r.id || i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td className="py-0.5 pr-2 whitespace-nowrap">{r.date}</td>
-                  <td className="py-0.5 pr-2 font-semibold">{String(r.who).substring(0, 60)}</td>
-                  <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>+${fmt(r.amount)}</td>
-                  <td className="py-0.5 pr-2 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td>
-                  {inCat === '' && <td className="py-0.5 text-right">{catPicker(r)}</td>}
-                  {inCat !== '' && inCat !== 'transfer' && <td className="py-0.5 text-right">{removeBtn(r)}</td>}</tr>;
-              })}
-              {inCat !== '' && inCat !== 'transfer' && canPick && (function () { var idsY = (data.spending.in_rows || []).filter(function (r) { return r.category === inCat && r.id; }).map(function (r) { return r.id; }); return idsY.length > 1 ? <tr><td colSpan={5} className="pt-1 text-right"><button onClick={function () { removeCat(idsY, 'all ' + idsY.length + ' deposits listed here'); }} className="px-2 py-1 rounded text-[10px] font-extrabold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>✕ Remove category from all {idsY.length} deposits listed</button></td></tr> : null; })()}
-            </tbody></table>
-          </div>}
         </div>}
       </div>}
      </div>}

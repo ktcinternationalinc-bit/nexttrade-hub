@@ -141,9 +141,9 @@ function undo(id, user) { return call({ action: 'undo_category_pick', payload: {
   function runHandler(file, apiName, reloadCall, answers) {
     var src = fs.readFileSync(path.join(root, 'src/components/' + file + '.jsx'), 'utf8'); var m = src.match(/function undoPick\(\) \{[^\n]*\n/); if (!m) { return { error: 'handler not found' }; }
     var st = { pt: { id: 'U1' }, busy: false, reloads: 0, toasts: [], calls: 0 }; var queue = answers.slice();
-    var env = { setUndoBusy: function (v) { st.busy = v; }, setUndoPt: function (v) { st.pt = v; }, toast: { success: function (t) { st.toasts.push('ok:' + t); }, error: function (t) { st.toasts.push('err:' + t); } }, keepUndoBar: B.keepUndoBar, undoChangedSomething: B.undoChangedSomething };
+    var env = { busy: false, editingCategory: false, data: { from: '2026-01-01', to: '2026-12-31' }, setUndoBusy: function (v) { st.busy = v; }, setUndoPt: function (v) { st.pt = v; }, toast: { success: function (t) { st.toasts.push('ok:' + t); }, error: function (t) { st.toasts.push('err:' + t); } }, keepUndoBar: B.keepUndoBar, undoChangedSomething: B.undoChangedSomething };
     env[apiName] = function (action, payload) { st.calls++; st.lastPayload = payload; return Promise.resolve(queue.shift()); };
-    var reloadName = reloadCall.split('(')[0]; env[reloadName] = function () { st.reloads++; };
+    var reloadName = reloadCall.split('(')[0]; env[reloadName] = function () { st.reloads++; st.lastReload = Array.from(arguments); };
     var names = Object.keys(env); var body = 'var undoPt = st.pt; var undoBusy = st.busy; ' + m[0] + ' return undoPick;';
     var make = new Function(['st'].concat(names).join(','), body.replace('var undoPt = st.pt; var undoBusy = st.busy; ', ''));
     return { st: st, run: function () { var f = new Function(['st'].concat(names).join(','), 'var undoPt = st.pt; var undoBusy = st.busy; ' + m[0] + ' return undoPick();'); return f.apply(null, [st].concat(names.map(function (n) { return env[n]; }))); } };
@@ -151,10 +151,10 @@ function undo(id, user) { return call({ action: 'undo_category_pick', payload: {
   var SCREENS = [['ProfitabilityTab', 'erApi', 'startExpenses({ ignoreCache: true })'], ['PeriodStatsTab', 'erApi', 'load(from, to)'], ['AllTransactionsTab', 'api', 'quietReload()']];
   for (var si = 0; si < SCREENS.length; si++) {
     var sc = SCREENS[si];
-    if (sc[0] === 'PeriodStatsTab') { global.from = '2026-01-01'; global.to = '2026-12-31'; }
     var h = runHandler(sc[0], sc[1], sc[2], [uH, Object.assign({}, uH2, { api_build_marker: 'x', message: 'Undone.' })]);
     if (h.error) { check('HANDLER ' + sc[0] + ' found', false, h.error); continue; }
     await h.run(); await new Promise(function (r) { setTimeout(r, 0); });
+    if (sc[0] === 'PeriodStatsTab') { check('HANDLER PeriodStatsTab: refreshes the applied report dates', JSON.stringify(h.st.lastReload) === '["2026-01-01","2026-12-31"]'); }
     var afterPartial = { pt: h.st.pt, reloads: h.st.reloads, busy: h.st.busy };
     await h.run(); await new Promise(function (r) { setTimeout(r, 0); });
     check('HANDLER ' + sc[0] + ' (real code): a half-finished undo KEEPS the Undo bar with the same undo id and reloads the screen; pressing Undo again sends that same id, finishes, and then the bar goes', afterPartial.pt && afterPartial.pt.id === 'U1' && afterPartial.reloads === 1 && afterPartial.busy === false && h.st.calls === 2 && h.st.lastPayload.undo_id === 'U1' && h.st.pt === null && h.st.reloads === 2, [afterPartial, h.st]);
