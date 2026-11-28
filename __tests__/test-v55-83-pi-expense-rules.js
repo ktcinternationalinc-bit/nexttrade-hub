@@ -19,17 +19,8 @@ function ok(name, cond) {
 console.log('PI — expense categories + rules + verified');
 
 // ── 1. FUNCTIONAL: the real matching math ──
-var src = R('src/lib/expense-rules.js');
-var names = [];
-var cjs = src
-  .replace(/export var ([a-zA-Z0-9_]+)/g, function (m, n) { names.push(n); return 'var ' + n; })
-  .replace(/export function ([a-zA-Z0-9_]+)/g, function (m, n) { names.push(n); return 'function ' + n; });
-cjs += '\n;module.exports = {' + names.map(function (n) { return n + ': ' + n; }).join(',') + '};';
-/* eslint-disable no-new-func */
-var mod = { exports: {} };
-new Function('module', 'exports', cjs)(mod, mod.exports);
-var merchantKey = mod.exports.merchantKey;
-var bestRule = mod.exports.bestRule;
+require('sucrase/register');
+var { merchantKey, bestRule } = require('../src/lib/expense-rules.js');
 
 ok('1a: merchantKey strips refs/card numbers/dates so the SAME merchant always maps to the SAME rule',
   merchantKey('SHELL OIL 57444 #8821 11/02') === 'shell oil' &&
@@ -64,7 +55,7 @@ ok('2d: RLS open-authenticated (email auth pattern), NO delete policy — deacti
 // ── 3. Learning: every human pick is remembered ──
 var srv = R('src/lib/expense-rules-server.js');
 ok('3a: learnRule upserts by merchant key — same classification kept, changed mind UPDATES the learned rule',
-  /ilike\('match_text', key\)/.test(srv) && /row\.classification === classification\) \{ return \{ kept: row\.id \};/.test(srv) &&
+  /readExpensePhraseRule\(db, 'id, classification, source', key\)/.test(srv) && /row\.classification === classification\) \{ return \{ kept: row\.id \};/.test(srv) &&
   /\{ updated: row\.id \}/.test(srv) && /source: 'learned'/.test(srv));
 ok('3b: a MANUAL rule is never silently retargeted by the learner; needs_clarification is never learned',
   /row\.source === 'manual'\) \{ return \{ kept_manual: row\.id \};/.test(srv) &&

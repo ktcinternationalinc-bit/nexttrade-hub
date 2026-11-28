@@ -9,6 +9,7 @@
 //   • the picked line decides: if IT cannot be undone, nothing is changed at all.
 // Server only. var + concat.
 import { merchantKey } from './expense-rules';
+import { readExpensePhraseRule } from './bank-rule-storage';
 
 export var UNDO_HOURS = 24;
 export var UNDO_MAX_ROWS = 2000;
@@ -35,7 +36,7 @@ export async function readLine(db, id) {
 export async function readRuleFor(db, line) {
   var key = merchantKey(((line && line.merchant_name) || '') + ' ' + ((line && line.name) || ''));
   if (!key) { return null; }
-  var r = await db.from('us_expense_rules').select('id, classification, active, source, updated_at').ilike('match_text', key).limit(1);
+  var r = await readExpensePhraseRule(db, 'id, classification, active, source, updated_at', key);
   return (r && !r.error && r.data && r.data.length) ? r.data[0] : null;
 }
 export async function readRule(db, id) {

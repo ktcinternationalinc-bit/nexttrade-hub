@@ -21,7 +21,8 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { readRulesLastRun } from '../../../../lib/expense-rules-server'; // v55.83-UG
 import { applyExpenseRules, waveAccountForCategory, previewRule, applyRuleToAll, applyLookAlikes, rowText, ruleBucket, learnRule, partyFlagRows } from '../../../../lib/expense-rules-server'; // v55.83-RC (+ learnRule: v55.83-RN — its import was lost in RC, so every pick in All Transactions failed after saving)
-import { ruleMatches } from '../../../../lib/expense-rules'; // v55.83-QV — the SAME matcher the 15-minute job uses
+import { parseRuleMatch } from '../../../../lib/bank-rule-match';
+import { readRuleModes, writeRuleMode } from '../../../../lib/bank-rule-storage';
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { readLine, readRuleFor, readRule, writeUndoPoint, undoCategoryPick, undoWords, ledgerPosted, UNDO_HOURS } from '../../../../lib/category-undo-server'; // v55.83-WS — undo a single category pick
 import { windowFloorFor } from '../../../../lib/visibility-window-server'; // v55.83-WS — the undo re-checks the person's history window
@@ -85,12 +86,13 @@ export async function POST(req) {
     if (action === 'list') {
       var cats = await db.from('expense_categories').select('id, key, label, active, sort, kind, wave_account_id, wave_account_name').order('sort').order('label');
       if (cats.error) { return NextResponse.json({ ok: false, error: cats.error.message + ' — run sql/v55-83-PI-expense-categories-rules.sql first.', needs_sql: true, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var rules = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, source, hit_count, last_hit_at, updated_at, third_party_payer').order('updated_at', { ascending: false }).limit(1000);
+      var rules = await readRuleModes(function (mode) { return db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, source, hit_count, last_hit_at, updated_at, third_party_payer' + mode).order('updated_at', { ascending: false }).limit(1000); });
       var flagReady = true;
       if (rules.error && /third_party_payer/.test(rules.error.message || '')) { // SW SQL not run yet → the list still loads, the flag choice says what to run
         flagReady = false;
-        rules = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, source, hit_count, last_hit_at, updated_at').order('updated_at', { ascending: false }).limit(1000);
+        rules = await readRuleModes(function (mode) { return db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, source, hit_count, last_hit_at, updated_at' + mode).order('updated_at', { ascending: false }).limit(1000); });
       }
+      if (rules.error) { return NextResponse.json({ ok: false, error: rules.error.message, api_build_marker: API_BUILD_MARKER }, { status: 503 }); }
       return NextResponse.json({ ok: true, categories: cats.data || [], rules: (rules.data || []), parties: await loadRuleParties(db), flag_ready: flagReady, last_run: await readRulesLastRun(db), api_build_marker: API_BUILD_MARKER });
     }
 
@@ -135,8 +137,8 @@ export async function POST(req) {
     // ── save_rule: create or edit (manual from the Rules tab) ──
     if (action === 'save_rule') {
       var p = body.payload || {};
-      var mt = String(p.match_text || '').trim().toLowerCase();
-      if (mt.length < 3) { return NextResponse.json({ ok: false, error: 'Match text must be at least 3 characters (what the bank line contains).', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var match = parseRuleMatch(p.match_text, p.match_mode);
+      if (match.error) { return NextResponse.json({ ok: false, error: match.error, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       // v55.83-SW — a rule gives a category, or marks the line as sent to a paid-through company, or both
       var hasFlagField = Object.prototype.hasOwnProperty.call(p, 'third_party_payer');
       var payerIn = String(p.third_party_payer || '').trim(); var payerName = null;
@@ -149,19 +151,19 @@ export async function POST(req) {
         var catok = await db.from('expense_categories').select('key').eq('key', p.classification).limit(1);
         if (!catok.error && (!catok.data || !catok.data.length)) { return NextResponse.json({ ok: false, error: 'Unknown category "' + p.classification + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       }
-      var patch = { match_text: mt, classification: p.classification || null, auto_apply: p.auto_apply !== false, active: p.active !== false, source: 'manual', updated_by: by, updated_at: new Date().toISOString() };
+      var patch = { match_text: match.match_text, match_mode: match.match_mode, classification: p.classification || null, auto_apply: p.auto_apply !== false, active: p.active !== false, source: 'manual', updated_by: by, updated_at: new Date().toISOString() };
       if (hasFlagField) { patch.third_party_payer = payerName; }
       var swMsg = function (m) { return (/third_party_payer|null value in column "classification"|us_expense_rules_what_ck/.test(m || '')) ? m + SW_SQL_HINT : m; };
       if (p.id) {
-        var updr = await db.from('us_expense_rules').update(patch).eq('id', p.id).select();
+        var updr = await writeRuleMode(patch, function (row) { return db.from('us_expense_rules').update(row).eq('id', p.id).select(); });
         if (updr.error) { return NextResponse.json({ ok: false, error: swMsg(updr.error.message), api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
         // v55.83-RC (Max 13:59 "it should automatically apply regardless") — applied the moment it is saved
         var apU = (patch.active && patch.auto_apply && updr.data && updr.data[0]) ? await applyRuleToAll(db, updr.data[0], { by: by }) : null;
         return NextResponse.json({ ok: true, rule: updr.data && updr.data[0], applied_now: apU, api_build_marker: API_BUILD_MARKER });
       }
       patch.created_by = by;
-      var insr = await db.from('us_expense_rules').insert(patch).select();
-      if (insr.error) { return NextResponse.json({ ok: false, error: /duplicate|unique/i.test(insr.error.message) ? 'A rule for that exact text already exists — edit it instead.' : swMsg(insr.error.message), api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var insr = await writeRuleMode(patch, function (row) { return db.from('us_expense_rules').insert(row).select(); });
+      if (insr.error) { return NextResponse.json({ ok: false, error: /duplicate|unique/i.test(insr.error.message) ? 'A rule with that match already exists — edit it instead.' : swMsg(insr.error.message), api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var apI = (patch.active && patch.auto_apply && insr.data && insr.data[0]) ? await applyRuleToAll(db, insr.data[0], { by: by }) : null; // v55.83-RC
       return NextResponse.json({ ok: true, rule: insr.data && insr.data[0], applied_now: apI, api_build_marker: API_BUILD_MARKER });
     }
@@ -189,20 +191,22 @@ export async function POST(req) {
       var pv = body.payload || {};
       var ruleRow = null;
       if (pv.id) {
-        var rq = await db.from('us_expense_rules').select('id, match_text, classification, hit_count, active, auto_apply, third_party_payer').eq('id', pv.id).maybeSingle();
-        if (rq.error && /third_party_payer/.test(rq.error.message || '')) { rq = await db.from('us_expense_rules').select('id, match_text, classification, hit_count, active, auto_apply').eq('id', pv.id).maybeSingle(); } // SW SQL not run yet
-        ruleRow = rq && rq.data;
+        var rq = await readRuleModes(function (mode) { return db.from('us_expense_rules').select('id, match_text, classification, hit_count, active, auto_apply, third_party_payer' + mode).eq('id', pv.id).maybeSingle(); });
+        if (rq.error && /third_party_payer/.test(rq.error.message || '')) { rq = await readRuleModes(function (mode) { return db.from('us_expense_rules').select('id, match_text, classification, hit_count, active, auto_apply' + mode).eq('id', pv.id).maybeSingle(); }); } // SW SQL not run yet
+        if (rq.error || !rq.data) { return NextResponse.json({ ok: false, error: rq.error ? rq.error.message : 'Rule not found.', api_build_marker: API_BUILD_MARKER }, { status: rq.error ? 503 : 404 }); }
+        ruleRow = rq.data;
       }
-      var mtxt = String((ruleRow && ruleRow.match_text) || pv.match_text || '').trim().toLowerCase();
-      if (mtxt.length < 3) { return NextResponse.json({ ok: false, error: 'Type at least 3 characters to test.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var condition = ruleRow || parseRuleMatch(pv.match_text, pv.match_mode);
+      if (condition.error) { return NextResponse.json({ ok: false, error: condition.error, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var mtxt = condition.match_text;
       if (action === 'rule_preview') {
-        var pr = await previewRule(db, mtxt, (ruleRow && ruleRow.classification) || pv.classification || null);
+        var pr = await previewRule(db, mtxt, (ruleRow && ruleRow.classification) || pv.classification || null, condition.match_mode);
         if (pr.error) { return NextResponse.json({ ok: false, error: pr.error, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
         var bk = pr.buckets;
         // v55.83-SW — how many money-out lines this text would mark as sent to the company (blank ones only)
         var flagParty = String((ruleRow && ruleRow.third_party_payer) || pv.third_party_payer || '').trim(); var wouldFlag = null; var flagSample = [];
-        if (flagParty) { var pfR = await partyFlagRows(db, mtxt); if (!pfR.error) { wouldFlag = pfR.rows.length; flagSample = pfR.rows.slice(0, 8).map(function (t) { return { date: t.posted_date || t.date, text: rowText(t).substring(0, 90), amount: t.amount_abs }; }); } }
-        return NextResponse.json({ ok: true, match_text: mtxt, scanned: pr.scanned, matches: pr.hits.length, flag_party: flagParty || null, would_flag: wouldFlag, flag_sample: flagSample,
+        if (flagParty) { var pfR = await partyFlagRows(db, mtxt, condition.match_mode); if (!pfR.error) { wouldFlag = pfR.rows.length; flagSample = pfR.rows.slice(0, 8).map(function (t) { return { date: t.posted_date || t.date, text: rowText(t).substring(0, 90), amount: t.amount_abs }; }); } }
+        return NextResponse.json({ ok: true, match_text: mtxt, match_mode: condition.match_mode, scanned: pr.scanned, matches: pr.hits.length, flag_party: flagParty || null, would_flag: wouldFlag, flag_sample: flagSample,
           fillable: bk.blank.length + bk.rule.length, rule_filled: bk.rule.length, human_picked: bk.human.length, verified: bk.verified.length, already_right: bk.same.length,
           sample: pr.hits.slice(0, 12).map(function (t) { var hw = ruleBucket(t, (ruleRow && ruleRow.classification) || null); return { date: t.posted_date || t.date, text: rowText(t).substring(0, 90), amount: t.amount_abs, direction: t.direction, category: t.classification || null, how: hw === 'blank' ? 'blank' : hw === 'verified' ? 'verified' : (t.category_source === 'rule' ? 'rule' : 'human') }; }),
           api_build_marker: API_BUILD_MARKER });
@@ -210,7 +214,7 @@ export async function POST(req) {
       if (!ruleRow) { return NextResponse.json({ ok: false, error: 'Save the rule first, then apply it.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var ap = await applyRuleToAll(db, ruleRow, { overwrite_people: pv.overwrite_people === true, by: by });
       if (ap.error) { return NextResponse.json({ ok: false, error: ap.error, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      await audit(db, by, 'rule_applied_now', 'us_expense_rule', ruleRow.id, { match_text: mtxt, classification: ruleRow.classification, applied: ap.applied, overwrote_people: ap.overwrote_people, flagged: ap.flagged || 0, payer: ruleRow.third_party_payer || null });
+      await audit(db, by, 'rule_applied_now', 'us_expense_rule', ruleRow.id, { match_text: mtxt, match_mode: condition.match_mode, classification: ruleRow.classification, applied: ap.applied, overwrote_people: ap.overwrote_people, flagged: ap.flagged || 0, payer: ruleRow.third_party_payer || null });
       return NextResponse.json({ ok: true, applied: ap.applied, flagged: ap.flagged || 0, flag_error: ap.flag_error || undefined, matches: ap.matches, already_right: ap.already_right,
         skipped_human: ap.left_people, skipped_verified: ap.verified_untouched, overwrote_people: ap.overwrote_people, api_build_marker: API_BUILD_MARKER });
     }

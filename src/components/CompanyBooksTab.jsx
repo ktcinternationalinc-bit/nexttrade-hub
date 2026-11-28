@@ -9,6 +9,8 @@ import { companyByKey } from '../lib/companies';
 import { learnMatchText, lineShown } from '../lib/company-rule-learn';
 import StatementImport from './StatementImport';
 import NextradeTaxReport from './NextradeTaxReport';
+import BankRuleMatchFields from './BankRuleMatchFields';
+import { ALL_KEYWORDS_MATCH, PHRASE_MATCH, parseRuleMatch, ruleMatchLabel } from '../lib/bank-rule-match';
 import { NEXTRADE_SOURCE_LABELS } from '../lib/nextrade-tax-report';
 import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
 
@@ -134,13 +136,13 @@ export default function CompanyBooksTab(props) {
   }
   if (!comp) { return <div className="p-3 text-[12px]">Unknown company.</div>; }
 
-  function setCategory(ids, key) {
+  function setCategory(ids, key, refreshReport) {
     if (!ids.length) { return; }
     // v55.83-XU (Max 22 Nov) — taking the category off asks first, with the count (a KTC bill made from the line is voided by the
     // existing guarded step; a paid or posted one stops it and is named)
     if (!key && !window.confirm('Take the category off ' + ids.length + ' line(s)?\n\nThey go back to Uncategorized. A KTC bill made from a line is voided (never deleted); a line whose KTC bill is paid or posted is left as it is and named.')) { return; }
     setBusy(true);
-    api({ action: 'set_category', ids: ids, category_key: key || null }).then(function (j) {
+    return api({ action: 'set_category', ids: ids, category_key: key || null }).then(function (j) {
       var made = ((j && j.results) || []).filter(function (r) { return r.ktc && r.ktc.action && r.ktc.action !== 'none'; });
       // v55.83-VK — what was just categorized by hand became (or updated) a rule: say so, and offer the other lines it covers
       var learned = ((j && j.learned) || []); var catLabel = (catByKey[key] || {}).label || key;
@@ -154,10 +156,14 @@ export default function CompanyBooksTab(props) {
       if (withMore.length && window.confirm(nMore + ' other line(s) not categorized yet have the same description (' + withMore.map(function (x) { return '“' + x.match_text + '”'; }).join(', ') + ').\n\nPut them in “' + catLabel + '” too?' + (comp.key === 'nextrade' ? '\n\n(For a category KTC pays, each line also makes its KTC bill.)' : ''))) {
         return api({ action: 'apply_rules', all_dates: true, rule_ids: withMore.map(function (x) { return x.rule_id; }) }).then(function (a) {
           sayRuleRun(a, ' by the new rule');
-          return loadLines();
+          return refreshReport ? refreshReport() : loadLines();
         });
       }
-      return loadLines();
+      if (!refreshReport) { return loadLines(); }
+      if (j && (j.ok || j.saved > 0)) { return refreshReport(); }
+    }).catch(function () {
+      toast.error('Could not confirm the category change. Refresh to check the saved category.');
+      if (refreshReport) { return refreshReport(); }
     }).finally(function () { setBusy(false); });
   }
   function openKtcCategory(nextradeKey) {
@@ -201,7 +207,7 @@ export default function CompanyBooksTab(props) {
   }
   function openRule(line) {
     setRowPanel(null);
-    setRuleForm({ lineId: line.id, match_text: learnMatchText(line) || '', direction: line.direction, category_key: '' });
+    setRuleForm({ lineId: line.id, match_text: learnMatchText(line) || '', match_mode: comp.key === 'nextrade' ? ALL_KEYWORDS_MATCH : PHRASE_MATCH, direction: line.direction, category_key: '' });
   }
   async function saveRule(event) {
     event.preventDefault();
@@ -217,13 +223,13 @@ export default function CompanyBooksTab(props) {
   function renderRuleForm() {
     var choices = activeCats.filter(function (c) { return !c.direction || c.direction === 'any' || ruleForm.direction === 'any' || c.direction === ruleForm.direction; });
     return <form onSubmit={saveRule} className="flex gap-2 items-center flex-wrap mb-2 p-2 rounded" style={btn('#f8fafc', '#0f172a')}>
-      <label className="text-[10px] font-bold">Description contains <input className={inp} style={inpS} value={ruleForm.match_text} onChange={function (e) { setRuleForm(Object.assign({}, ruleForm, { match_text: e.target.value })); }} placeholder="e.g. centerpoint" /></label>
+      <BankRuleMatchFields rule={ruleForm} onChange={setRuleForm} disabled={busy} allowKeywords={comp.key === 'nextrade'} />
       <select aria-label="Money direction" className={inp} style={inpS} value={ruleForm.direction} onChange={function (e) {
         var direction = e.target.value; var category = catByKey[ruleForm.category_key];
         setRuleForm(Object.assign({}, ruleForm, { direction: direction, category_key: category && category.direction && category.direction !== 'any' && direction !== 'any' && category.direction !== direction ? '' : ruleForm.category_key }));
       }}><option value="any">Money in or out</option><option value="out">Money out only</option><option value="in">Money in only</option></select>
       <select aria-label={comp.label + ' category'} className={inp} style={inpS} value={ruleForm.category_key} onChange={function (e) { setRuleForm(Object.assign({}, ruleForm, { category_key: e.target.value })); }}><option value="">Choose a category</option>{choices.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select>
-      <button disabled={busy || ruleForm.match_text.trim().length < 3 || !ruleForm.category_key} className="px-2 py-1 rounded text-[10px] font-extrabold" style={btn('#0f172a', '#ffffff')}>Save rule</button>
+      <button disabled={busy || !!parseRuleMatch(ruleForm.match_text, ruleForm.match_mode).error || !ruleForm.category_key} className="px-2 py-1 rounded text-[10px] font-extrabold" style={btn('#0f172a', '#ffffff')}>Save rule</button>
       <button type="button" onClick={function () { setRuleForm(null); }} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#f1f5f9', '#334155')}>Cancel</button>
     </form>;
   }
@@ -386,7 +392,8 @@ export default function CompanyBooksTab(props) {
       {lines && !shown.length && <div className="text-[11px] mt-2" style={{ color: '#64748b' }}>Nothing to show for these dates and filters.</div>}
     </div>}
 
-    {view === 'tax_report' && <NextradeTaxReport api={api} exportCsv={exportCsv} onReview={function (start, end) {
+    {view === 'tax_report' && <NextradeTaxReport api={api} exportCsv={exportCsv} categoryBusy={busy}
+      categoriesFor={catsFor} onCategoryChange={canManage ? setCategory : null} onReview={function (start, end) {
       setFrom(start); setTo(end); setShow('uncat'); setQ(''); setView('lines');
       loadLines(start, end); loadAccounts();
     }} />}
@@ -422,11 +429,11 @@ export default function CompanyBooksTab(props) {
     </div>}
 
     {view === 'rules' && <div>
-      {canManage && (!ruleForm || ruleForm.lineId) && <button onClick={function () { setRuleForm({ match_text: '', category_key: '', direction: 'any' }); }} className="px-2 py-1 rounded text-[11px] font-extrabold mb-2" style={btn('#0f172a', '#ffffff')}>➕ New rule</button>}
+      {canManage && (!ruleForm || ruleForm.lineId) && <button onClick={function () { setRuleForm({ match_text: '', match_mode: comp.key === 'nextrade' ? ALL_KEYWORDS_MATCH : PHRASE_MATCH, category_key: '', direction: 'any' }); }} className="px-2 py-1 rounded text-[11px] font-extrabold mb-2" style={btn('#0f172a', '#ffffff')}>➕ New rule</button>}
       {canManage && ruleForm && !ruleForm.lineId && renderRuleForm()}
       {(rules || []).map(function (r) { return <div key={r.id} className="flex items-center gap-2 text-[11px] py-1" style={{ borderTop: '1px solid #e2e8f0', opacity: r.active ? 1 : 0.5 }}>
-        <span>"{r.match_text}"{r.direction !== 'any' ? ' (money ' + r.direction + ')' : ''} → <b>{(catByKey[r.category_key] || {}).label || r.category_key}</b></span><span style={{ color: '#64748b' }}>used {r.hit_count || 0}×</span><div className="flex-1" />
-        {canManage && <button onClick={function () { setRuleForm({ id: r.id, match_text: r.match_text, category_key: r.category_key, direction: r.direction }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#eff6ff', '#1d4ed8')}>✏ Edit</button>}
+        <span>{ruleMatchLabel(r)}{r.direction !== 'any' ? ' (money ' + r.direction + ')' : ''} → <b>{(catByKey[r.category_key] || {}).label || r.category_key}</b></span><span style={{ color: '#64748b' }}>used {r.hit_count || 0}×</span><div className="flex-1" />
+        {canManage && <button onClick={function () { setRuleForm({ id: r.id, match_text: r.match_text, match_mode: r.match_mode, category_key: r.category_key, direction: r.direction }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#eff6ff', '#1d4ed8')}>✏ Edit</button>}
         {canManage && <button onClick={function () { api({ action: 'rule_active', id: r.id, active: !r.active }).then(function (j) { if (j && j.ok) { loadView('rules'); } else { toast.error((j && j.error) || 'Not saved.'); } }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#f1f5f9', '#334155')}>{r.active ? 'Switch off' : 'Switch on'}</button>}
       </div>; })}
       {rules && !rules.length && <div className="text-[11px]" style={{ color: '#64748b' }}>No rules yet.</div>}

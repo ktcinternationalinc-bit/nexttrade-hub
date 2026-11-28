@@ -3,6 +3,7 @@
 // Pure: which words of a bank line become the rule's "description contains" text, and what to do with the rule list.
 // Safe on server and browser. SWC-safe (var + concatenation).
 import { normMatch, bestCompanyRule } from './companies';
+import { isKeywordMatch } from './bank-rule-match';
 
 // words that say nothing about WHO was paid — a rule made only of these would catch unrelated lines, so none is learned
 var GENERIC = {};
@@ -49,7 +50,7 @@ export function learnPlan(rules, line, cat) {
   if (!dir) { return { op: 'none', why: 'no direction' }; }
   var text = learnMatchText(line);
   if (!text) { return { op: 'none', why: 'too little text' }; }
-  var exact = (rules || []).filter(function (r) { return r && normMatch(r.match_text) === text && r.direction === dir; })[0] || null;
+  var exact = (rules || []).filter(function (r) { return r && !isKeywordMatch(r.match_mode) && normMatch(r.match_text) === text && r.direction === dir; })[0] || null;
   if (exact) {
     if (exact.category_key === cat.key && exact.active !== false) { return { op: 'same', rule: exact, text: text, direction: dir }; }
     return { op: 'update', rule: exact, was: exact.category_key, text: text, direction: dir };

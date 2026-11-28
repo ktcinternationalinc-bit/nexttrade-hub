@@ -11,6 +11,8 @@
 //   it never overwrites a human's pick, never reviews, never verifies.
 //   Fails soft everywhere (tables may not exist until the PI SQL runs).
 import { merchantKey, bestRule, ruleMatches } from './expense-rules';
+import { PHRASE_MATCH } from './bank-rule-match';
+import { readExpensePhraseRule, readRuleModes, writeRuleMode } from './bank-rule-storage';
 import { US_WAVE_BUSINESS_ID } from './business-of';
 import { autoReviewIfComplete } from './bank-allocation-server'; // v55.83-SW — money sent to a related company is finished when marked
 import { audit } from './audit-server';
@@ -20,7 +22,7 @@ export async function learnRule(db, txnText, classification, by) {
     if (!classification || classification === 'needs_clarification') { return { skipped: 'no_classification' }; }
     var key = merchantKey(txnText);
     if (!key) { return { skipped: 'no_merchant_key' }; }
-    var ex = await db.from('us_expense_rules').select('id, classification, source').ilike('match_text', key).limit(1);
+    var ex = await readExpensePhraseRule(db, 'id, classification, source', key);
     if (ex.error) { return { skipped: ex.error.message }; }
     if (ex.data && ex.data.length) {
       var row = ex.data[0];
@@ -31,7 +33,7 @@ export async function learnRule(db, txnText, classification, by) {
       var up = await db.from('us_expense_rules').update({ classification: classification, updated_by: by || null, updated_at: new Date().toISOString(), active: true }).eq('id', row.id).select('id');
       return up.error ? { skipped: up.error.message } : { updated: row.id };
     }
-    var ins = await db.from('us_expense_rules').insert({ match_text: key, classification: classification, source: 'learned', auto_apply: true, active: true, created_by: by || null, updated_by: by || null }).select('id');
+    var ins = await writeRuleMode({ match_text: key, match_mode: PHRASE_MATCH, classification: classification, source: 'learned', auto_apply: true, active: true, created_by: by || null, updated_by: by || null }, function (row) { return db.from('us_expense_rules').insert(row).select('id'); });
     return ins.error ? { skipped: ins.error.message } : { learned: (ins.data && ins.data[0] && ins.data[0].id) || true };
   } catch (e) { return { skipped: (e && e.message) || 'learn failed' }; }
 }
@@ -42,7 +44,7 @@ export async function learnRule(db, txnText, classification, by) {
 export async function suggestCategory(db, text) {
   try {
     if (!text) { return null; }
-    var rr = await db.from('us_expense_rules').select('id, match_text, classification, active').eq('active', true).not('classification', 'is', null).limit(1000);
+    var rr = await readRuleModes(function (mode) { return db.from('us_expense_rules').select('id, match_text, classification, active' + mode).eq('active', true).not('classification', 'is', null).limit(1000); });
     if (rr.error) { return null; }
     var r = bestRule(rr.data || [], text);
     return r ? r.classification : null;
@@ -127,10 +129,10 @@ async function batchSet(db, ids, cls, mode, outIds) {
   }
   return n;
 }
-export async function previewRule(db, matchText, ruleCls) {
+export async function previewRule(db, matchText, ruleCls, matchMode) {
   var got = await pageBankRows(db, 'id, date, posted_date, amount_abs, direction, name, merchant_name, classification, category_source, category_verified, review_status, account_id, transfer_group_id, pending');
   if (got.error) { return { error: got.error }; }
-  var probe = { match_text: matchText };
+  var probe = { match_text: matchText, match_mode: matchMode };
   var hits = got.rows.filter(function (t) { return ruleMatches(probe, rowText(t)); });
   var b = { blank: [], rule: [], human: [], verified: [], same: [] };
   hits.forEach(function (t) { b[ruleBucket(t, ruleCls)].push(t); });
@@ -140,11 +142,11 @@ export async function previewRule(db, matchText, ruleCls) {
 // bank line as money sent to a paid-through company. Same guard rails as a person clicking the 🏢 button, plus: it only ever
 // FILLS A BLANK. A line a person already marked, a transfer between our own accounts, a pending line, a duplicate copy and
 // money IN are never touched.
-export async function partyFlagRows(db, matchText) {
+export async function partyFlagRows(db, matchText, matchMode) {
   var got = await pageBankRows(db, 'id, date, posted_date, amount_abs, direction, name, merchant_name, third_party_payer, transfer_group_id, review_status',
     function (q) { return q.eq('direction', 'out').is('third_party_payer', null); });
   if (got.error) { return { error: got.error }; }
-  var probe = { match_text: matchText };
+  var probe = { match_text: matchText, match_mode: matchMode };
   var rows = got.rows.filter(function (t) { return !t.transfer_group_id && t.review_status !== 'duplicate' && ruleMatches(probe, rowText(t)); });
   return { rows: rows };
 }
@@ -156,12 +158,13 @@ async function partyKind(db, name) {
   } catch (eK) { /* table missing — fall through */ }
   return /nexttrade/i.test(String(name || '')) ? 'affiliate' : 'service_provider';
 }
-export async function applyPartyFlag(db, rule, by) {
+export async function applyPartyFlag(db, rule, by, competingRules) {
   var payer = String((rule && rule.third_party_payer) || '').trim();
   if (!payer) { return { flagged: 0, ids: [] }; }
-  var pf = await partyFlagRows(db, rule.match_text);
+  var pf = await partyFlagRows(db, rule.match_text, rule.match_mode);
   if (pf.error) { return { error: pf.error }; }
-  var ids = pf.rows.map(function (t) { return t.id; }); var done = [];
+  var rows = competingRules ? pf.rows.filter(function (t) { return bestRule(competingRules, rowText(t), true) === rule; }) : pf.rows;
+  var ids = rows.map(function (t) { return t.id; }); var done = [];
   for (var i = 0; i < ids.length; i += 200) {
     var up = await db.from('bank_transactions').update({ third_party_payer: payer }).in('id', ids.slice(i, i + 200))
       .is('third_party_payer', null).eq('direction', 'out').select('id'); // re-check: never race a person
@@ -180,7 +183,7 @@ export async function applyRuleToAll(db, rule, opts) {
   var o = opts || {};
   var res = { applied: 0, filled_blank: 0, retargeted: 0, overwrote_people: 0, matches: 0, already_right: 0, left_people: 0, verified_untouched: 0, scanned: 0, flagged: 0 };
   if (rule.classification) {
-    var pv = await previewRule(db, rule.match_text, rule.classification);
+    var pv = await previewRule(db, rule.match_text, rule.classification, rule.match_mode);
     if (pv.error) { return { error: pv.error }; }
     // v55.83-TR (Codex QA 17 Nov) — when a person's single pick spreads to look-alikes, a line in a PRIVATE account, one side of a
     // paired transfer, a pending line and a duplicate copy are never touched (they stay a person's call)
@@ -233,7 +236,7 @@ export async function privateAccountSet(db) {
 export async function applyLookAlikes(db, ruleId, cls, by) {
   var out = { applied: 0, left_people: 0, matches: 0, wave_set: 0, skipped: null, skipped_protected: 0 };
   if (!ruleId || ruleId === true || !cls || cls === 'transfer') { out.skipped = 'not_applicable'; return out; }
-  var rr = await db.from('us_expense_rules').select('id, match_text, classification, hit_count, active, auto_apply').eq('id', ruleId).maybeSingle();
+  var rr = await readRuleModes(function (mode) { return db.from('us_expense_rules').select('id, match_text, classification, hit_count, active, auto_apply' + mode).eq('id', ruleId).maybeSingle(); });
   if (rr.error || !rr.data) { out.skipped = 'rule_not_found'; return out; }
   if (rr.data.active === false) { out.skipped = 'rule_inactive'; return out; }
   if (rr.data.auto_apply === false) { out.skipped = 'auto_apply_off'; return out; }
@@ -262,9 +265,9 @@ export async function applyLookAlikes(db, ruleId, cls, by) {
 
 export async function applyExpenseRules(db, limit) {
   try {
-    var rulesRes = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, hit_count, third_party_payer').eq('active', true).eq('auto_apply', true).limit(1000);
+    var rulesRes = await readRuleModes(function (mode) { return db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, hit_count, third_party_payer' + mode).eq('active', true).eq('auto_apply', true).limit(1000); });
     if (rulesRes.error && /third_party_payer/.test(rulesRes.error.message || '')) { // SW SQL not run yet → exactly as before
-      rulesRes = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, hit_count').eq('active', true).eq('auto_apply', true).limit(1000);
+      rulesRes = await readRuleModes(function (mode) { return db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, hit_count' + mode).eq('active', true).eq('auto_apply', true).limit(1000); });
     }
     if (rulesRes.error) { return { error: rulesRes.error.message }; }
     var rules = rulesRes.data || [];
@@ -290,12 +293,11 @@ export async function applyExpenseRules(db, limit) {
         if (n > 0) { cur.hit_count = (Number(cur.hit_count) || 0) + n; await db.from('us_expense_rules').update({ hit_count: cur.hit_count, last_hit_at: new Date().toISOString() }).eq('id', rid); }
       }
     }
-    // v55.83-SW — rules that mark a line as sent to a paid-through company; the most specific text goes first, and a line
-    // marked by one rule is no longer blank for the next
-    var flagRules = rules.filter(function (r) { return !!r.third_party_payer; }).sort(function (x, y) { return String(y.match_text).length - String(x.match_text).length; });
+    // Pick the most specific paid-through rule for each line before filling its blank flag.
+    var flagRules = rules.filter(function (r) { return !!r.third_party_payer; });
     var flagged = 0;
     for (var f = 0; f < flagRules.length; f++) {
-      var fr = await applyPartyFlag(db, flagRules[f], null);
+      var fr = await applyPartyFlag(db, flagRules[f], null, flagRules);
       if (!fr.error && fr.flagged > 0) {
         flagged += fr.flagged;
         await db.from('us_expense_rules').update({ hit_count: (Number(flagRules[f].hit_count) || 0) + fr.flagged, last_hit_at: new Date().toISOString() }).eq('id', flagRules[f].id);
