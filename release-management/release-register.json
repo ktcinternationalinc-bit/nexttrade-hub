@@ -235,7 +235,7 @@
       "needsCodex": true,
       "needsMax": true,
       "dataChange": true,
-      "waitingFor": "Migration plan prepared. Isolated split, release and interrupted migration checks passed. Waiting for ACID, authenticated staging and restore checks, and a supported production executor.",
+      "waitingFor": "Migration plan prepared. Waiting for ACID, a fix for simultaneous saves over-reserving the same stock, authenticated staging and restore checks, and a supported production executor.",
       "routesChanged": false,
       "configChanged": false,
       "dependsOn": [
