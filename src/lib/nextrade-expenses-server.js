@@ -23,7 +23,7 @@ export async function loadNextradeExpenses(db, fetchAll, privateAccounts) {
     const cents = Math.round(Number(transaction.amount_abs) * 100);
     if (!(cents > 0)) return [];
     return [{ id: transaction.id, date: transaction.date, cents, who: transaction.merchant_name || transaction.name,
-      category: ktcByKey.get(category.key) || category.key, label: category.label, kind: category.kind,
+      category: ktcByKey.get(category.key) || category.key, nextrade_category: category.key, label: category.label, kind: category.kind,
       payroll: category.is_payroll === true, bill_id: billBySource.get(transaction.id) }];
   });
 }

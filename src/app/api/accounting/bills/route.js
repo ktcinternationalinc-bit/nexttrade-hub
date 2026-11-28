@@ -56,7 +56,9 @@ import { pairReturnedDeposits } from '../../../../lib/returned-deposit-pairing';
 export const maxDuration = 60;
 import { learnRule } from '../../../../lib/expense-rules-server'; // v55.83-PJ — bills remember vendor categories
 import { PENDING_REFUSAL } from '../../../../lib/pending-guard'; // v55.83-XT
-import { categoryForNewBill, loadBillRules, provenanceFields } from '../../../../lib/bill-rules-server'; // v55.83-WX — bill category rules first, then the vendor memory
+import { categoryForNewBill, loadBillRules, loadLinkedNameKeys, provenanceFields } from '../../../../lib/bill-rules-server'; // v55.83-WX — bill category rules first, then the vendor memory
+import { countedInProfit, isDeducted } from '../../../../lib/bill-rules';
+import { nameKey } from '../../../../lib/profitability';
 // v55.83-ZY — "Other services" / "Operational" need the widened checks; a refusal by the OLD check is said plainly (never saved without them)
 var ZY_SQL_WORDS = 'The new choices Other services / Operational need sql/v55-83-ZY-other-services-operational.sql — run it in Supabase, then save again. Nothing was saved.';
 function zyNeedsSql(err) { return !!err && /vendor_bills_bill_type_check|vendor_bills_shipment_direction_check|bill_commission_rules_default_direction_check/.test(String(err.message || '')); }
@@ -309,7 +311,7 @@ export async function POST(req) {
     function missingRel(e) { return /does not exist|schema cache|Could not find the table/i.test(String((e && e.message) || '')); }
     function reqIdOf(b0) { var v0 = b0 && typeof b0.request_id === 'string' ? b0.request_id.trim() : ''; return v0.length >= 8 ? v0.substring(0, 80) : null; }
 
-    var WRITE_ACTIONS = { pay_bills_from_bank: 1, bank_lines_for_bills: 1, save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, delete_bill: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1, attach_bill_file: 1, dismiss_bill_dup: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
+    var WRITE_ACTIONS = { pay_bills_from_bank: 1, bank_lines_for_bills: 1, save_bill: 1, set_bill_category: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, delete_bill: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1, attach_bill_file: 1, dismiss_bill_dup: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
     // v55.83-PW (Max, 10:56): three clear LEVELS. Writes still need
     // Bills: Manage. READS accept ANY totals-level permission — the explicit
     // "Accounting: See Money Totals" (ACCT-008), or the older Bills/AR views
@@ -461,6 +463,51 @@ export async function POST(req) {
         from: body.date_from || null, to: body.date_to || null, vendor: body.vendor || null, showVoided: body.show_voided === true, isVoid: isPaymentVoid });
       if (!canTotals) { hideTotals(repP); } // Codex 13:52 ZZ-02: no totals anywhere (screen, CSV, vendor page) without See Money Totals
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, report: repP, can_totals: canTotals, vendors: idsOf(LP.bills.filter(function (b) { return b.record_status === 'active'; }), 'vendor_name').sort() });
+    }
+
+    if (action === 'set_bill_category') {
+      const { id, category, expected_category: before } = body;
+      const error = (message, status) => NextResponse.json({ ok: false, error: message }, { status });
+      if (!id || ![category, before].every(key => key === null || typeof key === 'string' && /^[a-z0-9_-]{1,80}$/i.test(key))) {
+        return error('Pick a bill and a valid category.', 400);
+      }
+      const window = await windowFloorFor(db, gate.ctx);
+      if (window.error) return error(window.error, 503);
+      const bill = await db.from('vendor_bills').select('id,bill_date,category,record_status,currency,wave_business_id,bill_type,release_number,updated_at').eq('id', id).maybeSingle();
+      if (bill.error) return error('Could not read the bill. Try again.', 503);
+      const current = bill.data;
+      if (!current || current.wave_business_id !== US_WAVE_BUSINESS_ID || current.currency !== 'USD' || window.floor && current.bill_date < window.floor) return error('Bill not found.', 404);
+      if (current.record_status !== 'active') return error('This bill is no longer active.', 409);
+      if ((current.category || null) !== before) return error('The bill’s category changed. Refresh the report and try again.', 409);
+      if (before === category) return NextResponse.json({ ok: true, category });
+      const linked = await nextradeBillIds(db, [id]);
+      if (!linked.ok) return error('Could not verify the bill’s NextTrade link. Try again.', 503);
+      if (linked.ids[id]) return error('Change the category on the linked NextTrade expense row.', 409);
+      const wire = await openWireOf(db, id);
+      if (wire?.status === 'sent') return error('This bill is on a sent wire. Attach the wire to its bank line before editing the bill.', 409);
+      if (category) {
+        const picked = await db.from('expense_categories').select('key,label,kind,active').eq('key', category).maybeSingle();
+        if (picked.error) return error('Could not verify the category. Try again.', 503);
+        if (!picked.data || picked.data.active === false || category === 'needs_clarification' || !['expense', 'cogs', 'other_expense'].includes(picked.data.kind || 'expense')) {
+          return error('Pick an active expense category.', 400);
+        }
+        if (isDeducted(picked.data)) {
+          const [lines, names] = await Promise.all([loadLines(db, id), loadLinkedNameKeys(db)]);
+          if (lines.error) return error('Could not verify the bill’s shipment costs. Try again.', 503);
+          const reason = countedInProfit(current, lines.lines, names, nameKey);
+          if (reason) return error('This category would deduct the cost twice because ' + reason + '.', 409);
+        }
+      }
+      const ruleStorage = await loadBillRules(db);
+      if (ruleStorage.error) return error('Could not read the bill category rules. Try again.', 503);
+      const provenance = provenanceFields({ source: category ? 'manual' : null }, ruleStorage.ready);
+      let update = db.from('vendor_bills').update({ category, updated_at: new Date().toISOString(), ...provenance }).eq('id', id).eq('record_status', 'active');
+      update = current.updated_at ? update.eq('updated_at', current.updated_at) : update.is('updated_at', null);
+      const saved = await update.select('id').maybeSingle();
+      if (saved.error) return error('Could not save the bill category. Try again.', 503);
+      if (!saved.data) return error('This bill changed. Refresh the report and try again.', 409);
+      await audit(db, userId, 'bill_updated', 'vendor_bill', id, { category, previous_category: before, source: 'Profitability drill-down' });
+      return NextResponse.json({ ok: true, category });
     }
 
     // ── save_bill: create or update (active bills only)
@@ -2252,7 +2299,7 @@ export async function POST(req) {
             nextradeExpenses = await loadNextradeExpenses(db, fetchAll, privateNexttrade);
           } catch (expenseError) { nextradeExpenseError = 'NextTrade expenses could not be verified for these dates. Retry the report.'; }
         }
-        var nextradeBillIds = new Set(nextradeExpenses.map(function (row) { return row.bill_id; }).filter(Boolean));
+        var nextradeChargeBillIds = new Set(nextradeExpenses.map(function (row) { return row.bill_id; }).filter(Boolean));
         var rtmBlk = null; var ptBlocks = [];
         try {
           var partiesP = await loadParties(db);
@@ -2280,11 +2327,11 @@ export async function POST(req) {
                 if (!wq.error) { ptReqs = ptReqs.concat(wq.data || []); }
               }
             } catch (eWq) { ptReqs = []; }
-            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, historicalPayerByPayment: historicalPayerByPayment, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, refunds: ptRefunds, profKey: taxKeyP, nextradeBillIds }); // TX: + extra fees · WF step C: the one tax key
+            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, historicalPayerByPayment: historicalPayerByPayment, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, refunds: ptRefunds, profKey: taxKeyP, nextradeBillIds: nextradeChargeBillIds }); // TX: + extra fees · WF step C: the one tax key
             ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
         } catch (eR9) {
           rtmBlk = null; ptBlocks = [];
-          if (nextradeBillIds.size) { nextradeExpenseError = 'NextTrade reimbursements could not be verified for these dates. Retry the report.'; }
+          if (nextradeChargeBillIds.size) { nextradeExpenseError = 'NextTrade reimbursements could not be verified for these dates. Retry the report.'; }
         }
         // v55.83-VY (Codex 13:07: "integrate helper into the actual route -> report -> FundsSent -> totals/export path") — the shared
         // funds calculation, fed with the WHOLE history of each company (a fee or a bill payment dated in this period can belong

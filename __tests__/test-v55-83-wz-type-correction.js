@@ -56,6 +56,15 @@ console.log('WZ — a credit corrected to a payable bill cannot become a second 
   check('CONTROL: a credit with a number nobody else has → the type change is saved', ok2.ok === true && row(CM2).bill_type === 'supplier', ok2);
   var okA = await call({ action: 'validate_bill', id: A, checks: CK, notes: 'checked against the supplier statement', shipment_direction: 'outbound', bill_type: 'trucking' });
   check('CONTROL: a payable bill changing between payable types validates normally', okA.ok === true && row(A).validation_status === 'validated' && row(A).bill_type === 'trucking', okA);
+  Object.assign(row(A), { currency: 'USD', wave_business_id: require(path.join(root, 'src/lib/business-of.js')).US_WAVE_BUSINESS_ID, category: 'vendor_payment' });
+  db.t.expense_categories = [{ key: 'office', label: 'Office', kind: 'expense', active: true }, { key: 'trucking', label: 'Trucking', kind: 'expense', active: true }];
+  db.t.vendor_bill_lines = [];
+  var badCategory = await call({ action: 'set_bill_category', id: A, category: 'office', expected_category: 'vendor_payment' });
+  check('P&L drill-down: a shipment cost cannot be moved to overhead and deducted twice', badCategory.__status === 409 && row(A).category === 'vendor_payment', badCategory);
+  var goodCategory = await call({ action: 'set_bill_category', id: A, category: 'trucking', expected_category: 'vendor_payment' });
+  check('P&L drill-down: save only the category, keeping validation and amounts', goodCategory.ok === true && row(A).category === 'trucking' && row(A).total_amount === 100 && row(A).validation_status === 'validated', goodCategory);
+  var outdatedCategory = await call({ action: 'set_bill_category', id: A, category: null, expected_category: 'vendor_payment' });
+  check('P&L drill-down: a stale category cannot overwrite a more recent change', outdatedCategory.__status === 409 && row(A).category === 'trucking', outdatedCategory);
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   if (failN) { process.exit(1); }
 })().catch(function (e) { console.log('  ✗ FAIL: crashed ' + (e && e.stack)); process.exit(1); });

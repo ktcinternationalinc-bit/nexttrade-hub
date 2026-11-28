@@ -17,6 +17,8 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   const funding = [];
   const review = [];
   const unclassifiedReceipts = [];
+  const otherDeposits = [];
+  const directKtcExpenses = [];
   const banks = new Map(bankLines.map(line => [line.id, line]));
   const partnerPatterns = new Set(Object.values(bills).filter(b => isActive(b) && isUSD(b.currency) && isPartnerFeeCategory(b.category)).map(b => vendorKeyOf(b.vendor_name) + '|' + cents(b.total_amount)));
   function partnerMatch(bill) {
@@ -29,14 +31,15 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   const monthlySchedule = nexPacFeeSchedule(feeLinesByBill, from, to);
   const categoryOf = b => isPartnerFeeCategory(b.category) || isPartnerFeeCategory(labels[b.category]) || partnerMatch(b) || sum(feeLinesByBill.get(b.id) || []) === cents(b.total_amount) && feeLinesByBill.has(b.id) ? 'partner_fees' : b.category;
   const labelFor = key => labels[key] || key || 'Uncategorized';
-  const nextradeBills = new Set(nextradeExpenses.map(row => row.bill_id).filter(Boolean));
+  const nextradeByBill = new Map(nextradeExpenses.filter(row => row.bill_id).map(row => [row.bill_id, row]));
+  const nextradeBills = new Set(nextradeByBill.keys());
   const charges = nextradeExpenses.filter(row => inPeriod(row.date)).map(row => {
     const bill = bills[row.bill_id];
     const category = row.category;
     const label = labels[category] || row.label;
     const source = 'NextTrade expense · transaction date';
     if (privateBills[row.bill_id] || row.payroll && !showPayrollDetails) return { date: row.date, cents: row.cents, category, label, kind: row.kind, source };
-    return { ...row, category, label, source, ...(isActive(bill) ? { ref: bill.bill_number, bill_date: bill.bill_date,
+    return { ...row, category, label, source, nextrade_transaction_id: row.id, ...(isActive(bill) ? { ref: bill.bill_number, bill_date: bill.bill_date,
       bill_total_cents: cents(bill.total_amount), attachment_path: bill.attachment_path } : { bill_id: undefined }) };
   });
 
@@ -44,7 +47,9 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     const category = categoryOf(bill);
     const row = { id, date, cents: amount, category, label: labelFor(category), source, bank_ref: bank ? bank.name || bank.merchant_name : null };
     if (privateBills[bill.id]) return { ...row, label: 'Payroll', who: 'Payroll bill · details restricted', bank_ref: null };
-    return { ...row, who: bill.vendor_name, ref: bill.bill_number, bill_id: bill.id, bill_date: bill.bill_date,
+    const nexttrade = nextradeByBill.get(bill.id);
+    return { ...row, who: bill.vendor_name, ref: bill.bill_number, bill_id: bill.id, bill_category: bill.category || null, bill_date: bill.bill_date,
+      ...(nexttrade && (showPayrollDetails || !nexttrade.payroll) ? { nextrade_transaction_id: nexttrade.id, nextrade_category: nexttrade.nextrade_category } : {}),
       release: bill.release_number, bill_total_cents: cents(bill.total_amount), attachment_path: bill.attachment_path };
   }
 
@@ -144,8 +149,9 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
       // An ordinary bank line may also be named in the “paid through, source unknown” list. Use its bank payment once.
       if (directBank && row.on_bank_line === directBank) return;
       if (row.payment_id) recorded.add(row.payment_id);
-      const proof = paymentById.get(row.payment_id)?.vendor_payment_proof;
-      recordBillPayment(bill, row.paid_date, amount, company.party + (proof ? ' · vendor payment confirmation' : ' paid'), row.payment_id, null, company.party, row);
+      const payment = paymentById.get(row.payment_id);
+      const evidence = payment?.vendor_payment_proof ? ' · vendor payment confirmation' : payment?.method === 'historical_reconciliation' ? ' · historical reconciliation' : ' paid';
+      recordBillPayment(bill, row.paid_date, amount, company.party + evidence, row.payment_id, null, company.party, row);
     });
     (period.fee_rows || []).concat(period.loose_fee_rows || []).forEach(fee => {
       const amount = cents(fee.amount);
@@ -185,6 +191,9 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     }
     const kind = kinds[row.category];
     if (kind === 'transfer' || row.category === 'transfer' || kind === 'not_pnl') return;
+    if (!reviewCategory(row.category) && !/^((other_)?income)$/.test(kind || '')) {
+      directKtcExpenses.push({ ...base, bank_category: bank.classification ?? row.category, bank_edit: !row.money_in });
+    }
     eligibleBankIds.add(row.id);
     let remaining = amount;
     const allocations = bankPayments.get(row.id) || [];
@@ -201,7 +210,7 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
       remaining -= portion;
     });
     if (!remaining) return;
-    const remainder = { ...base, cents: remaining };
+    const remainder = { ...base, cents: remaining, bank_category: bank.classification ?? row.category, bank_edit: !row.money_in };
     if (reviewCategory(row.category) || /^((other_)?income)$/.test(kind || '')) review.push(remainder);
     else paid.push(remainder);
   });
@@ -226,7 +235,9 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     const bank = banks.get(row.id);
     if (!bank || !isUSD(bank.iso_currency) || row.paired || row.returned_deposit || row.money_back_from || row.category === 'transfer') return;
     const linked = recordedReceipts.get(row.id);
-    const record = { id: row.id, date: row.date, who: row.who, cents: cents(row.amount), invoice_id: bank.matched_invoice_id || (linked?.invoices.size === 1 ? Array.from(linked.invoices)[0] : null) };
+    const record = { id: row.id, date: row.date, who: row.who, cents: cents(row.amount), category: row.category, label: labelFor(row.category),
+      bank_category: bank.classification || '', bank_edit: !bank.matched_invoice_id && !linked, direction: 'in',
+      invoice_id: bank.matched_invoice_id || (linked?.invoices.size === 1 ? Array.from(linked.invoices)[0] : null) };
     if (row.category === 'customer_payment') {
       receipts.push(record);
     } else if (linked) {
@@ -235,6 +246,8 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
       if (proven < record.cents) unclassifiedReceipts.push({ ...record, cents: record.cents - proven, invoice_id: null, source: 'Unmatched remainder of deposit' });
     } else if (!row.category) {
       unclassifiedReceipts.push(record);
+    } else {
+      otherDeposits.push(record);
     }
   });
 
@@ -254,22 +267,37 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     const key = row.bank_category || 'uncategorized';
     directCategoryCents[key] = (directCategoryCents[key] || 0) + row.cents;
   });
-  return { rows_visible: showRows, paid: group(paid.filter(row => !row.nexttrade_reimbursement).concat(charges)), receipts: group(receipts), funding: group(funding),
+  const rtmTransfers = funds.filter(company => String(company.party || '').trim().toLowerCase() === 'rtm capital')
+    .flatMap(company => company.transfers || []).filter(transfer => inPeriod(transfer.date) && transfer.as_of);
+  const rtmReconciliation = rtmTransfers.length ? rtmTransfers.reduce((totals, transfer) => ({
+    sent: totals.sent + cents(transfer.sent),
+    bills: totals.bills + cents(transfer.as_of.applied_to_bills),
+    fees: totals.fees + cents(transfer.as_of.services_rendered),
+    refunded: totals.refunded + cents(transfer.as_of.refunds),
+    left: totals.left + cents(transfer.as_of.held),
+  }), { sent: 0, bills: 0, fees: 0, refunded: 0, left: 0 }) : null;
+  const allocationByTransfer = new Map(rtmTransfers.map(transfer => [transfer.id, {
+    linked_cents: cents(transfer.as_of.applied_to_bills), unallocated_cents: cents(transfer.as_of.held),
+  }]));
+  return { rows_visible: showRows, paid: group(paid.filter(row => !row.nexttrade_reimbursement).concat(charges)), receipts: group(receipts),
+    funding: group(funding.map(row => row.source === 'Funds sent' ? { ...row, allocation: allocationByTransfer.get(row.id) } : row)),
     funded_paid: group(paid.filter(row => row.party).map(row => row.nexttrade_reimbursement ? { ...row, source: row.source + ' · reimburses a recorded NextTrade charge' } : row)),
     nextrade_charges: group(charges), nextrade_reimbursements: group(reimbursements),
+    direct_ktc_expenses: group(directKtcExpenses),
+    rtm_reconciliation: rtmReconciliation,
     nextrade_operating: { charges_by_category: Array.from(chargeCategories.values()), direct_by_category: directCategoryCents,
       direct_rows: showRows ? directReimbursements.map(({ bank_id, cents: amount }) => ({ bank_id, cents: amount })) : [] },
     review: group(review),
     bank_cash: group(paid.filter(row => !row.party).concat(funding.map(row => ({ ...row, category: 'company_funding', label: 'RTM / NextTrade funding' })))),
     billed: group(billed.concat(charges)),
-    unclassified_receipts: group(unclassifiedReceipts), partner_billed: group(partnerBilled), partner_schedule: group(expectedPartnerFees), partner_paid_cents: sum(paid.filter(row => row.category === 'partner_fees')) };
+    unclassified_receipts: group(unclassifiedReceipts), other_deposits: group(otherDeposits), partner_billed: group(partnerBilled), partner_schedule: group(expectedPartnerFees), partner_paid_cents: sum(paid.filter(row => row.category === 'partner_fees')) };
 }
 
 export function combinePaidComparisons(parts) {
   if (!parts.length || parts.some(part => !part || part.unavailable)) return null;
   const totals = { rows_visible: parts.every(part => part.rows_visible), partner_paid_cents: parts.reduce((total, part) => total + part.partner_paid_cents, 0) };
   totals.notice = parts.find(part => part.notice)?.notice;
-  for (const key of ['paid', 'receipts', 'funding', 'funded_paid', 'bank_cash', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'review', 'unclassified_receipts', 'partner_billed', 'partner_schedule']) {
+  for (const key of ['paid', 'receipts', 'funding', 'funded_paid', 'bank_cash', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'direct_ktc_expenses', 'review', 'unclassified_receipts', 'other_deposits', 'partner_billed', 'partner_schedule']) {
     totals[key] = parts.reduce((total, part) => {
       const group = part[key];
       return group ? { cents: total.cents + group.cents, count: total.count + group.count, rows: total.rows.concat(group.rows) } : total;

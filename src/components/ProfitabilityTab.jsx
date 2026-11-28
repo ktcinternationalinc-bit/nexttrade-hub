@@ -153,11 +153,13 @@ export default function ProfitabilityTab(props) {
   var s22 = useState(null); var xOpen = s22[0]; var setXOpen = s22[1]; // the expense line opened: period|box|category
   var s23 = useState(null); var fShow = s23[0]; var setFShow = s23[1]; // the formula panel: { key, pinned }
   var s24 = useState(null); var catList = s24[0]; var setCatList = s24[1]; var s25 = useState({}); var catSaving = s25[0]; var setCatSaving = s25[1];
-  var canPick = (userProfile && userProfile.role === 'super_admin') || props.isSuperAdmin === true || (props.modulePerms || {})['bank.classify'] === true; // the same switch as Stats → Income Statement
   var isSuper = (userProfile && userProfile.role === 'super_admin') || props.isSuperAdmin === true; // v55.83-XQ — the "paid through RTM / NextTrade" figure is shown to super-admin only (Max)
+  var canPick = isSuper || (props.modulePerms || {})['bank.classify'] === true;
+  var canPickBill = isSuper || (props.modulePerms || {})['bills.manage'] === true;
+  var canPickNexttrade = isSuper || (props.modulePerms || {})['company.nextrade.manage'] === true;
   // v55.83-WP (Max, 21 Nov: "need to be able to undo a category selection") — the last pick's undo point, and the undo itself
   var sUndo = useState(null); var undoPt = sUndo[0]; var setUndoPt = sUndo[1]; var sUndoB = useState(false); var undoBusy = sUndoB[0]; var setUndoBusy = sUndoB[1];
-  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); startExpenses({ ignoreCache: true }); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (keepUndoBar(j)) { if (undoChangedSomething(j)) { startExpenses({ ignoreCache: true }); } } else { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
+  function undoPick() { if (!undoPt || undoBusy) { return; } setUndoBusy(true); erApi('undo_category_pick', { undo_id: undoPt.id }).then(function (j) { if (j && j.ok) { toast.success(j.message || 'Undone.', { duration: 9000 }); setUndoPt(null); refreshExpenseCategories(); } else { toast.error((j && j.error) || 'Not undone.', { duration: 12000 }); if (keepUndoBar(j)) { if (undoChangedSomething(j)) { refreshExpenseCategories(); } } else { setUndoPt(null); } } }).finally(function () { setUndoBusy(false); }); }
   function erApi(action, payload) {
     return hubFetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
@@ -166,8 +168,30 @@ export default function ProfitabilityTab(props) {
   // v55.83-WR (Max, 21 Nov: "should be able to change category right from here but not working") — the list is fetched when ANY
   // place with the menu is open: a line of the expense table OR the "How [month] is worked out" pop-up. A failed fetch is said, with a retry.
   var s29 = useState(''); var catErr = s29[0]; var setCatErr = s29[1]; var catLoading = useRef(false);
-  function loadCats() { if (!canPick || catLoading.current) { return; } catLoading.current = true; setCatErr(''); erApi('list').then(function (j) { if (j && j.ok) { setCatList(pickableCategories(j.categories)); } else { setCatErr((j && j.error) || 'The categories could not be loaded.'); } }).finally(function () { catLoading.current = false; }); }
+  function loadCats() { if (!(canPick || canPickBill) || catLoading.current) { return; } catLoading.current = true; setCatErr(''); erApi('list').then(function (j) { if (j && j.ok) { setCatList(pickableCategories(j.categories)); } else { setCatErr((j && j.error) || 'The categories could not be loaded.'); } }).finally(function () { catLoading.current = false; }); }
   useEffect(function () { if (needCategoryList({ canPick: canPick, loaded: Array.isArray(catList), loading: catLoading.current, xOpen: xOpen, fShow: fShow })) { loadCats(); } }, [xOpen, fShow]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [nexttradeCats, setNexttradeCats] = useState(null);
+  const [nexttradeCatError, setNexttradeCatError] = useState('');
+  const nexttradeCatLoading = useRef(false);
+  function categoryApi(path, body) {
+    return hubFetch('/api/accounting/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, user_id: userProfile?.id }) }).then(response => response.json())
+      .catch(() => ({ ok: false, error: 'Could not reach the server. Try again.' }));
+  }
+  function loadNexttradeCats() {
+    if (!canPickNexttrade || nexttradeCatLoading.current) return;
+    nexttradeCatLoading.current = true;
+    setNexttradeCatError('');
+    categoryApi('company-books', { action: 'categories', company: 'nextrade' }).then(result => {
+      if (result.ok && !result.sql_missing) setNexttradeCats(pickableCategories(result.categories).filter(category => category.direction !== 'in'));
+      else setNexttradeCatError(result.error || result.sql_missing || 'NextTrade categories could not be loaded.');
+    }).finally(() => { nexttradeCatLoading.current = false; });
+  }
+  useEffect(function () {
+    if (view !== 'period') return;
+    if (!catList && !catErr) loadCats();
+    if (!nexttradeCats && !nexttradeCatError) loadNexttradeCats();
+  }, [view, canPick, canPickBill, canPickNexttrade]); // eslint-disable-line react-hooks/exhaustive-deps
   // the SAME save as Stats → Income Statement (expense-rules bulk_classify, single pick); then every period is asked again
   function pickCat(row, key) {
     if (!key || !row || !row.id) { return; }
@@ -177,7 +201,7 @@ export default function ProfitabilityTab(props) {
       setCatSaving(function (m) { var n = Object.assign({}, m); n[row.id] = true; return n; });
       erApi('clear_category', { ids: [row.id], confirm: true }).then(function (j) {
         var w = singleLineWords(j); // (Codex 20:34) this line's own reason when it was kept — this screen has no list
-        if (w.ok) { toast.success(w.text + ' The expenses are loaded again.'); startExpenses({ ignoreCache: true }); }
+        if (w.ok) { toast.success(w.text); refreshExpenseCategories(row.date); }
         else { toast.error(w.text, { duration: 12000 }); }
       }).finally(function () { setCatSaving(function (m) { var n = Object.assign({}, m); delete n[row.id]; return n; }); });
       return;
@@ -186,8 +210,8 @@ export default function ProfitabilityTab(props) {
     if (samePick(row, key, catList)) { toast.error('This line is already under “' + categoryLabel(key, catList) + '”. Nothing was changed — pick a different category to move it.', { duration: 9000 }); return; }
     var fromLbl = categoryLabel(currentCategoryOf(row, catList), catList); var toLbl = categoryLabel(key, catList);
     setCatSaving(function (m) { var n = Object.assign({}, m); n[row.id] = true; return n; });
-    erApi('bulk_classify', { ids: [row.id], classification: key, single_pick: true }).then(function (j) {
-      if (j && j.ok && j.updated > 0) { setUndoPt(j.undo_id ? { id: j.undo_id, who: row.who, label: ((catList || []).filter(function (cU) { return cU.key === key; })[0] || {}).label || key, hours: j.undo_hours, ready: j.undo_ready !== false } : null); var more = Number(j.look_alikes_updated) || 0; toast.success('Saved: moved ' + (fromLbl ? 'from “' + fromLbl + '” ' : '') + 'to “' + toLbl + '”' + (more ? ' — ' + more + ' more line(s) with the same description went with it' : '') + '. The numbers are being worked out again; the line now sits under “' + toLbl + '”.', { duration: 9000 }); startExpenses({ ignoreCache: true }); }
+    erApi('bulk_classify', { ids: [row.id], classification: key, single_pick: true, report_pick: true }).then(function (j) {
+      if (j && j.ok && j.updated > 0) { setUndoPt(j.undo_id ? { id: j.undo_id, who: row.who, label: toLbl, hours: j.undo_hours, ready: j.undo_ready !== false } : null); toast.success('Moved ' + (fromLbl ? 'from “' + fromLbl + '” ' : '') + 'to “' + toLbl + '”.'); refreshExpenseCategories(row.date); }
       else { toast.error((j && j.error) || 'Nothing was saved — reload the page and try again.'); }
     }).finally(function () { setCatSaving(function (m) { var n = Object.assign({}, m); delete n[row.id]; return n; }); });
   }
@@ -203,6 +227,26 @@ export default function ProfitabilityTab(props) {
   }
   var s27 = useState(null); var billPeek = s27[0]; var setBillPeek = s27[1]; // { row, payer } — v55.83-VY
   function openBill(row, payer) { setBillPeek({ row: row, payer: payer }); }
+  function saveSourceCategory(row, kind, id, current, value) {
+    const key = value === '__remove__' ? null : value;
+    if (key === current) return;
+    if (!key && kind === 'nextrade' && !window.confirm('Remove this NextTrade category? Its linked KTC bill may be voided.')) return;
+    setCatSaving(previous => ({ ...previous, [id]: true }));
+    const request = kind === 'nextrade'
+      ? categoryApi('company-books', { action: 'set_category', company: 'nextrade', ids: [id], category_key: key, learn: false })
+      : categoryApi('bills', { action: 'set_bill_category', id, category: key, expected_category: current });
+    request.then(result => {
+      if (!result.ok || kind === 'nextrade' && !result.saved) { toast.error(result.error || 'The category could not be saved.'); return; }
+      toast.success(key ? 'Category saved.' : 'Category removed.');
+      setBillPeek(previous => {
+        if (!previous) return previous;
+        const field = kind === 'nextrade' ? 'nextrade_category' : 'bill_category';
+        const recordId = kind === 'nextrade' ? previous.row.nextrade_transaction_id : previous.row.bill_id;
+        return recordId === id ? { ...previous, row: { ...previous.row, [field]: key } } : previous;
+      });
+      refreshExpenseCategories(row.date || row.paid_date || row.bill_date);
+    }).finally(() => setCatSaving(previous => ({ ...previous, [id]: false })));
+  }
   // the bill's own file: the same private-link rule as the Bills screen (the storage rules decide who may open it)
   function openBillDoc(path) {
     if (!path) { return; } var priv = String(path).indexOf('pv/') === 0; var bucket = priv ? 'bills-private' : 'attachments';
@@ -268,17 +312,36 @@ export default function ProfitabilityTab(props) {
   // chips use: goFix scrolls to the product card and outlines it); a description that is not under a product yet goes to the names list, filtered
   function openSetupFor(name, gid) { setFull(false); setFShow(null); if (gid) { goFix('link', gid); } else { goFix('names', null, String(name || '')); } }
   function catPicker(row) {
-    if (!canPick || !row.id) { return null; }
-    if (catSaving[row.id]) { return <span style={{ color: SUB, fontSize: 10, fontWeight: 700 }}>saving…</span>; }
-    var pst = pickerState(catList, catErr);
-    if (pst === 'error') { return <button type="button" title={catErr} onClick={function (e) { e.stopPropagation(); loadCats(); }} className="text-[10px] font-extrabold rounded px-1.5 py-0.5" style={{ border: '1px solid #fca5a5', background: '#fef2f2', color: '#991b1b' }}>categories not loaded — try again</button>; }
-    if (pst === 'loading') { return <select value="" disabled aria-label="Loading the categories" onClick={function (e) { e.stopPropagation(); }} onFocus={function () { loadCats(); }} className="nt-light text-[11px] font-semibold rounded px-1 py-0.5" style={{ border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b', maxWidth: 180 }}><option value="">loading…</option></select>; }
-    var curK = currentCategoryOf(row, catList);
-    return <select value={curK} title={curK ? 'Now under: ' + categoryLabel(curK, catList) : 'No category chosen yet'} aria-label={'Change the category of ' + row.who} onClick={function (e) { e.stopPropagation(); }} onChange={function (e) { pickCat(row, e.target.value); }} className="nt-light text-[11px] font-semibold rounded px-1 py-0.5" style={{ border: '1px solid #fdba74', background: '#ffffff', color: '#0f172a', maxWidth: 180 }}>
-      {!curK && <option value="">change category…</option>}
-      {pickableCategories(catList).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
-      <option value="__remove__">✕ remove category (back to Uncategorized)</option>
-    </select>;
+    const nexttrade = !!row.nextrade_transaction_id;
+    const bill = !nexttrade && !!row.bill_id;
+    const id = nexttrade ? row.nextrade_transaction_id : bill ? row.bill_id : row.id;
+    const allowed = nexttrade ? canPickNexttrade : bill ? canPickBill : canPick && row.bank_edit;
+    if (!allowed || !id) return null;
+    if (catSaving[id]) return <span role="status" style={{ color: SUB, fontSize: 11 }}>Saving category…</span>;
+    const list = nexttrade ? nexttradeCats : catList;
+    const load = nexttrade ? loadNexttradeCats : loadCats;
+    const error = nexttrade ? nexttradeCatError : catErr;
+    const state = pickerState(list, error);
+    if (state === 'error') return <button type="button" title={error} onClick={load} className="rounded px-1.5 py-0.5 text-[11px] font-bold" style={{ background: '#fef2f2', color: '#991b1b' }}>Retry categories</button>;
+    if (state === 'loading') return <span role="status" style={{ color: SUB, fontSize: 11 }}>Loading categories…</span>;
+    const recordCategory = (nexttrade ? row.nextrade_category : bill ? (row.bill_category !== undefined ? row.bill_category : row.category === 'uncategorized' ? null : row.category) : row.bank_category ?? row.category) || null;
+    const options = bill ? list.filter(category => ['expense', 'other_expense', 'cogs'].includes(category.kind || 'expense')) : list;
+    const selected = currentCategoryOf({ category: recordCategory }, options);
+    const label = nexttrade ? 'NextTrade category' : bill ? 'Bill category' : 'Bank category';
+    return <label className="inline-flex flex-wrap items-center gap-1 text-[11px]">
+      <span>{label}</span>
+      <select value={selected} aria-label={label + ' for ' + (row.ref || row.bill_number || row.who || row.vendor || 'this transaction')}
+        onClick={event => event.stopPropagation()} onChange={event => {
+          const key = event.target.value;
+          if (nexttrade || bill) saveSourceCategory(row, nexttrade ? 'nextrade' : 'bill', id, recordCategory, key);
+          else pickCat({ ...row, category: recordCategory }, key);
+        }}
+        className="nt-light rounded border px-1 py-0.5 font-semibold" style={{ background: '#ffffff', color: '#0f172a', maxWidth: 208 }}>
+        {!selected && <option value="" disabled>{recordCategory ? categoryLabel(recordCategory, list) : 'Choose a category…'}</option>}
+        {options.map(category => <option key={category.key} value={category.key}>{category.label}</option>)}
+        {recordCategory && <option value="__remove__">Remove category</option>}
+      </select>
+    </label>;
   }
   var todayIso = new Date().toISOString().substring(0, 10);
   var floorIso = (data && data.window_floor) || '';
@@ -294,11 +357,18 @@ export default function ProfitabilityTab(props) {
   function startExpenses(opts) {
     var reqs = pendingRequests(expenseRequests(periodKeys(), pGran, effFrom, effTo), pExp, expScope, opts);
     if (!reqs.length) { return; }
+    const first = opts?.first;
+    if (first) reqs.sort((a, b) => Number(b.from <= first && first <= b.to) - Number(a.from <= first && first <= a.to));
     var gen = expGen.current; var scope = expScope;
     loadExpensePeriods({ requests: reqs, adjust: rtmAdjust, fold: foldUnc,
       isCurrent: function () { return expGen.current === gen; },
       put: function (k, res) { if (expGen.current !== gen) { return; } setPExp(function (prev) { var nx = Object.assign({}, prev); nx[scope + '|' + k] = res; return nx; }); },
       fetchOne: function (q) { return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'period_stats', paid_comparison: true, from: q.from, to: q.to, user_id: userProfile && userProfile.id }) }).then(function (r) { return r.json(); }); } });
+  }
+  function refreshExpenseCategories(date) {
+    expGen.current += 1;
+    expAuto.current = expGen.current;
+    startExpenses({ ignoreCache: true, first: date });
   }
   // a new report, another grouping or another person: the answers kept so far no longer apply
   useEffect(function () { expGen.current += 1; setPExp({}); }, [data, pGran, userProfile && userProfile.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -748,16 +818,16 @@ export default function ProfitabilityTab(props) {
       if (expOn && picked.key === 'total' && !exp.complete) { status = 'The comparison total appears once all selected periods have loaded.'; }
       var pnl = exp?.status === 'ok' && (picked.key !== 'total' || exp.complete)
         ? finalPnl(picked.profit, exp.cols, (picked.incomplete || 0) + (picked.uncounted || 0)) : null;
-      var invoiceRows = periodInvoices(cells.filter(function (c) { return picked.key === 'total' || bucketOf(c.invoice_date, pGran).key === picked.key; }), false)
+      var invoiceRows = periodInvoices(cells.filter(function (c) { return picked.key === 'total' || bucketOf(c.invoice_date, pGran).key === picked.key; }), false, true)
         .map(function (iv) { return { id: iv.key, invoice_id: iv.invoice_id, ref: iv.invoice, who: iv.customer, date: iv.date, cents: iv.sold_cents }; });
       function fixCosts() {
         setPOpen(picked.key);
         window.requestAnimationFrame(function () { window.requestAnimationFrame(function () { document.getElementById('nt-fix-list')?.scrollIntoView({ block: 'start' }); }); });
       }
       return <PeriodPaidComparison key={picked.key} period={picked} periods={options} onPeriod={setComparisonKey} comparison={compare} status={status} invoiceRows={invoiceRows} onOpenInvoice={setPeekId}
-        basis={expenseBasis} onBasisChange={setExpenseBasis}
+        basis={expenseBasis} onBasisChange={setExpenseBasis} categoryPicker={catPicker}
         onOpenBill={function (bill) { openBill(Object.assign({}, bill, { vendor: bill.who, bill_number: bill.ref, paid_date: bill.date, comparison_record: true })); }}
-        pnl={pnl} onOpenPnl={function () { setFShow({ key: picked.key, pinned: true }); }}
+        pnl={pnl} pnlExpenses={exp?.cols} onOpenPnl={function () { setFShow({ key: picked.key, pinned: true }); }}
         onFixCosts={picked.key === 'total' ? null : fixCosts} />;
     }
     function expCell(r, k) {
@@ -798,7 +868,7 @@ export default function ProfitabilityTab(props) {
                 isX ? <tr key={c0.key + ':x'}><td colSpan={2} style={{ background: '#f0f9ff', borderTop: '1px solid #7dd3fc', padding: 4 }}><ExpenseDetail makeup={e.detail && e.detail.byKey[c0.key]} rowsListed={e.detail ? e.detail.rows_listed : false} picker={catPicker} onConfirm={confirmFunds} onOpenBill={openBill} funding={(function () { var mk = e.detail && e.detail.byKey[c0.key]; return mk && mk.funding_key !== undefined ? ((e.detail.funding || []).filter(function (fu) { return fu.key === mk.funding_key; })[0] || null) : null; })()} catLabel={function (k) { var mk2 = e.detail && e.detail.byKey[k]; return mk2 ? mk2.label : k; }} /></td></tr> : null]; })}
             {col.cats.length === 0 && <tr><td colSpan={2} className="px-2 py-1" style={{ color: SUB }}>nothing</td></tr>}
           </tbody></table></div>; })}</div>
-        <div className="text-[10px] mt-1" style={{ color: SUB }}>{'Click any line to see what is behind it: the bank lines, the money sent to RTM / NextTrade taken out, and the bills they paid put in its place. ' + (canPick ? 'A bank line’s category can be changed right there.' : 'Changing a category needs the “categorize bank lines” switch.') + ' Categories are placed in a column by their name.'}</div>
+        <div className="text-[10px] mt-1" style={{ color: SUB }}>Open an expense category to see its bank transactions, bills, and NextTrade charges. Where you have editing access, changing a category refreshes the report.</div>
         {/* v55.83-XQ — view-only: everything RTM / NextTrade settled this period, so Max can see it at a glance. Never added to the P&L. */}
         {isSuper && e.cols.paid_through_cents > 0 && <div className="text-[11px] mt-1 px-2 py-1" style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e3a8a', fontWeight: 700 }}>
           {'Paid through RTM / NextTrade this period: ' + money(e.cols.paid_through_cents) + ' — the bills they settled for you (trucking, inbound, fees, …).'}
@@ -1260,7 +1330,7 @@ export default function ProfitabilityTab(props) {
     {!data && busy && <div className="text-[12px] p-2" style={{ color: SUB }}>Building the report…</div>}
     <UndoPickBar point={undoPt} busy={undoBusy} onUndo={undoPick} onClose={function () { setUndoPt(null); }} />
     {/* v55.83-VQ (Max, Nov 19: "clicking on view invoice from here is not working" — in FULL SCREEN the invoice opened BEHIND the table: the full-screen layer is above the viewer's own layer. The viewer is now mounted on the page body, above full screen.) */}
-    {billPeek && typeof document !== 'undefined' && createPortal(<div onClick={function () { setBillPeek(null); }} style={{ position: 'fixed', inset: 0, zIndex: 330, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}><div onClick={function (e) { e.stopPropagation(); }}><BillPeek row={billPeek.row} payer={billPeek.payer} onOpenDoc={openBillDoc} onGoBills={function () { setBillPeek(null); setFull(false); onGo('bills'); }} onClose={function () { setBillPeek(null); }} /></div></div>, document.body)}
+    {billPeek && typeof document !== 'undefined' && createPortal(<div onClick={function () { setBillPeek(null); }} style={{ position: 'fixed', inset: 0, zIndex: 330, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}><div onClick={function (e) { e.stopPropagation(); }}><BillPeek row={billPeek.row} payer={billPeek.payer} categoryEditor={catPicker(billPeek.row)} onOpenDoc={openBillDoc} onGoBills={function () { setBillPeek(null); setFull(false); onGo('bills'); }} onClose={function () { setBillPeek(null); }} /></div></div>, document.body)}
     {keepAsk && typeof document !== 'undefined' && createPortal(<div onClick={function () { setKeepAsk(null); }} style={{ position: 'fixed', inset: 0, zIndex: 320, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}><div onClick={function (e) { e.stopPropagation(); }}><KeepYardsPreview ask={keepAsk} busy={busy} onConfirm={confirmKeep} onCancel={function () { setKeepAsk(null); }} /></div></div>, document.body)}
     {showProfit && peekId && typeof document !== 'undefined' && createPortal(<div style={{ position: 'fixed', inset: 0, zIndex: 300 }}><InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { setFull(false); try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); setFull(false); onGo('invoices'); }} /></div>, document.body)}
   </div>;

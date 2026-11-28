@@ -46,6 +46,13 @@ function pickIt(id, cls, user) { return call({ action: 'bulk_classify', payload:
 function undo(id, user) { return call({ action: 'undo_category_pick', payload: { undo_id: id } }, user); }
 
 (async function () {
+  row('t1').direction = 'in';
+  var reportPick = await call({ action: 'bulk_classify', payload: { ids: ['t1'], classification: 'utilities', single_pick: true, report_pick: true } });
+  check('P&L drill-down: one deposit changes category with Undo and no vendor rule or look-alike changes', reportPick.ok && reportPick.undo_id && row('t1').classification === 'utilities' && row('t2').classification === null && rules().length === 0, reportPick);
+  row('t5').wave_business_id = 'NEXTRADE_BOOKS';
+  var wrongBook = await call({ action: 'bulk_classify', payload: { ids: ['t5'], classification: 'office', single_pick: true, report_pick: true } });
+  check('P&L drill-down: the KTC bank picker rejects a transaction owned by NextTrade', wrongBook._status === 404 && row('t5').classification === null, wrongBook);
+  freshDb();
   // ── 1. a line with NO category: pick, then undo → exactly as it was
   var s0 = { t1: state('t1'), t2: state('t2'), t3: state('t3'), t4: state('t4'), t5: state('t5') };
   var p1 = await pickIt('t1', 'utilities');
@@ -148,7 +155,7 @@ function undo(id, user) { return call({ action: 'undo_category_pick', payload: {
     var make = new Function(['st'].concat(names).join(','), body.replace('var undoPt = st.pt; var undoBusy = st.busy; ', ''));
     return { st: st, run: function () { var f = new Function(['st'].concat(names).join(','), 'var undoPt = st.pt; var undoBusy = st.busy; ' + m[0] + ' return undoPick();'); return f.apply(null, [st].concat(names.map(function (n) { return env[n]; }))); } };
   }
-  var SCREENS = [['ProfitabilityTab', 'erApi', 'startExpenses({ ignoreCache: true })'], ['PeriodStatsTab', 'erApi', 'load(from, to)'], ['AllTransactionsTab', 'api', 'quietReload()']];
+  var SCREENS = [['ProfitabilityTab', 'erApi', 'refreshExpenseCategories()'], ['PeriodStatsTab', 'erApi', 'load(from, to)'], ['AllTransactionsTab', 'api', 'quietReload()']];
   for (var si = 0; si < SCREENS.length; si++) {
     var sc = SCREENS[si];
     var h = runHandler(sc[0], sc[1], sc[2], [uH, Object.assign({}, uH2, { api_build_marker: 'x', message: 'Undone.' })]);

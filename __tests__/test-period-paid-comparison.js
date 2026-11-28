@@ -8,6 +8,7 @@ const { addPeriodCell, blankPeriodRow } = require('../src/lib/pnl-period');
 const { identifyNexPacFeeLines, nexPacFeeSchedule } = require('../src/lib/partner-fee-months');
 const { applyVendorWirePaymentDates } = require('../src/lib/vendor-wire-payment-dates');
 const { profitabilityWorkItems } = require('../src/lib/profitability-work-feed');
+const { pnlFormula, periodInvoices } = require('../src/lib/pnl-expense-detail');
 const PeriodPaidComparison = require('../src/components/PeriodPaidComparison.jsx').default;
 
 const june = { from: '2026-06-01', to: '2026-06-30' };
@@ -44,6 +45,13 @@ assert.equal(bankMonth.funded_paid.cents, 0);
 assert.equal(bankMonth.receipts.cents, 40978220);
 assert.equal(bankMonth.receipts.rows[0].invoice_id, 'older-invoice');
 assert.equal(bankMonth.unclassified_receipts.cents, 933000);
+assert.equal(bankMonth.unclassified_receipts.rows[0].bank_edit, true);
+assert.equal(bankMonth.other_deposits.cents, 12000);
+assert.equal(bankMonth.direct_ktc_expenses.cents, 19184494);
+const categorizedDeposit = assemble({ incomeRows: [row('unknown-in', 'customer_payment', 9330)] });
+assert.equal(categorizedDeposit.unclassified_receipts.cents, 0);
+assert.equal(categorizedDeposit.receipts.cents, 933000);
+assert.equal(categorizedDeposit.receipts.rows[0].id, 'unknown-in');
 assert.equal(bankMonth.review.cents, 11000);
 assert.equal(bankMonth.partner_billed.cents, 4525000);
 assert.equal(bankMonth.partner_billed.rows[0].bill_id, '14277');
@@ -81,6 +89,10 @@ assert.equal(juneFunding.review.rows[0].id, 'duplicated-partner');
 assert.deepEqual(juneFunding.funded_paid.rows.filter(r => r.transfer_id === 'rtm').map(r => [r.category, r.cents]), [
   ['partner_fees', 4525000], ['trucking', 2000000], ['professional_fees', 50000],
 ]);
+const partlyAllocated = assemble({ spendingRows: [row('rtm', 'professional_fees', 76000, { funds_sent_to: 'RTM Capital' })],
+  funds: funding({}, { transfers: [{ id: 'rtm', date: '2026-06-25', sent: 76000, as_of: { applied_to_bills: 13447.36, services_rendered: 0, refunds: 0, held: 62552.64 } }] }) });
+assert.deepEqual(partlyAllocated.rtm_reconciliation, { sent: 7600000, bills: 1344736, left: 6255264, fees: 0, refunded: 0 });
+assert.deepEqual(partlyAllocated.funding.rows[0].allocation, { linked_cents: 1344736, unallocated_cents: 6255264 });
 
 const julyFunding = assemble({ date: july, partnerFeeLines: [{ id: 'july-fee', bill_id: '14487', description: 'Operational Fee July 2026', amount: 45250 }], funds: funding({ applied_rows: [fundedBill('july-portion', 'freight', 4250, { paid_date: '2026-07-03' })] }) });
 assert.equal(julyFunding.funding.cents, 0);
@@ -137,6 +149,9 @@ assert.equal(spanningTasks.find(task => task.group === 'shipment_costs_missing')
 const period = blankPeriodRow('2026-06', 'Jun 2026');
 addPeriodCell(period, { goods_revenue: 247989.25, goods_profit: 98316.74, transport_revenue: 59524.25, transport_profit: 4409 });
 addPeriodCell(period, { goods_revenue: 88159.26, goods_profit: null });
+assert.equal(periodInvoices([{ invoice_id: 'a', goods_revenue: 40, transport_revenue: 12 }], false, true)[0].sold_cents, 4000);
+assert.equal(periodInvoices([{ invoice_id: 'a', goods_revenue: 40, transport_revenue: 12 }], false)[0].sold_cents, 5200);
+assert.deepEqual(pnlFormula(period, null, false).lines.slice(0, 3).map(r => r.cents), [33614851, 8815926, 24798925]);
 const html = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], comparison: bankMonth, invoiceRows: [], onFixCosts() {}, onOpenBill() {} }));
 for (const text of ['Goods invoiced less payments', 'Customer receipts less payments', '$336,148.51', '$98,316.74', '$4,409.00', '$88,159.26', 'Fix missing costs', 'Partner fee billed', 'Bill 14277', 'RTM / NextTrade bills and fees paid']) assert.ok(html.includes(text), text);
 const juneReport = renderToStaticMarkup(React.createElement(PeriodPaidComparison, {
@@ -161,4 +176,12 @@ const accruedReport = renderToStaticMarkup(React.createElement(PeriodPaidCompari
 }));
 for (const text of ['Goods invoiced less bills dated this period', '-$90,500.00', 'Bill 14277']) assert.ok(accruedReport.includes(text), text);
 assert.doesNotMatch(accruedReport, /Customer receipts less payments/);
+const editable = renderToStaticMarkup(React.createElement(PeriodPaidComparison, {
+  period, periods: [period], invoiceRows: [], comparison: bankMonth, onOpenBill() {},
+  categoryPicker: record => record.bank_edit || record.bill_id ? React.createElement('button', { type: 'button' }, 'Edit category for ' + record.id) : null,
+}));
+assert.match(editable, /Deposits to identify[\s\S]*Edit category for unknown-in/);
+assert.match(editable, /Direct KTC bank expenses[\s\S]*Edit category for rent/);
+assert.match(editable, /Other categorized deposits[\s\S]*Edit category for interest/);
+assert.doesNotMatch(editable, /Edit category for rtm/);
 console.log('PASS: period comparison reconciliation, source records, RTM funding and refunds, partner duplicates, account transfers, foreign currency, access, and missing costs.');

@@ -64,7 +64,7 @@ export default function ExpenseDetail(props) {
         return <tr key={row.id || index} style={{ borderTop: '1px solid ' + LINE }}>
           <td className="px-2 py-1 whitespace-nowrap">{row.date}</td>
           <td className="px-2 py-1">{row.who || row.label}{row.bill_id && props.onOpenBill && <button type="button"
-            className="ml-2 font-semibold underline" style={{ color: '#1d4ed8' }} onClick={() => props.onOpenBill({ ...row, vendor: row.who, bill_number: row.ref })}>{'Bill ' + row.ref}</button>}</td>
+            className="ml-2 font-semibold underline" style={{ color: '#1d4ed8' }} onClick={() => props.onOpenBill({ ...row, vendor: row.who, bill_number: row.ref })}>{'Bill ' + row.ref}</button>}<div>{picker(row)}</div></td>
           <td className="px-2 py-1 text-right tabular-nums">{money(row.cents)}</td>
         </tr>;
       })}</tbody></table>
@@ -74,7 +74,7 @@ export default function ExpenseDetail(props) {
       <div className="overflow-auto pl-scroll" style={{ maxHeight: 260 }}><table className="w-full text-[11px]"><tbody>
         {m.bills.rows.map(function (r, i) { return <tr key={i} style={{ borderTop: '1px solid ' + LINE }}>
           <td className="px-2 py-1 whitespace-nowrap">{r.date}</td><td className="px-2 py-1 font-semibold">{String(r.who).substring(0, 60)}</td><td className="px-2 py-1">{r.ref}</td>
-          <td className="px-2 py-1" style={{ color: SUB }}>{'paid by ' + r.payer}</td><td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(r.cents)}</td></tr>; })}
+          <td className="px-2 py-1" style={{ color: SUB }}>{'paid by ' + r.payer}<div>{picker(r)}</div></td><td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(r.cents)}</td></tr>; })}
       </tbody></table></div>
       {m.bills.listed_cents !== m.bills.cents && <div className="px-2 py-1" style={{ color: '#b45309' }}>{'The bills listed add up to ' + money(m.bills.listed_cents) + ' of ' + money(m.bills.cents) + ' (the list holds 300 per company).'}</div>}
     </div>}

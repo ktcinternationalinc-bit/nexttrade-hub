@@ -404,11 +404,26 @@ export async function POST(req) {
     if (action === 'bulk_classify') {
       var idsB = (body.payload && body.payload.ids) || [];
       var clsB = body.payload && body.payload.classification;
+      var reportPick = body.payload?.report_pick === true;
       if (!Array.isArray(idsB) || idsB.length === 0) { return NextResponse.json({ ok: false, error: 'Pick at least one transaction.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (idsB.length > 500) { return NextResponse.json({ ok: false, error: 'Max 500 transactions per bulk update — narrow the selection.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (!clsB) { return NextResponse.json({ ok: false, error: 'Pick the category to apply.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var catOkB = await db.from('expense_categories').select('key').eq('key', clsB).limit(1);
+      var catOkB = await db.from('expense_categories').select(reportPick ? 'key,active' : 'key').eq('key', clsB).limit(1);
       if (!catOkB.error && (!catOkB.data || !catOkB.data.length)) { return NextResponse.json({ ok: false, error: 'Unknown category "' + clsB + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (reportPick) {
+        if (idsB.length !== 1) return NextResponse.json({ ok: false, error: 'Pick one transaction.' }, { status: 400 });
+        var [scopePick, windowPick, bankPick] = await Promise.all([
+          privateScope(db, by), windowFloorFor(db, gate.ctx),
+          db.from('bank_transactions').select('id,account_id,date,posted_date,wave_business_id,review_status,classification').eq('id', idsB[0]).maybeSingle(),
+        ]);
+        if (scopePick.error || windowPick.error || bankPick.error || catOkB.error) return NextResponse.json({ ok: false, error: 'Could not verify this transaction or category. Try again.' }, { status: 503 });
+        if (catOkB.data[0]?.active === false) return NextResponse.json({ ok: false, error: 'Pick an active category.' }, { status: 400 });
+        var candidate = bankPick.data;
+        if (!candidate || candidate.wave_business_id !== US_WAVE_BUSINESS_ID || candidate.review_status === 'duplicate'
+          || isPrivateRow(candidate, scopePick) || windowPick.floor && (candidate.posted_date || candidate.date) < windowPick.floor) {
+          return NextResponse.json({ ok: false, error: 'Transaction not found.' }, { status: 404 });
+        }
+      }
       // v55.83-QZ2 (review fix) — a leg of a PAIRED transfer cannot quietly
       // become an expense: the hub would show the new category while the
       // ledger still books it as a transfer. Unpair first (↔), then categorize.
@@ -423,14 +438,15 @@ export async function POST(req) {
       if (!pgB.ok) { return NextResponse.json({ ok: false, error: (idsB.length > 1 && pgB.pending_ids ? pgB.pending_ids.length + ' of these lines are still pending at the bank. ' : '') + pgB.error, pending_ids: pgB.pending_ids || [], api_build_marker: API_BUILD_MARKER }, { status: pgB.status }); }
       // WP — one line picked by a person: its exact state and its rule's state BEFORE the pick are read first
       var undoOn = idsB.length === 1 && !!(body.payload && body.payload.single_pick === true);
-      var uBefore = undoOn ? await readLine(db, idsB[0]) : null; var uRuleBefore = uBefore ? await readRuleFor(db, uBefore) : null; var uLr = null; var uLook = []; var uWave = null;
-      var updB = await db.from('bank_transactions')
-        .update({ classification: clsB, category_source: 'classification' })
-        .in('id', idsB).select('id, direction, merchant_name, name');
+      var uBefore = undoOn ? await readLine(db, idsB[0]) : null; var uRuleBefore = uBefore && !reportPick ? await readRuleFor(db, uBefore) : null; var uLr = null; var uLook = []; var uWave = null;
+      var updateB = db.from('bank_transactions').update({ classification: clsB, category_source: 'classification' }).in('id', idsB);
+      if (reportPick) updateB = candidate.classification == null ? updateB.is('classification', null) : updateB.eq('classification', candidate.classification);
+      var updB = await updateB.select('id, direction, merchant_name, name');
       if (updB.error) { return NextResponse.json({ ok: false, error: updB.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var learnedB2 = 0; var seenKeys = {}; var ruleIdsB = [];
       var rowsB = updB.data || [];
-      for (var bi = 0; bi < rowsB.length && learnedB2 < 50; bi++) {
+      if (reportPick && !rowsB.length) return NextResponse.json({ ok: false, error: 'The transaction changed. Refresh the report and try again.' }, { status: 409 });
+      for (var bi = 0; !reportPick && bi < rowsB.length && learnedB2 < 50; bi++) {
         var tB = rowsB[bi];
         if (tB.direction !== 'out' && tB.direction !== 'in') { continue; } // v55.83-TR — money in learns too
         var textB = (tB.merchant_name || '') + ' ' + (tB.name || '');

@@ -20,7 +20,7 @@ export function expenseDetail(spending, rc, nextrade) {
   var sp = spending || {}; var out = { byKey: {}, not_pnl: [], transfers_cents: cents(sp.transfers && sp.transfers.total), rows_listed: Array.isArray(sp.rows) };
   var blocks = sp.paid_through || (sp.rtm ? [sp.rtm] : []);
   var orig = {}; (sp.categories || []).forEach(function (c) { orig[c.key] = c; });
-  var rowsBy = {}; (sp.rows || []).forEach(function (r) { var k = r.category || 'uncategorized'; (rowsBy[k] = rowsBy[k] || []).push({ id: r.id || null, category: k /* v55.83-ZK: the line's own category, so the menu can show it */, date: r.date || '', who: r.who || '', cents: cents(r.amount), money_in: r.money_in === true, matched_invoice: r.matched_invoice === true }); });
+  var rowsBy = {}; (sp.rows || []).forEach(function (r) { var k = r.category || 'uncategorized'; (rowsBy[k] = rowsBy[k] || []).push({ id: r.id || null, category: k, date: r.date || '', who: r.who || '', cents: cents(r.amount), money_in: r.money_in === true, matched_invoice: r.matched_invoice === true, bank_edit: !r.funds_sent_to && !r.money_back_from }); });
   var remOf = {}; blocks.forEach(function (b) { remainderRows(b).forEach(function (rw) { remOf[rw.key] = { block: b, row: rw }; });
     // v55.83-VY — the company's three possible rows always belong to it, also a fee row P&L by period made itself (explicitFeeRows)
     var base = '__pt_' + String(b.key || b.payer || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_'); [base, base + '_fee', base + '_waiting', base + '_unconfirmed'].forEach(function (k) { if (!remOf[k]) { remOf[k] = { block: b, row: null }; } }); });
@@ -48,7 +48,7 @@ export function expenseDetail(spending, rc, nextrade) {
     blocks.forEach(function (b) {
       (b.payments_by_cat || []).forEach(function (p) { if (p.key === key) { var v = cents(p.total); if (v) { m.taken_out.push({ payer: b.payer || '', era_note: b.era_note || null, cents: v, from_advance: p.from_advance === true }); m.taken_out_cents += v; } } });
       (b.allocations_by_cat || []).forEach(function (a) { if (a.key === key) { m.bills.cents += cents(a.total); } });
-      (b.rows || []).forEach(function (r) { if ((r.category || 'uncategorized') === key) { var v2 = cents(r.amount); m.bills.rows.push({ date: r.date || '', who: r.who || '', ref: r.ref || '', cents: v2, payer: b.payer || '' }); m.bills.listed_cents += v2; } });
+      (b.rows || []).forEach(function (r) { if ((r.category || 'uncategorized') === key) { var v2 = cents(r.amount); m.bills.rows.push({ date: r.date || '', who: r.who || '', ref: r.ref || '', cents: v2, payer: b.payer || '', bill_id: r.bill_id, bill_category: key === 'uncategorized' ? null : key }); m.bills.listed_cents += v2; } });
     });
     m.bills.rows.sort(function (a, c) { return c.cents - a.cents; });
     const charges = nextrade?.get(key);
@@ -105,8 +105,13 @@ export function pnlFormula(r, e, hidden) {
   var x = row.excl || { goods_lines: 0, goods_revenue: 0, transport_lines: 0, transport_revenue: 0 };
   function n(v) { return hidden ? null : (v === undefined || v === null ? null : v); }
   function of(k) { return k + ' sale line' + (k === 1 ? '' : 's'); }
+  var goodsBridge = !hidden && x.goods_lines > 0 && !row.miss?.goods_revenue ? [
+    { sign: '', label: 'Goods invoiced, all lines', cents: n(row.goods_revenue) },
+    { sign: '−', label: 'Goods invoiced on ' + of(x.goods_lines) + ' awaiting cost', cents: n(x.goods_revenue) }
+  ] : [];
   var lines = [
-    { sign: '', label: 'Goods revenue of the ' + of(u.goods_lines) + ' whose cost is known', cents: n(u.goods_revenue) },
+    ...goodsBridge,
+    { sign: goodsBridge.length ? '=' : '', label: 'Goods revenue of the ' + of(u.goods_lines) + ' whose cost is known', cents: n(u.goods_revenue) },
     { sign: '−', label: 'Goods cost of those lines = supplier cost + commission + inbound allowance + bonded / brokerage', cents: n(u.goods_cost) },
     { sign: '=', label: 'GOODS PROFIT', cents: n(row.goods_profit), strong: true },
     { sign: '', label: 'Transport charged on the ' + of(u.transport_lines) + ' whose shipping cost is known', cents: n(u.transport_revenue) },
@@ -144,7 +149,7 @@ export function pnlFormula(r, e, hidden) {
 
 // The invoices of one opened period, one row each, so every one can be opened on top of the page.
 // cells = that period's cells. hidden = profit not shown to this person → profit is null on every row.
-export function periodInvoices(cells, hidden) {
+export function periodInvoices(cells, hidden, goodsOnly = false) {
   var by = {}; var order = [];
   function known(x) { return !(x === null || x === undefined || x === ''); }
   (cells || []).forEach(function (c) {
@@ -153,7 +158,7 @@ export function periodInvoices(cells, hidden) {
     r.lines += 1;
     var rel = String(c.release_raw || c.release || ''); if (rel && r.releases.indexOf(rel) < 0) { r.releases.push(rel); }
     if (known(c.goods_revenue)) { r.sold_cents += Math.round(Number(c.goods_revenue) * 100); }
-    if (known(c.transport_revenue)) { r.sold_cents += Math.round(Number(c.transport_revenue) * 100); }
+    if (!goodsOnly && known(c.transport_revenue)) { r.sold_cents += Math.round(Number(c.transport_revenue) * 100); }
     if (known(c.profit)) { r.profit += Math.round(Number(c.profit) * 100); } else { r.missing += 1; }
   });
   return order.map(function (k) { var r = by[k]; if (hidden === true) { r.profit = null; r.missing = 0; } return r; })

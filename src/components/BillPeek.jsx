@@ -21,6 +21,7 @@ export default function BillPeek(props) {
     <table className="w-full text-[12px]"><tbody>
       {line('Vendor', b.vendor)}{line('Bill number', b.bill_number || '—')}{line('Bill date', b.bill_date || '—')}{line('Release', b.release || '—')}
       {line('Bill total', money(b.bill_total_cents))}
+      {props.categoryEditor ? line('Category', props.categoryEditor) : null}
       {comparison ? line('Report amount', money(b.cents)) : general ? line(props.paidLabel, money(b.cents)) : line('Paid from ' + (props.payer || 'these') + ' funds', money(b.cents) + (b.bill_total_cents !== null && b.bill_total_cents !== undefined && b.cents !== b.bill_total_cents ? ' (part of the bill)' : ''))}
       {general ? (props.extraLines || []).map(function (x, i) { return line(x[0], x[1], 'x' + i); }) : null}
       {comparison ? line('Report record', [b.source, b.paid_date].filter(Boolean).join(' · ')) : general ? null : line('Paid on', b.paid_date || '—')}{general || comparison ? null : b.starting_balance_as_of ? line('From starting balance dated', b.starting_balance_as_of) : line('From the transfer of', b.transfer_date || '—')}
