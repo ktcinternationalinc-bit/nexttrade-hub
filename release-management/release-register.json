@@ -1,6 +1,6 @@
 {
   "updated": "2026-11-28",
-  "updatedBy": "Warehouse pallet correction review",
+  "updatedBy": "Warehouse production release review",
   "intro": "Review upcoming Warehouse changes, see which approvals are queued, and check what is on production.",
   "legend": [
     {
@@ -51,14 +51,16 @@
       "id": "wh-skin-b-charts",
       "title": "Warehouse look (B, refined) + inventory flow charts",
       "repo": "nextrade_WAREHOUSE",
-      "build": "6c40a66",
+      "build": "8909f8c65d8bc93dcab93532ac3b088af4a7273c",
       "date": "2026-11-22",
       "where": "staging",
       "status": "queued",
       "needsCodex": true,
       "needsMax": true,
       "dataChange": false,
-      "meta": "build 6c40a66 · 22 Nov",
+      "meta": "Local release candidate 8909f8c · 28 Nov",
+      "dependsOn": ["wh-bug-002"],
+      "waitingFor": "The chart build preserves the live Closed payment changes. Verify the exact chart package on staging after the shipped-date guard.",
       "desc": "New skin (fonts, outlines, bigger logo/titles, colour-coded order status), click-a-tile inbound/outbound charts (monthly + by-year + multi-select), commas, full grade names.",
       "files": "ktc-skin.css, app.blade.php, dashboard/index.blade.php, inventory summaries, DashboardController.php (gradeFlow, read-only), routes/web.php",
       "backup": "staging ~/code-backups/skin-B-20261122, ktc-skin-20261119/before.tar, grade-flow-20261122",
@@ -159,6 +161,7 @@
       "needsCodex": true,
       "needsMax": true,
       "dataChange": true,
+      "waitingFor": "Production has no duplicate open reservation groups. Rehearse the three migrations and check that older code preserves split reservations before approval.",
       "routesChanged": false,
       "configChanged": false,
       "dependsOn": [
@@ -301,15 +304,16 @@
       "id": "wh-bug-002",
       "title": "BUG-002 — future shipped-date guard",
       "repo": "nextrade_WAREHOUSE",
-      "build": "",
+      "build": "4471602b4a84fb6bdc3ee4eaa20fcaf072c22069",
       "date": "2026-11-15",
       "where": "staging",
       "status": "queued",
       "needsCodex": false,
       "needsMax": true,
       "dataChange": false,
-      "meta": "15 Nov",
-      "desc": "Blocks future shipped dates and removes the fallback to today. Production's order controller and two order forms differ from the candidate baseline and must be reconciled before this release.",
+      "meta": "Local release candidate 4471602 · 28 Nov",
+      "desc": "Blocks future shipped dates and removes the fallback to today. The candidate preserves the three live Closed payment code changes.",
+      "waitingFor": "The live source is reconciled. Test the exact package on staging before enabling approval.",
       "files": "shipped-date validation + display",
       "backup": "staging backup bundle",
       "rollback": "restore bundle + php artisan view:clear"
@@ -325,6 +329,7 @@
       "needsCodex": false,
       "needsMax": true,
       "dataChange": false,
+      "waitingFor": "Reconcile the checklist with the live Closed payment code and rehearse adding the four missing database columns.",
       "meta": "various · Nov",
       "desc": "Stage requirements and ACID checklist rules. Production already has the read-only feed and is missing checklist columns. This release needs its own migration review and must preserve the live feed.",
       "files": "App\\Services\\OrderStageRules, HubFeedController",
@@ -336,18 +341,17 @@
       "title": "Receipt 1325 date fix",
       "repo": "nextrade_WAREHOUSE",
       "build": "data fix",
-      "date": "2026-11-22",
-      "where": "staging",
-      "status": "queued",
+      "date": "2026-11-28",
+      "where": "production",
+      "status": "live",
       "needsCodex": false,
-      "needsMax": true,
+      "needsMax": false,
       "dataChange": true,
-      "meta": "data · 22 Nov",
-      "desc": "Prepared and tested one-row correction for receipt 1325. Change 1984-11-06 03:00:53 to 2024-10-11 03:00:53 with its original timestamp backed up.",
-      "manualPlan": "docs/2026-11-28-warehouse-release-prep.md#receipt-1325",
+      "meta": "Verified on production · 28 Nov",
+      "desc": "Corrected receipt 1325 from 1984-11-06 03:00:53 to 2024-10-11 03:00:53. The original timestamp was saved in a one-row backup.",
       "files": "scan_in_inventories id=1325 created_at",
-      "backup": "table zz_fix1325_scan_in_inventories_before_20261122 (never dropped)",
-      "rollback": "restore created_at from that table"
+      "backup": "zz_fix1325_before_20261128_approved",
+      "rollback": "Restoring the original timestamp requires separate approval of a one-row data correction."
     },
     {
       "id": "wh-xb-receipts-feed",
@@ -469,6 +473,16 @@
           }
         ]
       }
+    }
+  ],
+  "events": [
+    {
+      "item": "wh-receipt-1325",
+      "action": "manual-data-correction",
+      "at": "2026-11-28T08:14:10Z",
+      "by": "Codex production readback",
+      "backup": "zz_fix1325_before_20261128_approved",
+      "detail": "Approved in chat. Verified the new timestamp, the original in the one-row backup and the unchanged updated_at."
     }
   ],
   "protocol": [

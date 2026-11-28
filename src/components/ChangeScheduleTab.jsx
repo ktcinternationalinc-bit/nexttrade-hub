@@ -203,7 +203,7 @@ function Row(props) {
   if (props.sign && props.sign.problem && where !== 'unknown') { tags.push({ color: 'max', label: 'Needs a look' }); }
   if (it.dataChange) { tags.push({ color: 'data', label: 'Data change' }); }
   return (
-    <div className="warehouse-change-row" style={{ background: C.card, border: '1px solid ' + C.line, borderLeft: '3px solid ' + leftColor, borderRadius: 8, padding: '12px 14px', display: 'grid', gap: 10, alignItems: 'start' }}>
+    <div id={'warehouse-change-' + it.id} className="warehouse-change-row" style={{ background: C.card, border: '1px solid ' + C.line, borderLeft: '3px solid ' + leftColor, borderRadius: 8, padding: '12px 14px', display: 'grid', gap: 10, alignItems: 'start', scrollMarginTop: 155 }}>
       <div style={{ minWidth: 0 }}>
         {props.selection && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <input type="checkbox" aria-label={(props.selection === 'rollback' ? 'Select for rollback ' : 'Select ') + it.title} checked={!!props.selected} disabled={props.selectLocked} onChange={function () { props.onSelect(it.id); }} />
@@ -310,6 +310,7 @@ export default function ChangeScheduleTab() {
   var active = lists.active; var queued = lists.queued; var live = lists.live; var rollbackItems = lists.rollbackItems;
   var canSign = !!(data && data.canSign);
   var version = data?.warehouseVersion;
+  var pendingChecks = live.filter(function (item) { return signs[item.id]?.where === 'deployed'; });
   var candidates = queued.filter(function (it) { return signs[it.id]?.canGo; });
   var selected = selectionAction === 'go' ? selectedDeployments(candidates, signs, picked) :
     new Set(rollbackItems.filter(function (it) { return picked[it.id]; }).map(function (it) { return it.id; }));
@@ -419,7 +420,13 @@ export default function ChangeScheduleTab() {
         </div>}
         {statusReadable && version && <section aria-label="Last five verified code versions" style={{ background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '12px 14px' }}>
           <h2 style={{ fontSize: '1.1rem', margin: '0 0 4px' }}>Last five verified code versions</h2>
-          {version.reason && <div style={{ color: C.muted }}>{version.reason}</div>}
+          {version.reason && <div style={{ color: C.muted }}>No complete version has been verified yet.</div>}
+          {pendingChecks.length > 0 && <div style={{ color: C.muted, marginTop: 6 }}>
+            {pendingChecks.length} live {pendingChecks.length === 1 ? 'change still needs' : 'changes still need'} a production check.
+            <ul style={{ margin: '5px 0 0', paddingLeft: '1.2em' }}>{pendingChecks.map(function (item) {
+              return <li key={item.id}><a style={{ color: C.codex }} href={'#warehouse-change-' + item.id}>{item.title}</a></li>;
+            })}</ul>
+          </div>}
           {version.versions?.map(function (entry) { return <div key={entry.id} style={{ borderTop: '1px solid ' + C.line, padding: '8px 0' }}>
             <b>Warehouse version #{entry.id}</b> · verified {fmtWhen(entry.at)}
             {entry.by ? ' by ' + entry.by : ''}{entry.isCurrent ? ' · current production' : ''}

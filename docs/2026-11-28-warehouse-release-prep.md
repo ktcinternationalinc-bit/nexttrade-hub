@@ -2,19 +2,19 @@
 
 ## Receipt 1325
 
-Ready for explicit manual approval. The production read-only check found `scan_in_inventories.id = 1325` at `1984-11-06 03:00:53`. Fix staging returned `2024-10-11 03:00:53`. The production table uses InnoDB and reported zero update triggers. The correction preserves the time of day.
+Applied after the November 28 approval. The correction changed `scan_in_inventories.id = 1325` from `1984-11-06 03:00:53` to `2024-10-11 03:00:53`. Independent production readback confirmed the new value, preserved `updated_at`, and found exactly one row, containing the original timestamp, in `zz_fix1325_before_20261128_approved`.
 
 The reviewed program is `release-management/deploy/receipt-1325-correction.php`. After approval, create a unique InnoDB backup with `createReceipt1325Backup` and call `correctReceipt1325` with the same backup name. The program locks the receipt, checks the exact original timestamp, saves its previous values and updates that row alone. It verifies the backup and both timestamps before committing. The exact program passed on connection-local fix-staging fixtures, including preserved unrelated data, a failed verification that rolled back, and a refused retry. The deployed worker has no executor for this manual correction.
 
 ## BUG-002 shipped-date guard
 
-Candidate `dd23fce9d852953caa99ea9883da25db0a3ead64` is on local branch `codex/warehouse-bug-002-candidate` in `.codex-warehouse-bug-002-prep`. It applies the six application-file changes from `f9d89d4` on the recorded live shipping-feed build `09d21b12`, keeping the live Order Queue release behavior. The candidate also returns a validation message for malformed Scan Out dates before that handler starts a transaction.
+Candidate `4471602b4a84fb6bdc3ee4eaa20fcaf072c22069` is on local branch `codex/warehouse-bug-002-candidate` in `.codex-warehouse-bug-002-prep`. It applies the six application-file changes from `f9d89d4` to the production baseline. The three copied source files matched their production hashes and preserve the Closed payment workflow. The candidate returns a validation message for malformed Scan Out dates before that handler starts a transaction.
 
-The installed fix-staging date and checklist services passed 14 synthetic PHP checks without a database connection. The date cases covered future, unreadable, valid, and confirmable dates. The candidate's three PHP files passed PHP 8.2 syntax checks. Three of its six files have unexpected production fingerprints: `OrderController.php`, `edit.blade.php`, and `edit_OrderUSA.blade.php`. Reconcile the three live files before package review. Then exercise the exact package in the signed-in date editor, both order-edit screens, Shipping, Reopen, and Scan Out.
+The installed fix-staging date and checklist services passed 14 synthetic PHP checks without a database connection. The date cases covered future, unreadable, valid, and confirmable dates. Exercise the exact reconciled package in the signed-in date editor, both order-edit screens, Shipping, Reopen, and Scan Out.
 
 ## Warehouse look and inventory charts
 
-Local candidate `13154ac296caf0edd79a940425275fb3364521d6` combines the skin and chart work with the follow-up history and badge corrections. It labels the charts as all-warehouse historical movements and starts month ranges at the first of the month. The candidate excludes the intervening customer reminder migration. It shares the live order-controller discrepancy. Verify the exact production baselines and the chart's signed-in results, with a valid old receipt retained and receipt 1325 handled through its separate data release.
+Local candidate `8909f8c65d8bc93dcab93532ac3b088af4a7273c` combines the skin and chart work with the follow-up history and badge corrections on top of the reconciled shipped-date candidate. It labels the charts as all-warehouse historical movements and starts month ranges at the first of the month. The candidate excludes the intervening customer reminder migration. Verify the exact production baselines and the chart's signed-in results, including the corrected receipt date and a valid older receipt.
 
 ## Order checklist, ACID and the Hub feed
 

@@ -21,7 +21,8 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           const items = ['One', 'Two', 'Three', 'Blocked'].map((name, i) => ({ id: 'fix-' + i, title: name, needsMax: true, manifest: { sha: 'a'.repeat(40), files: [{ path: 'resources/views/' + name + '.blade.php' }] } }));
           items[2].dependsOn = ['fix-0'];
           const signoffs = Object.fromEntries(items.map((it, i) => [it.id, { head: 0, manifestDigest: 'b'.repeat(64), where: 'staging', canGo: manager && i < 3, canRollback: false, why: i === 3 ? 'Staging QA missing' : '' }]));
-          const data = { ok: true, items, signoffs, canSign: manager, workerOnline: false, worker: { enabled: false, last_seen: '2026-11-24T12:49:07Z' }, executionReady: true, history: [] };
+          const data = { ok: true, items, signoffs, canSign: manager, workerOnline: false, worker: { enabled: false, last_seen: '2026-11-24T12:49:07Z' }, executionReady: true, history: [],
+            warehouseVersion: { versions: [], reason: 'Production verification pending' } };
           window.releaseData = data;
           window.releaseReads = 0;
           window.delayNextReleaseRead = 0;
@@ -128,6 +129,9 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
             window.dispatchEvent(new Event('focus'));
           });
           await page.getByText('On production — not yet checked', { exact: true }).waitFor();
+          const checkpointPanel = page.getByRole('region', { name: 'Last five verified code versions' });
+          await checkpointPanel.getByText('No complete version has been verified yet.').waitFor();
+          assert.equal(await checkpointPanel.getByRole('link', { name: 'One', exact: true }).getAttribute('href'), '#warehouse-change-fix-0');
           const production = page.getByRole('region', { name: 'Already on production' });
           assert.equal(await production.getByRole('checkbox').count(), 0);
           assert.equal(await active.getByRole('heading', { name: 'One', exact: true }).count(), 0);

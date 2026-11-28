@@ -157,6 +157,11 @@ export function historyList(rows, register) {
   var ev = (register && Array.isArray(register.events)) ? register.events : [];
   for (i = 0; i < ev.length; i++) {
     var e = ev[i] || {};
+    if (e.action === 'manual-data-correction') {
+      out.push({ key: 'e' + i, row: null, ref: null, at: str(e.at), item: str(e.item), title: titles[str(e.item)] || str(e.item),
+        action: e.action, what: 'Corrected and verified on production', by: str(e.by), build: '', backup: str(e.backup), note: str(e.detail).substring(0, 400) });
+      continue;
+    }
     if (e.action !== 'codex-pass' && e.action !== 'behavioral-qa') { continue; }
     out.push({ key: 'e' + i, row: null, ref: null, at: str(e.at), item: str(e.item), title: titles[str(e.item)] || str(e.item), action: str(e.action), what: e.action === 'codex-pass' ? 'Codex passed this build' : 'Tested on staging — passed',
       by: e.action === 'codex-pass' ? 'Codex' : 'QA', build: str(e.build), backup: '', note: str(e.detail).substring(0, 400) });
@@ -209,10 +214,8 @@ export function itemSignState(item, latest) {
       else if (target && target.row) { out.canRollback = true; }
       else { out.why = out.why || 'The worker needs a recorded production move with its build and backup before it can roll this change back.'; }
     }
-    else if (item && item.dataChange && !selection.supportedDataPlan(item)) {
-      out.why = item.manualPlan ? 'Ready for manual approval. The deployment worker cannot queue this operation.' : 'Waiting for a reviewed database release plan.';
-    }
-    else if (!item?.manifest) { out.why = 'Waiting for a committed build, file list and a passing staging test.'; }
+    else if (item && item.dataChange && !selection.supportedDataPlan(item)) { out.why = item.waitingFor || 'Waiting for a reviewed database release plan.'; }
+    else if (!item?.manifest) { out.why = item?.waitingFor || 'Waiting for a committed build, file list and a passing staging test.'; }
     else if (st.failedPalletSnapshot && item.manifest.dataPlan?.snapshotHash === st.failedPalletSnapshot) {
       out.why = 'The production pallet records changed. A fresh dry run is required before approval.';
       out.problem = '';

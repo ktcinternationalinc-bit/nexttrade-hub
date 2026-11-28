@@ -122,6 +122,10 @@ async function send(b) { return post({ json: async () => b }); }
   check(rb.ok && rb.row.ref_id === 31 && rb.row.detail.backup === moved.detail.backup, 'rollback bound to actual deployment backup and reference');
   check(rules.approvalText('go', a, a.manifest.sha).startsWith('Approved:'), 'delegated approval does not impersonate Max');
   const liveRegister = JSON.parse(fs.readFileSync(path.join(root, 'release-management/release-register.json'), 'utf8'));
+  const receipt = liveRegister.items.find(it => it.id === 'wh-receipt-1325');
+  check(rules.itemSignState(receipt).where === 'live' && !rules.itemSignState(receipt).canRollback &&
+    rules.historyList([], liveRegister).some(row => row.item === receipt.id && row.action === 'manual-data-correction' && row.backup === receipt.backup),
+    'the manually verified receipt correction is live with its backup recorded and no code rollback');
   const palletData = liveRegister.items.find(it => it.id === 'wh-bug-001');
   check(selection.candidateProblems(palletData).length === 0, 'pallet correction binds its exact approved record snapshot and script');
   check(!selection.supportedDataPlan({ ...palletData, id: 'arbitrary-sql' }), 'only the named pallet correction is supported');
