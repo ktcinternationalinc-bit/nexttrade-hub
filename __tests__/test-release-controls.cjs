@@ -75,6 +75,11 @@ async function send(b) { return post({ json: async () => b }); }
   check((await send({ ...request, review_receipt: '' })).status === 409 && calls.length === 0, 'approval without a background review refused');
   const reviewed = await review({ json: async () => ({ item_ids: request.item_ids }) });
   check(reviewed.body.passed && reviewed.body.receipt && calls.length === 0, 'background review reads release state without approval or writes');
+  register.items.push({ id: 'fix-unprepared', title: 'Unprepared fix', repo: 'nextrade_WAREHOUSE', status: 'queued' });
+  const blockedReview = await review({ json: async () => ({ item_ids: ['fix-a', 'fix-unprepared'] }) });
+  check(!blockedReview.body.passed && !blockedReview.body.receipt && blockedReview.body.problems.length === 1 && /committed build/.test(blockedReview.body.problems[0]),
+    'an unprepared change has one actionable review blocker and no receipt');
+  register.items.pop();
   check((await send({ ...request, item_ids: [...request.item_ids].reverse(), review_receipt: reviewed.body.receipt })).status === 409, 'review receipt is bound to the selected changes');
   check((await send({ ...request, review_receipt: issueReview(caller, request.item_ids, register, request.heads, Date.now() - 16 * 60000) })).status === 409, 'old review receipts expire');
   r = await send({ ...request, review_receipt: reviewed.body.receipt });
@@ -200,5 +205,8 @@ async function send(b) { return post({ json: async () => b }); }
   }
   role = 'staff'; perms = [{ user_id: caller, module_name: 'releases.manage', has_access: true }];
   check((await reviewData()).status === 403, 'code release delegation does not authorize database approvals');
+  const delegated = (await read({})).body.signoffs;
+  check(delegated['wh-bug-001-save-path'].canGo && !delegated[palletData.id].canGo && /super admin/.test(delegated[palletData.id].why),
+    'the schedule offers the prevention release to a delegated manager and explains who can approve the correction');
   console.log(checks + ' release controls checks passed');
 })().catch(err => { console.error(err); process.exitCode = 1; });

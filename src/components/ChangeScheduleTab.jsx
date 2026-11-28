@@ -108,6 +108,25 @@ function activeRequest(sign) {
   return !!(sign && (sign.kind === 'go' || sign.kind === 'rollback' || sign.executing || sign.where === 'unknown'));
 }
 
+function missingDependency(item, signs, selected) {
+  return (item.dependsOn || []).find(function (id) {
+    return !['live', 'deployed'].includes(signs[id]?.where) && !selected.has(id);
+  });
+}
+
+function selectedDeployments(candidates, signs, picked) {
+  // A dependent is selected only while its prerequisites are selected or on production.
+  var selected = new Set();
+  var previousSize;
+  do {
+    previousSize = selected.size;
+    candidates.forEach(function (item) {
+      if (picked[item.id] && !missingDependency(item, signs, selected)) selected.add(item.id);
+    });
+  } while (selected.size !== previousSize);
+  return selected;
+}
+
 // Which list each change is in. Sign-off state and permission to take action come from the server; which list a change is in
 // follows the recorded history (current), not only the register file. v55.83-YW: moved out of the component unchanged.
 export function scheduleLists(data) {
@@ -178,11 +197,11 @@ function Row(props) {
   if (where === 'live') { tags.push({ color: 'prod', label: 'On production' }); }
   else if (where === 'deployed') { tags.push({ color: 'max', label: 'On production — not yet checked' }); }
   else if (where === 'unknown') { tags.push({ color: 'max', label: 'Needs attention — production state unconfirmed' }); }
+  else if (props.sign?.canGo && !props.dependencyNote) { tags.push({ color: 'prod', label: 'Ready for review' }); }
+  else if (props.sign?.why || props.dependencyNote) { tags.push({ color: 'stage', label: 'Waiting' }); }
   else { tags.push({ color: 'stage', label: 'On staging' }); }
   if (props.sign && props.sign.problem && where !== 'unknown') { tags.push({ color: 'max', label: 'Needs a look' }); }
   if (it.dataChange) { tags.push({ color: 'data', label: 'Data change' }); }
-  if (!active && where === 'staging' && it.needsCodex) { tags.push({ color: 'codex', label: 'Codex reviewing' }); }
-  if (!active && where === 'staging' && it.needsMax) { tags.push({ color: 'max', label: "Needs your go" }); }
   return (
     <div className="warehouse-change-row" style={{ background: C.card, border: '1px solid ' + C.line, borderLeft: '3px solid ' + leftColor, borderRadius: 8, padding: '12px 14px', display: 'grid', gap: 10, alignItems: 'start' }}>
       <div style={{ minWidth: 0 }}>
@@ -191,6 +210,7 @@ function Row(props) {
           {props.selection === 'rollback' ? 'Select for code rollback' : 'Select for deployment'}
         </label>}
         <h3 style={{ margin: '0 0 3px', fontSize: '.98rem', color: C.ink }}>{it.title}</h3>
+        {props.dependencyNote && <div style={{ color: C.max, fontSize: '.82rem' }}>{props.dependencyNote}</div>}
         {active && <div role="status" style={{ color: C.max, margin: '6px 0', fontWeight: 700 }}>
           {requestStatus(props.sign, props.data)}
           {(props.sign.requestId || props.sign.execution?.request_id) && <div style={{ fontWeight: 400 }}>Request #{props.sign.requestId || props.sign.execution.request_id}</div>}
@@ -289,11 +309,25 @@ export default function ChangeScheduleTab() {
   var statusReadable = lists.statusReadable; var items = lists.items; var signs = lists.signs;
   var active = lists.active; var queued = lists.queued; var live = lists.live; var rollbackItems = lists.rollbackItems;
   var canSign = !!(data && data.canSign);
-  var selectableIds = new Set((selectionAction === 'rollback' ? rollbackItems : queued).map(function (it) { return it.id; }));
-  var selectedIds = Object.keys(picked).filter(function (id) { return picked[id] && selectableIds.has(id); });
+  var candidates = queued.filter(function (it) { return signs[it.id]?.canGo; });
+  var selected = selectionAction === 'go' ? selectedDeployments(candidates, signs, picked) :
+    new Set(rollbackItems.filter(function (it) { return picked[it.id]; }).map(function (it) { return it.id; }));
+  var selectedIds = Array.from(selected);
+  useEffect(function () {
+    if (statusReadable && Object.keys(picked).some(function (id) { return !selected.has(id); })) {
+      setPicked(Object.fromEntries(selectedIds.map(function (id) { return [id, true]; })));
+    }
+  }, [picked, data, selectionAction]);
   var workerLabel = data?.worker?.enabled === false ? 'Worker disabled - approved releases will not start until activation is authorized' :
     data?.workerOnline ? 'Deployment worker online' : 'Worker offline - approved releases are waiting for connection';
-  function select(id) { setPicked(function (p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); }
+  function select(id) {
+    setPicked(function (p) {
+      var next = Object.assign({}, p);
+      if (next[id]) delete next[id];
+      else next[id] = true;
+      return next;
+    });
+  }
   function switchSelection(action) {
     setPicked({});
     setSelectionAction(action);
@@ -385,16 +419,16 @@ export default function ChangeScheduleTab() {
             <button disabled={!selectedIds.length || reviewOpen} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
           </div>
           {!selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>
-            {selectionAction === 'go' ? 'Select changes awaiting approval.' : 'Select deployed changes under Already on production.'}
+            {selectionAction === 'go' ? (candidates.length ? 'Select changes marked Ready for review.' : 'No changes are ready for deployment review.') : 'Select deployed changes under Already on production.'}
           </div>}
         </div>}
-        {message && <div role="status" style={{ color: C.max }}>{message}</div>}
+        {message && !review && <div role="status" style={{ color: C.prod }}>{message}</div>}
         {review && <section ref={reviewPanel} role="dialog" tabIndex={-1} aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
           <h2>{review.action === 'go' ? 'Production release review' : 'Confirm selected code rollbacks'}</h2>
           {review.action === 'rollback' && <p>This restores the selected Warehouse code files. Business records and uploads stay as they are.</p>}
           {review.action === 'go' && <p role="status" style={{ color: review.result?.passed ? C.prod : C.max }}>
             {reviewing ? 'Checking the selected changes, staging test evidence and current release state…' :
-              review.result?.passed ? 'Review passed. You can approve this exact build for production.' :
+              review.result?.passed ? 'Review passed. You can approve the selected changes for production.' :
                 review.result ? 'Review blocked. See what each change still needs below.' : 'Review incomplete. Run it again to continue.'}
           </p>}
           {review.items.map(function (it) { var s = review.heads[it.id] || {}; return <div key={it.id} style={{ padding: '10px 0', borderTop: '1px solid ' + C.line }}>
@@ -405,7 +439,6 @@ export default function ChangeScheduleTab() {
                 <div>Build: {result.sha || 'Not prepared'}</div>
                 {result.files.length > 0 && <div>Files: {result.files.join(', ')}</div>}
                 {result.migrations?.length > 0 && <div>Migrations: {result.migrations.join(', ')}</div>}
-                {result.note && <div style={{ color: C.max }}>{result.note}</div>}
                 {result.evidence && <div>{result.evidence}</div>}
                 {result.steps.length > 0 && <ul>{result.steps.map(function (step) { return <li key={step}>{step}</li>; })}</ul>}
               </div>;
@@ -419,9 +452,10 @@ export default function ChangeScheduleTab() {
             The worker that handles these database changes is offline. You can approve now, and the changes will wait in the queue.
           </p>}
           {reviewSelectionChanged && <p role="alert" style={{ color: C.max }}>The release status changed during review. Close this review and check the current status.</p>}
+          {message && <div role="alert" style={{ color: C.max }}>{message}</div>}
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
             <button disabled={sending || reviewing || reviewBlocked || !review.items.length || !canSign} style={btn(C.prod, true)} onClick={confirmReview}>{sending ? 'Queuing...' : review.action === 'go' ? 'Approve and queue deployment' : 'Confirm and queue code rollback'}</button>
-            <button disabled={sending || reviewing} style={btn(C.muted, false)} onClick={function () { setReview(null); }}>Close</button>
+            <button disabled={sending || reviewing} style={btn(C.muted, false)} onClick={function () { setReview(null); setMessage(''); }}>Close</button>
           </div>
         </section>}
 
@@ -451,9 +485,14 @@ export default function ChangeScheduleTab() {
             Changes awaiting approval
             <span style={{ font: '700 10px ' + C.mono, padding: '2px 8px', borderRadius: 999, letterSpacing: '.05em', textTransform: 'uppercase', background: 'rgba(242,207,91,.15)', color: C.gold2 }}>{queued.length} items</span>
           </h2>
-          <p style={{ color: C.muted, fontSize: '.86rem', margin: '0 0 12px' }}>Not approved for execution yet. Review the selected builds before approving them.</p>
           <div style={{ display: 'grid', gap: 10 }}>
-            {queued.length ? queued.map(function (it, i) { return <Row key={it.id || i} item={it} sign={signs[it.id]} onDone={load} selection={canSign && selectionAction === 'go' ? 'go' : null} selected={picked[it.id]} selectLocked={reviewOpen} onSelect={select} />; })
+            {queued.length ? [...candidates, ...queued.filter(function (it) { return !signs[it.id]?.canGo; })].map(function (it) {
+              var canDeploy = canSign && selectionAction === 'go' && signs[it.id]?.canGo;
+              var dependency = canDeploy ? missingDependency(it, signs, selected) : null;
+              var prerequisite = dependency && items.find(function (item) { return item.id === dependency; });
+              var dependencyNote = dependency && (signs[dependency]?.canGo ? 'Select ' + (prerequisite?.title || dependency) + ' first.' : 'Waiting for ' + (prerequisite?.title || dependency) + ' to reach production.');
+              return <Row key={it.id} item={it} sign={signs[it.id]} onDone={load} selection={canDeploy ? 'go' : null} selected={selected.has(it.id)} selectLocked={reviewOpen || !!dependency} dependencyNote={dependencyNote} onSelect={select} />;
+            })
               : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'No changes awaiting approval.'}</div>}
           </div>
         </section>

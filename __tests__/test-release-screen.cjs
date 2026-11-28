@@ -19,6 +19,7 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
         await page.addScriptTag({ path: path.join(deps, 'react-dom/umd/react-dom.development.js') });
         await page.evaluate(({ code, manager }) => {
           const items = ['One', 'Two', 'Three', 'Blocked'].map((name, i) => ({ id: 'fix-' + i, title: name, needsMax: true, manifest: { sha: 'a'.repeat(40), files: [{ path: 'resources/views/' + name + '.blade.php' }] } }));
+          items[2].dependsOn = ['fix-0'];
           const signoffs = Object.fromEntries(items.map((it, i) => [it.id, { head: 0, manifestDigest: 'b'.repeat(64), where: 'staging', canGo: manager && i < 3, canRollback: false, why: i === 3 ? 'Staging QA missing' : '' }]));
           const data = { ok: true, items, signoffs, canSign: manager, workerOnline: false, worker: { enabled: false, last_seen: '2026-11-24T12:49:07Z' }, executionReady: true, history: [] };
           window.releaseData = data;
@@ -49,7 +50,11 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
             return snapshot;
           } });
           const mod = { exports: {} };
-          new Function('require', 'module', 'exports', code)(id => id === 'react' ? React : { supabase: { auth: { getSession: async () => ({ data: { session: { access_token: 'test' } } }) } } }, mod, mod.exports);
+          new Function('require', 'module', 'exports', code)(id => {
+            if (id === 'react') return React;
+            if (id === './ReleasePauseBar') return () => null;
+            return { supabase: { auth: { getSession: async () => ({ data: { session: { access_token: 'test' } } }) } } };
+          }, mod, mod.exports);
           ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(mod.exports.default));
         }, { code, manager });
         await page.getByRole('heading', { name: 'One', exact: true }).waitFor();
@@ -58,8 +63,21 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           const reviewButton = toolbar.getByRole('button', { name: 'Review selected deployments', exact: true });
           assert.equal(await page.getByRole('button', { name: 'Review deployment', exact: true }).count(), 0);
           assert.ok(await reviewButton.isDisabled());
-          await page.getByRole('checkbox', { name: 'Select One', exact: true }).check();
-          await page.getByRole('checkbox', { name: 'Select Three', exact: true }).check();
+          const one = page.getByRole('checkbox', { name: 'Select One', exact: true });
+          const three = page.getByRole('checkbox', { name: 'Select Three', exact: true });
+          assert.equal(await page.getByRole('checkbox', { name: 'Select Blocked', exact: true }).count(), 0);
+          await page.getByText('Staging QA missing', { exact: true }).waitFor();
+          assert.ok(await three.isDisabled());
+          await page.getByText('Select One first.', { exact: true }).waitFor();
+          await one.check();
+          await three.check();
+          await one.uncheck();
+          assert.ok(await three.isDisabled());
+          assert.ok(!(await three.isChecked()));
+          assert.ok(await reviewButton.isDisabled());
+          await one.check();
+          assert.ok(!(await three.isChecked()));
+          await three.check();
           await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
           await page.waitForFunction(() => {
             const bar = document.querySelector('[aria-label="Selected Warehouse changes"]');
@@ -124,11 +142,8 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           await dialog.getByRole('button', { name: 'Close', exact: true }).click();
           await toolbar.getByRole('button', { name: 'Return to deployments', exact: true }).click();
           assert.equal(await production.getByRole('checkbox').count(), 0);
-          await page.getByRole('checkbox', { name: 'Select Blocked', exact: true }).check();
-          await reviewButton.click();
-          await page.getByText('Staging QA missing', { exact: true }).last().waitFor();
-          assert.ok(await page.getByRole('button', { name: 'Approve and queue deployment', exact: true }).isDisabled());
-          await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+          assert.equal(await page.getByRole('checkbox', { name: 'Select Blocked', exact: true }).count(), 0);
+          assert.ok(await reviewButton.isDisabled());
           await page.evaluate(() => {
             window.releaseData.signoffsError = 'Fixture status unavailable';
             window.dispatchEvent(new Event('focus'));

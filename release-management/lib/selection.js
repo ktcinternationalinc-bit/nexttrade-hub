@@ -71,7 +71,6 @@ function selectionPlan(items, states, ids, action) {
   ids.forEach(function (id) {
     var it = byId[id]; var st = states[id] || {};
     if (!it) { problems.push('Unknown change: ' + id); return; }
-    if (action === 'go') candidateProblems(it).forEach(function (p) { problems.push(it.title + ': ' + p); });
     if (!(action === 'go' ? st.canGo : st.canRollback)) {
       var why = st.why;
       if (action === 'go' && (st.where === 'live' || st.where === 'deployed')) {
@@ -80,6 +79,8 @@ function selectionPlan(items, states, ids, action) {
         why = 'Already approved and queued. See Change Schedule for execution status.';
       }
       problems.push(it.title + ': ' + (why || 'Not ready for this action.'));
+    } else if (action === 'go') {
+      candidateProblems(it).forEach(function (p) { problems.push(it.title + ': ' + p); });
     }
     if (it.dataChange && action === 'rollback' && !isOrderQueueRelease(it)) problems.push(it.title + ': data restoration requires a reviewed database operation.');
     if (action === 'go') {
@@ -88,7 +89,7 @@ function selectionPlan(items, states, ids, action) {
         paths[f.path] = id;
       });
       (it.dependsOn || []).forEach(function (dep) {
-        if (ids.indexOf(dep) < 0 && !['live', 'deployed'].includes((states[dep] || {}).where)) problems.push(it.title + ': also requires ' + dep);
+        if (ids.indexOf(dep) < 0 && !['live', 'deployed'].includes((states[dep] || {}).where)) problems.push(it.title + ': select ' + (byId[dep]?.title || dep) + ' too, or deploy it first.');
       });
     } else {
       (items || []).forEach(function (other) {

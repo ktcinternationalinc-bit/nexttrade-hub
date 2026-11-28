@@ -117,7 +117,7 @@ function req(body) {
   r = await signRoute.POST(req({ item_id: 'wh-ready', action: 'go' }));
   check('no name typed = refused', r.status === 400 && world.rows.length === 0, r);
   r = await signRoute.POST(req({ item_id: 'wh-nocodex', action: 'go', confirm: 'Warehouse look' }));
-  check('no Codex pass recorded = cannot be signed off', r.status === 409 && /Codex|Exact build/.test(r.body.error) && world.rows.length === 0, r);
+  check('no Codex pass recorded = cannot be signed off', r.status === 409 && /Waiting for a committed build/.test(r.body.error) && world.rows.length === 0, r);
   r = await signRoute.POST(req({ item_id: 'wh-stagingpass', action: 'go', confirm: 'Staging only pass' }));
   check('a Codex pass for STAGING is not a pass for production', r.status === 409 && world.rows.length === 0, r);
   r = await signRoute.POST(req({ item_id: 'wh-live', action: 'go', confirm: 'Hub embed enablement' }));

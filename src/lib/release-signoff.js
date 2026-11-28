@@ -201,11 +201,11 @@ export function itemSignState(item, latest) {
       else if (target && target.row) { out.canRollback = true; }
       else { out.why = out.why || 'The worker needs a recorded production move with its build and backup before it can roll this change back.'; }
     }
-    else if (item && item.dataChange && !selection.supportedDataPlan(item)) { out.why = 'This release includes database work. A reviewed database release plan is required.'; }
-    else if (!build) { out.why = out.why || 'This change needs a committed build, exact file list and a passing staging test before approval.'; }
+    else if (item && item.dataChange && !selection.supportedDataPlan(item)) { out.why = 'Waiting for a reviewed database release plan.'; }
+    else if (!item?.manifest) { out.why = 'Waiting for a committed build, file list and a passing staging test.'; }
     else {
       var problems = selection.candidateProblems(item);
-      if (problems.length) { out.why = problems.join(' '); }
+      if (!build || problems.length) { out.why = problems.join(' ') || 'Waiting for code review of this build.'; }
       else { out.canGo = true; }
     }
   }

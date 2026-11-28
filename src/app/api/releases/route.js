@@ -90,6 +90,10 @@ export async function GET(request) {
     stt.executing = !!stt.execution;
     stt.canCheck = canSign && readable && executionReady && !stt.executing && stt.where === 'deployed' && stt.kind === 'none';
     if (stt.executing) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; stt.why = 'Execution is running or needs recovery. No new request can replace it.'; }
+    if (canSign && stt.canGo && it.dataChange && !ctx.isSuperAdmin) {
+      stt.canGo = false;
+      stt.why = 'Ask a super admin to approve this database change.';
+    }
     if (!executionReady) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; }
     if (!canSign || !readable) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; }
     if (!readable) { stt.kind = 'unknown'; }
