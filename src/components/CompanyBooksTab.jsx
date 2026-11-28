@@ -3,12 +3,13 @@
 // companies per se when it comes to categorization, all that stuff"). Own bank + credit-card accounts, own categories,
 // own rules, own totals and export. Nextrade expense categories can map to KTC bill categories.
 // Inline colours on white panels (the dark theme repaints bg-white).
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { hubFetch } from '../lib/hub-fetch';
 import { companyByKey } from '../lib/companies';
 import { learnMatchText, lineShown } from '../lib/company-rule-learn';
 import StatementImport from './StatementImport';
 import NextradeTaxReport from './NextradeTaxReport';
+import CompanyTotalsReport from './CompanyTotalsReport';
 import BankRuleMatchFields from './BankRuleMatchFields';
 import { ALL_KEYWORDS_MATCH, PHRASE_MATCH, parseRuleMatch, ruleMatchLabel } from '../lib/bank-rule-match';
 import { NEXTRADE_SOURCE_LABELS } from '../lib/nextrade-tax-report';
@@ -54,12 +55,14 @@ export default function CompanyBooksTab(props) {
   var [cutoff, setCutoff] = useState(null);
   var s20 = useState(null); var rowPanel = s20[0]; var setRowPanel = s20[1]; // v55.83-UB — { id, mode: 'newcat' | 'transfer', ... } under one row
 
-  function api(payload) {
+  var companyKey = comp?.key;
+  var userId = userProfile?.id;
+  var api = useCallback(function (payload) {
     return hubFetch('/api/accounting/company-books', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id, company: comp.key }, payload)) })
+      body: JSON.stringify(Object.assign({ user_id: userId, company: companyKey }, payload)) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
-  }
+  }, [companyKey, userId]);
   function loadCats() { return api({ action: 'categories' }).then(function (j) { if (j && j.ok) { setCats(j.categories || []); setKinds(j.kinds || {}); if (j.sql_missing) { setSqlMissing(j.sql_missing); } } }); }
   function loadAccounts() {
     return api({ action: 'accounts' }).then(function (j) {
@@ -109,9 +112,17 @@ export default function CompanyBooksTab(props) {
     if (v === 'lines') { loadLines(); if (comp.key === 'nextrade') { loadAccounts(); } }
     if (v === 'rules') { loadCats(); api({ action: 'rules' }).then(function (j) { if (j && j.ok) { setRules(j.rules || []); } else { setErr((j && j.error) || ''); } }); }
     if (v === 'categories') { loadCats(); }
-    if (v === 'totals') { setBusy(true); api({ action: 'totals', from: from, to: to }).then(function (j) { if (j && j.ok) { setTotals(j.totals); } else { setErr((j && j.error) || ''); } }).finally(function () { setBusy(false); }); }
+    if (v === 'totals') { setBusy(true); loadTotals(from, to).finally(function () { setBusy(false); }); }
     if (v === 'accounts') { loadAccounts(); }
     if (v === 'mapping') { api({ action: 'mapping' }).then(function (j) { if (j && j.ok) { setMapping(j); } else { setErr((j && j.error) || ''); } }); }
+  }
+  function loadTotals(start, end) {
+    return api({ action: 'totals', from: start, to: end }).then(function (j) {
+      if (j && j.ok && j.totals) {
+        setTotals({ ...j.totals, from: j.from, to: j.to, capped: j.capped });
+        setErr('');
+      } else { setErr((j && (j.error || j.sql_missing)) || 'Totals could not refresh. Use Show to try again.'); }
+    });
   }
   useEffect(function () { if (comp) { loadCats(); loadView('lines'); loadCutoff(); } }, [props.company]); // eslint-disable-line react-hooks/exhaustive-deps
   // v55.83-XN (Max, 21 Nov: "JUST ONE BUTTON TO IGNORE ALL OF THEM FROM CREATING KTC BILLS PRIOR TO JUNE 1 2026") — the super admin's
@@ -263,7 +274,7 @@ export default function CompanyBooksTab(props) {
       if (j && j.ok) { toast.success('Unpaired — both lines are not categorized again.'); loadLines(); } else { toast.error((j && j.error) || 'Not unpaired.'); }
     }).finally(function () { setBusy(false); });
   }
-  function catsFor(l) { return cats.filter(function (c) { return (c.active || c.key === l.company_category) && (!c.direction || c.direction === 'any' || c.direction === l.direction || c.key === l.company_category); }); }
+  function catsFor(l, categories = cats) { return categories.filter(function (c) { return (c.active || c.key === l.company_category) && (!c.direction || c.direction === 'any' || c.direction === l.direction || c.key === l.company_category); }); }
   function exportCsv(rowsOut, name) {
     var csv = rowsOut.map(function (r) { return r.map(function (c) { var s = String(c == null ? '' : c); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(','); }).join('\n');
     var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = name; a.click();
@@ -403,11 +414,11 @@ export default function CompanyBooksTab(props) {
         {totals.excludes_payroll && <span className="font-bold px-2 rounded" style={{ background: '#fef3c7', color: '#92400e' }}>🔒 WITHOUT payroll — these are not the full totals</span>}
         <span>Money in: <b style={{ color: '#166534' }}>{fmt(totals.inTotal)}</b></span><span>Money out{totals.excludes_payroll ? ' (without payroll)' : ''}: <b style={{ color: '#991b1b' }}>{fmt(totals.outTotal)}</b></span>
         <span>Transfers in: <b>{fmt(totals.transfersIn)}</b></span><span>Transfers out: <b>{fmt(totals.transfersOut)}</b></span>
-        <button onClick={function () { exportCsv([['category', 'kind'].concat(totals.months).concat(['total'])].concat(totals.rows.map(function (r) { return r.payroll_restricted ? [r.label, r.kind].concat(totals.months.map(function () { return 'restricted'; })).concat(['restricted']) : [r.label, r.kind].concat(totals.months.map(function (m) { return r.byMonth[m] || 0; })).concat([r.total]); }).concat(totals.excludes_payroll ? [['TOTALS ABOVE EXCLUDE PAYROLL']] : [])), comp.key + '-totals-' + from + '-to-' + to + '.csv'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#f0fdf4', '#166534')}>⬇ Export CSV</button>
+        <button onClick={function () { exportCsv([['category', 'kind'].concat(totals.months).concat(['total'])].concat(totals.rows.map(function (r) { return r.payroll_restricted ? [r.label, r.kind].concat(totals.months.map(function () { return 'restricted'; })).concat(['restricted']) : [r.label, r.kind].concat(totals.months.map(function (m) { return r.byMonth[m] || 0; })).concat([r.total]); }).concat(totals.excludes_payroll ? [['TOTALS ABOVE EXCLUDE PAYROLL']] : [])), comp.key + '-totals-' + totals.from + '-to-' + totals.to + '.csv'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#f0fdf4', '#166534')}>⬇ Export CSV</button>
       </div>
       <div className="text-[10px] mb-1" style={{ color: '#64748b' }}>Transfers (own money moving, money from KTC, card payments) are listed but never counted as income or spending.</div>
-      <div style={{ overflowX: 'auto' }}><table className="text-[13px]" style={{ color: '#0f172a' }}><thead><tr style={{ background: '#e2e8f0', color: '#1e293b' }}><th className="p-1 text-left">Category</th>{totals.months.map(function (m) { return <th key={m} className="p-1 text-right">{m}</th>; })}<th className="p-1 text-right">Total</th></tr></thead>
-        <tbody>{totals.rows.map(function (r) { return <tr key={r.key} style={{ borderTop: '1px solid #e2e8f0', color: r.kind === 'transfer' ? '#64748b' : '#0f172a' }}><td className="p-1">{r.label}{r.kind === 'transfer' ? ' ↔' : ''}</td>{totals.months.map(function (m) { return <td key={m} className="p-1 text-right whitespace-nowrap">{r.byMonth[m] ? fmt(r.byMonth[m]) : ''}</td>; })}<td className="p-1 text-right font-bold whitespace-nowrap">{r.payroll_restricted ? '🔒' : fmt(r.total)}</td></tr>; })}</tbody></table></div>
+      <CompanyTotalsReport totals={totals} api={api} categoriesFor={catsFor} categoryBusy={busy || !!err}
+        onCategoryChange={canManage ? setCategory : null} refreshTotals={loadTotals} />
     </div>}
 
     {view === 'categories' && <div>

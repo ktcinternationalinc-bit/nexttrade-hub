@@ -23,7 +23,7 @@ function transactionRows(part) {
   });
 }
 
-function TransactionDetail({ transactions, heading, categoriesFor, onCategoryChange, categoryBusy }) {
+export function TransactionDetail({ transactions, heading, categoriesFor, onCategoryChange, categoryBusy, signedOut, dateLabel = 'Posted date' }) {
   var [month, setMonth] = useState('');
   var [account, setAccount] = useState('');
   var [limit, setLimit] = useState(detailPageSize);
@@ -47,7 +47,7 @@ function TransactionDetail({ transactions, heading, categoriesFor, onCategoryCha
     <div className="overflow-x-auto">
       <table className="w-full min-w-[740px] text-[11px]" aria-label={heading + ' transactions'}>
         <thead><tr className="border-b border-slate-300">
-          {['Posted date', 'Account', 'Description', 'Source', 'Category', 'Money in', 'Money out'].map(function (text, index) {
+          {[dateLabel, 'Account', 'Description', 'Source', 'Category', 'Money in', 'Money out'].map(function (text, index) {
             return <th key={text} scope="col" className={'py-1.5 px-2 ' + (index < 5 ? 'text-left' : 'text-right')}>{text}</th>;
           })}
         </tr></thead>
@@ -67,7 +67,7 @@ function TransactionDetail({ transactions, heading, categoriesFor, onCategoryCha
               </select>
               : line.category_label}</td>
             <td className="px-2 py-1.5 text-right">{line.direction === 'in' ? cents(line.amount) : '—'}</td>
-            <td className="px-2 py-1.5 text-right">{line.direction === 'out' ? cents(line.amount) : '—'}</td>
+            <td className="px-2 py-1.5 text-right" style={signedOut && line.direction === 'out' && line.amount > 0 ? { color: '#991b1b' } : undefined}>{line.direction === 'out' ? cents(signedOut ? -line.amount : line.amount) : '—'}</td>
           </tr>;
         })}</tbody>
       </table>
