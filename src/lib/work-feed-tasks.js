@@ -3,11 +3,12 @@
 // An assignment NEVER grants anything: it only says whose job a task is. The feed still shows a task only to people whose switches
 // already let them see it. Server-safe (no imports), SWC-safe (var + concatenation).
 export var ASSIGNMENTS_KEY = 'work_feed_assignments';
+export const COST_ENTRY_PERMISSION = 'accounting.cost_entry';
 
 // live: the feed shows these today. Later ones can be assigned now; their feed items come in later builds.
 // needs: every group must be met; a group is met when ANY switch in it is on.
 var KTC = ['accounting.clickbooks.access', 'accounting.view'];
-var COSTS = [KTC, ['pnl.view'], ['pnl.view_revenue'], ['pnl.view_margin'], ['pnl.edit_costs']];
+var COSTS = [[COST_ENTRY_PERMISSION]];
 export var FEED_TASKS = [
   { key: 'bill_flags', label: 'Price flags on bills', job: 'Bills', live: true, needs: [KTC, ['bills.manage']], needsWords: 'Bills: Manage' },
   { key: 'bill_validate', label: 'Bills to validate', job: 'Bills', live: true, needs: [KTC, ['bills.manage']], needsWords: 'Bills: Manage' },
@@ -19,8 +20,8 @@ export var FEED_TASKS = [
   { key: 'wire_bank', label: 'Sent wires with no bank line', job: 'Wires — send', live: true, needs: [KTC, ['wires.send']], needsWords: 'Wires: Send' },
   { key: 'wire_proof', label: 'Paid wires waiting for proof', job: 'Wires — send', live: true, needs: [KTC, ['wires.send']], needsWords: 'Wires: Send' },
   { key: 'invoice_bank', label: 'Egypt invoices awaiting bank confirmation', job: 'Egypt bank confirmations', live: true, needs: [['Treasury', 'View Financial Reports']], needsWords: 'Treasury or View Financial Reports' },
-  { key: 'supplier_costs_missing', label: 'Missing supplier costs', job: 'Profitability', live: true, needs: COSTS, needsWords: 'Profitability: View, See profit and margin, and Edit Product Costs' },
-  { key: 'shipment_costs_missing', label: 'Missing shipment costs and units', job: 'Profitability', live: true, needs: COSTS, needsWords: 'Profitability: View, See profit and margin, and Edit Product Costs' },
+  { key: 'supplier_costs_missing', label: 'Missing supplier costs', job: 'Cost entry', live: true, needs: COSTS, needsWords: 'Cost Entry' },
+  { key: 'shipment_costs_missing', label: 'Missing shipment costs and units', job: 'Cost entry', live: true, needs: COSTS, needsWords: 'Cost Entry' },
   { key: 'order_no_invoice', label: 'Shipped orders with no KTC invoice', job: 'Invoices', live: false, needs: [['invoice.create', 'Edit Invoices'], ['orders.monitor']], needsWords: 'Invoices: Create/Edit + Orders: Monitor' },
   { key: 'order_paperwork', label: 'Shipped orders — NT paperwork not complete', job: 'Order management', live: false, needs: [['orders.manage']], needsWords: 'Orders: Manage' },
   { key: 'order_preload', label: 'Pre-load orders missing items', job: 'Order management', live: false, needs: [['orders.manage']], needsWords: 'Orders: Manage' },

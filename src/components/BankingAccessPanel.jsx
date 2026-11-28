@@ -16,12 +16,16 @@ import { canOpenTypedPnl, LEDGER_PNL_PERMISSION, TYPED_PNL_PERMISSION } from '..
 import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import { useBankVisibility, refreshBankVisibility } from '../lib/use-bank-visibility';
+import { COST_ENTRY_PERMISSION } from '../lib/work-feed-tasks';
 
 var INK = '#0f172a'; var SUB = '#334155'; var MUTED = '#64748b';
 export var BANKING_GROUPS = [
-  { title: '1 · Which books can they open?', note: 'Nothing below works until at least one of these is ON.', items: [
+  { title: '1 · Which books can they open?', note: 'Permissions that open accounting screens need one of these switches.', items: [
     { key: 'accounting.clickbooks.access', label: 'ClickBooks (KTC Hub)', desc: 'Books, Bills, Wires, Stats, Forecast, Financial Reports. Shows what is due and overdue.' },
     { key: 'accounting.wavehub.access', label: 'Wave Hub', desc: 'Wave dashboard, invoices, customers, bank review & matching, order reconciliation.' },
+  ] },
+  { title: 'Cost entry', items: [
+    { key: COST_ENTRY_PERMISSION, label: 'Cost Entry', desc: 'Enter missing supplier costs, trucking, freight, and units in My Work Feed.' },
   ] },
   { title: '2 · Which money can they see?', items: [
     { key: 'accounting.view_totals', label: 'Money totals', desc: 'Came In, Went Out, Sales, Net Moved, Projected Net. Without it these show “Restricted”.', needsBooks: true },

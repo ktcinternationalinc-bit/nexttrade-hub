@@ -13,8 +13,9 @@ import { buildFeed, compareFeed, addResolved, tally } from '../lib/work-feed';
 import { acctAccess, screenHub } from '../lib/accounting-access';
 import { hubFetch } from '../lib/hub-fetch';
 import WorkAssignmentsPanel from './WorkAssignmentsPanel'; // v55.83-AAH — admin / super admin pick who owns each task
-import { canAssign, taskOf } from '../lib/work-feed-tasks';
+import { canAssign, COST_ENTRY_PERMISSION, taskOf } from '../lib/work-feed-tasks';
 import { COST_FEED_KEYS } from '../lib/profitability-work-feed';
+import CostEntryForm from './CostEntryForm';
 
 // Kept only in this open page (never stored): the feed as it was when the person pressed a button (so Back can tell Resolved / Still
 // open), and the Resolved group of this person while the page is open.
@@ -33,7 +34,7 @@ export function feedAccess(isSuper, mp, role) {
   if (!canWires) { perms.prepare = false; perms.signoff = false; perms.send = false; }
   // same gate as the home screen's "awaiting bank confirmation" card (PendingBankConfirmationsWidget)
   var canInvoices = boss || m['Treasury'] === true || m['View Financial Reports'] === true;
-  var canCosts = revenueOk && hubOk('profitability') && (boss || (m['pnl.view'] === true && m['pnl.view_margin'] === true && m['pnl.edit_costs'] === true));
+  var canCosts = boss || m[COST_ENTRY_PERMISSION] === true;
   return { perms: perms, canBills: canBills, canWires: canWires, canInvoices: canInvoices, canCosts: canCosts, any: canBills || canWires || canInvoices || canCosts };
 }
 
@@ -55,6 +56,7 @@ export default function WorkFeed(props) {
   var s8 = useState('todo'); var view = s8[0]; var setView = s8[1];
   var s9 = useState(null); var asg = s9[0]; var setAsg = s9[1]; // v55.83-AAH — { tasks, names } from /api/work-feed/assignments (null = none / not readable)
   var s10 = useState(false); var asgOpen = s10[0]; var setAsgOpen = s10[1];
+  var [costTask, setCostTask] = useState(null);
   var prevRef = useRef(null); // the feed now on screen (also read by the invoice watcher)
   var seqRef = useRef(0); var userRef = useRef(null); // which load is the newest; whose feed this is
 
@@ -66,14 +68,14 @@ export default function WorkFeed(props) {
   function load(prev) {
     seqRef.current++; var mySeq = seqRef.current;
     setBusy(true);
-    Promise.all([acc.canBills ? post('/api/accounting/bills', { action: 'list' }) : Promise.resolve(null), acc.canWires ? post('/api/accounting/wire-packages', { action: 'list' }) : Promise.resolve(null), acc.canCosts ? post('/api/accounting/profitability', { action: 'cost_work_feed', date_from: '2026-06-01' }) : Promise.resolve(null)]).then(function (r) {
+    Promise.all([acc.canBills ? post('/api/accounting/bills', { action: 'list' }) : Promise.resolve(null), acc.canWires ? post('/api/accounting/wire-packages', { action: 'list' }) : Promise.resolve(null), acc.canCosts ? post('/api/accounting/profitability', { action: 'cost_work_feed' }) : Promise.resolve(null)]).then(function (r) {
       if (seqRef.current !== mySeq) { return; }
       var e = [];
       if (r[0] && !r[0].ok) { e.push('Bills: ' + (r[0].error || 'not loaded')); }
       if (r[1] && !r[1].ok) { e.push('Wires: ' + (r[1].error || 'not loaded')); }
       var othersOk = !e.length;
       var costsOk = !!(r[2] && r[2].ok && Array.isArray(r[2].tasks));
-      if (acc.canCosts && !costsOk) { e.push('Profitability cost tasks: ' + (r[2]?.error || 'not loaded')); }
+      if (acc.canCosts && !costsOk) { e.push('Cost entry: ' + (r[2]?.error || 'not loaded')); }
       setErrs(e);
       var w = (acc.canBills || acc.canWires) ? waitingFor({ bills: (r[0] && r[0].ok && r[0].bills) || [], wires: (r[1] && r[1].ok && r[1].packages) || [], funding: (r[1] && r[1].ok && r[1].funding_open) || [], perms: acc.perms, userId: me }) : null;
       // Codex AAA-02: the home screen's invoices count only when the page says they loaded (invoicesStatus.ok); otherwise the last good
@@ -114,6 +116,7 @@ export default function WorkFeed(props) {
   // again whenever the signed-in person or their effective access changes (a new person starts with an empty feed and no comparison).
   var accessKey = (me || '') + '|' + [acc.canBills, acc.canWires, acc.canInvoices, acc.canCosts, acc.perms.bills, acc.perms.prepare, acc.perms.signoff, acc.perms.send].map(function (b) { return b ? 1 : 0; }).join('');
   useEffect(function () {
+    setCostTask(null);
     if (!me || !acc.any) { seqRef.current++; prevRef.current = null; setFeed(null); setErrs([]); setSince(null); setBusy(false); return; }
     if (userRef.current !== me) { userRef.current = me; prevRef.current = null; setFeed(null); setSince(null); if (lastJump && lastJump.user !== me) { lastJump = null; } }
     load(null);
@@ -139,6 +142,7 @@ export default function WorkFeed(props) {
   }, [invSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function openIt(item) {
+    if (item.target?.kind === 'cost_entry') { setCostTask(item.key); return; }
     var y0 = 0; try { y0 = window.scrollY || 0; } catch (e0) {}
     lastJump = { user: me, before: feed, key: item.key, title: item.title, y: y0, backN: Number(props.backN || 0), view: view };
     if (props.onOpen) { props.onOpen(item.target, { title: item.title, todo: item.todo }); }
@@ -237,8 +241,9 @@ export default function WorkFeed(props) {
                 </div>
                 <div className="px-3 py-2.5 flex flex-col items-end justify-center gap-2" style={{ flex: '0 0 auto', borderLeft: '1px solid ' + LINE, minWidth: 170 }}>
                   {x.amount && <div className="tabular-nums" style={{ fontSize: 15, fontWeight: 900, color: INK }}>{x.amount}</div>}
-                  <button onClick={function () { openIt(x); }} title="Takes you to the exact place. A Back button there brings you back to this feed." className="px-4 py-2.5 text-[13px] font-extrabold" style={Object.assign({ background: INK, color: '#000000', border: '1px solid ' + INK, whiteSpace: 'nowrap' }, sq)}>Go resolve →</button>
+                  <button onClick={function () { openIt(x); }} title={x.entry ? 'Open cost entry here' : 'Takes you to the exact place. A Back button there brings you back to this feed.'} className="px-4 py-2.5 text-[13px] font-extrabold" style={Object.assign({ background: INK, color: '#000000', border: '1px solid ' + INK, whiteSpace: 'nowrap' }, sq)}>{x.entry ? 'Enter ' + (x.entry.kind === 'unit' ? 'unit' : 'cost') : 'Go resolve →'}</button>
                 </div>
+                {acc.canCosts && x.entry && costTask === x.key && <CostEntryForm key={x.key} task={x} userId={me} onCancel={() => setCostTask(null)} onSaved={() => { setCostTask(null); load(feed); }} />}
               </div>;
             })}
             {g.items.length > 15 && <div className="px-3 py-2 text-[12px] font-bold" style={{ color: SUB }}>{'+ ' + (g.items.length - 15) + ' more of these — resolve the ones above and the next ones move up.'}</div>}

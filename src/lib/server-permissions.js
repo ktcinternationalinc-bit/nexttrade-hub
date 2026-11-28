@@ -1,5 +1,6 @@
 import { authorizeBankVisibility, BankVisibilityError } from './bank-visibility.js';
 import { PERMISSION_ALIASES, effectiveSwitch } from './permission-aliases.js';
+import { COST_ENTRY_PERMISSION } from './work-feed-tasks.js';
 
 // src/lib/server-permissions.js — SERVER-SIDE permission resolution for API routes.
 // The Hub is a protective overlay: routes must enforce the SPECIFIC permission server-side,
@@ -109,6 +110,7 @@ export var REVENUE_CONFLICT_KEYS = { 'pnl.view_margin': 1, 'accounting.view_invo
 // v55.83-XK (inventory 23 Nov: ClickBooks, Wave, orders, reconciliation and bank routes also return customer money under their own
 // switches) — a researcher is an ALLOW-LIST: among the accounting & banking switches only these three; every other one conflicts.
 export var RESEARCHER_ALLOWED = { 'pnl.view': 1, 'pnl.edit_costs': 1, 'pnl.view_revenue': 1 };
+RESEARCHER_ALLOWED[COST_ENTRY_PERMISSION] = 1;
 export function isRevenueConflict(perm) {
   var p = String(perm || ''); if (RESEARCHER_ALLOWED[p] === 1) { return false; }
   if (REVENUE_CONFLICT_KEYS[p] === 1) { return true; }

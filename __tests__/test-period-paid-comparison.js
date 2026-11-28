@@ -126,13 +126,13 @@ const cell = { invoice_date: '2026-06-24', invoice: 'America 1747', release: '10
 const supplierCell = { ...cell, invoice: 'AMERICA 1746', description: 'Miatex Goods', pounds: 100, transport_revenue: 100, transport_profit: 100, base_cost: null };
 const tasks = profitabilityWorkItems([cell, supplierCell, supplierCell]);
 assert.equal(tasks.length, 2);
-assert.equal(tasks.find(task => task.group === 'supplier_costs_missing').detail, 'Jun 2026 · 2 sale lines');
+assert.equal(tasks.find(task => task.group === 'supplier_costs_missing').detail, 'Jun 2026 · 2 lines');
 const shippingTask = tasks.find(task => task.group === 'shipment_costs_missing');
 assert.match(shippingTask.issue, /also blocks the shipping calculation/);
-assert.deepEqual(shippingTask.target, { kind: 'profitability', month: '2026-06', task: 'pounds:Stock PVC Rolls BY KGs' });
+assert.deepEqual(shippingTask.target, { kind: 'cost_entry' });
 const spanningTasks = profitabilityWorkItems([cell, { ...cell, invoice_date: '2026-07-06', invoice: 'America 1759' }, supplierCell]);
 assert.equal(spanningTasks.filter(task => task.group === 'shipment_costs_missing').length, 1);
-assert.equal(spanningTasks.find(task => task.group === 'shipment_costs_missing').detail, 'Jun 2026, Jul 2026 · 2 sale lines');
+assert.equal(spanningTasks.find(task => task.group === 'shipment_costs_missing').detail, 'Jun 2026, Jul 2026 · 2 lines');
 
 const period = blankPeriodRow('2026-06', 'Jun 2026');
 addPeriodCell(period, { goods_revenue: 247989.25, goods_profit: 98316.74, transport_revenue: 59524.25, transport_profit: 4409 });
