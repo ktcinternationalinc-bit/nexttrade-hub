@@ -3,6 +3,7 @@ import { isPartnerFeeCategory } from './partner-fee';
 import { NEXPAC_FEE_CENTS, identifyNexPacFeeLines, nexPacFeeSchedule } from './partner-fee-months';
 import { billIdentity } from './bill-duplicates';
 import { partyKeyOf } from './paid-through-blocks';
+import { managedCashReceipts, MANAGED_SALES_OPENING_ID } from './nextrade-managed-sales';
 
 const cents = amount => Math.round((Number(amount) || 0) * 100);
 const sum = rows => rows.reduce((total, row) => total + row.cents, 0);
@@ -20,7 +21,7 @@ function fundingCategory(name) {
   return fundingCategories.get(party) || { key: 'other_funding', label: 'Other company funding' };
 }
 
-export function buildPaidComparison({ bills, payments, customerPayments = [], partnerFeeLines = [], nextradeExpenses = [], spendingRows, incomeRows, bankLines, funds, labels, kinds, from, to, billBusinessId, privateBills = {}, showRows = true, showPayrollDetails = true }) {
+export function buildPaidComparison({ bills, payments, customerPayments = [], partnerFeeLines = [], nextradeExpenses = [], managedSalesLines = [], managedSalesBalance = null, spendingRows, incomeRows, bankLines, funds, labels, kinds, from, to, billBusinessId, privateBills = {}, showRows = true, showPayrollDetails = true }) {
   if (!Array.isArray(funds)) return { unavailable: 'Vendor payments through RTM and NextTrade could not be verified.' };
   const inPeriod = date => date && date >= from && date <= to;
   const paid = [];
@@ -181,6 +182,11 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   payments.forEach(payment => {
     const bill = bills[payment.bill_id];
     if (payment.voided || recorded.has(payment.id) || !isActive(bill) || !isUSD(bill.currency)) return;
+    if (payment.party_opening_id === MANAGED_SALES_OPENING_ID) {
+      if (inPeriod(payment.paid_date)) recordBillPayment(bill, payment.paid_date, cents(payment.amount), 'Paid from NextTrade-managed sales',
+        payment.id, null, 'NextTrade Industries', null);
+      return;
+    }
     if (payment.bank_transaction_id) {
       const key = payment.bank_transaction_id;
       if (!bankPayments.has(key)) bankPayments.set(key, []);
@@ -273,6 +279,7 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   });
 
   const group = rows => ({ cents: sum(rows), count: rows.length, rows: showRows ? rows : [] });
+  const cashReceipts = managedCashReceipts(managedSalesLines, bankLines, receipts, from, to);
   const reimbursements = paid.filter(row => row.nexttrade_reimbursement);
   const chargeCategories = new Map();
   charges.forEach(row => {
@@ -317,7 +324,9 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     return { ...row, category: category.key, label: category.label, who: row.who || row.label };
   })));
   const netPayments = paid.filter(row => !row.nexttrade_reimbursement);
-  return { rows_visible: showRows, paid: group(netPayments.concat(charges)), receipts: group(receipts),
+  return { rows_visible: showRows, paid: group(netPayments.concat(charges)), receipts: group(cashReceipts.receipts),
+    bank_receipts: group(receipts), managed_sales_receipts: group(cashReceipts.sales), managed_sales_remittances: group(cashReceipts.remittances),
+    managed_sales_balance: managedSalesBalance,
     funding: group(fundingRows),
     funded_paid: group(paid.filter(row => row.party).map(row => row.nexttrade_reimbursement ? { ...row, source: row.source + ' · reimburses a recorded NextTrade charge' } : row)),
     nextrade_charges: group(charges), nextrade_reimbursements: group(reimbursements),
@@ -340,8 +349,15 @@ export function combinePaidComparisons(parts) {
       return group ? { cents: total.cents + group.cents, count: total.count + group.count, rows: total.rows.concat(group.rows) } : total;
     }, { cents: 0, count: 0, rows: [] });
   }
-  for (const key of ['paid', 'receipts', 'funding', 'funded_paid', 'bank_cash', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'review', 'unclassified_receipts', 'other_deposits', 'partner_billed', 'partner_schedule']) {
+  for (const key of ['paid', 'receipts', 'bank_receipts', 'managed_sales_receipts', 'managed_sales_remittances', 'funding', 'funded_paid', 'bank_cash', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'review', 'unclassified_receipts', 'other_deposits', 'partner_billed', 'partner_schedule']) {
     totals[key] = combineGroups(part => part[key]);
+  }
+  const balances = parts.map(part => part.managed_sales_balance).filter(Boolean).sort((a, b) => a.from.localeCompare(b.from));
+  if (balances.length === parts.length) {
+    const first = balances[0];
+    const last = balances[balances.length - 1];
+    totals.managed_sales_balance = { ...first, to: last.to, closing: last.closing };
+    for (const key of ['receipts', 'remitted', 'reversed', 'paid']) totals.managed_sales_balance[key] = balances.reduce((total, balance) => total + balance[key], 0);
   }
   totals.funding_by_company = {};
   parts.forEach(part => Object.entries(part.funding_by_company || {}).forEach(([key, company]) => {

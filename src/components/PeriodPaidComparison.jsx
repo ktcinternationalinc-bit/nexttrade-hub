@@ -120,6 +120,22 @@ function FundingSummary({ reconciliation: r }) {
     {' = '}<Amount cents={r.left} /> unallocated at period-end.</p>;
 }
 
+function ManagedSalesBalance({ balance }) {
+  return <details className="mt-2 rounded border border-slate-200 px-3 py-2">
+    <summary className="flex cursor-pointer flex-wrap justify-between gap-x-4 font-semibold text-[#1d4ed8]">
+      <span>NextTrade-managed sales balance</span>
+      <span className="tabular-nums text-[#0f172a]"><Amount cents={balance.closing} /> held at period end</span>
+    </summary>
+    <div className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-2">
+      <span>Opening balance <b><Amount cents={balance.opening} /></b></span>
+      <span>Sales received <b><Amount cents={balance.receipts} /></b></span>
+      <span>Remitted to KTC <b><Amount cents={-balance.remitted} /></b></span>
+      <span>Bills paid from balance <b><Amount cents={-balance.paid} /></b></span>
+      {balance.reversed !== 0 && <span>Sales reversals <b><Amount cents={-balance.reversed} /></b></span>}
+    </div>
+  </details>;
+}
+
 export default function PeriodPaidComparison({ period, periods, onPeriod, comparison, status, invoiceRows, onOpenInvoice, onOpenBill, onOpenTransactions, onFixCosts, pnl, pnlExpenses, onOpenPnl, basis = 'bank', onBasisChange, canSeeSources = true, categoryPicker }) {
   const available = !!(comparison && !comparison.unavailable);
   const visible = available && comparison.rows_visible && canSeeSources;
@@ -135,6 +151,7 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
   const partnerExpected = comparison?.partner_schedule;
   const partnerPaid = comparison?.partner_paid_cents || 0;
   const showPartnerFee = partnerBilled?.count > 0 || partnerExpected?.count > 0 || partnerPaid !== 0;
+  const moneyAtNextTrade = comparison?.managed_sales_receipts?.count > 0 || comparison?.managed_sales_remittances?.count > 0;
   if (visible && bankView) comparison.funded_paid.rows.forEach(row => {
     if (row.transfer_id) {
       if (!paymentsByTransfer.has(row.transfer_id)) paymentsByTransfer.set(row.transfer_id, { cents: 0, rows: [] });
@@ -178,14 +195,21 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
     </p>}
     <div className={'grid gap-3' + (mode.key === 'billed' ? '' : ' sm:grid-cols-2')}>
       {panel(mode.key === 'billed' ? 'Goods invoiced less bills dated this period' : 'Goods invoiced less payments', period.goods_revenue, <Records title="Goods invoiced" group={invoices} visible={canSeeSources} onOpenInvoice={onOpenInvoice} />, !period.miss.goods_revenue)}
-      {mode.key !== 'billed' && panel('Bank receipts less payments', available ? comparison.receipts.cents : 0, available ?
-        <CategoryRecords title="Cash receipts from the bank" group={comparison.receipts} visible={visible} onOpenInvoice={onOpenInvoice} categoryPicker={categoryPicker}>
-          <p className="text-slate-700">Customer collections and other categorized income received this period, by bank posting date.</p>
+      {mode.key !== 'billed' && panel(moneyAtNextTrade ? 'Cash received less payments' : 'Bank receipts less payments', available ? comparison.receipts.cents : 0, available ?
+        <CategoryRecords title={moneyAtNextTrade ? 'Cash receipts for KTC' : 'Cash receipts from the bank'} group={comparison.receipts} visible={visible} onOpenInvoice={onOpenInvoice} categoryPicker={categoryPicker}>
+          {moneyAtNextTrade
+            ? <p className="text-slate-700">KTC bank receipts and NextTrade-managed sales, by bank posting date. Matched remittances are counted on the original NextTrade receipt date.</p>
+            : <p className="text-slate-700">Customer collections and other categorized income received this period, by bank posting date.</p>}
         </CategoryRecords> : null)}
     </div>
+    {available && comparison.managed_sales_balance && <ManagedSalesBalance balance={comparison.managed_sales_balance} />}
     {!available && <p role="status" className="mt-2 text-slate-700">{comparison?.unavailable || status || 'Loading payments…'}</p>}
     {available && comparison.notice && <p role="status" className="mt-2 rounded border border-[#d8bc7f] bg-[#fffbeb] px-3 py-2 text-[#713f12]">{comparison.notice}</p>}
     {available && <div className="mt-2 space-y-1.5">
+      {mode.key !== 'billed' && moneyAtNextTrade && <CategoryRecords title="KTC bank receipts only" group={comparison.bank_receipts}
+        visible={visible} onOpenInvoice={onOpenInvoice} categoryPicker={categoryPicker}>
+        {comparison.managed_sales_remittances.count > 0 && <p className="text-slate-700">Includes <Amount cents={comparison.managed_sales_remittances.cents} /> transferred in from NextTrade-managed sales.</p>}
+      </CategoryRecords>}
       {expenseGroup && <CategoryRecords key={mode.key} title={bankView ? mode.expense : mode.expense + ' · by category'} group={expenseGroup}
         visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} initiallyOpen={bankView} nexttrade={nexttradeInBankView}
         paymentsByTransfer={bankView ? paymentsByTransfer : undefined} fundingByCompany={bankView ? comparison.funding_by_company : undefined}>

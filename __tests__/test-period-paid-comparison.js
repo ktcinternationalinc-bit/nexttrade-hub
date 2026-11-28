@@ -11,6 +11,7 @@ const { profitabilityWorkItems } = require('../src/lib/profitability-work-feed')
 const { pnlFormula, periodInvoices } = require('../src/lib/pnl-expense-detail');
 const { readExpenseAnswer } = require('../src/lib/pnl-expenses');
 const { isNextradeKtcExpense, nextradeExpenseCategory } = require('../src/lib/nextrade-expenses-server');
+const { managedCashReceipts, MANAGED_SALES_OPENING_ID } = require('../src/lib/nextrade-managed-sales');
 const PeriodPaidComparison = require('../src/components/PeriodPaidComparison.jsx').default;
 const ExpenseDetail = require('../src/components/ExpenseDetail.jsx').default;
 const PnlFormula = require('../src/components/PnlFormula.jsx').default;
@@ -84,6 +85,20 @@ const cashIncome = assemble({
 assert.deepEqual(cashIncome.receipts.rows.map(r => r.category), ['customer_payment', 'other_income', 'interest_income']);
 assert.equal(cashIncome.receipts.cents, 77000);
 assert.deepEqual(cashIncome.other_deposits.rows.map(r => r.category), ['loan']);
+const ntSales = [
+  { id: 'nt-sale', date: '2026-06-07', direction: 'in', category: 'sales', amount: 74210.04, description: 'Managed customer receipts' },
+  { id: 'nt-wire', date: '2026-06-08', direction: 'out', category: 'sales_ktc_managed_income', amount: 9330, description: 'IMAD: 0608MMQFMP2L017380' },
+];
+const bankRemittance = { id: 'ktc-wire', direction: 'in', amount_abs: 9330, name: 'REF:20260608MMQFMP2L017380' };
+const actualBankReceipts = [{ id: 'customers', cents: 40978220 }, { id: 'ktc-wire', cents: 933000, category: 'other_income' }];
+const managedCash = managedCashReceipts(ntSales, [bankRemittance], actualBankReceipts, june.from, june.to);
+assert.equal(managedCash.receipts.reduce((sum, r) => sum + r.cents, 0), 48399224);
+assert.deepEqual(managedCash.remittances, [actualBankReceipts[1]]);
+assert.equal(managedCashReceipts(ntSales, [{ ...bankRemittance, amount_abs: 9329 }], actualBankReceipts, june.from, june.to).remittances.length, 0);
+assert.equal(managedCashReceipts(ntSales, [bankRemittance, { ...bankRemittance, id: 'possible-duplicate' }], actualBankReceipts, june.from, june.to).remittances.length, 0);
+const poolPaid = assemble({ payments: [pay('managed-paid', 'trucking', 500, null, { party_opening_id: MANAGED_SALES_OPENING_ID })] });
+assert.equal(poolPaid.paid.cents, 50000);
+assert.equal(poolPaid.funded_paid.rows[0].source, 'Paid from NextTrade-managed sales');
 
 const direct = assemble({ spendingRows: [row('one-debit', 'vendor_payment', 50000), row('uncategorized-bank', '', 900)], payments: [pay('partner-part', '14277', 45250, 'one-debit'), pay('freight-part', 'freight', 4750, 'one-debit'), pay('linked-unknown', 'freight', 900, 'uncategorized-bank'), pay('void', 'freight', 800, 'one-debit', { voided: true }), pay('bank-missing', 'trucking', 250, 'out-of-period'), pay('legacy-no-bank', 'freight', 500, null)] });
 assert.equal(direct.paid.cents, 5090000);

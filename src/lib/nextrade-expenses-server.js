@@ -1,6 +1,7 @@
 import { isExpenseKind, NEXTRADE_COMPANY_ID } from './companies';
 import { wantsBill } from './nextrade-bills-server';
 import { dropPrivate } from './private-accounts-server';
+import { MANAGED_REMITTANCE } from './nextrade-managed-sales';
 
 export const NEXTRADE_KTC_PNL_FROM = '2026-06-01';
 export const NEXTRADE_KTC_PNL_EXCLUSIONS = 'nextrade_ktc_pnl_exclusions';
@@ -53,7 +54,7 @@ export async function loadNextradeExpenses(db, fetchAll, privateAccounts) {
     const cents = Math.round(Number(transaction.amount_abs) * 100);
     return [{ id: transaction.id, date: transaction.date, cents, who: transaction.merchant_name || transaction.name,
       category: expenseCategory.key, nextrade_category: category.key, label: expenseCategory.label, kind: expenseCategory.kind,
-      ktc_pnl_excluded: excluded.has(transaction.id), payroll: category.is_payroll === true,
+      ktc_pnl_excluded: excluded.has(transaction.id) || transaction.company_category === MANAGED_REMITTANCE, payroll: category.is_payroll === true,
       credit_card: transaction.account_subtype === 'credit card', bill_id: billBySource.get(transaction.id) }];
   });
 }

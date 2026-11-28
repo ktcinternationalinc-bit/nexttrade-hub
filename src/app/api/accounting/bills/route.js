@@ -13,6 +13,7 @@ import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess, pa
 import { buildPaidThroughBlocks, uniquePaidThroughBankRows } from '../../../../lib/paid-through-blocks';
 import { buildPaidComparison } from '../../../../lib/period-paid-comparison';
 import { loadNextradeExpenses, NEXTRADE_KTC_PNL_FROM } from '../../../../lib/nextrade-expenses-server';
+import { readManagedSalesPeriod, MANAGED_SALES_OPENING_ID } from '../../../../lib/nextrade-managed-sales';
 import { NEXPAC_FEE_CENTS } from '../../../../lib/partner-fee-months';
 import { applyVendorWirePaymentDates } from '../../../../lib/vendor-wire-payment-dates';
 import { fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
@@ -2292,11 +2293,18 @@ export async function POST(req) {
             });
           }
         }
-        if (comparePaid && pTo >= NEXTRADE_KTC_PNL_FROM) {
+        var managedSalesPeriod = null;
+        if (comparePaid) {
           try {
             var privateNexttrade = await privateScope(db, userId);
             if (privateNexttrade.error) { throw new Error(privateNexttrade.error); }
-            nextradeExpenses = await loadNextradeExpenses(db, fetchAll, privateNexttrade);
+            var nexttradeSources = await Promise.all([
+              pTo >= NEXTRADE_KTC_PNL_FROM ? loadNextradeExpenses(db, fetchAll, privateNexttrade) : [],
+              readManagedSalesPeriod(db, fetchAll, pFrom, pTo, callerIsSuper)
+            ]);
+            nextradeExpenses = nexttradeSources[0];
+            managedSalesPeriod = nexttradeSources[1];
+            managedSalesPeriod.lines = dropPrivate(managedSalesPeriod.lines, privateNexttrade);
           } catch (expenseError) { nextradeExpenseError = 'NextTrade expenses could not be verified for these dates. Retry the report.'; }
         }
         var nextradeChargeBillIds = new Set(nextradeExpenses.map(function (row) { return row.bill_id; }).filter(Boolean));
@@ -2371,6 +2379,11 @@ export async function POST(req) {
         } else {
           ptBlocks.forEach(function (b9) { (b9.payments_by_cat || []).forEach(function (p9) { if (p9.from_starting_balance) { sbTaxBy[b9.payer] = r2((sbTaxBy[b9.payer] || 0) + p9.total); sbTaxTotal = r2(sbTaxTotal + p9.total); sbTaxCount += p9.count || 0; } }); });
         }
+        if (Array.isArray(partyFunds)) {
+          var salesPayments = xoPays.filter(function (p) { return p.party_opening_id === MANAGED_SALES_OPENING_ID && p.voided !== true && p.paid_date >= pFrom && p.paid_date <= pTo; });
+          var salesPaymentsTotal = salesPayments.reduce(function (total, p) { return r2(total + Number(p.amount || 0)); }, 0);
+          if (salesPaymentsTotal) { sbTaxBy['NextTrade Industries'] = r2((sbTaxBy['NextTrade Industries'] || 0) + salesPaymentsTotal); sbTaxTotal = r2(sbTaxTotal + salesPaymentsTotal); sbTaxCount += salesPayments.length; }
+        }
         fundingTax.transfers_count = fundingTax.count; fundingTax.transfers_total = fundingTax.total;
         fundingTax.from_starting_balance = sbTaxTotal; fundingTax.from_starting_balance_count = sbTaxCount; fundingTax.from_starting_balance_by_party = sbTaxBy;
         if (sbTaxTotal) {
@@ -2408,7 +2421,8 @@ export async function POST(req) {
               bills: billNameById, payments: xoPays, customerPayments: paysP.filter(function (payment) { return !isPaymentVoid(payment) && usInv[payment.accounting_invoice_id]; }),
               spendingRows: comparisonOut, incomeRows: comparisonIn, bankLines: spTx, partnerFeeLines: partnerFeeLines,
               funds: partyFunds, labels: catLabels, kinds: catKinds, from: pFrom, to: pTo, billBusinessId: US_WAVE_BUSINESS_ID,
-              nextradeExpenses, privateBills: callerIsSuper ? {} : payZD.pay.ids, showRows: canRows, showPayrollDetails: callerIsSuper
+              nextradeExpenses, managedSalesLines: managedSalesPeriod?.lines, managedSalesBalance: managedSalesPeriod?.balance,
+              privateBills: callerIsSuper ? {} : payZD.pay.ids, showRows: canRows, showPayrollDetails: callerIsSuper
             }); }
           } catch (compareError) { paidComparison = { unavailable: 'The payment breakdown could not be reconciled.' }; }
           if (vendorProofUnavailable && paidComparison && !paidComparison.unavailable) {

@@ -24,6 +24,7 @@ import { feeExplanation, currentFundsWords, canSeeStartingBalance, HIDDEN_STARTI
 import { nextradeBillIds } from '../../../../lib/nextrade-bill-links-server'; // v55.83-XX — Nextrade bills are paid only through NextTrade
 import { partnerFeeGuard } from '../../../../lib/partner-fee-server'; // v55.83-ZP — "services rendered" never doubles a partner-fee bill
 import { audit } from '../../../../lib/audit-server';
+import { MANAGED_SALES_OPENING_ID } from '../../../../lib/nextrade-managed-sales';
 
 // v55.83-XO (Max 21-22 Nov) — STARTING BALANCES: money a company already held for KTC before the Hub ("a previous balance to
 // nextrade that we will pay bills from"), and paying KTC bills from it ("b- NEW EXPENSE WHEN USED AFTER 6/1/2026").
@@ -36,7 +37,7 @@ import { audit } from '../../../../lib/audit-server';
 // which script to run and change nothing.
 var API_BUILD_MARKER = 'v55.83-XO-party-funds';
 var SQL_MISSING_XO = 'Starting balances need one database update first: run sql/v55-83-XO-starting-balance.sql (Supabase → SQL Editor → New query → paste → Run). Nothing was changed.';
-var OPENING = { opening_add: 1, opening_pay: 1, opening_pay_candidates: 1, managed_sales_preview: 1, managed_sales_add: 1 };
+var OPENING = { opening_add: 1, opening_pay: 1, opening_pay_candidates: 1 };
 var OPENING_PAY_FROM = '2026-06-01'; // Max's (b): using a starting balance is a new expense from 1 June 2026
 // (Codex 17:51 P2) NOT an instruction to install anything: the database step is released together with the screens that need it.
 var SQL_MISSING_WF = 'Confirming a transfer and marking services rendered are not switched on yet — they arrive with a later update. Nothing was changed.';
@@ -137,34 +138,17 @@ export async function POST(req) {
       if (!installedXO) { return fail(SQL_MISSING_XO, 409); }
       var obParty = parties.filter(function (p) { return p.name === body.party; })[0];
       if (!obParty) { return fail('Pick NextTrade or RTM.'); }
-      if (action === 'managed_sales_preview' || action === 'managed_sales_add') {
-        if (obParty.name !== 'NextTrade Industries' || !isDate(body.from) || !isDate(body.to) || body.from > body.to) {
-          return fail('Choose the dates of the NextTrade-managed sales.');
-        }
-        if (action === 'managed_sales_preview') {
-          var salesQuote = await db.rpc('hub_nextrade_managed_sales_preview', { p_from: body.from, p_to: body.to });
-          if (salesQuote.error) { return guardFail(salesQuote, true); }
-          var { sales, remitted, reversed, net, signature, already_used } = salesQuote.data;
-          return NextResponse.json({ ok: true, sales, remitted, reversed, net, signature, already_used });
-        }
-        if (!Number.isFinite(body.held) || body.held <= 0 || typeof body.visible_to_staff !== 'boolean' ||
-          typeof body.signature !== 'string' || !/^[a-f0-9]{32}$/.test(body.signature) ||
-          typeof body.request_id !== 'string' || !/^[a-z0-9-]{8,64}$/.test(body.request_id) ||
-          typeof body.reason !== 'string' || body.reason.trim().length < 10) {
-          return fail('Confirm the amount NextTrade still holds, its reference, and staff visibility.');
-        }
-        var captured = await db.rpc('hub_nextrade_managed_sales_add', { p: {
-          from: body.from, to: body.to, held: body.held, visible_to_staff: body.visible_to_staff, signature: body.signature,
-          reason: body.reason.trim().slice(0, 375), request_id: body.request_id, actor: userId
-        } });
-        if (captured.error) { return guardFail(captured, true); }
-        return NextResponse.json({ ok: true, id: captured.data?.id, repeat: captured.data?.repeat === true });
-      }
       if (action === 'opening_pay_candidates') {
         // the bills that may be paid from a starting balance: KTC's, active, in US dollars, open (not paid, not on an open wire),
         // paid through this company or by nobody yet. Read-only.
         var ocq; try { ocq = await fetchAllRows(function () { return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, total_amount, paid_via, record_status, currency').eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('record_status', 'active').order('id', { ascending: true }); }); } catch (eOc) { return readFail('the bills', eOc); }
         var ocb = ocq.filter(function (b) { return (!b.paid_via || String(b.paid_via).toLowerCase() === obParty.name.toLowerCase()) && String(b.currency || 'USD').toUpperCase() === 'USD'; });
+        if (body.opening_id === MANAGED_SALES_OPENING_ID) {
+          var remittanceBills = await db.rpc('hub_nextrade_managed_remittance_bill_ids');
+          if (remittanceBills.error) { return readFail('the managed-sales remittances', remittanceBills.error); }
+          var remittanceIds = new Set((remittanceBills.data || []).map(function (row) { return row.bill_id; }));
+          ocb = ocb.filter(function (b) { return !remittanceIds.has(b.id); });
+        }
         var ocIds = ocb.map(function (b) { return b.id; }); var ocPaid = {}; var ocWire = {};
         for (var oi = 0; oi < ocIds.length; oi += 200) {
           var opq = await db.from('vendor_bill_payments').select('bill_id, amount, voided').in('bill_id', ocIds.slice(oi, oi + 200));
@@ -288,6 +272,7 @@ export async function POST(req) {
         loaded = await loadPartyFunds(db, { fetchAll: fetchAllRows, businessId: US_WAVE_BUSINESS_ID, parties: parties, pays: pays, bills: billById, entries: entries, from: from, to: to });
       } catch (eR) { if (eR && eR.code === 'XO_UNAVAILABLE') { return NextResponse.json({ ok: false, unavailable: 'starting_balances', error: 'Could not read ' + eR.message + '. Nothing is shown, so no total is given without them. Try again in a moment.' }, { status: 503 }); } return readFail('the funds held', eR); } // v55.83-XO (Codex 14:52 P2)
       var managedSales = new Set();
+      var rollingSales = null;
       if (installedXO) {
         try {
           var salesBalances = await fetchAllRows(function () { return db.from('nextrade_managed_sales_balances').select('opening_id').order('opening_id'); });
@@ -296,6 +281,11 @@ export async function POST(req) {
           if (!/nextrade_managed_sales_balances.*(?:does not exist|schema cache)|Could not find the table.*nextrade_managed_sales_balances/i.test(salesError.message)) {
             return readFail('the NextTrade-managed sales balances', salesError);
           }
+        }
+        if (isSuper && canTotals && (loaded.openings || []).some(function (opening) { return opening.id === MANAGED_SALES_OPENING_ID; })) {
+          var rollingResult = await db.rpc('hub_party_opening_state', { p_id: MANAGED_SALES_OPENING_ID });
+          if (rollingResult.error) { return readFail('the running NextTrade-managed sales balance', rollingResult.error); }
+          if (rollingResult.data?.found) { rollingSales = rollingResult.data; }
         }
       }
       // which bank account each transfer is in (privacy), and the database's own state per transfer when WF is installed
@@ -338,6 +328,11 @@ export async function POST(req) {
           if (canTotals) { sr.amount = s.amount; sr.original = s.original; sr.corrections = s.corrections; sr.used = s.current.used; sr.left = s.current.held; }
           sbRows.push(sr);
         });
+        if (rollingSales && f.party === 'NextTrade Industries') {
+          sbRows.push({ id: MANAGED_SALES_OPENING_ID, source: 'managed_sales', rolling: true, as_of: rollingSales.as_of,
+            amount: rollingSales.amount, left: rollingSales.held, used: rollingSales.used, visible_to_staff: false,
+            sales: rollingSales.sales, remitted: rollingSales.remitted, reversed: rollingSales.reversed, bills: [] });
+        }
         var o = { party: f.party, transfers: rows, hidden_private_transfers: hiddenN, needs_reconciliation: hiddenSb ? (f.transfers_need_reconciliation === true || (f.starting_balances || []).some(function (s) { return canSeeStartingBalance(s, isSuper) && s.over_used === true; })) : f.needs_reconciliation, // v55.83-XO (Codex 18:29): never says a hidden balance is over-used
           identity_to_confirm_count: f.identity_to_confirm.count,
           paid_without_a_transfer_count: f.paid_without_a_transfer.lifetime_rows.length, starting_balances: sbRows, hidden_starting_balances: hiddenSb };

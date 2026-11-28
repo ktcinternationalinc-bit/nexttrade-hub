@@ -42,7 +42,7 @@ export var STARTING_BALANCE_PAY_FROM = '2026-06-01';
 export function startingBalanceActions(sb, o) {
   var can = !!(o && o.canStart) && !!(o && o.installed);
   var left = Number(sb && sb.left);
-  return { pay: can && left > 0.005, correct: can && Number(sb && sb.amount) > 0.005, add: can,
+  return { pay: can && left > 0.005, correct: can && !sb?.rolling && Number(sb && sb.amount) > 0.005, add: can,
     why: !(o && o.canStart) ? '' : !(o && o.installed) ? 'needs sql/v55-83-XO-starting-balance.sql first' : left > 0.005 ? '' : 'nothing left on it' };
 }
 
@@ -56,7 +56,6 @@ export default function FundsHeldPanel(props) {
   var s6 = useState(false); var shown = s6[0]; var setShown = s6[1];
   var s7 = useState(null); var payAsk = s7[0]; var setPayAsk = s7[1]; // v55.83-XX — { bill_id, bill_number, party, text, bad, offerWire } from 🟦 Nextrade bills → Pay ▸
   var s8 = useState(null); var linkMsg = s8[0]; var setLinkMsg = s8[1]; // v55.83-ZP — { party, text } after “🔗 Link the bills it paid”
-  const [managedSales, setManagedSales] = useState(null);
   // v55.83-ZP (Max 26 Nov: "isnt the 76000 linked to bills so it was sent and spent toward ktc bills") — open the right place to link
   // the bills a transfer paid: its “📎 Record bills already paid” form when that is open for it, otherwise say plainly what to do first.
   // Nothing is written by this; the person ticks the bills and saves as before.
@@ -142,7 +141,7 @@ export default function FundsHeldPanel(props) {
   // presetBill (v55.83-XX) = the bill chosen in 🟦 Nextrade bills → Pay ▸: ticked for what is still owed, never more than is left on the balance
   function openOpeningPay(p, sb, presetBill) {
     setForm({ kind: 'opening_pay', party: p.party, id: 'sb:' + sb.id, sb: sb.id, asOf: sb.as_of, max: Number(sb.left), date: '', reference: '', reason: '', picks: {}, bills: null, click: clickId() });
-    api({ action: 'opening_pay_candidates', party: p.party }).then(function (j) { setForm(function (f) {
+    api({ action: 'opening_pay_candidates', party: p.party, opening_id: sb.id }).then(function (j) { setForm(function (f) {
       if (!(f && f.kind === 'opening_pay' && f.sb === sb.id)) { return f; }
       var nf = Object.assign({}, f, { bills: (j && j.ok) ? (j.bills || []) : [], billsErr: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the bills.') });
       if (presetBill && j && j.ok) {
@@ -169,7 +168,7 @@ export default function FundsHeldPanel(props) {
         var pick = startingBalanceToPay(j, base.party, d.source);
         if (!pick.ok) { setPayAsk(Object.assign({}, base, { bad: true, offerWire: true, text: pick.why })); return; }
         var sourceLabel = d.source === 'managed_sales' ? 'NextTrade-managed sales' : 'the NextTrade starting balance';
-        setPayAsk(Object.assign({}, base, { text: 'Bill ' + (base.bill_number || '') + ' is selected for payment from ' + sourceLabel + ' as of ' + pick.sb.as_of + ' (' + fmt(pick.sb.left) + ' available).' }));
+        setPayAsk(Object.assign({}, base, { text: 'Bill ' + (base.bill_number || '') + ' is selected for payment from ' + sourceLabel + ' (' + fmt(pick.sb.left) + ' available).' }));
         openOpeningPay(pick.party, pick.sb, base.bill_id);
       }).finally(function () { setBusy(false); });
     }
@@ -179,28 +178,6 @@ export default function FundsHeldPanel(props) {
   function payFromTransferInstead(a) {
     setPayAsk(null);
     try { window.dispatchEvent(new CustomEvent(NEXTRADE_OPEN_WIRE_EVENT, { detail: { payee: a.party, bill_id: a.bill_id, bill_number: a.bill_number } })); } catch (e) { /* old browser */ }
-  }
-  async function previewManagedSales() {
-    const selection = managedSales;
-    setBusy(true);
-    try {
-      const quote = await api({ action: 'managed_sales_preview', party: 'NextTrade Industries', from: selection.from, to: selection.to });
-      if (!quote.ok) { toast.error(quote.error || 'Could not preview the sales balance.'); return; }
-      setManagedSales(current => current === selection ? { ...selection, quote, held: quote.net > 0 ? Number(quote.net).toFixed(2) : '' } : current);
-    } finally { setBusy(false); }
-  }
-  async function saveManagedSales() {
-    const f = managedSales;
-    setBusy(true);
-    try {
-      const result = await api({ action: 'managed_sales_add', party: 'NextTrade Industries', from: f.from, to: f.to, held: Number(f.held),
-        signature: f.quote.signature, reason: f.reason, visible_to_staff: f.visible, request_id: f.click });
-      if (!result.ok) { toast.error(result.error || 'Could not save the sales balance.'); return; }
-      setManagedSales(null);
-      toast.success('NextTrade-managed sales balance is available for bills.');
-      if (props.onChanged) { props.onChanged(); }
-      await load();
-    } finally { setBusy(false); }
   }
   function saveOpening() {
     if (form.kind === 'opening_pay') {
@@ -264,14 +241,16 @@ export default function FundsHeldPanel(props) {
             {sbs.map(function (sb) { var sa = startingBalanceActions(sb, sbo);
               return <div key={sb.id} className="rounded p-2 mt-1 text-[12px]" style={{ background: '#f0f9ff', border: '1px solid #bae6fd', color: INK }}>
                 <div className="flex gap-3 items-baseline flex-wrap">
-                  <b>{(sb.source === 'managed_sales' ? 'NextTrade-managed sales balance' : 'Starting balance held with ' + p.party) + ', as of ' + sb.as_of}</b>
+                  <b>{sb.rolling ? 'NextTrade-managed sales balance' : (sb.source === 'managed_sales' ? 'NextTrade-managed sales balance' : 'Starting balance held with ' + p.party) + ', as of ' + sb.as_of}</b>
                   <span>amount <b>{fmt(sb.amount)}</b>{sb.corrections_count > 0 ? <span style={{ color: MUTED }}>{' (corrected ' + sb.corrections_count + '×)'}</span> : null}</span>
-                  <span>· used on bills <b>{fmt(sb.used)}</b></span><span>· left <b style={{ color: '#166534' }}>{fmt(sb.left)}</b></span>
+                  <span>· used on bills <b>{fmt(sb.used)}</b></span><span>· left <b style={{ color: sb.left < 0 ? '#991b1b' : '#166534' }}>{fmt(sb.left)}</b></span>
                   {data.can_starting_balance && <span className="text-[10px] font-bold" style={{ color: sb.visible_to_staff ? '#166534' : '#92400e' }}>{sb.visible_to_staff ? 'staff can see it' : 'only you can see it'}</span>}
                   {sa.pay && <button type="button" disabled={busy} onClick={function () { openOpeningPay(p, sb); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#075985', color: '#ffffff' }}>Pay bills from it</button>}
                   {sa.correct && <button type="button" disabled={busy} onClick={function () { openOpeningCorrect(p, sb); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Lower it (correction)</button>}
                 </div>
-                <div className="text-[10px]" style={{ color: MUTED }}>{'Where the number comes from: ' + (sb.reason || '—') + '. This is not money sent in any period. Bills paid from it count in their own categories; for the tax report each one is a new expense on the day it is paid (1 June 2026 or later).'}</div>
+                <div className="text-[10px]" style={{ color: MUTED }}>{sb.rolling
+                  ? 'Posted sales ' + fmt(sb.sales) + ' − remittances to KTC ' + fmt(sb.remitted) + ' − sales reversals ' + fmt(sb.reversed) + '. The balance updates as transactions and payments are recorded.'
+                  : 'Where the number comes from: ' + (sb.reason || '—') + '. This is not money sent in any period. Bills paid from it count in their own categories; for the tax report each one is a new expense on the day it is paid (1 June 2026 or later).'}</div>
                 {sb.bills && sb.bills.length > 0 && <div className="mt-1">{sb.bills.map(function (b, i) { return <div key={i} className="text-[11px] flex gap-2 flex-wrap"><span>{b.paid_date}</span><b>{b.vendor}</b><span>{'bill ' + (b.bill_number || '—')}</span><span style={{ color: MUTED }}>{b.category}</span><span className="tabular-nums font-bold">{fmt(b.portion)}</span></div>; })}</div>}
                 {form && form.id === 'sb:' + sb.id && form.kind === 'opening_correct' && <div className="flex gap-2 items-center flex-wrap mt-2 p-2 rounded" style={{ background: '#ffffff' }}>
                   <span className="text-[11px] font-extrabold">{'Lower this starting balance by (it cannot go below what is already used; ' + fmt(form.max) + ' can come off):'}</span>
@@ -305,31 +284,6 @@ export default function FundsHeldPanel(props) {
             {data.can_starting_balance && <div className="mt-1">
               {addA.add ? <button type="button" disabled={busy} onClick={function () { openOpeningAdd(p); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#e0f2fe', color: '#075985' }}>+ Starting balance</button>
                 : <span className="text-[10px]" style={{ color: MUTED }}>{'+ Starting balance: ' + (data.starting_balance_sql_missing || addA.why)}</span>}
-              {addA.add && p.party === 'NextTrade Industries' && <button type="button" disabled={busy}
-                onClick={() => setManagedSales({ from: '', to: '', reason: '', visible: false, click: clickId() })}
-                className="ml-2 px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#e0f2fe', color: '#075985' }}>Review NextTrade-managed sales</button>}
-              {managedSales && p.party === 'NextTrade Industries' && <div className="mt-2 p-2 rounded border text-[12px]" style={{ borderColor: '#bae6fd' }}>
-                <div className="font-extrabold">NextTrade-managed sales balance</div>
-                <div className="flex flex-wrap items-center gap-2 mt-1">
-                  <label>From <input type="date" className={inp} style={inpS} max={today()} value={managedSales.from} onChange={e => setManagedSales({ ...managedSales, from: e.target.value, quote: null })} /></label>
-                  <label>Through <input type="date" className={inp} style={inpS} max={today()} value={managedSales.to} onChange={e => setManagedSales({ ...managedSales, to: e.target.value, quote: null })} /></label>
-                  <button type="button" disabled={busy || !managedSales.from || !managedSales.to || managedSales.from > managedSales.to} onClick={previewManagedSales} className="px-2 py-1 rounded font-bold" style={{ background: INK, color: '#ffffff' }}>Preview sales</button>
-                  <button type="button" disabled={busy} onClick={() => setManagedSales(null)} className="px-2 py-1 rounded font-bold">Cancel</button>
-                </div>
-                {managedSales.quote && <div className="space-y-1 mt-2">
-                  <p>Sales {fmt(managedSales.quote.sales)} − remitted to KTC {fmt(managedSales.quote.remitted)} − sales reversals {fmt(managedSales.quote.reversed)} = <b style={{ color: managedSales.quote.net < 0 ? '#991b1b' : INK }}>{fmt(managedSales.quote.net)}</b></p>
-                  {managedSales.quote.already_used ? <p role="status">A saved balance already covers dates in this range.</p> : managedSales.quote.net > 0 && <>
-                    <p>Enter the amount NextTrade still holds after any bills already paid from these sales.</p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <label>Amount still held <input type="number" min="0.01" max={managedSales.quote.net} step="0.01" className={inp} style={inpS} value={managedSales.held} onChange={e => setManagedSales({ ...managedSales, held: e.target.value })} /></label>
-                      <input aria-label="Reconciliation reference" placeholder="Reconciliation reference" className={inp} style={inpS} value={managedSales.reason} onChange={e => setManagedSales({ ...managedSales, reason: e.target.value })} />
-                      <label><input type="checkbox" checked={managedSales.visible} onChange={e => setManagedSales({ ...managedSales, visible: e.target.checked })} /> Staff may see this balance</label>
-                      <button type="button" onClick={saveManagedSales} disabled={busy || !(Number(managedSales.held) > 0) || Number(managedSales.held) > managedSales.quote.net || managedSales.reason.trim().length < 10}
-                        className="px-2 py-1 rounded font-bold" style={{ background: '#075985', color: '#ffffff' }}>Save confirmed balance</button>
-                    </div>
-                  </>}
-                </div>}
-              </div>}
               {form && form.id === 'sb-add:' + p.party && <div className="flex gap-2 items-center flex-wrap mt-1 p-2 rounded" style={{ background: '#f0f9ff', border: '1px solid #bae6fd' }}>
                 <span className="text-[12px] font-extrabold">{'Money ' + p.party + ' already held for KTC before the Hub (it is not money sent now):'}</span>
                 <span className="text-[11px] font-bold">$</span><input autoFocus className={inp} style={Object.assign({ width: 110 }, inpS)} value={form.amount} onChange={function (e) { setForm(Object.assign({}, form, { amount: e.target.value })); }} />

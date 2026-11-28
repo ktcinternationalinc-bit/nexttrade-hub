@@ -17,6 +17,7 @@ import { companyByKey, COMPANY_KINDS, categoryKey, bestCompanyRule, companyTotal
 import { NEXTRADE_WAVE_TD_SOURCE, nextradeTaxReport } from '../../../../lib/nextrade-tax-report';
 import { categorizeLine, partyName, wantsBill, loadBillCutoff, beforeCutoff, NEXTRADE_BILL_CUTOFF } from '../../../../lib/nextrade-bills-server'; // v55.83-TW (Codex P1-2): one database function, all or nothing
 import { isNextradeKtcExpense, NEXTRADE_KTC_PNL_EXCLUSIONS } from '../../../../lib/nextrade-expenses-server';
+import { MANAGED_REMITTANCE } from '../../../../lib/nextrade-managed-sales';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP private bank accounts — respected here too
 import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
@@ -169,6 +170,7 @@ export async function POST(req) {
         .eq('wave_business_id', cid).eq('id', body.transaction_id).maybeSingle();
       if (target.error) { return readFail('the transaction', target.error); }
       if (!target.data || isPrivateRow(target.data, scope)) { return fail('NextTrade transaction not found.', 404); }
+      if (target.data.company_category === MANAGED_REMITTANCE) { return fail('A managed-sales remittance is already tracked in the sales balance.', 409); }
       var choices = await loadCats(db, cid);
       if (choices.error) { return readFail('the categories', choices.error); }
       var targetCategory = (choices.data || []).find(function (category) { return category.key === target.data.company_category; });
@@ -396,7 +398,7 @@ export async function POST(req) {
       var links = {}; var ktcMapL = null; var ktcCatsL = null;
       var pnlChoices = new Map(); var pnlChoiceError = null;
       if (comp.key === 'nextrade') {
-        var eligible = linesOut.filter(function (l) { return !l.payroll_restricted && isNextradeKtcExpense(l, byKey[l.company_category]); }).map(function (l) { return l.id; });
+        var eligible = linesOut.filter(function (l) { return !l.payroll_restricted && l.company_category !== MANAGED_REMITTANCE && isNextradeKtcExpense(l, byKey[l.company_category]); }).map(function (l) { return l.id; });
         for (var pi = 0; pi < eligible.length; pi += 200) {
           var choiceBatch = eligible.slice(pi, pi + 200);
           var excludedResult = await db.from(NEXTRADE_KTC_PNL_EXCLUSIONS).select('transaction_id').eq('excluded', true).in('transaction_id', choiceBatch);

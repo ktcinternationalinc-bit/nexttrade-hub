@@ -73,7 +73,7 @@ export function startingBalanceToPay(funds, partyName, source) {
   var balances = (p.starting_balances || []).filter(function (b) { return (b.source === 'managed_sales') === (source === 'managed_sales'); });
   var sb = oldestStartingBalance(balances);
   if (!sb) {
-    if (source === 'managed_sales') { return { ok: false, party: p, why: 'No NextTrade-managed sales balance has funds available. Review a sales period below.' }; }
+    if (source === 'managed_sales') { return { ok: false, party: p, why: 'The NextTrade-managed sales balance has no funds available.' }; }
     var any = balances.length > 0;
     return { ok: false, party: p, why: 'There is no NextTrade starting balance with money left' + (any ? ' (every one is used up)' : ' (none has been entered)') + '. Pay this bill from a KTC transfer to NextTrade instead.' };
   }
@@ -91,7 +91,7 @@ export function openingPickAmount(bill, sbLeft) {
 export function nextradePayChoices(isSuper) {
   var out = [{ key: 'transfer', label: 'From a KTC transfer to NextTrade', hint: 'Opens Wires → ＋ New wire to NextTrade Industries with this bill ticked. You pick the transfer it is paid from; the usual check and two signatures follow.' }];
   if (isSuper === true) {
-    out.push({ key: 'managed_sales', label: 'From NextTrade-managed sales', hint: 'Uses confirmed sales proceeds held by NextTrade for KTC.' });
+    out.push({ key: 'managed_sales', label: 'From NextTrade-managed sales', hint: 'Uses posted sales receipts held by NextTrade for KTC.' });
     out.push({ key: 'opening', label: 'From the NextTrade starting balance', hint: 'Opens the oldest manual starting balance with funds available and this bill selected.' });
   }
   return out;
