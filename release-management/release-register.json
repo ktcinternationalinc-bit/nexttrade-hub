@@ -228,32 +228,30 @@
       "title": "Order Queue and stock cards: Rolls / Not rolls (boxes, bales), version history",
       "repo": "nextrade_WAREHOUSE",
       "build": "b5bdd6356cc608b438a9f6fe34b26ff489d1f4d6",
-      "proposedBuild": "3f98347581aead1705abd3379ec5ab4be1e06593",
+      "proposedBuild": "a1d74b708315b76e4129866d104f70f03470735a",
       "date": "2026-11-26",
       "where": "staging",
       "status": "queued",
       "needsCodex": true,
       "needsMax": true,
       "dataChange": true,
-      "waitingFor": "The isolated staging migration rehearsal passed and preserved fixture weights and history. Complete signed-in reservation and restore-compatibility checks and prepare a production migration plan.",
+      "waitingFor": "Migration plan prepared. Isolated split, release and interrupted migration checks passed. Waiting for ACID, authenticated staging and restore checks, and a supported production executor.",
       "routesChanged": false,
       "configChanged": false,
       "dependsOn": [
         "wh-order-queue",
         "wh-stage-rules"
       ],
-      "meta": "26 Nov · Max: \"install on staging now\" · this change was installed and verified on fix staging as build 2026.11.26-e (b5bdd63) · production: not installed · later staging builds: see environments.staging.observations (dated, not certified for this change)",
+      "meta": "28 Nov · Revised candidate a1d74b7 passed isolated fix-staging checks. Previous shared fix-staging install b5bdd63 is recorded under staging history.",
       "desc": "The Order Queue shows Rolls and Not rolls (boxes, bales) separately and reserves them separately; reservations made before the split stay \"not yet split\" (held in both) until a person splits them, and a split must keep the reserved weight. The Dashboard and Inventory Summary cards show the same split and open to the grades inside each card. The warehouse footer shows the installed build and its version history.",
-      "files": "26 files, each listed with its SHA-256 in nextrade-app/build-manifest.php of b5bdd63 (Order Queue service, controller, model, screen, picking PDF, CGT grade form, Dashboard / Inventory controllers and card views, StockBlocks service, build-info.php, tools/verify-build.php, three migrations)",
-      "backup": "Staging, before each install: ~/code-backups/oq-rolls-20261126, oq-rolls-rev2-20261126, oq-rolls-part2-20261126, oq-rolls-part3-20261126, oq-rolls-rev3-20261126; tables zz_oqrolls_c_g_t_grades_before_20261126, zz_oqrolls_order_queues_before_20261126, zz_oqrolls2_order_queues_before_20261126. Production: none yet (nothing installed there).",
-      "rollback": "Among the builds of this change (2026.11.26-b and later): copy that build's files back from its backup folder, php artisan view:clear, php tools/verify-build.php, add a version saying so. Back to 2026.11.26-a: not allowed (it reads \"not yet split\" reservations as rolls). Below 2026.11.26-a (the pre-split Order Queue): a data step must come first, because the old code knows one reservation per order + colour + grade (fold the open lines of each order + colour + grade into one, kept as history, and mark them not yet split). That step is a PROPOSAL only: it must first be proven on a disposable restored copy with the old code (read, edit and pick, including partly picked and mixed holds), and a real run needs its own approval, a durable backup and a freeze of allocation and scanning. See CHANGE-MANAGEMENT.md section G in nextrade_WAREHOUSE. The added columns stay.",
+      "files": "25 files including three migrations. Exact before and after fingerprints are in release-management/warehouse-data-migration-candidates.json.",
+      "backup": "Archive the production code, affected tables and migration ledger before the move. Compare row counts and record digests before and after.",
+      "rollback": "Preserve the schema and reservation history. Use a verified code version compatible with active split holds or recover forward. One-click restore across this change stays blocked.",
       "releaseSteps": [
-        "Production preflight (read-only), BEFORE the migrations: the production schema of order_queues and c_g_t_grades, and any order + colour + grade with more than one open reservation (there is no form column yet, so such rows are true legacy duplicates); report them, do not merge or delete them. AFTER the migrations and before the code goes live: no duplicate open rows by order + colour + grade + form. A rolls row and a not-rolls row for the same order + colour + grade are two valid holds, never duplicates to merge or delete. The concurrent-save limit (two saves of the last pounds in the same second can both succeed) is a known limit, not a duplicate check.",
-        "Signed-in walk on fix staging (reserve rolls, reserve boxes, split an older reservation, release one line, release all, download the picking PDF; open the Dashboard and Inventory Summary cards and their drill-down; date and past-year filters; a yards case with real stock) - not done yet.",
-        "Codex production review of the exact build and its manifest; Max's named go here.",
-        "Back up the production order_queues and c_g_t_grades tables and the replaced files; run the three migrations (2026_11_25_000001, 2026_11_25_000002, 2026_11_26_000001), then move the files; php artisan view:clear.",
-        "Write production's OWN build-info.php version and manifest (never copied from staging), run php tools/verify-build.php there, and record the result here.",
-        "Older reservations on production stay \"not yet split\" until a person splits each one with the order's real contents; the 18 splits made on fix staging on 26 Nov are not production data."
+        "Verify ACID on production. Use the named migration plan to recheck code fingerprints, schema, seed matches and existing reservations. Complete authenticated staging and restore checks.",
+        "After approval, pause the affected writers. Archive the exact production code and affected tables. Run only the three named migrations in order.",
+        "Compare original row digests and inventory totals. Install the exact code, generate production's build and version files, and verify before reopening writes.",
+        "Legacy reservations stay marked not yet split until a user confirms how much is in each form."
       ],
       "environments": {
         "staging": {
@@ -457,12 +455,12 @@
       "dependsOn": [
         "wh-skin-b-charts"
       ],
-      "waitingFor": "The isolated staging migration rehearsal passed. This release needs a signed-in checklist test and a production migration plan the worker can execute.",
+      "waitingFor": "Migration plan prepared. Isolated staging migration and checklist save checks passed. Waiting for Charts, authenticated checklist and feed checks, and a supported production executor.",
       "meta": "Local release candidate 052bd56 · 28 Nov",
       "desc": "Adds order-stage requirements and ACID checklist rules while preserving the live read-only Hub feeds. Production has four missing checklist columns.",
       "files": "Order controller, checklist service and Blade templates, optional Hub ping configuration, and three migrations",
-      "backup": "staging backup bundle",
-      "rollback": "restore bundle + php artisan view:clear"
+      "backup": "Archive the production code, order-status tables and migration ledger before the move. Compare original row digests after migration.",
+      "rollback": "Restore compatible code and preserve all checklist columns, entered data and load-time precision."
     },
     {
       "id": "wh-receipt-1325",

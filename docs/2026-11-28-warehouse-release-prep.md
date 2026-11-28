@@ -1,5 +1,7 @@
 # Warehouse release preparation
 
+See the [production migration plans](2026-11-28-warehouse-data-migration-plans.md) for the latest BUG-002 production checks, ACID and Rolls / Not rolls staging evidence, file fingerprints, and recovery requirements.
+
 ## Receipt 1325
 
 Applied after the November 28 approval. The correction changed `scan_in_inventories.id = 1325` from `1984-11-06 03:00:53` to `2024-10-11 03:00:53`. Independent production readback confirmed the new value, preserved `updated_at`, and found exactly one row, containing the original timestamp, in `zz_fix1325_before_20261128_approved`.
@@ -22,7 +24,7 @@ Local candidate `052bd5618a6ac07ad276ca7b3d6e5e3d67d87290` preserves the live Cl
 
 ## Order Queue Rolls / Not rolls
 
-Local candidate `3f98347581aead1705abd3379ec5ab4be1e06593` applies the Rolls / Not rolls changes after the checklist candidate and passed 52 reference checks. Production has zero duplicate open reservation groups. The `form` and `not_rolls` columns are absent and none of the three Rolls / Not rolls migrations was recorded. Finish the signed-in reservation, legacy split, release and picking PDF checks. Rehearse the migrations and restore compatibility on a disposable restored copy. Generate install version files on the verified target so the footer describes what is actually installed there. Its migrations require a supported execution plan before Change Schedule can queue it.
+Local candidate `a1d74b708315b76e4129866d104f70f03470735a` applies Rolls / Not rolls after ACID and passed 52 reference checks. The revised migrations preserve history even after a partial run. The isolated workflow checks and remaining authenticated checks are listed in the migration plan. Its migrations require a supported executor before Change Schedule can queue them.
 
 ## Approval evidence for code packages
 

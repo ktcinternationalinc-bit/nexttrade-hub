@@ -1,0 +1,52 @@
+# Warehouse data migration plans
+
+The release order is BUG-002, Warehouse look and inventory charts, Order stage checklist and ACID, then Rolls / Not rolls. Each data release needs its own approval and maintenance window. The deployed Change Schedule worker cannot execute either of these data plans today. The [candidate manifest](../release-management/warehouse-data-migration-candidates.json) pins the exact application and Laravel migration files and their expected SHA-256 fingerprints before and after each move. A null baseline means the file is expected to be absent.
+
+## Checks completed on November 28
+
+- Warehouse production moved BUG-002 approval #14 as history entry #15 at 3:37 a.m. ET. All six production file fingerprints matched build `4471602b4a84fb6bdc3ee4eaa20fcaf072c22069`. Ten behavioral checks executed the live date handlers with an isolated in-memory database, and all three changed Blade templates compiled and parsed.
+- The charts build `8909f8c65d8bc93dcab93532ac3b088af4a7273c` has its own approval in Change Schedule. The exact build passed an isolated staging check for historical receipts, shipped-only outbound totals and no duplicate weight when grades overlap.
+- A read-only production snapshot showed the five tables used by these plans are InnoDB. The checklist's `load_date` is already `DATETIME`. The new checklist and Rolls columns are absent. None of the six migration names are recorded. There were zero duplicate open reservation groups and zero fractional open reservations. Three grades matched the reviewed boxes/bales seed.
+- The live code fingerprint check agrees with the planned sequence when the chart and ACID changes are applied in order. Eight Rolls baseline files had different line endings. Their exact live fingerprints matched existing local copies, and the manifest records the live byte fingerprints for those paths.
+- On fix staging, the exact six migration files passed both a clean run and a simulated interrupted run, with repeats. All four checklist fields appeared. Existing load timestamps, reservation weights, grade timestamps and release history were preserved. The revised Rolls build completed missing metadata after interruption and preserved later explicit choices.
+- The exact checklist handler passed synthetic tests for Egypt, Kenya, other and blank destinations, explicit midnight and date-only inputs, saved document/payment selections, omitted ACID fields, and preservation of a Closed payment row. The exact Rolls handlers passed synthetic tests for legacy holds in both blocks, separate Canadian stock, rejecting an unbalanced split, conserving all 1,500 lb through a valid split, preserving the original history, selecting the correct picking PDF rows, and releasing one block without changing the other. These tests ran on isolated fixtures, with an in-memory database and a simulated signed-in user.
+
+## Before either production window
+
+1. Complete the release's remaining staging checks in a disposable authenticated Warehouse environment, then approve its exact build and manifest. Confirm the prior release is deployed and verified, the release worker is idle, and the production approval identifies the operator, exact files, migration filenames and maintenance window. Keep the restored-copy rehearsal and restore-compatibility results with the approval.
+2. Pause affected writes at every entry point, including jobs and imports. Wait for in-flight writes to finish and keep the maintenance window in force through verification. If the application cannot reliably stop affected writes, defer the migration.
+3. Recheck the live file fingerprints, column types, migration ledger, row counts and keys. Store an encrypted, access-restricted copy of the affected table definitions and rows and the migration ledger outside the webroot. Keep the code backup separate. Record checksums and timestamps and verify the database backup restores into an isolated database. Record per-table row counts and ordered, primary-key-based digests of the original columns using consistent NULL, decimal and timestamp encodings. Compute those digests again after the migration while writes are paused.
+4. Execute only the listed migration files in order using Laravel's migration ledger and a single authorized operator. Verify each result before proceeding. MariaDB DDL can commit independently, so a failure halts the release with writes still paused. Inspect the schema, ledger and data, identify the last completed operation, and resume the reviewed idempotent step when the evidence matches. Escalate unexpected drift before making further writes.
+5. Install only the fingerprinted code and refresh the necessary application caches. Verify the expected bytes, compare database baselines and run the release-specific checks. Record the code backup ID and successful verification, then resume writes. Use code restoration only where compatible with the existing schema and records.
+
+## Order stage checklist and ACID
+
+Candidate `052bd5618a6ac07ad276ca7b3d6e5e3d67d87290` contains ten files, including these three migrations under `database/migrations`.
+
+1. `2026_11_16_000001_add_stage_rule_columns_to_order_status_requirements.php`
+2. `2026_11_16_000002_add_note_to_order_statuses.php`
+3. `2026_11_17_000001_add_load_time_known_to_order_status_requirements.php`
+
+**Scope and baseline.** Back up `order_status_requirements`, `order_statuses`, the migration ledger and all existing files in the manifest. Pause order-stage, scan-out and Closed-payment writers that can touch those tables. Require the approved `DATETIME` baseline for `load_date`. The operation adds nullable shipping document type, order payment type and status-history note fields, plus `load_time_known` defaulting to zero.
+
+**Acceptance.** Original column digests and row counts must match exactly for both tables. All existing load dates and times and all Closed payment values must match. Pre-existing rows have unknown load time and null values for the other new fields. Finish the authenticated staging walkthrough for mandatory Egypt/Kenya ACID and cargoX, the missing destination case, original BL versus SWB, CAD versus non-bank, and date-only versus explicit midnight. Check Closed payments and an authenticated read-only order/receipts feed in both the staged environment and on production. Use existing production orders for readback and keep test saves on staging. Confirm the Hub feed shows a supplied load time and preserves “unknown” when the time is missing.
+
+**Recovery.** Restore the previous compatible code archive if the deployment requires reversal. Leave the four new columns and all saved values in place. Preserve `DATETIME` precision. Leave the migration ledger consistent with the actual schema. The prior feed and code must pass the read paths with the additional columns on a restored copy.
+
+## Rolls / Not rolls and stock cards
+
+Candidate `a1d74b708315b76e4129866d104f70f03470735a` contains 25 files, including these three migrations under `database/migrations`.
+
+1. `2026_11_25_000001_add_not_rolls_to_c_g_t_grades.php`
+2. `2026_11_25_000002_add_form_to_order_queues.php`
+3. `2026_11_26_000001_mark_legacy_order_queue_lines_not_yet_split.php`
+
+**Scope and baseline.** Back up `c_g_t_grades`, `order_queues`, the migration ledger and the existing code files in the manifest. Pause allocation, grade changes, reservation saves, release, picking, and scan operations that change related stock or holds. Record open and historical rows and pounds separately, and capture counts and weights of on-hand pallets by warehouse and grade using the queue's stock filters. Require zero duplicate open legacy groups by order, colour and NT grade. Stop for review if the grade seed matches change.
+
+**Acceptance.** Original IDs, weights, order/colour/grade links, release reason, user, release date and original timestamps must match. The first migration seeds exactly the reviewed slug/name matches. After the third migration, all legacy lines are marked `mixed` with empty classification metadata. Require zero duplicate open groups by order, colour, NT grade and form. Each of the two explicit forms can legitimately have a separate open hold. Reconcile the combined inventory counts and weight to the baseline and confirm the two sections and their CGT/NT drill-downs. On an authenticated disposable copy, finish reserve, split, pick, release and rendered/printed PDF checks, including partly picked holds and orders across warehouse sections. Resolve and retest simultaneous reservations for the last pounds before production approval. Generate and verify the Warehouse footer and installed-build fingerprint on the actual target using the verified archive.
+
+**Recovery.** Preserve the data columns, original lines, split history and all subsequent writes. Before the first split or explicit form-specific write, a code restore requires a successful rehearsal proving that the older code protects every active hold. After any form-specific write, use forward recovery or a verified code version that understands the two forms. The pre-split code cannot safely operate on separate active holds. Keep that version out of one-click restore across this release. Restoring table dumps over current records or collapsing active holds is outside this plan.
+
+## Last verified code versions
+
+Record a verified checkpoint with the exact code and backup references after each full production check. The Hub lists up to five checkpoints as they are verified. Each code restore must pass compatibility checks against the current database and later deployments. The current worker leaves database releases outside automatic code restore and blocks restore paths across incompatible changes. Backups are recovery evidence and can be tested in isolation while current production rows stay in place.
