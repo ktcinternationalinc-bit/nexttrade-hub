@@ -2,7 +2,7 @@
 // v55.83-PH — Accounting > 📉 Stats (Max, Nov 6): "i need a tab from june 1st
 // on for both invoices and bills to see stats". Default June 1, 2026 → today;
 // invoices and bills side by side; month-by-month table; CSV.
-import { remainderRows } from '../lib/paid-through-blocks'; // v55.83-SR
+import { remainderRows, spendingCategoryBankRows } from '../lib/paid-through-blocks'; // v55.83-SR
 import { spendingByCategoryCsv, spendingDetailCsv, incomeStatementCsv, taxPackBlocked } from '../lib/tax-pack'; // v55.83-WF step C — the accountant pack's spending files
 import React, { Fragment, useState, useEffect } from 'react';
 import UndoPickBar from './UndoPickBar'; // v55.83-WP — undo the last category pick
@@ -27,6 +27,7 @@ export function rtmAdjust(cats0, rtm) {
   ((rtm && rtm.payments_by_cat) || []).forEach(function (p) {
     if (!map[p.key]) { map[p.key] = { key: p.key, label: p.label || p.key, kind: 'expense', count: 0, total: 0 }; }
     map[p.key].total = r2a(map[p.key].total - p.total); map[p.key].rtm_out = p.total;
+    map[p.key].count = Math.max(0, (map[p.key].count || 0) - (p.count || 0));
   });
   ((rtm && rtm.allocations_by_cat) || []).forEach(function (a) {
     if (!map[a.key]) { map[a.key] = { key: a.key, label: a.label || a.key, kind: a.kind || 'expense', count: 0, total: 0 }; }
@@ -196,12 +197,12 @@ export default function PeriodStatsTab(props) {
   function bankCategoryDetails(key, title, moneyIn) {
     var report = data.spending;
     var bank = (moneyIn ? report.in_rows : report.rows) || [];
-    var direct = bank.filter(function (r) { return r.category === key; });
     var blocks = moneyIn ? [] : ptBlocks().filter(ptIsOn);
+    var direct = spendingCategoryBankRows(bank, key, blocks);
     var remainder = blocks.find(function (block) { return remainderRows(block).some(function (row) { return row.key === key; }); });
     var support = remainder ? remainderRows(remainder).find(function (row) { return row.key === key; }) : null;
-    var billRows = blocks.flatMap(function (block) {
-      return (block.rows || []).filter(function (row) { return remainder ? block === remainder && !support.money_back : row.category === key; });
+    var billRows = remainder ? [] : blocks.flatMap(function (block) {
+      return (block.rows || []).filter(function (row) { return row.category === key; });
     });
     var bankById = new Map(bank.map(function (row) { return [row.id, row]; }));
     var fundingRows = remainder ? (support.money_back ? support.money_back_rows : remainder.lines) || [] : [];
@@ -224,7 +225,7 @@ export default function PeriodStatsTab(props) {
               </tr>;
             })}</tbody>
           </table>}
-          {remainder && <p className="mt-1 text-[10px] text-slate-600">Supporting records for {remainder.payer}. Bank amounts are shown in full. The category total uses the report’s paid-through calculation.</p>}
+          {remainder && <p className="mt-1 text-[10px] text-slate-600">Bank records for reference. The category subtotal reflects the remainder after covered bills and adjustments. Covered bills are listed under their own categories.</p>}
           {billRows.length > 0 && <table className="w-full mt-2 text-[10px]" aria-label={title + ' covered bills'}>
             <thead><tr className="border-b border-slate-200 text-slate-600"><th scope="col" className="text-left">Paid date</th><th scope="col" className="text-left">Covered bill</th><th scope="col" className="text-right">Amount paid</th></tr></thead>
             <tbody>{billRows.map(function (bill, index) { return <tr key={index} className="border-b border-slate-100"><td className="py-1">{bill.date}</td><td>{bill.who} · {bill.ref}</td><td className="text-right tabular-nums">${fmt(bill.amount)}</td></tr>; })}</tbody>
@@ -497,11 +498,14 @@ export default function PeriodStatsTab(props) {
         {ptBlocks().map(function (pb) {
           var onP = ptIsOn(pb);
           var isAff = pb.kind === 'affiliate';
+          var isRtm = String(pb.payer || '').toLowerCase() === 'rtm capital';
+          var covered = (pb.allocations_by_cat || []).reduce(function (sum, category) { return sum + category.total; }, 0);
+          var remainder = remainderRows(pb).reduce(function (sum, row) { return sum + row.total; }, 0);
           return <div key={pb.key || pb.payer} className="flex gap-3 items-center flex-wrap mb-1 rounded p-1.5" style={{ background: isAff ? '#f0fdfa' : '#fdf2f8', border: '1px solid ' + (isAff ? '#99f6e4' : '#fbcfe8') }}>
             <span className="text-[10px] font-extrabold" style={{ color: isAff ? '#115e59' : '#9d174d' }}>🏢 {pb.payer}{pb.era_note ? ' · ' + pb.era_note : ''} ({isAff ? 'booked as an advance — earlier entries stay as booked' : 'pays vendors for us — one professional-fees line'}):</span>
             <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={!onP} onChange={function () { var n0 = Object.assign({}, ptOn); n0[pb.key || pb.payer] = false; setPtOn(n0); }} /> Tax view — payments to {pb.payer} stay ONE line (${fmt(pb.payments_total)})</label>
-            <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={onP} onChange={function () { var n1 = Object.assign({}, ptOn); n1[pb.key || pb.payer] = true; setPtOn(n1); }} /> Real-cost view — covered costs in their ACTUAL categories (${fmt(pb.allocations_total)} + ${fmt(pb.service_fee)} {isAff ? 'not yet linked to costs' : ((pb.waiting > 0.005 || pb.fees_booked > 0.005) ? 'not in bills' : 'service fee')}){!isAff && (pb.waiting > 0.005 || pb.fees_booked > 0.005) ? ' = bills $' + fmt(pb.allocations_total) + ' · service fee $' + fmt((Number(pb.fees_booked) || 0) + (Number(pb.remainder_other) || 0)) + ' · waiting for bills $' + fmt(pb.waiting) : ''}</label>
-            {onP && <span className="text-[9px]" style={{ color: isAff ? '#115e59' : '#9d174d' }}>{isAff ? 'This is the INTERNAL view: money sent ahead of its costs is held, not spending, until NextTrade\'s bills are linked. The accountant tax pack does NOT use it — there every transfer to NextTrade stays one Professional-fees amount, in full.' : 'Totals identical in both views. The accountant tax pack always uses the one-line tax view: each transfer once, in full.'}</span>}
+            <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={onP} onChange={function () { var n1 = Object.assign({}, ptOn); n1[pb.key || pb.payer] = true; setPtOn(n1); }} /> Internal view — ${fmt(covered)} in bill categories · ${fmt(remainder)} {isRtm ? 'in Professional Fees after adjustments' : isAff ? 'remaining funding' : 'in fees and remaining funding'}</label>
+            {isRtm && <span className="text-[9px]" style={{ color: '#9d174d' }}>{onP ? 'The balance goes to Professional Fees provisionally. Linking another bill reduces that balance.' : 'The full RTM transfer stays in Professional Fees in the tax view and the Accountant pack.'}</span>}
           </div>;
         })}
         {categoryDrillOpen && leftPanel()}

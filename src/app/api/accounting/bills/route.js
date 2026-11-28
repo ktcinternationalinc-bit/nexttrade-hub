@@ -10,8 +10,8 @@
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
 import { payrollBillScope, payrollFilteredDb, requestNamesPayroll, pnlAccess, payrollBillsNote, payrollLinesNote, SPENDING_WITHHELD } from '../../../../lib/payroll-bills'; // v55.83-ZD
-import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
-import { FUNDING_DESTINATIONS, fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
+import { buildPaidThroughBlocks, uniquePaidThroughBankRows } from '../../../../lib/paid-through-blocks';
+import { fundingIdentity, STARTING_BALANCE_TAX_FROM, hiddenStartingBalances, partyFundsForViewer, HIDDEN_STARTING_BALANCE_REASON } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule · v55.83-XO — the starting-balance tax date
 import { loadPartyFunds, isMissingOpeningsTable, openingsUnavailable } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
 // v55.83-WF step C — periodAdjustments (the TX tax adjustments) is no longer used here: a transfer to RTM / NextTrade counts once, in full
 import { NextResponse } from 'next/server';
@@ -2013,6 +2013,7 @@ export async function POST(req) {
         var taxKeyP = profKeyP || '__professional_fees_pt';
         var fundingTax = { count: 0, total: 0, recategorized: 0, recategorized_total: 0, by_party: {} };
         var isFundingLine = function (tF) { if (tF.direction !== 'out' || tF.transfer_group_id) { return null; } return fundingIdentity({ direction: 'out', third_party_payer: tF.third_party_payer, name: tF.name, merchant_name: tF.merchant_name }); };
+        spTx = uniquePaidThroughBankRows(spTx.filter(function (t) { var date = t.posted_date || t.date; return date >= pFrom && date <= pTo; }), isFundingLine);
         // v55.83-WO (Max screenshots via Codex, 21 Nov 00:05, P1) — RETURNED CHECKS are counted NET. A deposit that the bank later
         // returned is two bank lines in this one category: money IN (the deposit) and money OUT (the return). The category's
         // expense is the returns MINUS the deposits categorized into it — a matched pair is 0, not a cost and not income. Both bank
@@ -2208,32 +2209,17 @@ export async function POST(req) {
         var rtmBlk = null; var ptBlocks = [];
         try {
           var partiesP = await loadParties(db);
-          var rtmTx = await db.from('bank_transactions')
-            .select('id, date, posted_date, amount_abs, classification, third_party_payer')
-            .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out')
-            .not('third_party_payer', 'is', null).neq('pending', true).neq('review_status', 'duplicate')
-            .gte('date', pFrom).lte('date', pTo).limit(2000);
-          if (!rtmTx.error) {
             // v55.83-SR — the blocks are built by src/lib/paid-through-blocks.js (same sums as before; a company with a
             // provider_from date is split at that date, and lines from it on are broken into bills / service fee / waiting)
             // v55.83-WF step C — every company line sits under the ONE tax key in spend.categories (above), so the blocks name the
             // same key: the internal view takes each payment out of exactly the line it was counted in. bank_category keeps what the bank line itself says.
-            var ptLines = (rtmTx.data || []).map(function (t9) { return { id: t9.id, date: t9.posted_date || t9.date, amount: t9.amount_abs, classification: taxKeyP, bank_category: t9.classification, payer: t9.third_party_payer, marked: true }; });
-            // v55.83-VY — a transfer whose bank text names the company's own account (ending 9909 / 2061) is money sent to that
-            // company even when nobody stamped it. Transfers between KTC's own accounts are never taken. Fail-soft.
-            try {
-              var destOr = FUNDING_DESTINATIONS.map(function (d0) { return 'name.ilike.%' + d0.suffix + '%,merchant_name.ilike.%' + d0.suffix + '%'; }).join(',');
-              var idTx = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, classification, name, merchant_name, transfer_group_id')
-                .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').is('third_party_payer', null).neq('pending', true).neq('review_status', 'duplicate')
-                .gte('date', pFrom).lte('date', pTo).or(destOr).limit(2000);
-              if (!idTx.error) {
-                (idTx.data || []).forEach(function (t8) {
-                  if (t8.transfer_group_id) { return; } // paired between KTC's own accounts — never money sent to a company (a bare "transfer" category does not make it one: step C)
-                  var id8 = fundingIdentity({ direction: 'out', third_party_payer: null, name: t8.name, merchant_name: t8.merchant_name }); if (!id8) { return; }
-                  ptLines.push({ id: t8.id, date: t8.posted_date || t8.date, amount: t8.amount_abs, classification: taxKeyP, bank_category: t8.classification, payer: id8.payer, marked: false, who: t8.merchant_name || t8.name || '' });
-                });
-              }
-            } catch (eId) {}
+            var ptLines = [];
+            // The tax line, real-cost reallocation and details must see the same bank rows.
+            spTx.forEach(function (txn) {
+              var date = txn.posted_date || txn.date;
+              var funding = txn.direction === 'out' && date >= pFrom && date <= pTo && isFundingLine(txn);
+              if (funding) { ptLines.push({ id: txn.id, date: date, amount: txn.amount_abs, classification: taxKeyP, bank_category: txn.classification, payer: funding.payer, marked: funding.basis === 'marked', who: txn.merchant_name || txn.name || '' }); }
+            });
             // v55.83-XR — money back in this window goes to its company's block as a money-back line: the tax line carries transfers −
             // money back, so the internal view takes out exactly that net; the block shows it as a not-P&L "money returned" row (never a
             // fee), and money back of a transfer in this same window lowers that transfer's waiting money instead (refunds)
@@ -2249,7 +2235,6 @@ export async function POST(req) {
             } catch (eWq) { ptReqs = []; }
             ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: xoPays, billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, refunds: ptRefunds, profKey: taxKeyP }); // TX: + extra fees · WF step C: the one tax key
             ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
-          }
         } catch (eR9) { rtmBlk = null; ptBlocks = []; }
         // v55.83-VY (Codex 13:07: "integrate helper into the actual route -> report -> FundsSent -> totals/export path") — the shared
         // funds calculation, fed with the WHOLE history of each company (a fee or a bill payment dated in this period can belong

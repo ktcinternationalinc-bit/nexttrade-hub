@@ -19,6 +19,7 @@ export default function FundsSent(props) {
   var f = props.funding; if (!f) { return null; }
   var catLabel = props.catLabel || function (k) { return k; };
   var p = f.period;
+  var rtmFee = p.provisional_fee_cents != null;
   function row(label, value, treat, color, strong) { return <tr style={{ borderTop: '1px solid ' + LINE, fontWeight: strong ? 800 : 400, background: strong ? '#f1f5f9' : '#ffffff' }}><td className="px-2 py-1">{label}</td><td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{value}</td><td className="px-2 py-1" style={{ color: color || SUB }}>{treat}</td></tr>; }
   return <div className="text-[11px] rounded" style={{ color: INK, border: '1px solid #93c5fd', background: '#ffffff' }}>
     <div className="px-2 py-1.5 font-extrabold" style={{ background: '#dbeafe', color: '#1e3a8a' }}>{f.payer + ' — funds, ' + p.from + ' → ' + p.to}</div>
@@ -31,8 +32,9 @@ export default function FundsSent(props) {
       {/* v55.83-ZP — the partner-fee bills inside that line: shown apart, counted ONCE (as the bill, in C · Partner fee), never again here */}
       {partnerFeeOfRows(f.applied_rows) > 0 ? row('    of which partner fee', money(partnerFeeOfRows(f.applied_rows)), 'Part of the line above, not added to it. Counted once, as the partner-fee bill, in C · Partner fee.') : null}
       {row('− Explicitly marked as services rendered (their fee)', money(p.fee_cents), 'DEDUCTED here, in A · Warehouse / Office.', '#7f1d1d')}
-      {row('= Held with ' + f.payer + ' at the end', money(p.closing_held_cents), p.closing_held_cents >= 0 ? 'NOT an expense. It stays with them for future bills, or until someone marks it as services rendered.' : 'More was used than was sent — needs reconciliation.', p.closing_held_cents >= 0 ? '#065f46' : '#b91c1c', true)}
-      {row('Professional-fee deduction included here', money(p.fee_deduction_cents), 'Only this amount reduces profit.', '#7f1d1d', true)}
+      {row('= Held with ' + f.payer + ' at the end', money(p.closing_held_cents), p.closing_held_cents < 0 ? 'More was used than was sent — needs reconciliation.' : rtmFee ? 'Cash balance for reference.' : 'Funds available for future bills or service fees.', p.closing_held_cents >= 0 ? '#065f46' : '#b91c1c', true)}
+      {rtmFee && p.provisional_fee_cents !== 0 && row(p.provisional_fee_cents > 0 ? 'RTM provisional Professional Fees' : 'RTM provisional Professional Fees adjustment', money(p.provisional_fee_cents), 'Included under A · Warehouse / Office.', '#7f1d1d')}
+      {row('Professional Fees included in the P&L', money(p.fee_deduction_cents), 'Net expense in A · Warehouse / Office.', '#7f1d1d', true)}
     </tbody></table>
     {/* v55.83-ZP (Max 26 Nov: "isnt the 76000 linked to bills so it was sent and spent toward ktc bills") */}
     {periodNoBillsLinked(p) && <div className="px-2 py-1.5 font-bold flex gap-2 items-center flex-wrap" style={{ background: '#fef3c7', color: '#92400e' }}>
@@ -60,6 +62,6 @@ export default function FundsSent(props) {
         <td className="px-2 py-1 text-right">{props.onOpenBill && b.bill_id ? <button onClick={function (ev) { ev.preventDefault(); ev.stopPropagation(); props.onOpenBill(b, f.payer); }} className="px-1.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open bill ↗</button> : null}</td></tr>; })}</tbody></table></div>
       <div className="px-2 py-1 text-[10px]" style={{ color: SUB }}>These bills are marked as paid through the company, but the payment does not say which transfer the money came from. They are not taken from any transfer above and are never a fee.</div></details>}
     <details><summary className="px-2 py-1.5 font-extrabold" style={{ cursor: 'pointer', color: '#1d4ed8' }}>{'▸ Services rendered marked in these dates — ' + money(p.fee_cents) + ' (' + f.fee_rows.length + ')'}</summary>
-      {f.fee_rows.length === 0 ? <div className="px-2 py-1.5" style={{ color: SUB }}>Nothing was marked as their fee in these dates, so nothing is deducted as a fee.</div> : <table className="w-full text-[11px]"><tbody>{f.fee_rows.map(function (r, i) { return <tr key={i} style={{ borderTop: '1px solid ' + LINE }}><td className="px-2 py-1 whitespace-nowrap">{r.date}</td><td className="px-2 py-1">{r.why}</td><td className="px-2 py-1" style={{ color: SUB }}>{r.transfer_date ? 'from the transfer of ' + r.transfer_date : 'names no transfer'}</td><td className="px-2 py-1 text-right tabular-nums font-extrabold">{money(r.cents)}</td></tr>; })}</tbody></table>}</details>
+      {f.fee_rows.length === 0 ? <div className="px-2 py-1.5" style={{ color: SUB }}>No services-rendered fees were recorded in these dates.</div> : <table className="w-full text-[11px]"><tbody>{f.fee_rows.map(function (r, i) { return <tr key={i} style={{ borderTop: '1px solid ' + LINE }}><td className="px-2 py-1 whitespace-nowrap">{r.date}</td><td className="px-2 py-1">{r.why}</td><td className="px-2 py-1" style={{ color: SUB }}>{r.transfer_date ? 'from the transfer of ' + r.transfer_date : 'names no transfer'}</td><td className="px-2 py-1 text-right tabular-nums font-extrabold">{money(r.cents)}</td></tr>; })}</tbody></table>}</details>
   </div>;
 }

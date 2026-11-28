@@ -28,7 +28,7 @@ export function expenseDetail(spending, rc) {
   function makeup(key, label, figure) {
     var m = { key: key, label: label, cents: figure, bank: null, from_advances_cents: 0, taken_out: [], taken_out_cents: 0, bills: { cents: 0, listed_cents: 0, rows: [] }, remainder: null, other_cents: 0 };
     // a row made from the shared funds calculation (the explicit fee, or what is held): it has no lines of its own — the company panel shows it
-    if (/^__pf_/.test(String(key))) { m.remainder = { payer: '' }; m.funding_key = String(key).replace(/_(fee|held)$/, ''); m.is_explicit_fee = /_fee$/.test(String(key)); m.adds_up = true; return m; }
+    if (/^__pf_/.test(String(key))) { m.remainder = { payer: '' }; m.funding_key = String(key).replace(/_(provisional_fee|fee|held)$/, ''); m.is_provisional_fee = /_provisional_fee$/.test(String(key)); m.is_explicit_fee = /_fee$/.test(String(key)) && !m.is_provisional_fee; m.adds_up = true; return m; }
     if (remOf[key]) {
       // what is left of the money sent to a paid-through company after the bills it paid — it has no lines of its own
       var b = remOf[key].block;
@@ -69,13 +69,17 @@ export function expenseDetail(spending, rc) {
     var unlinked = (pw.period_rows || []).map(function (r) { var sb = r.source_bill || {}; return { paid_date: r.paid_date || '', transfer_id: null, transfer_date: '', vendor: r.vendor || '', bill_number: r.bill_number || '', bill_id: r.bill_id || null, bill_date: sb.bill_date || '', release: r.release_number || '', category: sb.category || 'uncategorized', recognition: sb.recognition || 'unverified', bill_total_cents: (r.bill_total === null || r.bill_total === undefined) ? null : cents(r.bill_total), cents: cents(r.portion), attachment_path: r.attachment_path || null, on_bank_line: r.on_bank_line || null }; });
     var fees = (p.fee_rows || []).concat(p.loose_fee_rows || []).map(function (r) { return { date: r.date || '', cents: cents(r.amount), why: r.why || 'services rendered', transfer_id: r.transfer_id || null, transfer_date: r.transfer_id ? (transferDate[r.transfer_id] || '') : '' }; });
     var dups = (c.duplicate_bank_lines || []).filter(function (d) { return inP(d.date); }).map(function (d) { return { id: d.id, date: d.date, cents: cents(d.sent), same_as: d.same_as }; });
-    return { key: '__pf_' + String(c.party || '').toLowerCase().replace(/[^a-z0-9]+/g, '_'), payer: c.party || '',
-      period: { from: p.from || '', to: p.to || '', opening_held_cents: cents(p.opening_held), funds_sent_cents: cents(p.funds_sent), applied_cents: cents(p.applied_to_bills), fee_cents: cents(p.services_rendered), fee_deduction_cents: cents(p.fee_deduction), closing_held_cents: cents(p.closing_held), tax_cents: cents(p.tax_professional_fees),
+    var fundingKey = '__pf_' + String(c.party || '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    var rtm = fundingKey === '__pf_rtm_capital';
+    var provisional = ((rc && rc.cats) || []).find(function (row) { return row.key === fundingKey + '_provisional_fee'; });
+    var provisionalCents = cents(provisional && provisional.total);
+    return { key: fundingKey, payer: c.party || '',
+      period: { from: p.from || '', to: p.to || '', opening_held_cents: cents(p.opening_held), funds_sent_cents: cents(p.funds_sent), applied_cents: cents(p.applied_to_bills), fee_cents: cents(p.services_rendered), provisional_fee_cents: rtm ? provisionalCents : null, fee_deduction_cents: cents(p.fee_deduction) + provisionalCents, closing_held_cents: cents(p.closing_held), tax_cents: cents(p.tax_professional_fees),
         starting_balance_added_cents: cents(p.starting_balance_added), from_starting_balance_cents: cents(p.from_starting_balance), tax_from_starting_balance_cents: cents(p.tax_from_starting_balance) }, // v55.83-XO (0 without a starting balance)
       unlinked_rows: unlinked, unlinked_cents: cents(pw.period_total), unlinked_as_of_cents: cents(pw.as_of_total),
       transfers: transfers, applied_rows: applied, applied_listed_cents: applied.reduce(function (t0, r) { return t0 + r.cents; }, 0), fee_rows: fees,
       to_confirm_cents: transfers.reduce(function (t0, t) { return t0 + (t.marked ? 0 : t.cents); }, 0), duplicates: dups, duplicates_cents: dups.reduce(function (t0, d) { return t0 + d.cents; }, 0),
-      needs_reconciliation: c.needs_reconciliation === true, explanation: feeExplanation(c), today_words: currentFundsWords(c) };
+      needs_reconciliation: c.needs_reconciliation === true, explanation: rtm ? 'Bills count once under their own categories. Professional Fees covers the remaining transfer amount, with a reduction when earlier provisional fees are allocated to bills.' : feeExplanation(c), today_words: currentFundsWords(c) };
   });
   ((rc && rc.cats) || []).forEach(function (c) {
     var v = cents(c.total);
@@ -122,7 +126,7 @@ export function pnlFormula(r, e, hidden) {
   if (cols && cols.unassigned.cents) { not.push({ label: 'Uncategorized expenses', cents: cols.unassigned.cents, cats: cols.unassigned.cats, why: 'money out with no category yet — not taken off until it gets one. Open it and give each line its category right here.' }); }
   if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, cats: cols.in_profit.cats, why: 'Nothing to do. These are payments for goods and shipping; their cost is already counted, sale by sale, in goods cost and transport cost above, so taking them off again would count them twice. This is decided by the category name. If a payment here is NOT for goods or shipping (rent, for example), open it and change its category.', nothing_to_do: true }); }
   if (cols && cols.duplicates) { not.push({ label: 'A bank transfer that appears twice (the second copy)', cents: cols.duplicates, why: 'the same transfer came in as two bank lines — the copy is counted nowhere' }); }
-  if (cols && cols.held && cols.held.cents) { not.push({ label: cols.held_is_balance ? 'Held with RTM / NextTrade at the end of these dates' : 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, funding: true, why: 'held with them for future bills — it is not an expense unless it is explicitly marked as their fee' + (cols.unconfirmed > 0 ? '. Of this, ' + (cols.unconfirmed / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) + ' is transfers nobody has confirmed yet — confirm them under A' : '') }); }
+  if (cols && cols.held && cols.held.cents) { not.push({ label: cols.held_is_balance ? 'Held with RTM / NextTrade at the end of these dates' : 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, funding: true, why: 'Balance for reference. A includes any RTM Professional Fees for this period' + (cols.unconfirmed > 0 ? '. Transfers totaling ' + (cols.unconfirmed / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) + ' still need confirmation under A' : '') }); }
   var det = ok ? e.detail : null;
   if (det) {
     (det.not_pnl || []).forEach(function (z) { not.push({ label: z.label, cents: z.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });

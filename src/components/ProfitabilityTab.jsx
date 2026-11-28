@@ -744,6 +744,7 @@ export default function ProfitabilityTab(props) {
         {e.cols.unassigned.cents !== 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{'if the uncategorized is all expense: ' + money(f.cents - e.cols.unassigned.cents)}</div>}
         {f.assumed !== 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{'provisional: ' + money(f.assumed) + ' of supplier / trucker payments assumed already inside profit'}</div>}
         {f.unconfirmed > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{'provisional: ' + money(f.unconfirmed) + ' sent to the RTM / NextTrade account is not confirmed yet — ƒ how? → A'}</div>}
+        {f.rtm_provisional_cents > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{money(f.rtm_provisional_cents) + ' in provisional RTM Professional Fees — ƒ how? → A'}</div>}
         {!f.complete && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>known part only</div>}</span>;
     }
     function expPanel(r) {

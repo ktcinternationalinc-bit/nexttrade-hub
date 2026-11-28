@@ -10,7 +10,7 @@
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 // v55.83-VY — WHICH company a bank line is money sent to is decided in ONE place: src/lib/party-funds.js (Codex 13:07).
 export { FUNDING_DESTINATIONS, fundingPayerOfText, fundingIdentity } from './party-funds';
-import { STARTING_BALANCE_TAX_FROM } from './party-funds'; // v55.83-XO — the one date rule for starting-balance uses
+import { bankRefOf, STARTING_BALANCE_TAX_FROM } from './party-funds'; // v55.83-XO — the one date rule for starting-balance uses
 export function partyKeyOf(x) { return String(x || '').trim().toLowerCase(); }
 
 // 'advance' = money sent ahead to a related company (not an expense until its bills are linked); 'provider' = one line
@@ -48,8 +48,9 @@ export function buildPaidThroughBlocks(o) {
         if (t.money_back === true) { moneyBack = r2(moneyBack - a); mbRows.push({ id: t.id, date: t.date, amount: r2(0 - a), transfer_id: t.transfer_id || null, who: t.who || '' }); mine.push(t); }
         else { payTotal = r2(payTotal + a); payCount++; mine.push(t); }
         var k = t.classification || 'uncategorized';
-        if (!payByCat[k]) { payByCat[k] = { key: k, label: catLabels[k] || k, total: 0 }; }
+        if (!payByCat[k]) { payByCat[k] = { key: k, label: catLabels[k] || k, total: 0, count: 0 }; }
         payByCat[k].total = r2(payByCat[k].total + a);
+        payByCat[k].count++;
       });
       var allocByCat = {}, allocTotal = 0, rows = [];
       (o.pays || []).forEach(function (p) {
@@ -66,7 +67,7 @@ export function buildPaidThroughBlocks(o) {
       // to that line); the real-cost view moves them into the bills' real categories (payments_by_cat out, allocations in)
       var advByCat = {}, advApplied = 0;
       (o.pays || []).forEach(function (p) {
-        if (p.method !== 'advance' || p.voided === true || !inP(p.paid_date)) { return; }
+        if (p.method !== 'advance' || p.party_opening_id || p.voided === true || !inP(p.paid_date)) { return; }
         var b = (o.billById || {})[p.bill_id];
         if (!b || partyKeyOf(b.paid_via) !== pk || eraOf(party, p.paid_date) !== era) { return; }
         var k = b.category || 'uncategorized'; var am = r2(p.amount);
@@ -150,6 +151,30 @@ export function buildPaidThroughBlocks(o) {
   return out;
 }
 
+// Base-category details use the same selected blocks as the category totals.
+// Match exact bank IDs so the other era and tax view of the same payee stay visible.
+export function spendingCategoryBankRows(rows, key, selectedBlocks) {
+  var moved = new Set((selectedBlocks || []).flatMap(function (block) {
+    return (block.lines || []).concat(block.money_back_rows || []).map(function (row) { return row.id; }).filter(Boolean);
+  }));
+  return (rows || []).filter(function (row) { return row.category === key && !moved.has(row.id); });
+}
+
+export function uniquePaidThroughBankRows(rows, identifyFunding) {
+  var chosen = new Map();
+  var references = new Map();
+  rows.forEach(function (row) {
+    var payer = row.direction === 'out' && identifyFunding(row);
+    var reference = payer && bankRefOf(String(row.name || '') + ' ' + String(row.merchant_name || ''));
+    if (!reference) { return; }
+    var identity = JSON.stringify([partyKeyOf(payer.payer), reference, r2(row.amount_abs)]);
+    references.set(row.id, identity);
+    var first = chosen.get(identity);
+    if (!first || (first.basis !== 'marked' && payer.basis === 'marked')) { chosen.set(identity, { id: row.id, basis: payer.basis }); }
+  });
+  return rows.filter(function (row) { return !references.has(row.id) || chosen.get(references.get(row.id)).id === row.id; });
+}
+
 // the rows that replace the single "remainder" row in the broken-down view; they always add up to block.service_fee
 export function remainderRows(block) {
   var b = block || {}; var rows = [];
@@ -157,7 +182,11 @@ export function remainderRows(block) {
   var kind = b.kind === 'affiliate' ? 'not_pnl' : 'expense';
   var fees = r2(b.fees_booked), waiting = r2(b.waiting);
   var other = (b.fees_booked == null && b.waiting == null) ? r2(b.service_fee) : r2(b.remainder_other);
-  if (Math.abs(other) > 0.005) { rows.push({ key: keyBase, label: b.remainder_label || 'RTM service fee (payments − covered bills)', kind: kind, count: b.payments_count || 0, total: other }); }
+  if (Math.abs(other) > 0.005) {
+    var isRtm = partyKeyOf(b.payer) === 'rtm capital';
+    var label = isRtm ? other > 0 ? 'RTM — provisional Professional Fees' : 'RTM — Professional Fees adjustment' : b.remainder_label || 'RTM service fee (payments − covered bills)';
+    rows.push({ key: keyBase, label: label, kind: kind, count: b.payments_count || 0, total: other });
+  }
   if (Math.abs(fees) > 0.005) { rows.push({ key: keyBase + '_fee', label: (b.payer || 'RTM') + ' service fee (on requests)', kind: 'expense', count: 0, total: fees }); }
   if (Math.abs(waiting) > 0.005) { rows.push({ key: keyBase + '_waiting', label: (b.payer || 'RTM') + ' — uncategorized, waiting for bills (stays professional fees)', kind: 'expense', count: 0, total: waiting, waiting: true }); }
   // v55.83-XR (Codex 09:01 / 09:54) — money the company RETURNED (of transfers before this window): a funds movement, never a fee or a
@@ -165,4 +194,22 @@ export function remainderRows(block) {
   var back = r2(b.money_back_other);
   if (Math.abs(back) > 0.005) { rows.push({ key: keyBase + '_returned', label: 'Money returned by ' + (b.payer || 'RTM') + ' (lowers the funds it holds; not income, not an expense)', kind: 'not_pnl', count: (b.money_back_rows || []).length, total: r2(0 - back), money_back: true, money_back_rows: b.money_back_rows || [] }); }
   return rows;
+}
+
+// Negative amounts unwind provisional fees when earlier transfers are applied
+// to bills or refunded this period.
+export function rtmFeeResidual(blocks, funds) {
+  var rtm = (blocks || []).filter(function (b) { return partyKeyOf(b.payer) === 'rtm capital'; });
+  if (funds && funds.period) {
+    var p = funds.period;
+    var billCoverage = rtm.reduce(function (total, b) {
+      var allocations = (b.allocations_by_cat || []).reduce(function (sum, row) { return sum + row.total; }, 0);
+      return total + allocations - (Number(b.starting_balance_applied) || 0);
+    }, 0);
+    return r2((Number(p.funds_sent) || 0) - (Number(p.refunds) || 0) - (rtm.length ? billCoverage : Number(p.applied_to_bills) || 0));
+  }
+  if (!rtm.length) { return null; }
+  return r2(rtm.reduce(function (total, b) {
+    return total + remainderRows(b).reduce(function (sum, row) { return sum + row.total; }, 0);
+  }, 0));
 }

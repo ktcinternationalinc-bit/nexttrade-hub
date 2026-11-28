@@ -7,6 +7,7 @@
 // Income Statement's categories into a column. Pure; money in whole cents.
 
 import { expenseDetail } from './pnl-expense-detail'; // v55.83-VT — what is behind each figure, from the same answer
+import { rtmFeeResidual } from './paid-through-blocks';
 
 function cents(x) { return Math.round((Number(x) || 0) * 100); }
 function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -42,9 +43,8 @@ export var EXPENSE_COLUMNS = [
 export function letterOf(cat) {
   var c = cat || {}; var kind = String(c.kind || 'expense'); var key = String(c.key || '').toLowerCase();
   var text = (key + ' ' + String(c.label || '')).toLowerCase().replace(/_/g, ' ');
-  // v55.83-VY (Max, Nov 20: "unallocated funds default internally to unused / awaiting allocation, NOT a fee ... Only explicit
-  // Services rendered designation creates that fee expense") — money sent to RTM / NextTrade that is neither used for a bill nor
-  // explicitly booked as their fee is HELD with them: shown, never taken off the profit. Only the explicit fee row is an office cost.
+  // The held balance is a reference. The period's RTM provisional fee and
+  // recorded fees are office expenses.
   if (/^__pf_/.test(key)) { return /_fee$/.test(key) ? 'A' : 'held'; } // rows made from the shared funds calculation (party-funds.js)
   if (/^__pt_/.test(key)) { return /_fee$/.test(key) ? 'A' : 'held'; }
   if (key === '__party_advance') { return 'held'; }
@@ -72,6 +72,7 @@ export function expenseColumns(cats, uncategorized) {
     // v55.83-WO — a NET category (returned checks: returns minus the deposits that were returned) is kept even at exactly 0, so the
     // pair behind the zero can still be opened and checked
     var v = cents(c.total); var netCat = c.net === true && (Number(c.credits) > 0 || Number(c.debits) > 0); if (!v && !netCat) { return; }
+    if (/_provisional_fee$/.test(c.key)) { out.rtm_provisional_cents = (out.rtm_provisional_cents || 0) + v; }
     out[l].cents += v; var oc = { key: c.key, label: c.label || c.key, cents: v }; if (netCat) { oc.net = true; oc.debits_cents = cents(c.debits); oc.credits_cents = cents(c.credits); } out[l].cats.push(oc);
   });
   var u = cents(uncategorized);
@@ -116,27 +117,30 @@ export function finalPnl(profitCents, cols, incompleteLines) {
   // commission ("already inside goods and transport profit"). That is an assumption from a name, not a line-by-line check, so a
   // final figure that rests on it is never called complete.
   // unconfirmed = transfers to a company's account that nobody has confirmed: left out of the expenses, but the figure rests on that
-  return { cents: profitCents - cols.total, assumed: cols.in_profit.cents, unconfirmed: cols.unconfirmed || 0, complete: cols.unassigned.cents === 0 && cols.in_profit.cents === 0 && !(cols.unconfirmed > 0) && !(incompleteLines > 0) };
+  return { cents: profitCents - cols.total, assumed: cols.in_profit.cents, unconfirmed: cols.unconfirmed || 0, rtm_provisional_cents: cols.rtm_provisional_cents || 0,
+    complete: cols.unassigned.cents === 0 && cols.in_profit.cents === 0 && !(cols.unconfirmed > 0) && !(cols.rtm_provisional_cents > 0) && !(incompleteLines > 0) };
 }
 
 // The Income Statement's categories in its real-cost look, exactly as that screen builds them: every paid-through company's
 // payments taken out of the category they were paid under and its bills put into their own. adjust / fold are that screen's own
 // functions (rtmAdjust, foldUnc), passed in so there is one copy of the rule.
-// v55.83-VY — P&L by period only: an explicitly booked fee is that company's fee whichever date its transfer has. Where the
-// Income Statement keeps such a fee inside the single "remainder" row of an older transfer, it is moved here into the company's
-// fee row (same money, the total does not move), so that ONLY the explicit fee is deducted and the rest is held.
 function slugOf(x) { return String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '_'); }
-// The company rows of P&L by period, from the shared calculation (funds = partyFundsBreakdown(...) for these dates):
-//   fee  = period.fee_deduction — explicit services rendered DATED in the period; the only professional-fee expense
-//   held = period.closing_held — still with the company at the end of the period; a balance, never an expense
-// meta.unconfirmed = transfers of THIS period recognised only from the bank text; meta.duplicates = second copies of a bank
-// transfer dated in this period (counted nowhere).
-export function partyFundsRows(cats, funds) {
+// Keep the bank balance separate from P&L activity. RTM's provisional and
+// recorded fees together equal its transfer residual after allocated bills.
+export function partyFundsRows(cats, funds, blocks) {
   var out = (cats || []).filter(function (c) { return !/^__pt_/.test(String(c.key)) && c.key !== '__party_advance'; }).map(function (c) { return Object.assign({}, c); });
   var meta = { unconfirmed: 0, duplicates: 0, needs_reconciliation: false };
   (funds || []).forEach(function (f) {
     var p = f.period || {}; var base = '__pf_' + slugOf(f.party);
-    if (Math.abs(Number(p.fee_deduction) || 0) > 0.004) { out.push({ key: base + '_fee', label: f.party + ' — services rendered (explicitly marked as their fee)', kind: 'expense', count: (p.fee_rows || []).length, total: Number(p.fee_deduction) }); }
+    var recorded = Number(p.fee_deduction) || 0;
+    if (Math.abs(recorded) > 0.004) { out.push({ key: base + '_fee', label: f.party + ' — recorded service fees', kind: 'expense', count: (p.fee_rows || []).length + (p.loose_fee_rows || []).length, total: recorded }); }
+    if (base === '__pf_rtm_capital') {
+      // Reclassifying a fee against an older transfer releases its former
+      // provisional amount even when this period has no bank transfer.
+      var residual = rtmFeeResidual(blocks, f);
+      var provisional = (cents(residual) - cents(recorded)) / 100;
+      if (provisional) { out.push({ key: base + '_provisional_fee', label: provisional > 0 ? 'RTM — provisional Professional Fees' : 'RTM — provisional Professional Fees adjustment', kind: 'expense', count: 0, total: provisional }); }
+    }
     if (Math.abs(Number(p.closing_held) || 0) > 0.004) { out.push({ key: base + '_held', label: f.party + ' — held with them at the end of these dates', kind: 'not_pnl', count: 0, total: Number(p.closing_held) }); }
     (f.transfers || []).forEach(function (t) { if (t.identity === 'bank_text' && (!p.from || t.date >= p.from) && (!p.to || t.date <= p.to)) { meta.unconfirmed += Math.round((Number(t.sent) || 0) * 100); } });
     (f.duplicate_bank_lines || []).forEach(function (d) { if ((!p.from || d.date >= p.from) && (!p.to || d.date <= p.to)) { meta.duplicates += Math.round((Number(d.sent) || 0) * 100); } });
@@ -169,12 +173,19 @@ export function explicitFeeRows(cats, blocks) {
 export function realCostCategories(spending, adjust, fold) {
   if (!spending) { return null; }
   var cats = spending.categories || [];
-  (spending.paid_through || []).forEach(function (b) { cats = adjust(cats, b); });
-  // v55.83-VY (Codex 13:07) — with the shared funds calculation in the answer, IT decides the fee and what is held; the block's
-  // own remainder rows are not used at all. Without it (an older answer) the block rule below is the fall-back.
+  var blocks = spending.paid_through || (spending.rtm ? [spending.rtm] : []);
+  blocks.forEach(function (b) { cats = adjust(cats, b); });
   var fundsMeta = null;
-  if (Array.isArray(spending.party_funds)) { var pf = partyFundsRows(cats, spending.party_funds); cats = pf.cats; fundsMeta = pf.meta; }
-  else { cats = explicitFeeRows(cats, spending.paid_through || []); }
+  if (Array.isArray(spending.party_funds)) { var pf = partyFundsRows(cats, spending.party_funds, blocks); cats = pf.cats; fundsMeta = pf.meta; }
+  else {
+    cats = explicitFeeRows(cats, blocks);
+    var fallback = rtmFeeResidual(blocks);
+    if (fallback !== null) {
+      var rtmKeys = blocks.filter(function (b) { return String(b.payer || '').trim().toLowerCase() === 'rtm capital'; }).map(function (b) { return '__pt_' + slugOf(b.key || b.payer); });
+      cats = cats.filter(function (row) { return !rtmKeys.some(function (key) { return row.key === key || row.key.indexOf(key + '_') === 0; }); });
+      if (fallback) { cats.push({ key: '__pt_rtm_capital_provisional_fee', label: 'RTM — Professional Fees after linked bills', kind: 'expense', count: 0, total: fallback }); }
+    }
+  }
   var folded = fold(cats);
   var unc = (spending.uncategorized && Number(spending.uncategorized.total)) || 0;
   return { cats: folded, uncategorized: Math.round((unc + (Number(folded.uncShift) || 0)) * 100) / 100, funds: fundsMeta };
@@ -256,6 +267,7 @@ export function totalExpenses(keys, cache, scope) {
     // held is a BALANCE at the end of each period (not a flow): the total row shows the latest period's, never a sum of balances
     if (e.cols.held_is_balance) { t.cols.held.cents = e.cols.held.cents; t.cols.held_is_balance = true; } else { t.cols.held.cents += e.cols.held.cents; }
     t.cols.duplicates = (t.cols.duplicates || 0) + (e.cols.duplicates || 0); t.cols.total += e.cols.total; t.cols.unconfirmed = (t.cols.unconfirmed || 0) + (e.cols.unconfirmed || 0);
+    t.cols.rtm_provisional_cents = (t.cols.rtm_provisional_cents || 0) + (e.cols.rtm_provisional_cents || 0);
     t.cols.paid_through_cents = (t.cols.paid_through_cents || 0) + (e.cols.paid_through_cents || 0); // v55.83-XQ — a flow: summed across periods (not a balance)
     t.cols.paid_through_unlinked_cents = (t.cols.paid_through_unlinked_cents || 0) + (e.cols.paid_through_unlinked_cents || 0);
   });
