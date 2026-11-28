@@ -38,9 +38,9 @@ export default function NextradeBillsPanel(props) {
     setChooser(null);
     try { window.dispatchEvent(new CustomEvent(NEXTRADE_OPEN_WIRE_EVENT, { detail: { payee: b.paid_via || 'NextTrade Industries', bill_id: b.id, bill_number: b.bill_number } })); } catch (e) { /* old browser */ }
   }
-  function payFromOpening(b) {
+  function payFromOpening(b, source) {
     setChooser(null);
-    try { window.dispatchEvent(new CustomEvent(NEXTRADE_PAY_OPENING_EVENT, { detail: { party: b.paid_via || 'NextTrade Industries', bill_id: b.id, bill_number: b.bill_number } })); } catch (e) { /* old browser */ }
+    try { window.dispatchEvent(new CustomEvent(NEXTRADE_PAY_OPENING_EVENT, { detail: { party: b.paid_via || 'NextTrade Industries', bill_id: b.id, bill_number: b.bill_number, source: source } })); } catch (e) { /* old browser */ }
   }
   var choices = nextradePayChoices(isSuper);
   var list = (rows || []).filter(function (r) { return showVoid || r.link.status === 'active'; });
@@ -64,7 +64,7 @@ export default function NextradeBillsPanel(props) {
         <div className="flex gap-2 flex-wrap items-start">
           {choices.map(function (c) {
             return <div key={c.key} className="rounded-lg p-2" style={{ background: '#ffffff', border: '1px solid #93c5fd', maxWidth: 360 }}>
-              <button onClick={function () { if (c.key === 'transfer') { payFromTransfer(b); } else { payFromOpening(b); } }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: c.key === 'transfer' ? '#1d4ed8' : '#075985', color: '#ffffff' }}>{c.label + ' →'}</button>
+              <button onClick={function () { if (c.key === 'transfer') { payFromTransfer(b); } else { payFromOpening(b, c.key); } }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: c.key === 'transfer' ? '#1d4ed8' : '#075985', color: '#ffffff' }}>{c.label + ' →'}</button>
               <div className="text-[10px] mt-1" style={{ color: '#475569' }}>{c.hint}</div></div>;
           })}
           <button onClick={function () { setChooser(null); }} className="px-2 py-1 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Cancel</button>

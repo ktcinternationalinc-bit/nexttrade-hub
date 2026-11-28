@@ -36,7 +36,7 @@ import { audit } from '../../../../lib/audit-server';
 // which script to run and change nothing.
 var API_BUILD_MARKER = 'v55.83-XO-party-funds';
 var SQL_MISSING_XO = 'Starting balances need one database update first: run sql/v55-83-XO-starting-balance.sql (Supabase → SQL Editor → New query → paste → Run). Nothing was changed.';
-var OPENING = { opening_add: 1, opening_pay: 1, opening_pay_candidates: 1 };
+var OPENING = { opening_add: 1, opening_pay: 1, opening_pay_candidates: 1, managed_sales_preview: 1, managed_sales_add: 1 };
 var OPENING_PAY_FROM = '2026-06-01'; // Max's (b): using a starting balance is a new expense from 1 June 2026
 // (Codex 17:51 P2) NOT an instruction to install anything: the database step is released together with the screens that need it.
 var SQL_MISSING_WF = 'Confirming a transfer and marking services rendered are not switched on yet — they arrive with a later update. Nothing was changed.';
@@ -137,6 +137,29 @@ export async function POST(req) {
       if (!installedXO) { return fail(SQL_MISSING_XO, 409); }
       var obParty = parties.filter(function (p) { return p.name === body.party; })[0];
       if (!obParty) { return fail('Pick NextTrade or RTM.'); }
+      if (action === 'managed_sales_preview' || action === 'managed_sales_add') {
+        if (obParty.name !== 'NextTrade Industries' || !isDate(body.from) || !isDate(body.to) || body.from > body.to) {
+          return fail('Choose the dates of the NextTrade-managed sales.');
+        }
+        if (action === 'managed_sales_preview') {
+          var salesQuote = await db.rpc('hub_nextrade_managed_sales_preview', { p_from: body.from, p_to: body.to });
+          if (salesQuote.error) { return guardFail(salesQuote, true); }
+          var { sales, remitted, reversed, net, signature, already_used } = salesQuote.data;
+          return NextResponse.json({ ok: true, sales, remitted, reversed, net, signature, already_used });
+        }
+        if (!Number.isFinite(body.held) || body.held <= 0 || typeof body.visible_to_staff !== 'boolean' ||
+          typeof body.signature !== 'string' || !/^[a-f0-9]{32}$/.test(body.signature) ||
+          typeof body.request_id !== 'string' || !/^[a-z0-9-]{8,64}$/.test(body.request_id) ||
+          typeof body.reason !== 'string' || body.reason.trim().length < 10) {
+          return fail('Confirm the amount NextTrade still holds, its reference, and staff visibility.');
+        }
+        var captured = await db.rpc('hub_nextrade_managed_sales_add', { p: {
+          from: body.from, to: body.to, held: body.held, visible_to_staff: body.visible_to_staff, signature: body.signature,
+          reason: body.reason.trim().slice(0, 375), request_id: body.request_id, actor: userId
+        } });
+        if (captured.error) { return guardFail(captured, true); }
+        return NextResponse.json({ ok: true, id: captured.data?.id, repeat: captured.data?.repeat === true });
+      }
       if (action === 'opening_pay_candidates') {
         // the bills that may be paid from a starting balance: KTC's, active, in US dollars, open (not paid, not on an open wire),
         // paid through this company or by nobody yet. Read-only.
@@ -264,6 +287,17 @@ export async function POST(req) {
         }
         loaded = await loadPartyFunds(db, { fetchAll: fetchAllRows, businessId: US_WAVE_BUSINESS_ID, parties: parties, pays: pays, bills: billById, entries: entries, from: from, to: to });
       } catch (eR) { if (eR && eR.code === 'XO_UNAVAILABLE') { return NextResponse.json({ ok: false, unavailable: 'starting_balances', error: 'Could not read ' + eR.message + '. Nothing is shown, so no total is given without them. Try again in a moment.' }, { status: 503 }); } return readFail('the funds held', eR); } // v55.83-XO (Codex 14:52 P2)
+      var managedSales = new Set();
+      if (installedXO) {
+        try {
+          var salesBalances = await fetchAllRows(function () { return db.from('nextrade_managed_sales_balances').select('opening_id').order('opening_id'); });
+          salesBalances.forEach(function (row) { managedSales.add(row.opening_id); });
+        } catch (salesError) {
+          if (!/nextrade_managed_sales_balances.*(?:does not exist|schema cache)|Could not find the table.*nextrade_managed_sales_balances/i.test(salesError.message)) {
+            return readFail('the NextTrade-managed sales balances', salesError);
+          }
+        }
+      }
       // which bank account each transfer is in (privacy), and the database's own state per transfer when WF is installed
       var ids = loaded.lines.map(function (l) { return l.id; }); var acct = {};
       for (var ai = 0; ai < ids.length; ai += 200) {
@@ -300,6 +334,7 @@ export async function POST(req) {
           if (!canSeeStartingBalance(s, isSuper)) { hiddenSb++; return; } // the ONE rule (party-funds.js), also used by the report route
           var sr = { id: s.id, kind: 'starting_balance', as_of: s.as_of, reason: s.reason, visible_to_staff: s.visible_to_staff, corrections_count: (s.correction_rows || []).length,
             bills: s.lifetime_rows.map(function (r) { return { bill_id: r.bill_id, vendor: r.vendor, bill_number: r.bill_number, paid_date: r.paid_date, release_number: r.release_number, portion: canTotals ? r.portion : null, category: r.source_bill.category }; }) };
+          if (managedSales.has(s.id)) { sr.source = 'managed_sales'; }
           if (canTotals) { sr.amount = s.amount; sr.original = s.original; sr.corrections = s.corrections; sr.used = s.current.used; sr.left = s.current.held; }
           sbRows.push(sr);
         });

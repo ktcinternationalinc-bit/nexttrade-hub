@@ -61,7 +61,7 @@ export function oldestStartingBalance(sbs) {
 }
 
 // From the party-funds "funds" answer: which NextTrade starting balance to pay from, or why it cannot be done (in plain words).
-export function startingBalanceToPay(funds, partyName) {
+export function startingBalanceToPay(funds, partyName, source) {
   var j = funds || {};
   if (j.can_starting_balance !== true) { return { ok: false, why: 'Only the super admin can pay bills from the NextTrade starting balance.' }; }
   if (j.starting_balances_installed !== true) { return { ok: false, why: 'Paying from the starting balance is not switched on yet (sql/v55-83-XO-starting-balance.sql).' }; }
@@ -70,9 +70,11 @@ export function startingBalanceToPay(funds, partyName) {
   (j.parties || []).forEach(function (x) { var n = String((x && x.party) || '').toLowerCase(); if (!p && n === want) { p = x; } });
   if (!p) { (j.parties || []).forEach(function (x) { if (!p && /next\s*trade/i.test(String((x && x.party) || ''))) { p = x; } }); }
   if (!p) { return { ok: false, why: 'NextTrade is not in the funds list.' }; }
-  var sb = oldestStartingBalance(p.starting_balances);
+  var balances = (p.starting_balances || []).filter(function (b) { return (b.source === 'managed_sales') === (source === 'managed_sales'); });
+  var sb = oldestStartingBalance(balances);
   if (!sb) {
-    var any = (p.starting_balances || []).length > 0;
+    if (source === 'managed_sales') { return { ok: false, party: p, why: 'No NextTrade-managed sales balance has funds available. Review a sales period below.' }; }
+    var any = balances.length > 0;
     return { ok: false, party: p, why: 'There is no NextTrade starting balance with money left' + (any ? ' (every one is used up)' : ' (none has been entered)') + '. Pay this bill from a KTC transfer to NextTrade instead.' };
   }
   return { ok: true, party: p, sb: sb };
@@ -88,7 +90,10 @@ export function openingPickAmount(bill, sbLeft) {
 // The two ways to pay a Nextrade bill (the chooser under Pay ▸). The starting balance is the super admin's only, as in XO.
 export function nextradePayChoices(isSuper) {
   var out = [{ key: 'transfer', label: 'From a KTC transfer to NextTrade', hint: 'Opens Wires → ＋ New wire to NextTrade Industries with this bill ticked. You pick the transfer it is paid from; the usual check and two signatures follow.' }];
-  if (isSuper === true) { out.push({ key: 'opening', label: 'From the NextTrade starting balance', hint: 'Opens Bills → 🏦 Funds with RTM / NextTrade → the oldest NextTrade starting balance with money left, with this bill ticked.' }); }
+  if (isSuper === true) {
+    out.push({ key: 'managed_sales', label: 'From NextTrade-managed sales', hint: 'Uses confirmed sales proceeds held by NextTrade for KTC.' });
+    out.push({ key: 'opening', label: 'From the NextTrade starting balance', hint: 'Opens the oldest manual starting balance with funds available and this bill selected.' });
+  }
   return out;
 }
 export var NEXTRADE_OPEN_WIRE_EVENT = 'hub-open-nextrade-wire';
