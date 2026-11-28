@@ -7,7 +7,7 @@ import { dropPrivate } from './private-accounts-server';
 export async function loadNextradeExpenses(db, fetchAll, privateAccounts) {
   const company = NEXTRADE_COMPANY_ID;
   const [transactions, categories, mappings, links] = await Promise.all([
-    fetchAll(() => db.from('bank_transactions').select('id,date,posted_date,account_id,amount_abs,iso_currency,direction,name,merchant_name,company_category,transfer_group_id,review_status,pending')
+    fetchAll(() => db.from('bank_transactions').select('id,date,posted_date,account_id,account_subtype,amount_abs,iso_currency,direction,name,merchant_name,company_category,transfer_group_id,review_status,pending')
       .eq('wave_business_id', company).eq('direction', 'out').gte('date', NEXTRADE_BILL_CUTOFF).order('id')),
     fetchAll(() => db.from('company_categories').select('key,label,kind,is_payroll,makes_ktc_bill').eq('company_id', company).order('key')),
     fetchAll(() => db.from('company_category_map').select('category_key,ktc_category').eq('company_id', company).order('category_key')),
@@ -24,6 +24,6 @@ export async function loadNextradeExpenses(db, fetchAll, privateAccounts) {
     if (!(cents > 0)) return [];
     return [{ id: transaction.id, date: transaction.date, cents, who: transaction.merchant_name || transaction.name,
       category: ktcByKey.get(category.key) || category.key, nextrade_category: category.key, label: category.label, kind: category.kind,
-      payroll: category.is_payroll === true, bill_id: billBySource.get(transaction.id) }];
+      payroll: category.is_payroll === true, credit_card: transaction.account_subtype === 'credit card', bill_id: billBySource.get(transaction.id) }];
   });
 }

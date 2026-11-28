@@ -61,6 +61,7 @@ const julyDirect = nexttradeReport('2026-07-01', '2026-07-31', [{ id: 'mixed-deb
 assert.equal(julyDirect.view.cols.A.cents, 4182);
 assert.equal(julyDirect.view.detail.byKey.utilities.bank.rows[0].cents, 4182);
 assert.equal(julyDirect.paid_comparison.bank_cash.cents, 50000);
+assert.equal(julyDirect.paid_comparison.bank_cash.rows[0].reimbursement_cents, 45818);
 assert.equal(julyDirect.paid_comparison.paid.cents, 4182);
 console.log('PASS: NextTrade expense month, bank-only KTC charge, exact reimbursement matching, partial direct debits, and untouched tax source.');
 const blockRows = [rt, nt, rtReturn].map((row, index) => ({ ...row, date: '2026-09-30', classification: category,

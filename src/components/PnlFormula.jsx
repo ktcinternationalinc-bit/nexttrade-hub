@@ -8,6 +8,7 @@
 import React from 'react';
 import FundsSent from './FundsSent'; // v55.83-VY
 import ExpenseDetail from './ExpenseDetail'; // v55.83-WE
+import { negativeInk } from './PeriodPaidComparison';
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 function money(c) { if (c === null || c === undefined) { return '—'; } var v = c / 100; return (v < 0 ? '−$' : '$') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -22,7 +23,7 @@ export default function PnlFormula(props) {
   function catList(cats) {
     if (!cats || !cats.length) { return <div className="text-[10px] py-1" style={{ color: SUB }}>Nothing in it.</div>; }
     return <div>{cats.map(function (c) { return <details key={c.key} open={props.openAll === true ? true : undefined} style={{ borderTop: '1px solid ' + LINE }}>
-      <summary style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0' }}><span style={{ color: '#1d4ed8', textDecoration: 'underline' }}>{'▸ ' + c.label}</span><span className="tabular-nums">{money(c.cents)}</span></summary>
+      <summary style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0' }}><span style={{ color: '#1d4ed8', textDecoration: 'underline' }}>{'▸ ' + c.label}</span><span className="tabular-nums" style={negativeInk(c.cents)}>{money(c.cents)}</span></summary>
       {det ? <div style={{ background: '#f0f9ff', border: '1px solid #7dd3fc', padding: 4, marginBottom: 4 }}><ExpenseDetail makeup={det.byKey ? det.byKey[c.key] : null} rowsListed={det.rows_listed} picker={props.picker} funding={fundingOf(c.key)} catLabel={props.catLabel} onConfirm={props.onConfirm} onOpenBill={props.onOpenBill} /></div> : <div className="text-[10px]" style={{ color: SUB }}>The lines behind it are not loaded.</div>}
     </details>; })}</div>;
   }
@@ -54,12 +55,12 @@ export default function PnlFormula(props) {
     <table className="w-full text-[11px]"><tbody>{f.lines.map(function (l, i) { return <tr key={i} style={{ borderTop: '1px solid ' + LINE, fontWeight: l.strong ? 800 : 400, background: l.strong ? '#f1f5f9' : '#ffffff' }}>
       <td className="pl-3 pr-1 py-1" style={{ width: 18, verticalAlign: 'top' }}>{l.sign}</td><td className="px-1 py-1">{l.cats ? <details open={open}><summary style={{ cursor: 'pointer', color: '#1d4ed8', fontWeight: 800 }}>{l.label + ' — click to see what is in it'}</summary>
         {/^A · /.test(l.label) ? <div className="py-1 text-[10px]" style={{ color: SUB }}>Supplier cost, commission, inbound allowance and bonded / brokerage are in Goods Cost. Customer transport charges are revenue in Transport Profit. Shipping and trucking costs stay in Transport Profit.</div> : null}
-        {catList(l.cats)}{/^A · /.test(l.label) ? companies() : null}</details> : l.label}</td><td className="pl-1 pr-3 py-1 text-right tabular-nums whitespace-nowrap" style={{ verticalAlign: 'top' }}>{money(l.cents)}</td></tr>; })}</tbody></table>
+        {catList(l.cats)}{/^A · /.test(l.label) ? companies() : null}</details> : l.label}</td><td className="pl-1 pr-3 py-1 text-right tabular-nums whitespace-nowrap" style={{ verticalAlign: 'top', ...negativeInk(l.cents) }}>{money(l.cents)}</td></tr>; })}</tbody></table>
     <div className="px-3 pt-2 font-extrabold text-[11px]" style={{ color: '#b45309' }}>NOT USED in the figure <span style={{ color: SUB, fontWeight: 400 }}>— click a blue line to see it and fix it here</span></div>
     {f.not_used.length === 0 ? <div className="px-3 py-1 text-[11px]" style={{ color: SUB }}>Nothing was left out.</div> : <table className="w-full text-[11px]"><tbody>{f.not_used.map(function (x, i) { var can = !!(x.cats || x.funding || (x.open_list && props.onShowOpen)); return <tr key={i} style={{ borderTop: '1px solid ' + LINE }}>
       <td className="pl-3 pr-1 py-1">{x.cats || x.funding ? <details open={props.openAll === true ? true : undefined}><summary style={{ cursor: 'pointer', color: '#1d4ed8', fontWeight: 800 }}>{x.label + ' — click to see what is in it'}</summary>{x.cats ? catList(x.cats) : companies()}</details> : <span>{x.label}</span>}
         <div style={{ color: SUB, fontSize: 10 }}>{x.why}</div>{x.open_list && props.onShowOpen ? fixBlock(x) : null}{can ? null : null}</td>
-      <td className="pl-1 pr-3 py-1 text-right tabular-nums whitespace-nowrap" style={{ verticalAlign: 'top' }}>{money(x.cents)}</td></tr>; })}</tbody></table>}
+      <td className="pl-1 pr-3 py-1 text-right tabular-nums whitespace-nowrap" style={{ verticalAlign: 'top', ...negativeInk(x.cents) }}>{money(x.cents)}</td></tr>; })}</tbody></table>}
     {/* v55.83-WY — customer balances today: noted here, never part of this figure or of the tax P&L */}
     {props.balancesBlock ? <div style={{ borderTop: '1px solid #e2e8f0' }}>{props.balancesBlock}</div> : null}
     <div className="px-3 py-2 text-[10px]" style={{ color: SUB }}>{f.notes.map(function (t, i) { return <div key={i}>{t}</div>; })}</div>

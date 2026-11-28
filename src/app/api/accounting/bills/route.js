@@ -2052,7 +2052,7 @@ export async function POST(req) {
         // basis). Fetch in AND out; the income side mirrors the spending side.
         var spTx = await fetchAll(function () {
           return db.from('bank_transactions')
-            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction, third_party_payer, account_id, iso_currency')
+            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction, third_party_payer, account_id, account_subtype, iso_currency')
             .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out']).neq('pending', true)
             .neq('review_status', 'duplicate') // v55.83-QM — duplicates never count in spending/income
             .or('and(posted_date.gte.' + pFrom + ',posted_date.lte.' + pTo + '),and(posted_date.is.null,date.gte.' + pFrom + ',date.lte.' + pTo + ')')

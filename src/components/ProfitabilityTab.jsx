@@ -27,7 +27,7 @@ import KeepYardsPreview from './KeepYardsPreview'; // v55.83-VX — before / aft
 import BillPeek from './BillPeek'; // v55.83-VY — a bill paid from RTM / NextTrade funds, opened on top
 import ExpenseDetail from './ExpenseDetail'; // v55.83-VT — what is behind one expense figure
 import PnlFormula from './PnlFormula'; // v55.83-VT — the formula of a row, with its numbers
-import PeriodPaidComparison from './PeriodPaidComparison';
+import PeriodPaidComparison, { negativeInk } from './PeriodPaidComparison';
 import { combinePaidComparisons } from '../lib/period-paid-comparison';
 import { pnlFormula, periodInvoices } from '../lib/pnl-expense-detail';
 import { rtmAdjust, foldUnc } from './PeriodStatsTab'; // v55.83-VQ — the Income Statement's own real-cost rule (one copy) // v55.83-VL — P&L by period: periods and the breakdown of one period
@@ -647,9 +647,9 @@ export default function ProfitabilityTab(props) {
       if (isProfit && hidden) { return '🔒'; }
       if (revH && REV_PERIOD[f]) { return '🔒'; } // v55.83-XK
       var v = r[f] / 100; var miss = r.miss[f] || 0;
-      return <span>{(v < 0 ? '−$' : '$') + fmt(Math.abs(v))}{miss > 0 && (r.key === 'total' ? <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{miss + ' sale line(s) missing this'}</div> : <button onClick={function (e) { e.stopPropagation(); setPOpen(r.key); }} title="Show these sale lines and how to fix them" style={{ display: 'block', marginLeft: 'auto', color: '#b45309', fontSize: 9, fontWeight: 800, textDecoration: 'underline', background: 'none', border: 0, padding: 0, cursor: 'pointer' }}>{miss + ' missing — see & fix'}</button>)}</span>;
+      return <span><span style={negativeInk(v)}>{(v < 0 ? '−$' : '$') + fmt(Math.abs(v))}</span>{miss > 0 && (r.key === 'total' ? <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{miss + ' sale line(s) missing this'}</div> : <button onClick={function (e) { e.stopPropagation(); setPOpen(r.key); }} title="Show these sale lines and how to fix them" style={{ display: 'block', marginLeft: 'auto', color: '#b45309', fontSize: 9, fontWeight: 800, textDecoration: 'underline', background: 'none', border: 0, padding: 0, cursor: 'pointer' }}>{miss + ' missing — see & fix'}</button>)}</span>;
     }
-    function pct(a, b) { return hidden ? '🔒' : (b ? (Math.round(a / b * 1000) / 10) + '%' : '—'); }
+    function pct(a, b) { if (hidden) { return '🔒'; } if (!b) { return '—'; } var value = Math.round(a / b * 1000) / 10; return <span style={negativeInk(value)}>{value + '%'}</span>; }
     function csv() {
       var head = ['Period', 'Lines', 'Pounds', 'Yards (kept in yards)', 'Goods revenue', 'Goods cost (goods + commission + inbound + bonded)', 'Goods profit', 'Goods margin %', 'Transport charged', 'Trucking (our cost)', 'Freight (our cost)', 'Transport profit', 'Total profit (goods + transport)', 'Revenue not counted (cost unknown)', 'Lines not complete', 'Expense dates', 'A Warehouse / Office', 'C Partner fee', 'D Payroll', 'E Taxes', 'Uncategorized expenses (not taken off)', 'Held with RTM / NextTrade at the end of the period (not an expense)', 'Paid through RTM / NextTrade (bills they settled — information only, not deducted; recognition follows the underlying bills and allocations)', 'FINAL P&L (total profit − A − C − D − E)', 'Final P&L complete?'];
       var lines = [head].concat(rows.concat([tot]).map(function (r) { return [r.label, r.lines, Math.round(r.pounds), Math.round(r.yards || 0), revH ? 'hidden' : r.goods_revenue / 100, revH ? 'hidden' : r.goods_cost / 100, hidden ? '' : r.goods_profit / 100, hidden ? '' : (r.goods_revenue ? Math.round(r.goods_profit / r.goods_revenue * 1000) / 10 : ''), revH ? 'hidden' : r.transport_revenue / 100, r.trucking_cost / 100, r.freight_cost / 100, hidden ? '' : r.transport_profit / 100, hidden ? '' : r.profit / 100, revH ? 'hidden' : r.uncounted_revenue / 100, r.incomplete].concat((function () {
@@ -672,7 +672,7 @@ export default function ProfitabilityTab(props) {
             var isP = x.kind === 'profit';
             return <tr key={x.key} style={{ borderTop: '1px solid ' + LINE, fontWeight: isP ? 800 : 400, background: isP ? '#ecfdf5' : '#ffffff', color: INK }}>
               <td className="px-2 py-1">{(x.kind === 'out' ? '− ' : x.kind === 'in' ? '+ ' : '= ') + x.label}</td>
-              <td className="px-2 py-1 text-right tabular-nums" style={isP && x.cents !== null ? { color: x.cents >= 0 ? '#065f46' : '#7f1d1d' } : undefined}>{money(x.cents)}{x.missing > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{x.missing + ' line(s) missing — listed under “Lines to fix”'}</div>}</td>
+              <td className="px-2 py-1 text-right tabular-nums" style={isP && x.cents !== null && x.cents >= 0 ? { color: '#065f46' } : negativeInk(x.cents)}>{money(x.cents)}{x.missing > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{x.missing + ' line(s) missing — listed under “Lines to fix”'}</div>}</td>
             </tr>; })}</tbody></table>
         </div>;
       }
@@ -684,8 +684,8 @@ export default function ProfitabilityTab(props) {
             <tbody>{items.map(function (it) { return <tr key={it.name} style={{ borderTop: '1px solid ' + LINE, color: INK }}>
               <td className="px-2 py-1">{it.name}{it.missing > 0 && <span style={{ color: '#b45309', fontWeight: 700 }}>{' · some costs not known yet'}</span>}</td>
               <td className="px-2 py-1 text-right tabular-nums">{qtyText(it.pounds, it.yards)}</td>
-              {showProfit && <td className="px-2 py-1 text-right tabular-nums">{money(it.goods_profit)}</td>}
-              {showProfit && <td className="px-2 py-1 text-right tabular-nums">{money(it.transport_profit)}</td>}
+              {showProfit && <td className="px-2 py-1 text-right tabular-nums" style={negativeInk(it.goods_profit)}>{money(it.goods_profit)}</td>}
+              {showProfit && <td className="px-2 py-1 text-right tabular-nums" style={negativeInk(it.transport_profit)}>{money(it.transport_profit)}</td>}
               {showProfit && <td className="px-2 py-1 text-right tabular-nums font-extrabold" style={it.profit === null ? undefined : { color: it.profit >= 0 ? '#065f46' : '#7f1d1d' }}>{money(it.profit)}</td>}
             </tr>; })}</tbody></table></div>
         </div>;
@@ -791,7 +791,7 @@ export default function ProfitabilityTab(props) {
             <thead><tr style={{ background: '#f1f5f9', color: '#334155' }}>{['Invoice', 'Date', 'Customer', 'Release', 'Lines', 'Sold for', 'Total profit', ''].filter(showColumn).map(function (h, i) { return <th key={i} className={'px-2 py-1 font-bold ' + (i >= 4 && i <= 6 ? 'text-right' : 'text-left')}>{h}</th>; })}</tr></thead>
             <tbody>{invs.map(function (iv) { return <tr key={iv.key} style={{ borderTop: '1px solid ' + LINE, color: INK }}>
               <td className="px-2 py-1 font-bold">{iv.invoice}</td><td className="px-2 py-1">{iv.date}</td><td className="px-2 py-1">{iv.customer}</td><td className="px-2 py-1">{iv.releases.join(', ') || '—'}</td><td className="px-2 py-1 text-right tabular-nums">{iv.lines}</td>
-              {showProfit && <td className="px-2 py-1 text-right tabular-nums">{money(iv.sold_cents)}</td>}{showProfit && <td className="px-2 py-1 text-right tabular-nums font-extrabold">{money(iv.profit)}{iv.missing > 0 && <span style={{ color: '#b45309', fontWeight: 700 }}>{' · known part'}</span>}</td>}
+              {showProfit && <td className="px-2 py-1 text-right tabular-nums" style={negativeInk(iv.sold_cents)}>{money(iv.sold_cents)}</td>}{showProfit && <td className="px-2 py-1 text-right tabular-nums font-extrabold" style={negativeInk(iv.profit)}>{money(iv.profit)}{iv.missing > 0 && <span style={{ color: '#b45309', fontWeight: 700 }}>{' · known part'}</span>}</td>}
               <td className="px-2 py-1 text-right">{showProfit && iv.invoice_id ? <button onClick={function (ev) { ev.stopPropagation(); setPeekId(iv.invoice_id); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open ↗</button> : null}</td></tr>; })}</tbody></table></div></div>
         {expPanel(r)}
         <div className="text-[10px] mt-1" style={{ color: SUB }}>The commission taken off above is the per-pound commission inside goods profit; there is no separate commission expense column. FINAL P&L = total profit − A − C − D − E. Profit is dated by invoice date; expenses by the date the money left the bank.</div>
@@ -826,6 +826,7 @@ export default function ProfitabilityTab(props) {
       }
       return <PeriodPaidComparison key={picked.key} period={picked} periods={options} onPeriod={setComparisonKey} comparison={compare} status={status} invoiceRows={invoiceRows} onOpenInvoice={setPeekId}
         basis={expenseBasis} onBasisChange={setExpenseBasis} categoryPicker={catPicker}
+        onOpenTransactions={canPick && props.onGo ? function () { onGo('all_txns', { backLabel: 'the expense breakdown' }); } : null}
         onOpenBill={function (bill) { openBill(Object.assign({}, bill, { vendor: bill.who, bill_number: bill.ref, paid_date: bill.date, comparison_record: true })); }}
         pnl={pnl} pnlExpenses={exp?.cols} onOpenPnl={function () { setFShow({ key: picked.key, pinned: true }); }}
         onFixCosts={picked.key === 'total' ? null : fixCosts} />;
@@ -835,7 +836,7 @@ export default function ProfitabilityTab(props) {
       var e = expOf(r); if (!e || e.status === 'loading') { return '…'; }
       if (e.status === 'locked') { return '🔒'; }
       if (e.status !== 'ok') { return <span title={e.why} style={{ color: '#b45309' }}>n/a</span>; }
-      return <span>{money(e.cols[k].cents)}{r.key === 'total' && !e.complete && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{e.loaded + ' of ' + e.periods + ' periods only'}</div>}
+      return <span><span style={negativeInk(e.cols[k].cents)}>{money(e.cols[k].cents)}</span>{r.key === 'total' && !e.complete && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{e.loaded + ' of ' + e.periods + ' periods only'}</div>}
         {k === 'A' && isSuper && e.cols.paid_through_cents > 0 && <div style={{ color: '#1d4ed8', fontSize: 9, fontWeight: 700 }} title="Bills RTM / NextTrade settled for you this period (trucking, inbound, fees, …), linked to a transfer or not. Information only; not deducted again here. Cost recognition follows the underlying bills and allocations.">{'(' + money(e.cols.paid_through_cents) + ' paid through RTM / NextTrade)'}</div>}</span>;
     }
     // v55.83-VT — the formula of the row: shows while the mouse is on the button, stays when the button is clicked
@@ -862,9 +863,9 @@ export default function ProfitabilityTab(props) {
         <div className="font-extrabold text-[11px] mb-1" style={{ color: '#7c2d12' }}>{'EXPENSES paid ' + e.from + ' → ' + e.to + ' (from the Income Statement, real-cost look)'}</div>
         <div className="flex gap-3 flex-wrap">{groups.map(function (g) { var col = e.cols[g[0]]; var wide = xOpen && xOpen.indexOf(r.key + '|' + g[0] + '|') === 0;
           return <div key={g[0]} style={{ flex: wide ? '1 1 100%' : '1 1 260px', minWidth: 240 }}><table className="w-full text-[11px]" style={{ background: '#ffffff', border: '1px solid ' + LINE }}><tbody>
-            <tr style={{ background: g[0] === 'unassigned' ? '#fef3c7' : (g[0] === 'held' ? '#dcfce7' : (g[0] === 'in_profit' ? '#f1f5f9' : '#ffedd5')), color: INK, fontWeight: 800 }}><td className="px-2 py-1">{g[1]}</td><td className="px-2 py-1 text-right tabular-nums">{money(col.cents)}</td></tr>
+            <tr style={{ background: g[0] === 'unassigned' ? '#fef3c7' : (g[0] === 'held' ? '#dcfce7' : (g[0] === 'in_profit' ? '#f1f5f9' : '#ffedd5')), color: INK, fontWeight: 800 }}><td className="px-2 py-1">{g[1]}</td><td className="px-2 py-1 text-right tabular-nums" style={negativeInk(col.cents)}>{money(col.cents)}</td></tr>
             {col.cats.map(function (c0) { var xk = r.key + '|' + g[0] + '|' + c0.key; var isX = xOpen === xk;
-              return [<tr key={c0.key} onClick={function (ev) { ev.stopPropagation(); setXOpen(isX ? null : xk); }} title={isX ? 'Close' : 'Show what is behind this figure'} style={{ borderTop: '1px solid ' + LINE, color: INK, cursor: 'pointer', background: isX ? '#e0f2fe' : '#ffffff' }}><td className="px-2 py-1"><span style={{ color: '#1d4ed8', fontWeight: 800 }}>{isX ? '▾ ' : '▸ '}</span><span style={{ textDecoration: 'underline' }}>{c0.label}</span></td><td className="px-2 py-1 text-right tabular-nums">{money(c0.cents)}</td></tr>,
+              return [<tr key={c0.key} onClick={function (ev) { ev.stopPropagation(); setXOpen(isX ? null : xk); }} title={isX ? 'Close' : 'Show what is behind this figure'} style={{ borderTop: '1px solid ' + LINE, color: INK, cursor: 'pointer', background: isX ? '#e0f2fe' : '#ffffff' }}><td className="px-2 py-1"><span style={{ color: '#1d4ed8', fontWeight: 800 }}>{isX ? '▾ ' : '▸ '}</span><span style={{ textDecoration: 'underline' }}>{c0.label}</span></td><td className="px-2 py-1 text-right tabular-nums" style={negativeInk(c0.cents)}>{money(c0.cents)}</td></tr>,
                 isX ? <tr key={c0.key + ':x'}><td colSpan={2} style={{ background: '#f0f9ff', borderTop: '1px solid #7dd3fc', padding: 4 }}><ExpenseDetail makeup={e.detail && e.detail.byKey[c0.key]} rowsListed={e.detail ? e.detail.rows_listed : false} picker={catPicker} onConfirm={confirmFunds} onOpenBill={openBill} funding={(function () { var mk = e.detail && e.detail.byKey[c0.key]; return mk && mk.funding_key !== undefined ? ((e.detail.funding || []).filter(function (fu) { return fu.key === mk.funding_key; })[0] || null) : null; })()} catLabel={function (k) { var mk2 = e.detail && e.detail.byKey[k]; return mk2 ? mk2.label : k; }} /></td></tr> : null]; })}
             {col.cats.length === 0 && <tr><td colSpan={2} className="px-2 py-1" style={{ color: SUB }}>nothing</td></tr>}
           </tbody></table></div>; })}</div>

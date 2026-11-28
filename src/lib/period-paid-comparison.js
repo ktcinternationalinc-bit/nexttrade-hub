@@ -16,9 +16,10 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   const receipts = [];
   const funding = [];
   const review = [];
+  const bankReview = [];
   const unclassifiedReceipts = [];
   const otherDeposits = [];
-  const directKtcExpenses = [];
+  const bankExpenses = [];
   const banks = new Map(bankLines.map(line => [line.id, line]));
   const partnerPatterns = new Set(Object.values(bills).filter(b => isActive(b) && isUSD(b.currency) && isPartnerFeeCategory(b.category)).map(b => vendorKeyOf(b.vendor_name) + '|' + cents(b.total_amount)));
   function partnerMatch(bill) {
@@ -38,8 +39,8 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     const category = row.category;
     const label = labels[category] || row.label;
     const source = 'NextTrade expense · transaction date';
-    if (privateBills[row.bill_id] || row.payroll && !showPayrollDetails) return { date: row.date, cents: row.cents, category, label, kind: row.kind, source };
-    return { ...row, category, label, source, nextrade_transaction_id: row.id, ...(isActive(bill) ? { ref: bill.bill_number, bill_date: bill.bill_date,
+    if (privateBills[row.bill_id] || row.payroll && !showPayrollDetails) return { date: row.date, cents: row.cents, category, label, kind: row.kind, source, source_company: 'NextTrade' };
+    return { ...row, category, label, source, source_company: 'NextTrade', nextrade_transaction_id: row.id, ...(isActive(bill) ? { ref: bill.bill_number, bill_date: bill.bill_date,
       bill_total_cents: cents(bill.total_amount), attachment_path: bill.attachment_path } : { bill_id: undefined }) };
   });
 
@@ -191,9 +192,12 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     }
     const kind = kinds[row.category];
     if (kind === 'transfer' || row.category === 'transfer' || kind === 'not_pnl') return;
-    if (!reviewCategory(row.category) && !/^((other_)?income)$/.test(kind || '')) {
-      directKtcExpenses.push({ ...base, bank_category: bank.classification ?? row.category, bank_edit: !row.money_in });
-    }
+    const needsCategory = reviewCategory(row.category);
+    const incomeCategory = kind === 'income' || kind === 'other_income';
+    const reviewReason = needsCategory ? 'Needs an expense category' : incomeCategory ? 'Money out is categorized as ' + base.label : null;
+    const bankExpense = { ...base, bank_category: bank.classification ?? row.category ?? '', bank_edit: !row.money_in, credit_card: bank.account_subtype === 'credit card' };
+    // Cash uses the posting and saved bank category once. Bill allocations are used only for Vendor payments.
+    bankExpenses.push(reviewReason ? { ...bankExpense, category: 'uncategorized', label: 'Uncategorized / needs review', review_reason: reviewReason } : bankExpense);
     eligibleBankIds.add(row.id);
     let remaining = amount;
     const allocations = bankPayments.get(row.id) || [];
@@ -210,8 +214,8 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
       remaining -= portion;
     });
     if (!remaining) return;
-    const remainder = { ...base, cents: remaining, bank_category: bank.classification ?? row.category, bank_edit: !row.money_in };
-    if (reviewCategory(row.category) || /^((other_)?income)$/.test(kind || '')) review.push(remainder);
+    const remainder = { ...bankExpense, cents: remaining };
+    if (reviewReason) bankReview.push({ ...remainder, review_reason: reviewReason });
     else paid.push(remainder);
   });
 
@@ -262,8 +266,10 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     chargeCategories.set(row.category, old);
   });
   const directReimbursements = reimbursements.filter(row => row.bank_id);
+  const reimbursementByBank = new Map();
   const directCategoryCents = Object.create(null);
   directReimbursements.forEach(row => {
+    if (row.bill_id) reimbursementByBank.set(row.bank_id, (reimbursementByBank.get(row.bank_id) || 0) + row.cents);
     const key = row.bank_category || 'uncategorized';
     directCategoryCents[key] = (directCategoryCents[key] || 0) + row.cents;
   });
@@ -279,16 +285,19 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   const allocationByTransfer = new Map(rtmTransfers.map(transfer => [transfer.id, {
     linked_cents: cents(transfer.as_of.applied_to_bills), unallocated_cents: cents(transfer.as_of.held),
   }]));
-  return { rows_visible: showRows, paid: group(paid.filter(row => !row.nexttrade_reimbursement).concat(charges)), receipts: group(receipts),
-    funding: group(funding.map(row => row.source === 'Funds sent' ? { ...row, allocation: allocationByTransfer.get(row.id) } : row)),
+  const fundingRows = funding.map(row => row.source === 'Funds sent' ? { ...row, allocation: allocationByTransfer.get(row.id) } : row);
+  const cashRows = bankExpenses.map(row => reimbursementByBank.has(row.id) ? { ...row, reimbursement_cents: reimbursementByBank.get(row.id) } : row);
+  const bankCash = group(cashRows.concat(fundingRows.map(row => ({ ...row, category: 'company_funding', label: 'RTM / NextTrade funding', who: row.who || row.label }))));
+  const netPayments = paid.filter(row => !row.nexttrade_reimbursement);
+  return { rows_visible: showRows, paid: group(netPayments.concat(charges)), receipts: group(receipts),
+    funding: group(fundingRows),
     funded_paid: group(paid.filter(row => row.party).map(row => row.nexttrade_reimbursement ? { ...row, source: row.source + ' · reimburses a recorded NextTrade charge' } : row)),
     nextrade_charges: group(charges), nextrade_reimbursements: group(reimbursements),
-    direct_ktc_expenses: group(directKtcExpenses),
     rtm_reconciliation: rtmReconciliation,
     nextrade_operating: { charges_by_category: Array.from(chargeCategories.values()), direct_by_category: directCategoryCents,
       direct_rows: showRows ? directReimbursements.map(({ bank_id, cents: amount }) => ({ bank_id, cents: amount })) : [] },
-    review: group(review),
-    bank_cash: group(paid.filter(row => !row.party).concat(funding.map(row => ({ ...row, category: 'company_funding', label: 'RTM / NextTrade funding' })))),
+    review: group(review.concat(bankReview)), bank_review: group(bankReview), other_review: group(review),
+    bank_cash: bankCash,
     billed: group(billed.concat(charges)),
     unclassified_receipts: group(unclassifiedReceipts), other_deposits: group(otherDeposits), partner_billed: group(partnerBilled), partner_schedule: group(expectedPartnerFees), partner_paid_cents: sum(paid.filter(row => row.category === 'partner_fees')) };
 }
@@ -297,11 +306,18 @@ export function combinePaidComparisons(parts) {
   if (!parts.length || parts.some(part => !part || part.unavailable)) return null;
   const totals = { rows_visible: parts.every(part => part.rows_visible), partner_paid_cents: parts.reduce((total, part) => total + part.partner_paid_cents, 0) };
   totals.notice = parts.find(part => part.notice)?.notice;
-  for (const key of ['paid', 'receipts', 'funding', 'funded_paid', 'bank_cash', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'direct_ktc_expenses', 'review', 'unclassified_receipts', 'other_deposits', 'partner_billed', 'partner_schedule']) {
-    totals[key] = parts.reduce((total, part) => {
-      const group = part[key];
+  function combineGroups(groupOf) {
+    return parts.reduce((total, part) => {
+      const group = groupOf(part);
       return group ? { cents: total.cents + group.cents, count: total.count + group.count, rows: total.rows.concat(group.rows) } : total;
     }, { cents: 0, count: 0, rows: [] });
+  }
+  for (const key of ['paid', 'receipts', 'funding', 'funded_paid', 'bank_cash', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'review', 'unclassified_receipts', 'other_deposits', 'partner_billed', 'partner_schedule']) {
+    totals[key] = combineGroups(part => part[key]);
+  }
+  if (parts.every(part => part.bank_review && part.other_review)) {
+    totals.bank_review = combineGroups(part => part.bank_review);
+    totals.other_review = combineGroups(part => part.other_review);
   }
   return totals;
 }
