@@ -10,17 +10,27 @@ export function profitabilityWorkItems(cells) {
     if (!byMonth.has(period.key)) byMonth.set(period.key, { period, cells: [] });
     byMonth.get(period.key).cells.push(cell);
   }
-  return Array.from(byMonth.values()).flatMap(({ period, cells: monthCells }) => {
+  const grouped = new Map();
+  const periods = Array.from(byMonth.values()).sort((a, b) => a.period.key.localeCompare(b.period.key));
+  for (const { period, cells: monthCells } of periods) {
     const tasks = openTasks(monthCells, false).tasks;
     const taskKeys = new Set(tasks.map(task => task.key));
     const dependentShipping = task => ['transport_revenue', 'not_shared'].includes(task.kind) && !!task.blockers?.length && task.blockers.every(blocker => taskKeys.has(blocker.task));
     const alsoBlocksShipping = new Set(tasks.filter(dependentShipping).flatMap(task => task.blockers.map(blocker => blocker.task)));
-    return tasks.filter(task => task.kind !== 'other' && !dependentShipping(task)).map(task => {
+    for (const task of tasks.filter(task => task.kind !== 'other' && !dependentShipping(task))) {
       const group = task.kind === 'base_cost' ? COST_FEED_KEYS[0] : COST_FEED_KEYS[1];
-      const detail = period.label + ' · ' + task.lines + (task.lines === 1 ? ' sale line' : ' sale lines');
-      const shipping = alsoBlocksShipping.has(task.key) ? ' This also blocks the shipping calculation.' : '';
-      return { group, key: group + ':' + period.key + ':' + task.key, title: task.title, detail, issue: task.title + '.' + shipping,
-        todo: task.todo || task.how, steps: [task.todo || task.how], target: { kind: 'profitability', month: period.key, task: task.key } };
-    });
+      const key = group + ':' + task.key;
+      if (!grouped.has(key)) {
+        grouped.set(key, { group, key, title: task.title, todo: task.todo || task.how, target: { kind: 'profitability', month: period.key, task: task.key }, months: [], lines: 0, blocksShipping: false });
+      }
+      const item = grouped.get(key);
+      item.months.push(period.label);
+      item.lines += task.lines;
+      item.blocksShipping ||= alsoBlocksShipping.has(task.key);
+    }
+  }
+  return Array.from(grouped.values()).map(({ months, lines, blocksShipping, ...item }) => {
+    const detail = months.join(', ') + ' · ' + lines + (lines === 1 ? ' sale line' : ' sale lines');
+    return { ...item, detail, issue: item.title + '. ' + detail + '.' + (blocksShipping ? ' This also blocks the shipping calculation.' : ''), steps: [item.todo] };
   });
 }

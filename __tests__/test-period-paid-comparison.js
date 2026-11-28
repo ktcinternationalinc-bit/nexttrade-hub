@@ -114,6 +114,9 @@ assert.equal(tasks.find(task => task.group === 'supplier_costs_missing').detail,
 const shippingTask = tasks.find(task => task.group === 'shipment_costs_missing');
 assert.match(shippingTask.issue, /also blocks the shipping calculation/);
 assert.deepEqual(shippingTask.target, { kind: 'profitability', month: '2026-06', task: 'pounds:Stock PVC Rolls BY KGs' });
+const spanningTasks = profitabilityWorkItems([cell, { ...cell, invoice_date: '2026-07-06', invoice: 'America 1759' }, supplierCell]);
+assert.equal(spanningTasks.filter(task => task.group === 'shipment_costs_missing').length, 1);
+assert.equal(spanningTasks.find(task => task.group === 'shipment_costs_missing').detail, 'Jun 2026, Jul 2026 · 2 sale lines');
 
 const period = blankPeriodRow('2026-06', 'Jun 2026');
 addPeriodCell(period, { goods_revenue: 247989.25, goods_profit: 98316.74, transport_revenue: 59524.25, transport_profit: 4409 });
