@@ -38,8 +38,8 @@ export async function POST(request) {
         const request = result.data.find(row => Number(row.id) === Number(claim.data?.request_id));
         if (claim.data?.request_id && !request) return response({ error: { message: 'Claimed request is missing from release history.' } }, 409);
         if (request?.detail?.versionCheckpoint != null) {
-          const restore = checkpoint.warehouseCheckpoint(result.data, register.items).restore;
-          if (request.action !== 'rollback' || !restore || restore.checkpoint.id !== request.detail.versionCheckpoint ||
+          const restore = checkpoint.warehouseCheckpoint(result.data, register.items).versions.find(version => version.id === request.detail.versionCheckpoint)?.restore;
+          if (request.action !== 'rollback' || !restore ||
               restore.itemId !== request.item_id || restore.moveId !== Number(request.ref_id)) {
             return response({ error: { message: 'The verified Warehouse version changed before the restore. No code was restored.' } }, 409);
           }

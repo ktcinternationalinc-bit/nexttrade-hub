@@ -88,9 +88,9 @@ is set true. They contain **no delete/DROP** of any kind. Data is never deleted.
 
 ## v55.83-YJ — sign-off, roll back, and the live steps
 
-### Last verified good Warehouse version
+### Last five verified Warehouse code versions
 
-Use **Record production verification** on each deployed change after checking it on the live Warehouse. Once all deployed changes in the release history have been checked, Change Schedule records their combined code state as a verified version. Its version number is the history entry that completed verification.
+Use **Record production verification** on each deployed change after checking it on the live Warehouse. Once all deployed changes in the release history have been checked, Change Schedule records their combined code state as a verified version. It lists the five most recent distinct verified code states. The version number is the history entry that completed verification.
 
 **Review restore** presents the next code backup needed to return to a verified version. Approve each step separately, newest change first. The worker checks the approved backup and current file fingerprints before restoring. Restores use the code backups and never run database migrations or restore business records. Change Schedule blocks a version restore across later data changes or unconfirmed recovery. Files outside the recorded release history require a separately reviewed release.
 

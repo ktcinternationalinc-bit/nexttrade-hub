@@ -51,9 +51,9 @@ export async function POST(request) {
   var { latest, states, heads } = reviewState(bundledRegister, sr.data || []);
   var versionRestore = null;
   if (body.version_checkpoint != null) {
-    versionRestore = checkpoint.warehouseCheckpoint(sr.data || [], bundledRegister.items).restore;
+    versionRestore = checkpoint.warehouseCheckpoint(sr.data || [], bundledRegister.items).versions.find(function (version) { return version.id === body.version_checkpoint; })?.restore;
     if (action !== 'rollback' || ids.length !== 1 || !versionRestore || ids[0] !== versionRestore.itemId ||
-        body.version_checkpoint !== versionRestore.checkpoint.id || body.version_move !== versionRestore.moveId ||
+        body.version_move !== versionRestore.moveId ||
         Object.values(states).some(function (state) { return state.kind === 'go' || state.kind === 'rollback'; })) {
       return deny('The verified version or production state changed. Refresh and review the restore again.', 409);
     }
@@ -84,7 +84,7 @@ export async function POST(request) {
     row.detail.execution = 'warehouse-worker-v1';
     row.detail.source = 'Hub change management';
     row.detail.candidate = action === 'go' ? item : null;
-    if (versionRestore) row.detail.versionCheckpoint = versionRestore.checkpoint.id;
+    if (versionRestore) row.detail.versionCheckpoint = body.version_checkpoint;
     rows.push(row);
   }
   var ins = await db.rpc('release_enqueue', { p_rows: rows, p_heads: heads });

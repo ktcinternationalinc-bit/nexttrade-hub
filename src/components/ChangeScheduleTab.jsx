@@ -310,7 +310,6 @@ export default function ChangeScheduleTab() {
   var active = lists.active; var queued = lists.queued; var live = lists.live; var rollbackItems = lists.rollbackItems;
   var canSign = !!(data && data.canSign);
   var version = data?.warehouseVersion;
-  var versionRestore = version?.restore;
   var candidates = queued.filter(function (it) { return signs[it.id]?.canGo; });
   var selected = selectionAction === 'go' ? selectedDeployments(candidates, signs, picked) :
     new Set(rollbackItems.filter(function (it) { return picked[it.id]; }).map(function (it) { return it.id; }));
@@ -351,12 +350,12 @@ export default function ChangeScheduleTab() {
         .finally(function () { setReviewing(false); });
     }
   }
-  function openVersionReview() {
-    if (!statusReadable || !versionRestore || !canSign || reviewOpen) return;
-    var item = items.find(function (it) { return it.id === versionRestore.itemId; });
+  function openVersionReview(entry) {
+    if (!statusReadable || !entry.restore || !canSign || reviewOpen) return;
+    var item = items.find(function (it) { return it.id === entry.restore.itemId; });
     if (!item) return;
     setMessage('');
-    setReview({ action: 'rollback', items: [item], heads: signs, version: versionRestore });
+    setReview({ action: 'rollback', items: [item], heads: signs, version: entry });
   }
   function confirmReview() {
     if (reviewSelectionChanged) return;
@@ -369,8 +368,8 @@ export default function ChangeScheduleTab() {
       payload.confirm = 'ROLLBACK';
       payload.heads = Object.fromEntries(review.items.map(function (it) { return [it.id, (review.heads[it.id] || {}).head]; }));
       if (review.version) {
-        payload.version_checkpoint = review.version.checkpoint.id;
-        payload.version_move = review.version.moveId;
+        payload.version_checkpoint = review.version.id;
+        payload.version_move = review.version.restore.moveId;
       }
     }
     setSending(true);
@@ -378,8 +377,9 @@ export default function ChangeScheduleTab() {
       .then(function (j) { if (!j || !j.ok) throw new Error((j && j.error) || 'Could not queue the release.'); setMessage(j.note); setPicked({}); setReview(null); load(); })
       .catch(function (e) { setMessage(e.message); }).finally(function () { setSending(false); });
   }
+  var reviewedVersion = review?.version && version?.versions?.find(function (entry) { return entry.id === review.version.id; });
   var reviewSelectionChanged = review && (!statusReadable || (review.version ?
-    versionRestore?.checkpoint.id !== review.version.checkpoint.id || versionRestore?.moveId !== review.version.moveId :
+    reviewedVersion?.restore?.moveId !== review.version.restore.moveId :
     review.items.some(function (it) { return !selectedIds.includes(it.id); })));
   var reviewBlocked = review && (reviewSelectionChanged ||
     (review.action === 'go' ? !review.result?.passed : review.items.some(function (it) { return !review.heads[it.id]?.canRollback; })));
@@ -417,17 +417,18 @@ export default function ChangeScheduleTab() {
           {!canSign && <div style={{ color: C.muted }}>View only. Managing releases requires the NT Warehouse release permission.</div>}
           {!data.executionReady && <div>Execution database setup is not available. No release can be queued.</div>}
         </div>}
-        {statusReadable && version && <section aria-label="Last verified good version" style={{ background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '12px 14px' }}>
-          <h2 style={{ fontSize: '1.1rem', margin: '0 0 4px' }}>Last verified good version</h2>
-          {version.lastVerified && <div>
-            <b>Warehouse version #{version.lastVerified.id}</b> · verified {fmtWhen(version.lastVerified.at)}
-            {version.lastVerified.by ? ' by ' + version.lastVerified.by : ''}{version.isCurrent ? ' · current production' : ''}
-          </div>}
+        {statusReadable && version && <section aria-label="Last five verified code versions" style={{ background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '12px 14px' }}>
+          <h2 style={{ fontSize: '1.1rem', margin: '0 0 4px' }}>Last five verified code versions</h2>
           {version.reason && <div style={{ color: C.muted }}>{version.reason}</div>}
-          {versionRestore && canSign && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
-            <button disabled={reviewOpen || sending || reviewing} style={btn(C.max, false)} onClick={openVersionReview}>Review restore to version #{versionRestore.checkpoint.id}</button>
-            <span style={{ color: C.muted, fontSize: '.83rem' }}>{versionRestore.remaining} code {versionRestore.remaining === 1 ? 'change' : 'changes'} to restore</span>
-          </div>}
+          {version.versions?.map(function (entry) { return <div key={entry.id} style={{ borderTop: '1px solid ' + C.line, padding: '8px 0' }}>
+            <b>Warehouse version #{entry.id}</b> · verified {fmtWhen(entry.at)}
+            {entry.by ? ' by ' + entry.by : ''}{entry.isCurrent ? ' · current production' : ''}
+            {entry.reason && <div style={{ color: C.muted }}>{entry.reason}</div>}
+            {entry.restore && canSign && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
+              <button disabled={reviewOpen || sending || reviewing} style={btn(C.max, false)} onClick={function () { openVersionReview(entry); }}>Review restore to version #{entry.id}</button>
+              <span style={{ color: C.muted, fontSize: '.83rem' }}>{entry.restore.remaining} code {entry.restore.remaining === 1 ? 'change' : 'changes'} to restore</span>
+            </div>}
+          </div>; })}
         </section>}
         {canSign && statusReadable && <div ref={toolbarRef} role="group" aria-label="Selected Warehouse changes" style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
           <div role="status" style={{ color: data?.workerOnline ? C.prod : C.max, marginBottom: 8 }}>
@@ -451,9 +452,9 @@ export default function ChangeScheduleTab() {
         </div>}
         {message && !review && <div role="status" style={{ color: C.prod }}>{message}</div>}
         {review && <section ref={reviewPanel} role="dialog" tabIndex={-1} aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
-          <h2>{review.version ? 'Restore Warehouse version #' + review.version.checkpoint.id : review.action === 'go' ? 'Production release review' : 'Confirm selected code rollbacks'}</h2>
+          <h2>{review.version ? 'Restore Warehouse version #' + review.version.id : review.action === 'go' ? 'Production release review' : 'Confirm selected code rollbacks'}</h2>
           {review.action === 'rollback' && <p>Restores the listed Warehouse code files from backup. The worker never runs a database restore or a migration for this action.</p>}
-          {review.version?.remaining > 1 && <p>Review and approve one code change at a time, starting with the most recent.</p>}
+          {review.version?.restore.remaining > 1 && <p>Review and approve one code change at a time, starting with the most recent.</p>}
           {review.action === 'go' && <p role="status" style={{ color: review.result?.passed ? C.prod : C.max }}>
             {reviewing ? 'Checking the selected changes, staging test evidence and current release state…' :
               review.result?.passed ? 'Review passed. You can approve the selected changes for production.' :

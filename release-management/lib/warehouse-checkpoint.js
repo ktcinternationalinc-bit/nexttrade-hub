@@ -1,13 +1,14 @@
 'use strict';
 
 const { candidateProblems, isPalletCorrection } = require('./selection');
+const RETAINED_VERSIONS = 5;
 
 function warehouseCheckpoint(history, items) {
   const active = new Map();
   const approvals = new Map();
   const unresolved = new Set();
   const byId = new Map(items.map(item => [item.id, item]));
-  const verifiedVersions = [];
+  const verifiedVersions = new Map();
   let dataBoundary = 0;
   const rows = [...history].sort((a, b) => Number(a.id) - Number(b.id));
 
@@ -30,7 +31,10 @@ function warehouseCheckpoint(history, items) {
         const moveIds = new Set([...active.values()].map(move => move.id));
         if (!moveIds.size) continue;
         const version = { id, at: row.created_at, by: row.signed_by_name || row.recorded_by, moveIds, changeCount: moveIds.size };
-        verifiedVersions.push(version);
+        const buildSet = JSON.stringify([...active.values()].map(move => [move.itemId, move.sha]).sort());
+        verifiedVersions.delete(buildSet);
+        verifiedVersions.set(buildSet, version);
+        if (verifiedVersions.size > RETAINED_VERSIONS) verifiedVersions.delete(verifiedVersions.keys().next().value);
       }
     }
     if (row.action === 'rolled_back') {
@@ -54,28 +58,26 @@ function warehouseCheckpoint(history, items) {
   const currentIds = new Set([...active.values()].map(move => move.id));
   const isCurrent = version => version.moveIds.size === currentIds.size && [...version.moveIds].every(id => currentIds.has(id));
   const summary = version => ({ id: version.id, at: version.at, by: version.by, changeCount: version.changeCount });
-  const last = verifiedVersions.at(-1);
-  if (!last) return { lastVerified: null, reason: 'Record production verification for all deployed changes to establish a good version.' };
-  const result = { lastVerified: summary(last), isCurrent: !unresolved.size && isCurrent(last) };
-  if (unresolved.size) return { ...result, reason: 'Resolve the outstanding production recovery before restoring a version.' };
-
-  const target = result.isCurrent ? verifiedVersions.findLast(version => !isCurrent(version)) : last;
-  if (!target) return result;
-  if (![...target.moveIds].every(id => currentIds.has(id))) {
-    return { ...result, reason: 'That version includes code that has already been removed. It needs a new reviewed release.' };
-  }
-  if (dataBoundary > target.id) {
-    return { ...result, reason: 'A later release changed data or left its effects unverified. Review data compatibility before restoring older code.' };
-  }
-  const changes = [...active.values()].filter(move => !target.moveIds.has(move.id)).sort((a, b) => b.id - a.id);
-  if (!changes.length) return result;
-  const unsafe = changes.some(({ itemId, candidate, sha, backup }) => {
-    return !byId.has(itemId) || candidate?.id !== itemId || candidate?.dataChange !== false || candidate.manifest?.sha !== sha ||
-      !/^\/home\/[a-z0-9_-]+\/code-backups\/[a-z0-9_-]+$/i.test(backup || '') || candidateProblems(candidate).length;
+  const versions = [...verifiedVersions.values()].reverse().map(target => {
+    const version = summary(target);
+    if (unresolved.size) return { ...version, reason: 'Resolve the outstanding production recovery before restoring a version.' };
+    if (isCurrent(target)) return { ...version, isCurrent: true };
+    if (dataBoundary > target.id) {
+      return { ...version, reason: 'A later release changed data or left its effects unverified. Review data compatibility before restoring older code.' };
+    }
+    if (![...target.moveIds].every(id => currentIds.has(id))) {
+      return { ...version, reason: 'That version includes code that has already been removed. It needs a new reviewed release.' };
+    }
+    const changes = [...active.values()].filter(move => !target.moveIds.has(move.id)).sort((a, b) => b.id - a.id);
+    const unsafe = changes.some(({ itemId, candidate, sha, backup }) => {
+      return !byId.has(itemId) || candidate?.id !== itemId || candidate?.dataChange !== false || candidate.manifest?.sha !== sha ||
+        !/^\/home\/[a-z0-9_-]+\/code-backups\/[a-z0-9_-]+$/i.test(backup || '') || candidateProblems(candidate).length;
+    });
+    if (unsafe) return { ...version, reason: 'A later change lacks a reviewed code-only restore and a recorded backup.' };
+    const next = changes[0];
+    return { ...version, restore: { remaining: changes.length, itemId: next.itemId, moveId: next.id } };
   });
-  if (unsafe) return { ...result, reason: 'A later change lacks a reviewed code-only restore and a recorded backup.' };
-  const next = changes[0];
-  return { ...result, restore: { checkpoint: summary(target), remaining: changes.length, itemId: next.itemId, moveId: next.id } };
+  return { versions, reason: versions.length ? '' : 'Record production verification for all deployed changes to establish a good version.' };
 }
 
 module.exports = { warehouseCheckpoint };

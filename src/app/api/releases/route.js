@@ -102,10 +102,13 @@ export async function GET(request) {
   });
 
   var version = readable ? checkpoint.warehouseCheckpoint(signRows, items) : null;
-  if (version?.restore && (!executionReady || !signoffs[version.restore.itemId]?.canRollback ||
-      Object.values(signoffs).some(function (state) { return state.executing || state.kind === 'go' || state.kind === 'rollback'; }))) {
-    version.restore = null;
-    if (canSign) version.reason = 'Finish or withdraw outstanding release requests before restoring a version.';
+  if (version) {
+    var releaseBusy = Object.values(signoffs).some(function (state) { return state.executing || state.kind === 'go' || state.kind === 'rollback'; });
+    version.versions = version.versions.map(function (entry) {
+      if (!entry.restore || (executionReady && !releaseBusy && signoffs[entry.restore.itemId]?.canRollback)) return entry;
+      var why = canSign ? (releaseBusy ? 'Finish or withdraw outstanding release requests first.' : 'The next code restore is unavailable.') : '';
+      return { ...entry, restore: null, reason: why };
+    });
   }
 
   return NextResponse.json({

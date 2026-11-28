@@ -146,13 +146,15 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           assert.ok(await reviewButton.isDisabled());
           await page.evaluate(() => {
             const d = window.releaseData;
-            const lastVerified = { id: 12, at: '2026-11-24T13:15:00Z', by: 'Max' };
+            const lastVerified = { id: 12, at: '2026-11-24T13:15:00Z', by: 'Max', restore: { remaining: 1, itemId: 'fix-0', moveId: 1 } };
             d.signoffs['fix-1'].refreshedPlan = true;
-            d.warehouseVersion = { lastVerified, isCurrent: false, restore: { checkpoint: lastVerified, remaining: 1, itemId: 'fix-0', moveId: 1 } };
+            d.warehouseVersion = { versions: [lastVerified, { id: 10, reason: 'A later release changed data.' }] };
             window.dispatchEvent(new Event('focus'));
           });
           await future.getByText('Updated plan — ready for new approval', { exact: true }).waitFor();
-          const version = page.getByRole('region', { name: 'Last verified good version' });
+          const version = page.getByRole('region', { name: 'Last five verified code versions' });
+          await version.getByText('A later release changed data.', { exact: true }).waitFor();
+          assert.equal(await version.getByRole('button', { name: 'Review restore to version #10' }).count(), 0);
           await version.getByRole('button', { name: 'Review restore to version #12' }).click();
           await dialog.getByRole('heading', { name: 'Restore Warehouse version #12' }).waitFor();
           await dialog.getByRole('button', { name: 'Approve and queue code restore' }).click();

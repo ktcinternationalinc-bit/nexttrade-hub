@@ -6,6 +6,7 @@ require('sucrase/register');
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'synthetic-test-only';
 const root = path.join(__dirname, '..');
 const selection = require('../release-management/lib/selection');
+const { warehouseCheckpoint } = require('../release-management/lib/warehouse-checkpoint');
 let checks = 0;
 function check(value, label) { assert.ok(value, label); console.log('PASS ' + label); checks++; }
 function candidate(id) {
@@ -237,18 +238,27 @@ async function send(b) { return post({ json: async () => b }); }
     ...recordedMove(second, 5), ...recordedMove(third, 7)];
   calls = [];
   seq = 7;
-  let version = (await read({})).body.warehouseVersion;
-  check(version.lastVerified.id === 3 && version.restore.itemId === third.id && version.restore.remaining === 2,
+  let version = (await read({})).body.warehouseVersion.versions[0];
+  check(version.id === 3 && version.restore.itemId === third.id && version.restore.remaining === 2,
     'last checked code version remains available through later releases, newest change restores first');
   const restore = { item_ids: [third.id], action: 'rollback', confirm: 'ROLLBACK', heads: { [third.id]: 7 }, version_checkpoint: 3, version_move: 7 };
   check((await send({ ...restore, version_checkpoint: 2 })).status === 409 && !calls.length, 'a stale version restore is refused before enqueue');
   check((await send(restore)).status === 200 && calls[0].body.p_rows[0].detail.versionCheckpoint === 3 && calls[0].body.p_rows[0].ref_id === 7,
     'approval queues a code rollback bound to its exact verified version and backup move');
   rows.push({ id: 9, item_id: third.id, scope: 'warehouse', action: 'rolled_back', ref_id: 8, sha: third.manifest.sha });
-  version = (await read({})).body.warehouseVersion;
+  version = (await read({})).body.warehouseVersion.versions[0];
   check(version.restore.itemId === second.id && version.restore.remaining === 1, 'the next restore opens only after the newest code change is restored');
   rows.push(...recordedMove(palletData, 11));
-  version = (await read({})).body.warehouseVersion;
+  version = (await read({})).body.warehouseVersion.versions[0];
   check(!version.restore && /changed data/.test(version.reason), 'a database change prevents automatic code restore across it');
+  const versionItems = Array.from({ length: 7 }, (_, i) => ({ ...candidate('version-' + i), dataChange: false }));
+  const versionRows = versionItems.flatMap((item, index) => {
+    const id = index * 3 + 2;
+    return [...recordedMove(item, id), { id: id + 1, item_id: item.id, action: 'checked_live', ref_id: id, sha: item.manifest.sha }];
+  });
+  const recentVersions = warehouseCheckpoint(versionRows, versionItems).versions;
+  check(recentVersions.map(entry => entry.id).join(',') === '21,18,15,12,9' && recentVersions[0].isCurrent &&
+    recentVersions[4].restore.remaining === 4 && recentVersions[4].restore.itemId === versionItems[6].id,
+    'the five most recent verified versions are available by ID and restore in reverse order');
   console.log(checks + ' release controls checks passed');
 })().catch(err => { console.error(err); process.exitCode = 1; });

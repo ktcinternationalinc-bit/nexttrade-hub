@@ -309,7 +309,7 @@
       "needsMax": true,
       "dataChange": false,
       "meta": "15 Nov",
-      "desc": "Blocks shipped dates in the future, no silent today fallback, 12-hour display fix.",
+      "desc": "Blocks future shipped dates and removes the fallback to today. Production's order controller and two order forms differ from the candidate baseline and must be reconciled before this release.",
       "files": "shipped-date validation + display",
       "backup": "staging backup bundle",
       "rollback": "restore bundle + php artisan view:clear"
@@ -326,7 +326,7 @@
       "needsMax": true,
       "dataChange": false,
       "meta": "various · Nov",
-      "desc": "Stage requirement rules, the read-only shipping-cost feed to the Hub, close-order. (Owned by the orders/lifecycle session.)",
+      "desc": "Stage requirements and ACID checklist rules. Production already has the read-only feed and is missing checklist columns. This release needs its own migration review and must preserve the live feed.",
       "files": "App\\Services\\OrderStageRules, HubFeedController",
       "backup": "staging backup bundle",
       "rollback": "restore bundle + php artisan view:clear"
@@ -343,7 +343,8 @@
       "needsMax": true,
       "dataChange": true,
       "meta": "data · 22 Nov",
-      "desc": "1984-11-06 → 2024-10-11 (year typo). Backed up to zz_fix1325 table. Would be re-applied on live as a 1-row update with a backup.",
+      "desc": "Prepared and tested one-row correction for receipt 1325. Change 1984-11-06 03:00:53 to 2024-10-11 03:00:53 with its original timestamp backed up.",
+      "manualPlan": "docs/2026-11-28-warehouse-release-prep.md#receipt-1325",
       "files": "scan_in_inventories id=1325 created_at",
       "backup": "table zz_fix1325_scan_in_inventories_before_20261122 (never dropped)",
       "rollback": "restore created_at from that table"
