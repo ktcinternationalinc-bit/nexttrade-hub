@@ -95,9 +95,10 @@ ok('6c: Stats carries SPENDING BY CATEGORY — transfers are their own line and 
   /real_spending: r2\(totOut - trf\.total\)/.test(brS) &&
   /var isTrf = !!t6\.transfer_group_id \|\| t6\.classification === 'transfer';/.test(brS));
 var pst = R('src/components/PeriodStatsTab.jsx');
-ok('6d: spending table shows categories with %, uncategorized flagged, transfers labeled NOT spending, rows on click',
-  /Spending by category/.test(pst) && /Transfers between own accounts — NOT spending/.test(pst) &&
-  /Uncategorized — needs a category/.test(pst) && /Real spending \(transfers excluded\)/.test(pst));
+ok('6d: spending table flags uncategorized money, explains the transfer exclusion, and expands transactions within the same table',
+  /Spending by category/.test(pst) && /Transfers between own accounts — excluded from spending/.test(pst) &&
+  /Uncategorized — needs a category/.test(pst) && /Real spending \(transfers excluded\)/.test(pst) &&
+  /<\/tr>\s*\{open && bankCategoryDetails\(category\.key, category\.label, moneyIn\)\}/.test(pst));
 ok('6e: ↔ pair/unpair UI in the expenses table with candidate picker',
   /↔ pair/.test(ert2()) && /pair these ↔/.test(ert2()) && /↔ paired/.test(ert2()));
 function ert2() { return R('src/components/ExpenseRulesTab.jsx'); }

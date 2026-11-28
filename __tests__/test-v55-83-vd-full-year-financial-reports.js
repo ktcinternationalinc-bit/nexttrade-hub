@@ -17,7 +17,7 @@ check('the permission gate of Financial Reports is unchanged and still comes bef
 check('Accounting passes the signed-in person and the navigation to Financial Reports', acct.indexOf("<ClickBooksUSReports {...props} onGo={goFrom} />") > 0 && acct.indexOf("sub === 'clickbooks_reports' && reportsEnabled && canClickbooks &&") > 0);
 check('Stats: opens from the date it is given ONLY when it is a real date; otherwise 1 June as before', stats.indexOf("useState(/^\\d{4}-\\d{2}-\\d{2}$/.test(String(props.initialFrom || '')) ? props.initialFrom : '2026-06-01')") > 0);
 check('Stats keeps its own access check and loads the period it starts with', /var canView = VS\.access;/.test(stats) && /useEffect\(function \(\) \{ if \(canView\) \{ load\(from, to\); \} \}, \[\]\);/.test(stats));
-check('Stats still asks the same route for the same thing (numbers unchanged)', stats.indexOf("action: 'period_stats', from: f, to: t") > 0);
+check('Stats requests inline details from the period_stats route for the same date range', /hubFetch\('\/api\/accounting\/bills'/.test(stats) && /action: 'period_stats', inline_category_details: true, from: f, to: t/.test(stats));
 // the date rule itself
 var rx = /^\d{4}-\d{2}-\d{2}$/;
 function start(v) { return rx.test(String(v || '')) ? v : '2026-06-01'; }
