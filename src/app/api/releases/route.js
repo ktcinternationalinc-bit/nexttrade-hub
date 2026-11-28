@@ -18,6 +18,7 @@ import { verifiedCaller } from '../../../lib/verified-caller';
 import { loadUserPermissions, userHasPermission } from '../../../lib/server-permissions';
 import bundledRegister from '../../../../release-management/release-register.json';
 import selection from '../../../../release-management/lib/selection';
+import checkpoint from '../../../../release-management/lib/warehouse-checkpoint';
 // v55.83-YJ — the latest sign-off / roll-back request per change (read only here; writes are /api/releases/signoff)
 import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, latestByItem, itemSignState, tableMissing, historyList } from '../../../lib/release-signoff';
 
@@ -100,6 +101,13 @@ export async function GET(request) {
     signoffs[String(it.id)] = stt;
   });
 
+  var version = readable ? checkpoint.warehouseCheckpoint(signRows, items) : null;
+  if (version?.restore && (!executionReady || !signoffs[version.restore.itemId]?.canRollback ||
+      Object.values(signoffs).some(function (state) { return state.executing || state.kind === 'go' || state.kind === 'rollback'; }))) {
+    version.restore = null;
+    if (canSign) version.reason = 'Finish or withdraw outstanding release requests before restoring a version.';
+  }
+
   return NextResponse.json({
     ok: true,
     canSign: canSign,
@@ -114,6 +122,7 @@ export async function GET(request) {
     // (from the table, current at all times) plus the Codex / staging-test evidence from the register.
     history: readable ? historyList(signRows, register) : [],
     historyComplete: readable && signRows.length < 5000,
+    warehouseVersion: version,
     api_build_marker: API_BUILD_MARKER,
     source: source,
     snapshot: true,

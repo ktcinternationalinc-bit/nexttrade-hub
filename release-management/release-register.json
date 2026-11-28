@@ -1,7 +1,7 @@
 {
   "updated": "2026-11-28",
   "updatedBy": "Warehouse pallet correction review",
-  "intro": "What's live on production, what's waiting on fix staging, and what each change still needs before it moves. Production currently holds the baseline plus the Hub-embed change only. This file is hand-editable — edit it directly, or the deploy/rollback scripts append to it. The Change Schedule screen in the Hub reads this file.",
+  "intro": "Review upcoming Warehouse changes, see which approvals are queued, and check what is on production.",
   "legend": [
     {
       "key": "prod",

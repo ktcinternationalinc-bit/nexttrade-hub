@@ -3,10 +3,11 @@ const Module = require('node:module');
 require('sucrase/register');
 const { DATA_WORKER_VERSION } = require('../release-management/lib/selection');
 let valid = true; let active = true; let role = 'super_admin'; let dataRequest = false; let calls = [];
+let claim = null; let history = [];
 const db = { from(table) {
   const q = { select() { return q; }, eq() { return q; }, order() { return q; }, limit() { return q; }, in() { return q; }, upsert(row) { calls.push({ table, row }); return q; }, maybeSingle() { return q; }, then(resolve, reject) {
     const data = table === 'release_worker_credentials' ? { worker: 'registered-worker', enabled: valid } : table === 'users' ? { role, active } :
-      table === 'release_signoffs' && dataRequest ? { detail: { candidate: { dataChange: true } } } : [];
+      table === 'release_execution' ? claim : table === 'release_signoffs' && dataRequest ? { detail: { candidate: { dataChange: true } } } : history;
     return Promise.resolve({ data }).then(resolve, reject);
   } }; return q;
 }, async rpc(name, body) { calls.push({ name, body }); return { data: true }; } };
@@ -37,5 +38,13 @@ async function send(body, token = 'a'.repeat(64)) { return POST({ headers: new H
   assert.equal((await send({ op: 'authorized', userId: id })).body.data, true);
   active = false; assert.equal((await send({ op: 'authorized', userId: id })).body.data, false);
   active = true; role = 'admin'; assert.equal((await send({ op: 'authorized', userId: id })).body.data, false);
+  dataRequest = false;
+  claim = { request_id: 3 };
+  history = [{ id: 3, item_id: 'wh-bug-001-save-path', action: 'rollback', ref_id: 2, detail: { versionCheckpoint: 1 } }];
+  const rejected = await send({ op: 'history' });
+  assert.equal(rejected.status, 409);
+  assert.match(rejected.body.error.message, /version changed before the restore/);
+  claim = null;
+  assert.deepEqual((await send({ op: 'history' })).body.data, history);
   console.log('PASS worker endpoint: scoped access, revocation, registered identity, older workers cannot claim database requests');
 })().catch(e => { console.error(e); process.exitCode = 1; });

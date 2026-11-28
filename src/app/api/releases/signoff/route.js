@@ -10,6 +10,7 @@ import { SIGNOFF_TABLE, SIGNOFF_COLUMNS, requireReleaseManager, findItem, checkS
 import { matchesReview, reviewState } from '../../../../lib/release-review';
 import bundledRegister from '../../../../../release-management/release-register.json';
 import selection from '../../../../../release-management/lib/selection';
+import checkpoint from '../../../../../release-management/lib/warehouse-checkpoint';
 import { readReleasePause, pauseSentence } from '../../../../lib/release-pause'; // v55.83-YQ — the stop switch
 
 export const runtime = 'nodejs';
@@ -48,6 +49,15 @@ export async function POST(request) {
   }
   if ((sr.data || []).length === 5000) { return deny('Full history is required before another release.', 409); }
   var { latest, states, heads } = reviewState(bundledRegister, sr.data || []);
+  var versionRestore = null;
+  if (body.version_checkpoint != null) {
+    versionRestore = checkpoint.warehouseCheckpoint(sr.data || [], bundledRegister.items).restore;
+    if (action !== 'rollback' || ids.length !== 1 || !versionRestore || ids[0] !== versionRestore.itemId ||
+        body.version_checkpoint !== versionRestore.checkpoint.id || body.version_move !== versionRestore.moveId ||
+        Object.values(states).some(function (state) { return state.kind === 'go' || state.kind === 'rollback'; })) {
+      return deny('The verified version or production state changed. Refresh and review the restore again.', 409);
+    }
+  }
   // The screen must name the state it reviewed. Replayed/stale confirmations cannot approve a newer candidate.
   if (!body.heads || ids.some(function (id) { return Number(body.heads[id]) !== heads[id] || body.heads[id] === undefined; })) { return deny('This change has moved since your screen loaded. Refresh and review again.', 409); }
   if (action === 'go' && !matchesReview(body.review_receipt, who.userId, ids, bundledRegister, heads)) {
@@ -74,6 +84,7 @@ export async function POST(request) {
     row.detail.execution = 'warehouse-worker-v1';
     row.detail.source = 'Hub change management';
     row.detail.candidate = action === 'go' ? item : null;
+    if (versionRestore) row.detail.versionCheckpoint = versionRestore.checkpoint.id;
     rows.push(row);
   }
   var ins = await db.rpc('release_enqueue', { p_rows: rows, p_heads: heads });

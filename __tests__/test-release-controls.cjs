@@ -208,5 +208,47 @@ async function send(b) { return post({ json: async () => b }); }
   const delegated = (await read({})).body.signoffs;
   check(delegated['wh-bug-001-save-path'].canGo && !delegated[palletData.id].canGo && /super admin/.test(delegated[palletData.id].why),
     'the schedule offers the prevention release to a delegated manager and explains who can approve the correction');
+  role = 'super_admin';
+  const failedPalletRequest = { id: 10, item_id: palletData.id, scope: 'warehouse', action: 'go', sha: palletData.manifest.sha,
+    detail: { candidate: palletData } };
+  const failedPalletHistory = [failedPalletRequest, { id: 11, item_id: palletData.id, scope: 'warehouse', action: 'failed', ref_id: 10,
+    sha: palletData.manifest.sha, detail: { outcome: 'not_replaced', note: 'The matching pallet records changed since approval. A fresh dry run is required.' } }];
+  const failedPalletState = rules.latestByItem(failedPalletHistory)[palletData.id];
+  check(!rules.itemSignState(palletData, failedPalletState).canGo && /fresh dry run/.test(rules.itemSignState(palletData, failedPalletState).why),
+    'the previously failed pallet snapshot cannot receive another approval');
+  const refreshedPallet = structuredClone(palletData);
+  refreshedPallet.manifest.dataPlan.snapshotHash = '9'.repeat(64);
+  refreshedPallet.codexRef.manifestDigest = selection.digest(refreshedPallet.manifest);
+  refreshedPallet.behavioralQa.manifestDigest = refreshedPallet.codexRef.manifestDigest;
+  const refreshedState = rules.itemSignState(refreshedPallet, failedPalletState);
+  check(refreshedState.canGo && refreshedState.refreshedPlan && !refreshedState.problem,
+    'a newly reviewed snapshot is labeled ready for new approval and prior failure stays in history');
+  const first = { ...candidate('fix-a'), dataChange: false };
+  const second = { ...candidate('fix-b'), dataChange: false };
+  const third = { ...candidate('fix-c'), dataChange: false };
+  function recordedMove(item, id) {
+    return [
+      { id: id - 1, item_id: item.id, scope: 'warehouse', action: 'go', sha: item.manifest.sha, detail: { candidate: item } },
+      { id, item_id: item.id, scope: 'warehouse', action: 'moved', sha: item.manifest.sha, ref_id: id - 1,
+        detail: { backup: '/home/warehouse/code-backups/request-' + (id - 1) } },
+    ];
+  }
+  rows = [...recordedMove(first, 2), { id: 3, item_id: first.id, scope: 'warehouse', action: 'checked_live', ref_id: 2, sha: first.manifest.sha },
+    ...recordedMove(second, 5), ...recordedMove(third, 7)];
+  calls = [];
+  seq = 7;
+  let version = (await read({})).body.warehouseVersion;
+  check(version.lastVerified.id === 3 && version.restore.itemId === third.id && version.restore.remaining === 2,
+    'last checked code version remains available through later releases, newest change restores first');
+  const restore = { item_ids: [third.id], action: 'rollback', confirm: 'ROLLBACK', heads: { [third.id]: 7 }, version_checkpoint: 3, version_move: 7 };
+  check((await send({ ...restore, version_checkpoint: 2 })).status === 409 && !calls.length, 'a stale version restore is refused before enqueue');
+  check((await send(restore)).status === 200 && calls[0].body.p_rows[0].detail.versionCheckpoint === 3 && calls[0].body.p_rows[0].ref_id === 7,
+    'approval queues a code rollback bound to its exact verified version and backup move');
+  rows.push({ id: 9, item_id: third.id, scope: 'warehouse', action: 'rolled_back', ref_id: 8, sha: third.manifest.sha });
+  version = (await read({})).body.warehouseVersion;
+  check(version.restore.itemId === second.id && version.restore.remaining === 1, 'the next restore opens only after the newest code change is restored');
+  rows.push(...recordedMove(palletData, 11));
+  version = (await read({})).body.warehouseVersion;
+  check(!version.restore && /changed data/.test(version.reason), 'a database change prevents automatic code restore across it');
   console.log(checks + ' release controls checks passed');
 })().catch(err => { console.error(err); process.exitCode = 1; });

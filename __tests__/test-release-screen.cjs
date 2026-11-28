@@ -98,7 +98,7 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           assert.equal(posts[1].digests['fix-0'], 'b'.repeat(64));
           assert.equal(posts[1].review_receipt, 'review-fixture');
           const active = page.getByRole('region', { name: 'Active release requests' });
-          const future = page.getByRole('region', { name: 'Changes awaiting approval' });
+          const future = page.getByRole('region', { name: 'Upcoming Warehouse changes' });
           await active.getByRole('heading', { name: 'One', exact: true }).waitFor();
           assert.equal(await active.getByText('Approved - waiting for worker activation', { exact: false }).count(), 2);
           assert.equal(await active.getByText('Needs your go', { exact: true }).count(), 0);
@@ -144,6 +144,23 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           assert.equal(await production.getByRole('checkbox').count(), 0);
           assert.equal(await page.getByRole('checkbox', { name: 'Select Blocked', exact: true }).count(), 0);
           assert.ok(await reviewButton.isDisabled());
+          await page.evaluate(() => {
+            const d = window.releaseData;
+            const lastVerified = { id: 12, at: '2026-11-24T13:15:00Z', by: 'Max' };
+            d.signoffs['fix-1'].refreshedPlan = true;
+            d.warehouseVersion = { lastVerified, isCurrent: false, restore: { checkpoint: lastVerified, remaining: 1, itemId: 'fix-0', moveId: 1 } };
+            window.dispatchEvent(new Event('focus'));
+          });
+          await future.getByText('Updated plan — ready for new approval', { exact: true }).waitFor();
+          const version = page.getByRole('region', { name: 'Last verified good version' });
+          await version.getByRole('button', { name: 'Review restore to version #12' }).click();
+          await dialog.getByRole('heading', { name: 'Restore Warehouse version #12' }).waitFor();
+          await dialog.getByRole('button', { name: 'Approve and queue code restore' }).click();
+          await page.waitForFunction(() => window.posts.at(-1).version_checkpoint === 12);
+          const restoration = await page.evaluate(() => window.posts.at(-1));
+          assert.equal(restoration.action, 'rollback');
+          assert.equal(restoration.version_move, 1);
+          assert.deepEqual(restoration.item_ids, ['fix-0']);
           await page.evaluate(() => {
             window.releaseData.signoffsError = 'Fixture status unavailable';
             window.dispatchEvent(new Event('focus'));

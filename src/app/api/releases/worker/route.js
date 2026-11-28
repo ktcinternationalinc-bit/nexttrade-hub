@@ -4,6 +4,8 @@ import { NextResponse } from 'next/server';
 import { releaseDb } from '../../../../lib/release-db'; // v55.83-YW — no-store reads
 import workerRules from '../../../../../release-management/lib/worker-authorization';
 import selection from '../../../../../release-management/lib/selection';
+import checkpoint from '../../../../../release-management/lib/warehouse-checkpoint';
+import register from '../../../../../release-management/release-register.json';
 import { readReleasePause } from '../../../../lib/release-pause'; // v55.83-YQ — the stop switch
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,11 +29,26 @@ export async function POST(request) {
       case 'heartbeat':
         result = await db.from('release_worker_status').upsert({ id: 1, worker, enabled: body.enabled === true,
           version: body.version === selection.DATA_WORKER_VERSION ? selection.DATA_WORKER_VERSION : 'warehouse-worker-v1', last_seen: new Date().toISOString() }); break;
-      case 'history':
+      case 'history': {
+        // The worker reads history after claiming the exclusive execution lock.
+        const claim = await db.from('release_execution').select('request_id').eq('worker', worker).eq('phase', 'running').maybeSingle();
+        if (claim.error) return response({ error: { message: 'Active release claim could not be confirmed.' } }, 409);
+        result = await db.from('release_signoffs').select('*').eq('scope', 'warehouse').order('id', { ascending: true }).limit(5000);
+        if (result.error || !Array.isArray(result.data) || result.data.length >= 5000) break;
+        const request = result.data.find(row => Number(row.id) === Number(claim.data?.request_id));
+        if (claim.data?.request_id && !request) return response({ error: { message: 'Claimed request is missing from release history.' } }, 409);
+        if (request?.detail?.versionCheckpoint != null) {
+          const restore = checkpoint.warehouseCheckpoint(result.data, register.items).restore;
+          if (request.action !== 'rollback' || !restore || restore.checkpoint.id !== request.detail.versionCheckpoint ||
+              restore.itemId !== request.item_id || restore.moveId !== Number(request.ref_id)) {
+            return response({ error: { message: 'The verified Warehouse version changed before the restore. No code was restored.' } }, 409);
+          }
+        }
+        break;
+      }
       case 'requests': {
-        let q = db.from('release_signoffs').select('*').eq('scope', 'warehouse').order('id', { ascending: true }).limit(5000);
-        if (body.op === 'requests') q = q.in('action', ['go', 'rollback']);
-        result = await q; break;
+        result = await db.from('release_signoffs').select('*').eq('scope', 'warehouse').order('id', { ascending: true }).limit(5000).in('action', ['go', 'rollback']);
+        break;
       }
       case 'authorized':
         if (!/^[a-f0-9-]{36}$/i.test(body.userId || '')) return response({ error: { message: 'Invalid approver.' } }, 400);

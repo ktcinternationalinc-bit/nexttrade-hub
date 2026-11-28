@@ -197,7 +197,7 @@ function Row(props) {
   if (where === 'live') { tags.push({ color: 'prod', label: 'On production' }); }
   else if (where === 'deployed') { tags.push({ color: 'max', label: 'On production — not yet checked' }); }
   else if (where === 'unknown') { tags.push({ color: 'max', label: 'Needs attention — production state unconfirmed' }); }
-  else if (props.sign?.canGo && !props.dependencyNote) { tags.push({ color: 'prod', label: 'Ready for review' }); }
+  else if (props.sign?.canGo && !props.dependencyNote) { tags.push({ color: 'prod', label: props.sign.refreshedPlan ? 'Updated plan — ready for new approval' : 'Ready for review' }); }
   else if (props.sign?.why || props.dependencyNote) { tags.push({ color: 'stage', label: 'Waiting' }); }
   else { tags.push({ color: 'stage', label: 'On staging' }); }
   if (props.sign && props.sign.problem && where !== 'unknown') { tags.push({ color: 'max', label: 'Needs a look' }); }
@@ -309,6 +309,8 @@ export default function ChangeScheduleTab() {
   var statusReadable = lists.statusReadable; var items = lists.items; var signs = lists.signs;
   var active = lists.active; var queued = lists.queued; var live = lists.live; var rollbackItems = lists.rollbackItems;
   var canSign = !!(data && data.canSign);
+  var version = data?.warehouseVersion;
+  var versionRestore = version?.restore;
   var candidates = queued.filter(function (it) { return signs[it.id]?.canGo; });
   var selected = selectionAction === 'go' ? selectedDeployments(candidates, signs, picked) :
     new Set(rollbackItems.filter(function (it) { return picked[it.id]; }).map(function (it) { return it.id; }));
@@ -349,6 +351,13 @@ export default function ChangeScheduleTab() {
         .finally(function () { setReviewing(false); });
     }
   }
+  function openVersionReview() {
+    if (!statusReadable || !versionRestore || !canSign || reviewOpen) return;
+    var item = items.find(function (it) { return it.id === versionRestore.itemId; });
+    if (!item) return;
+    setMessage('');
+    setReview({ action: 'rollback', items: [item], heads: signs, version: versionRestore });
+  }
   function confirmReview() {
     if (reviewSelectionChanged) return;
     var payload = { item_ids: review.items.map(function (it) { return it.id; }), action: review.action };
@@ -359,13 +368,19 @@ export default function ChangeScheduleTab() {
     } else {
       payload.confirm = 'ROLLBACK';
       payload.heads = Object.fromEntries(review.items.map(function (it) { return [it.id, (review.heads[it.id] || {}).head]; }));
+      if (review.version) {
+        payload.version_checkpoint = review.version.checkpoint.id;
+        payload.version_move = review.version.moveId;
+      }
     }
     setSending(true);
     callApi('/api/releases/signoff', 'POST', payload)
       .then(function (j) { if (!j || !j.ok) throw new Error((j && j.error) || 'Could not queue the release.'); setMessage(j.note); setPicked({}); setReview(null); load(); })
       .catch(function (e) { setMessage(e.message); }).finally(function () { setSending(false); });
   }
-  var reviewSelectionChanged = review && (!statusReadable || review.items.some(function (it) { return !selectedIds.includes(it.id); }));
+  var reviewSelectionChanged = review && (!statusReadable || (review.version ?
+    versionRestore?.checkpoint.id !== review.version.checkpoint.id || versionRestore?.moveId !== review.version.moveId :
+    review.items.some(function (it) { return !selectedIds.includes(it.id); })));
   var reviewBlocked = review && (reviewSelectionChanged ||
     (review.action === 'go' ? !review.result?.passed : review.items.some(function (it) { return !review.heads[it.id]?.canRollback; })));
 
@@ -402,6 +417,18 @@ export default function ChangeScheduleTab() {
           {!canSign && <div style={{ color: C.muted }}>View only. Managing releases requires the NT Warehouse release permission.</div>}
           {!data.executionReady && <div>Execution database setup is not available. No release can be queued.</div>}
         </div>}
+        {statusReadable && version && <section aria-label="Last verified good version" style={{ background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '12px 14px' }}>
+          <h2 style={{ fontSize: '1.1rem', margin: '0 0 4px' }}>Last verified good version</h2>
+          {version.lastVerified && <div>
+            <b>Warehouse version #{version.lastVerified.id}</b> · verified {fmtWhen(version.lastVerified.at)}
+            {version.lastVerified.by ? ' by ' + version.lastVerified.by : ''}{version.isCurrent ? ' · current production' : ''}
+          </div>}
+          {version.reason && <div style={{ color: C.muted }}>{version.reason}</div>}
+          {versionRestore && canSign && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
+            <button disabled={reviewOpen || sending || reviewing} style={btn(C.max, false)} onClick={openVersionReview}>Review restore to version #{versionRestore.checkpoint.id}</button>
+            <span style={{ color: C.muted, fontSize: '.83rem' }}>{versionRestore.remaining} code {versionRestore.remaining === 1 ? 'change' : 'changes'} to restore</span>
+          </div>}
+        </section>}
         {canSign && statusReadable && <div ref={toolbarRef} role="group" aria-label="Selected Warehouse changes" style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
           <div role="status" style={{ color: data?.workerOnline ? C.prod : C.max, marginBottom: 8 }}>
             {active.length} active request{active.length === 1 ? '' : 's'} · {workerLabel}
@@ -419,13 +446,14 @@ export default function ChangeScheduleTab() {
             <button disabled={!selectedIds.length || reviewOpen} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
           </div>
           {!selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>
-            {selectionAction === 'go' ? (candidates.length ? 'Select changes marked Ready for review.' : 'No changes are ready for deployment review.') : 'Select deployed changes under Already on production.'}
+            {selectionAction === 'go' ? (candidates.length ? 'Select a ready change to review and approve.' : 'No changes are ready for deployment review.') : 'Select deployed changes under Already on production.'}
           </div>}
         </div>}
         {message && !review && <div role="status" style={{ color: C.prod }}>{message}</div>}
         {review && <section ref={reviewPanel} role="dialog" tabIndex={-1} aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
-          <h2>{review.action === 'go' ? 'Production release review' : 'Confirm selected code rollbacks'}</h2>
-          {review.action === 'rollback' && <p>This restores the selected Warehouse code files. Business records and uploads stay as they are.</p>}
+          <h2>{review.version ? 'Restore Warehouse version #' + review.version.checkpoint.id : review.action === 'go' ? 'Production release review' : 'Confirm selected code rollbacks'}</h2>
+          {review.action === 'rollback' && <p>Restores the listed Warehouse code files from backup. The worker never runs a database restore or a migration for this action.</p>}
+          {review.version?.remaining > 1 && <p>Review and approve one code change at a time, starting with the most recent.</p>}
           {review.action === 'go' && <p role="status" style={{ color: review.result?.passed ? C.prod : C.max }}>
             {reviewing ? 'Checking the selected changes, staging test evidence and current release state…' :
               review.result?.passed ? 'Review passed. You can approve the selected changes for production.' :
@@ -454,7 +482,7 @@ export default function ChangeScheduleTab() {
           {reviewSelectionChanged && <p role="alert" style={{ color: C.max }}>The release status changed during review. Close this review and check the current status.</p>}
           {message && <div role="alert" style={{ color: C.max }}>{message}</div>}
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-            <button disabled={sending || reviewing || reviewBlocked || !review.items.length || !canSign} style={btn(C.prod, true)} onClick={confirmReview}>{sending ? 'Queuing...' : review.action === 'go' ? 'Approve and queue deployment' : 'Confirm and queue code rollback'}</button>
+            <button disabled={sending || reviewing || reviewBlocked || !review.items.length || !canSign} style={btn(C.prod, true)} onClick={confirmReview}>{sending ? 'Queuing...' : review.version ? 'Approve and queue code restore' : review.action === 'go' ? 'Approve and queue deployment' : 'Confirm and queue code rollback'}</button>
             <button disabled={sending || reviewing} style={btn(C.muted, false)} onClick={function () { setReview(null); setMessage(''); }}>Close</button>
           </div>
         </section>}
@@ -480,9 +508,9 @@ export default function ChangeScheduleTab() {
           </div>
         </section>
 
-        <section aria-label="Changes awaiting approval">
+        <section aria-label="Upcoming Warehouse changes">
           <h2 style={{ fontSize: '1.1rem', margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 9 }}>
-            Changes awaiting approval
+            Upcoming Warehouse changes
             <span style={{ font: '700 10px ' + C.mono, padding: '2px 8px', borderRadius: 999, letterSpacing: '.05em', textTransform: 'uppercase', background: 'rgba(242,207,91,.15)', color: C.gold2 }}>{queued.length} items</span>
           </h2>
           <div style={{ display: 'grid', gap: 10 }}>
@@ -493,7 +521,7 @@ export default function ChangeScheduleTab() {
               var dependencyNote = dependency && (signs[dependency]?.canGo ? 'Select ' + (prerequisite?.title || dependency) + ' first.' : 'Waiting for ' + (prerequisite?.title || dependency) + ' to reach production.');
               return <Row key={it.id} item={it} sign={signs[it.id]} onDone={load} selection={canDeploy ? 'go' : null} selected={selected.has(it.id)} selectLocked={reviewOpen || !!dependency} dependencyNote={dependencyNote} onSelect={select} />;
             })
-              : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'No changes awaiting approval.'}</div>}
+              : <div style={{ color: C.muted, fontSize: '.86rem' }}>{loading ? 'Loading…' : 'No upcoming changes.'}</div>}
           </div>
         </section>
 

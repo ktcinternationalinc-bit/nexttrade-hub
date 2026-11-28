@@ -82,26 +82,34 @@ export function latestByItem(rows) {
   var list = (rows || []).filter(function (r) { return r && (r.action === 'go' || r.action === 'rollback' || r.action === 'withdraw' || MOVE_ACTIONS.indexOf(r.action) >= 0); });
   list.sort(function (a, b) { return Number(a.id) - Number(b.id); });
   var out = {};
+  var approvals = {};
   for (var i = 0; i < list.length; i++) {
     var r = list[i]; var key = str(r.item_id);
     var prev = out[key] || { kind: 'none', where: '', whereAt: '', dep: null, block: false, problem: '' };
     var d = r.detail || {};
     var st = { kind: prev.kind, sha: prev.sha || '', text: prev.text || '', by: prev.by || '', at: prev.at || '', id: prev.id, target: prev.target || null,
-      where: prev.where, whereAt: prev.whereAt, dep: prev.dep, block: prev.block, problem: prev.problem };
+      where: prev.where, whereAt: prev.whereAt, dep: prev.dep, block: prev.block, problem: prev.problem, failedPalletSnapshot: prev.failedPalletSnapshot };
     function clearRequest() { st.kind = 'none'; st.sha = ''; st.text = ''; st.by = ''; st.at = ''; st.id = null; st.target = null; }
     if (r.action === 'withdraw') {
       clearRequest();
     } else if (r.action === 'go' || r.action === 'rollback') {
+      if (r.action === 'go') approvals[r.id] = r;
       st.kind = r.action; st.sha = str(r.sha); st.text = str(r.approval_text); st.by = str(r.signed_by_name); st.at = str(r.created_at); st.id = r.id;
       st.target = r.action === 'rollback' ? { sha: str(r.sha), backup: str(d.backup), row: r.ref_id == null ? null : r.ref_id } : null;
     } else {
       st.whereAt = str(r.created_at);
-      if (r.action === 'moved') { clearRequest(); st.where = 'deployed'; st.dep = { id: r.id, sha: str(r.sha), backup: str(d.backup) }; st.block = false; st.problem = ''; }
+      if (r.action === 'moved') { clearRequest(); st.where = 'deployed'; st.dep = { id: r.id, sha: str(r.sha), backup: str(d.backup) }; st.block = false; st.problem = ''; st.failedPalletSnapshot = ''; }
       else if (r.action === 'checked_live') { st.where = 'live'; st.block = false; st.problem = ''; if (!st.dep || st.dep.sha !== str(r.sha)) { st.dep = { id: r.id, sha: str(r.sha), backup: str(d.backup) }; } }
       else if (r.action === 'rolled_back') { clearRequest(); st.where = 'staging'; st.dep = null; st.block = false; st.problem = ''; }
       else if (r.action === 'failed' && (d.outcome === 'not_replaced' || d.outcome === 'restored')) {
         clearRequest(); st.where = st.dep ? st.where : 'staging'; st.block = false;
         st.problem = d.outcome === 'restored' ? 'The last move failed and was put back. A new attempt needs a new go.' : 'The last move stopped before anything on production was replaced. A new attempt needs a new go.';
+        var failedRequest = approvals[r.ref_id];
+        if (failedRequest?.item_id === key && d.outcome === 'not_replaced' &&
+            d.note === 'The matching pallet records changed since approval. A fresh dry run is required.' &&
+            selection.isPalletCorrection(failedRequest.detail?.candidate)) {
+          st.failedPalletSnapshot = failedRequest.detail.candidate.manifest.dataPlan.snapshotHash;
+        }
       } else if (r.action === 'recovery_confirmed' && (d.where === 'staging' || d.where === 'live')) {
         clearRequest(); st.where = d.where; st.block = false; st.problem = '';
         if (d.where === 'staging') { st.dep = null; }
@@ -123,7 +131,7 @@ export function latestByItem(rows) {
 function rowWords(r) {
   var d = r.detail || {};
   if (r.action === 'go') { return 'Approved for production'; }
-  if (r.action === 'rollback') { return 'Roll back asked for'; }
+  if (r.action === 'rollback') { return d.versionCheckpoint == null ? 'Roll back asked for' : 'Code restore to version #' + d.versionCheckpoint + ' requested'; }
   if (r.action === 'withdraw') { return 'Taken back'; }
   if (r.action === 'moved') { return 'Moved to production — waiting to be checked'; }
   if (r.action === 'checked_live') { return 'Checked on the live site — live'; }
@@ -203,10 +211,20 @@ export function itemSignState(item, latest) {
     }
     else if (item && item.dataChange && !selection.supportedDataPlan(item)) { out.why = 'Waiting for a reviewed database release plan.'; }
     else if (!item?.manifest) { out.why = 'Waiting for a committed build, file list and a passing staging test.'; }
+    else if (st.failedPalletSnapshot && item.manifest.dataPlan?.snapshotHash === st.failedPalletSnapshot) {
+      out.why = 'The production pallet records changed. A fresh dry run is required before approval.';
+      out.problem = '';
+    }
     else {
       var problems = selection.candidateProblems(item);
       if (!build || problems.length) { out.why = problems.join(' ') || 'Waiting for code review of this build.'; }
-      else { out.canGo = true; }
+      else {
+        out.canGo = true;
+        if (st.failedPalletSnapshot) {
+          out.refreshedPlan = true;
+          out.problem = '';
+        }
+      }
     }
   }
   return out;
