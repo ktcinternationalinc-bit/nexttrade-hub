@@ -2246,7 +2246,16 @@ export async function POST(req) {
           var pfLoaded = await loadPartyFunds(db, { fetchAll: fetchAll, businessId: US_WAVE_BUSINESS_ID, parties: await loadParties(db), pays: xoPays, bills: billNameById, entries: (typeof pmE !== 'undefined' && pmE && pmE.data) || [], from: pFrom, to: pTo });
           partyFunds = pfLoaded.funds;
           // the bill's own file, so the screen can open it (the storage rules decide who may)
-          partyFunds.forEach(function (c7) { c7.transfers.forEach(function (t6) { ['lifetime_rows', 'as_of_rows'].forEach(function (k6) { (t6[k6] || []).forEach(function (r6) { var b6 = billNameById[r6.bill_id]; r6.attachment_path = (b6 && b6.attachment_path) || null; }); }); }); (c7.period.applied_rows || []).concat((c7.paid_without_a_transfer && c7.paid_without_a_transfer.period_rows) || []).forEach(function (r5) { var b5 = billNameById[r5.bill_id]; r5.attachment_path = (b5 && b5.attachment_path) || null; }); });
+          partyFunds.forEach(function (company) {
+            function attachBillFile(row) { var bill = billNameById[row.bill_id]; row.attachment_path = (bill && bill.attachment_path) || null; }
+            company.transfers.forEach(function (transfer) {
+              (transfer.lifetime_rows || []).forEach(attachBillFile);
+              (transfer.as_of_rows || []).forEach(attachBillFile);
+            });
+            (company.period.applied_rows || []).forEach(attachBillFile);
+            (company.period.from_starting_balance_rows || []).forEach(attachBillFile);
+            ((company.paid_without_a_transfer && company.paid_without_a_transfer.period_rows) || []).forEach(attachBillFile);
+          });
           // v55.83-XO (Codex 22 Nov 18:29 P1) — the WHOLE funds answer as this caller may see it, whatever dates were asked for: for
           // anyone but the super admin a hidden starting balance is left out entirely and its company's current block (whole history,
           // includes it) is withheld; a hidden balance that counts in these dates withholds the report (the explicit restricted state).

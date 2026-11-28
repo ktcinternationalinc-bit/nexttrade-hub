@@ -1135,9 +1135,9 @@ export default function ProfitabilityTab(props) {
       {busy && <span className="text-[11px]" style={{ color: SUB }}>Working…</span>}
     </div>
     <div className="rounded-lg px-3 py-1.5 mb-3 text-[11px] flex items-center gap-2 flex-wrap" style={{ background: '#f8fafc', color: '#334155', border: '1px solid ' + LINE }}>
-      <span><b>Profit view</b> — by invoice date, includes unpaid invoices and bills. Not the cash / tax report.</span>
+      <span><b>Profit view</b> — sales margins by invoice date. Operating expenses in P&amp;L by period follow recorded payment dates.</span>
       <button onClick={function () { setShowAbout(!showAbout); }} className="font-bold underline" style={{ color: '#1d4ed8' }}>{showAbout ? 'Hide details' : 'About this report'}</button>
-      {showAbout && <div className="w-full mt-1"><b>This is NOT the cash report.</b> It answers “did this product, customer or invoice make money?”. It is dated by invoice date and includes unpaid invoices, unpaid bills, a standard inbound allowance of $0.02 per pound (not a real payment) and any estimate, labelled. For money actually received and paid — the tax view — use <b>Accounting → Stats → Income Statement (cash basis)</b>. The two will not match. By product, customer and invoice leave RTM and NextTrade service fees out on purpose; <b>P&L by period</b> brings the expenses in from the Income Statement, and there what is left of the money sent to RTM / NextTrade after the bills it paid is counted under A · Warehouse / Office.</div>}
+      {showAbout && <div className="w-full mt-1"><b>Sales margin</b> puts sales and their shipment costs in the customer invoice period, including unpaid invoices and bills. Inbound allowance is a standard $0.02 per pound. Bonded charges use a standard amount for eligible Houston shipments. Shipping can use actual bills, entered costs or estimates. <b>P&amp;L by period</b> deducts operating expenses by payment date. RTM bills follow their own categories, and the provisional remainder is counted under A · Warehouse / Office. For customer receipts and payments, open <b>Accounting → Stats → Income Statement (cash basis)</b>.</div>}
     </div>
 
     {data && data.setup_needed && <div className="rounded-lg p-3 text-[12px]" style={{ background: '#fffbeb', color: '#78350f', border: '1px solid #f59e0b' }}>

@@ -163,8 +163,8 @@ console.log('ZP — partner-fee bills in their own column, counted once; RTM fun
   var bt = fs.readFileSync(path.join(root, 'src/components/BillsTab.jsx'), 'utf8');
   check('bills: the "looks like the monthly partner fee" flag, "Set as partner fee…" opens the editor (person saves), "Make it a rule…" pre-fills the rule form', /Looks like the monthly partner fee/.test(bt) && /Set as partner fee…/.test(bt) && /setEditing\(Object\.assign\(\{\}, b, \{ category: lk\.category/.test(bt) && /prefill=\{rulePrefill\}/.test(bt), null);
   var fh = fs.readFileSync(path.join(root, 'src/components/FundsHeldPanel.jsx'), 'utf8'); var fsx = fs.readFileSync(path.join(root, 'src/components/FundsSent.jsx'), 'utf8'); var at = fs.readFileSync(path.join(root, 'src/components/AccountingTab.jsx'), 'utf8');
-  check('funds box and P&L box: "not linked to any bills yet" + "🔗 Link the bills it paid"; the P&L button opens Bills → Funds at that company (event caught by Accounting)',
-    /are not linked to any bills yet/.test(fh) && /🔗 Link the bills it paid/.test(fh) && /are not linked to any bills yet/.test(fsx) && /OPEN_PARTY_FUNDS_EVENT/.test(fsx) && /addEventListener\(OPEN_PARTY_FUNDS_EVENT/.test(at) && /fundsTarget=\{fundsTarget\}/.test(at) && /openTarget=\{props\.fundsTarget/.test(bt), null);
+  check('both funds views explain missing links, and the P&L button opens Bills → Funds for that company',
+    /are not linked to any bills yet/.test(fh) && /Link the bills it paid/.test(fh) && /no bill-payment links for these transfers/.test(fsx) && /Link the bills it paid/.test(fsx) && /OPEN_PARTY_FUNDS_EVENT/.test(fsx) && /addEventListener\(OPEN_PARTY_FUNDS_EVENT/.test(at) && /fundsTarget=\{fundsTarget\}/.test(at) && /openTarget=\{props\.fundsTarget/.test(bt), null);
 
   console.log('ZP partner fee: ' + pass + ' passed, ' + failN + ' failed');
 })().catch(function (e) { console.log('  ✗ CRASH ' + (e && e.stack)); failN++; process.exitCode = 1; console.log('ZP partner fee: ' + pass + ' passed, ' + failN + ' failed'); });

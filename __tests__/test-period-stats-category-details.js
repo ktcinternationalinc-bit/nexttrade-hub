@@ -6,7 +6,7 @@ require(resolve(__dirname, '../node_modules/sucrase/register'));
 const { buildPaidThroughBlocks, spendingCategoryBankRows, uniquePaidThroughBankRows } = require('../src/lib/paid-through-blocks');
 const { rtmAdjust, foldUnc } = require('../src/components/PeriodStatsTab.jsx');
 const { fundingIdentity, partyFundsBreakdown } = require('../src/lib/party-funds');
-const { readExpenseAnswer } = require('../src/lib/pnl-expenses');
+const { finalPnl, readExpenseAnswer } = require('../src/lib/pnl-expenses');
 
 const category = 'professional_fees';
 const direct = { id: 'fee', category, amount: 247350 };
@@ -39,12 +39,12 @@ const pays = [
   { id: 'june-portion', bill_id: 'rent', bank_transaction_id: transfer.id, method: 'rtm', paid_date: '2026-06-28', amount: 75000 },
   { id: 'july-portion', bill_id: 'later', bank_transaction_id: transfer.id, method: 'rtm', paid_date: '2026-07-03', amount: 5000 },
 ];
-function report(from, to) {
+function report(from, to, payments = pays, bills = billById) {
   const hasTransfer = from <= transfer.date && transfer.date <= to;
   const categories = hasTransfer ? [{ key: category, label: 'Professional Fees', kind: 'expense', total: 80000, count: 1 }] : [];
   const lines = hasTransfer ? [{ ...transfer, payer: 'RTM Capital', classification: category, amount: transfer.amount_abs }] : [];
-  const paid_through = buildPaidThroughBlocks({ parties, pays, billById, lines, from, to });
-  const party_funds = partyFundsBreakdown({ parties, bankLines: [transfer, copy], pays, bills: billById, from, to });
+  const paid_through = buildPaidThroughBlocks({ parties, pays: payments, billById: bills, lines, from, to });
+  const party_funds = partyFundsBreakdown({ parties, bankLines: [transfer, copy], pays: payments, bills, from, to });
   return readExpenseAnswer({ ok: true, from, to, spending: { categories, paid_through, party_funds } }, { from, to }, rtmAdjust, foldUnc);
 }
 const june = report('2026-06-01', '2026-06-30');
@@ -61,3 +61,14 @@ assert.equal(july.cols.total, 0);
 assert.equal(whole.cols.total, june.cols.total + july.cols.total);
 assert.equal(whole.detail.funding[0].period.provisional_fee_cents, 0);
 console.log('PASS: An $80,000 transfer with $75,000 in linked bills leaves $5,000 in Professional Fees; a later allocation replaces it cent for cent.');
+
+const shipmentCosts = { goods_cost: 47000, commission: 5000, inbound_allowance: 3000, bonded: 2000, outbound_transport: 18000 };
+const shipmentBills = Object.fromEntries(Object.entries(shipmentCosts).map(([key, amount]) => [key, { category: key, total_amount: amount, paid_via: 'RTM Capital' }]));
+const shipmentPayments = Object.entries(shipmentCosts).map(([key, amount]) => ({ ...pays[0], id: key, bill_id: key, amount }));
+const shipmentReport = report('2026-06-01', '2026-06-30', shipmentPayments, shipmentBills);
+assert.equal(shipmentReport.detail.funding[0].applied_rows.length, 5);
+assert.equal(shipmentReport.detail.funding[0].period.tax_cents, 8000000);
+assert.equal(shipmentReport.cols.in_profit.cents, 7500000);
+assert.equal(shipmentReport.cols.A.cents, 500000);
+assert.equal(finalPnl(10272574, shipmentReport.cols, 0).cents, 9772574);
+console.log('PASS: $75,000 of RTM-funded shipment costs are excluded from overhead and only $5,000 is deducted from the shipment margin.');

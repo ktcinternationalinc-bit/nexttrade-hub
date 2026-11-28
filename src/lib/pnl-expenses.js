@@ -42,7 +42,8 @@ export var EXPENSE_COLUMNS = [
 // There is no commission column (Max): commission stays inside goods profit only.
 export function letterOf(cat) {
   var c = cat || {}; var kind = String(c.kind || 'expense'); var key = String(c.key || '').toLowerCase();
-  var text = (key + ' ' + String(c.label || '')).toLowerCase().replace(/_/g, ' ');
+  var label = String(c.label || '').toLowerCase();
+  var text = (key + ' ' + label).replace(/[_-]/g, ' ');
   // The held balance is a reference. The period's RTM provisional fee and
   // recorded fees are office expenses.
   if (/^__pf_/.test(key)) { return /_fee$/.test(key) ? 'A' : 'held'; } // rows made from the shared funds calculation (party-funds.js)
@@ -51,14 +52,15 @@ export function letterOf(cat) {
   if (kind === 'transfer' || kind === 'not_pnl') { return 'not_pnl'; }
   if (kind === 'income' || kind === 'other_income') { return 'income'; }
   if (!key || key === 'uncategorized' || key === 'needs_clarification' || key === 'other_expense' || /waiting$/.test(key) || /needs clarification|waiting for bills/.test(text)) { return 'unassigned'; }
-  if (kind === 'cogs') { return 'in_profit'; }
-  if (/commission/.test(text)) { return 'in_profit'; }
+  if (kind === 'cogs' || /commission|\bgoods cost\b|\binbound allowance\b/.test(text)) { return 'in_profit'; }
   if (/\btax/.test(text)) { return 'E'; }
   if (/payroll|salar|wage|labou?r|staff/.test(text)) { return 'D'; }
   // Max, Nov 19: "professional fee is not a partner fee" — C is ONLY a category named partner fee / management fee. Professional
   // fees, and what is left of the money sent to RTM / NextTrade after the bills it paid (their service fee), are office costs → A.
   if (/partner|management fee/.test(text)) { return 'C'; }
   if (/vendor payment|supplier|purchase|freight|truck|shipping|logistic|brokerage|bonded|customs|inspection/.test(text)) { return 'in_profit'; }
+  var shipmentTransport = /^(?:(?:inbound|outbound) )?transport(?:ation)?(?: charg(?:ed|es?)| costs?)?$/;
+  if (shipmentTransport.test(key.replace(/[_-]/g, ' ')) || shipmentTransport.test(label.replace(/[_-]/g, ' '))) { return 'in_profit'; }
   return 'A';
 }
 

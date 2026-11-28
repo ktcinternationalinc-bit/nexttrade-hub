@@ -63,10 +63,12 @@ export function expenseDetail(spending, rc) {
     var p = c.period || {}; (c.transfers || []).forEach(function (t) { transferDate[t.id] = t.date; });
     var inP = function (d) { return (!p.from || d >= p.from) && (!p.to || d <= p.to); };
     var transfers = (c.transfers || []).filter(function (t) { return inP(t.date); }).map(function (t) { return { id: t.id, date: t.date, who: t.reference || '', cents: cents(t.sent), marked: t.identity === 'marked' }; });
-    var applied = (p.applied_rows || []).map(function (r) { var sb = r.source_bill || {}; return { paid_date: r.paid_date || '', transfer_id: r.transfer_id || null, transfer_date: r.transfer_date || transferDate[r.transfer_id] || '', vendor: r.vendor || '', bill_number: r.bill_number || '', bill_id: r.bill_id || null, bill_date: sb.bill_date || '', release: r.release_number || '', category: sb.category || 'uncategorized', recognition: sb.recognition || 'unverified', bill_total_cents: (r.bill_total === null || r.bill_total === undefined) ? null : cents(r.bill_total), cents: cents(r.portion), attachment_path: r.attachment_path || null }; });
+    function billRow(r) { var sb = r.source_bill || {}; return { paid_date: r.paid_date || '', transfer_id: r.transfer_id || null, transfer_date: r.transfer_date || transferDate[r.transfer_id] || '', starting_balance_as_of: r.starting_balance_as_of || null, vendor: r.vendor || '', bill_number: r.bill_number || '', bill_id: r.bill_id || null, bill_date: sb.bill_date || '', release: r.release_number || '', category: sb.category || 'uncategorized', recognition: sb.recognition || 'unverified', bill_total_cents: (r.bill_total === null || r.bill_total === undefined) ? null : cents(r.bill_total), cents: cents(r.portion), attachment_path: r.attachment_path || null, on_bank_line: r.on_bank_line || null }; }
+    var applied = (p.applied_rows || []).map(billRow);
+    var fromStartingBalance = (p.from_starting_balance_rows || []).map(billRow);
     // party-funds revision 4 — bills paid THROUGH the company with no source transfer named: taken from no transfer, never a fee, to link
     var pw = c.paid_without_a_transfer || {};
-    var unlinked = (pw.period_rows || []).map(function (r) { var sb = r.source_bill || {}; return { paid_date: r.paid_date || '', transfer_id: null, transfer_date: '', vendor: r.vendor || '', bill_number: r.bill_number || '', bill_id: r.bill_id || null, bill_date: sb.bill_date || '', release: r.release_number || '', category: sb.category || 'uncategorized', recognition: sb.recognition || 'unverified', bill_total_cents: (r.bill_total === null || r.bill_total === undefined) ? null : cents(r.bill_total), cents: cents(r.portion), attachment_path: r.attachment_path || null, on_bank_line: r.on_bank_line || null }; });
+    var unlinked = (pw.period_rows || []).map(billRow);
     var fees = (p.fee_rows || []).concat(p.loose_fee_rows || []).map(function (r) { return { date: r.date || '', cents: cents(r.amount), why: r.why || 'services rendered', transfer_id: r.transfer_id || null, transfer_date: r.transfer_id ? (transferDate[r.transfer_id] || '') : '' }; });
     var dups = (c.duplicate_bank_lines || []).filter(function (d) { return inP(d.date); }).map(function (d) { return { id: d.id, date: d.date, cents: cents(d.sent), same_as: d.same_as }; });
     var fundingKey = '__pf_' + String(c.party || '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
@@ -77,7 +79,7 @@ export function expenseDetail(spending, rc) {
       period: { from: p.from || '', to: p.to || '', opening_held_cents: cents(p.opening_held), funds_sent_cents: cents(p.funds_sent), applied_cents: cents(p.applied_to_bills), fee_cents: cents(p.services_rendered), provisional_fee_cents: rtm ? provisionalCents : null, fee_deduction_cents: cents(p.fee_deduction) + provisionalCents, closing_held_cents: cents(p.closing_held), tax_cents: cents(p.tax_professional_fees),
         starting_balance_added_cents: cents(p.starting_balance_added), from_starting_balance_cents: cents(p.from_starting_balance), tax_from_starting_balance_cents: cents(p.tax_from_starting_balance) }, // v55.83-XO (0 without a starting balance)
       unlinked_rows: unlinked, unlinked_cents: cents(pw.period_total), unlinked_as_of_cents: cents(pw.as_of_total),
-      transfers: transfers, applied_rows: applied, applied_listed_cents: applied.reduce(function (t0, r) { return t0 + r.cents; }, 0), fee_rows: fees,
+      transfers: transfers, applied_rows: applied, applied_listed_cents: applied.reduce(function (t0, r) { return t0 + r.cents; }, 0), from_starting_balance_rows: fromStartingBalance, fee_rows: fees,
       to_confirm_cents: transfers.reduce(function (t0, t) { return t0 + (t.marked ? 0 : t.cents); }, 0), duplicates: dups, duplicates_cents: dups.reduce(function (t0, d) { return t0 + d.cents; }, 0),
       needs_reconciliation: c.needs_reconciliation === true, explanation: rtm ? 'Bills count once under their own categories. Professional Fees covers the remaining transfer amount, with a reduction when earlier provisional fees are allocated to bills.' : feeExplanation(c), today_words: currentFundsWords(c) };
   });
@@ -103,7 +105,7 @@ export function pnlFormula(r, e, hidden) {
   function of(k) { return k + ' sale line' + (k === 1 ? '' : 's'); }
   var lines = [
     { sign: '', label: 'Goods revenue of the ' + of(u.goods_lines) + ' whose cost is known', cents: n(u.goods_revenue) },
-    { sign: '−', label: 'Goods cost of those lines = supplier cost + commission + inbound allowance + bonded', cents: n(u.goods_cost) },
+    { sign: '−', label: 'Goods cost of those lines = supplier cost + commission + inbound allowance + brokerage + bonded', cents: n(u.goods_cost) },
     { sign: '=', label: 'GOODS PROFIT', cents: n(row.goods_profit), strong: true },
     { sign: '', label: 'Transport charged on the ' + of(u.transport_lines) + ' whose shipping cost is known', cents: n(u.transport_revenue) },
     { sign: '−', label: 'Trucking (our cost: bill, else typed figure, else estimate)', cents: n(u.trucking) },
@@ -124,7 +126,7 @@ export function pnlFormula(r, e, hidden) {
   if (!hidden && x.goods_lines > 0) { not.push({ label: 'Goods revenue of ' + of(x.goods_lines) + ' with no cost yet', cents: x.goods_revenue, open_list: true, side: 'goods', count: x.goods_lines, why: 'the cost of these goods is not known yet (not zero), so they add nothing to goods profit until it is' }); }
   if (!hidden && x.transport_lines > 0) { not.push({ label: 'Transport charged on ' + of(x.transport_lines) + ' with no shipping cost yet', cents: x.transport_revenue, open_list: true, side: 'transport', count: x.transport_lines, why: 'the shipping cost of these lines is not known yet (not zero), so they add nothing to transport profit until it is' }); }
   if (cols && cols.unassigned.cents) { not.push({ label: 'Uncategorized expenses', cents: cols.unassigned.cents, cats: cols.unassigned.cats, why: 'money out with no category yet — not taken off until it gets one. Open it and give each line its category right here.' }); }
-  if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, cats: cols.in_profit.cats, why: 'Nothing to do. These are payments for goods and shipping; their cost is already counted, sale by sale, in goods cost and transport cost above, so taking them off again would count them twice. This is decided by the category name. If a payment here is NOT for goods or shipping (rent, for example), open it and change its category.', nothing_to_do: true }); }
+  if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, cats: cols.in_profit.cats, why: 'These categories are excluded from the operating expense columns. Goods and shipping costs enter the report through the sales calculations above. Check the category here and the sale or release to verify an individual cost. To correct a miscategorized payment, open it and change its category.', nothing_to_do: true }); }
   if (cols && cols.duplicates) { not.push({ label: 'A bank transfer that appears twice (the second copy)', cents: cols.duplicates, why: 'the same transfer came in as two bank lines — the copy is counted nowhere' }); }
   if (cols && cols.held && cols.held.cents) { not.push({ label: cols.held_is_balance ? 'Held with RTM / NextTrade at the end of these dates' : 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, funding: true, why: 'Balance for reference. A includes any RTM Professional Fees for this period' + (cols.unconfirmed > 0 ? '. Transfers totaling ' + (cols.unconfirmed / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) + ' still need confirmation under A' : '') }); }
   var det = ok ? e.detail : null;
@@ -132,7 +134,7 @@ export function pnlFormula(r, e, hidden) {
     (det.not_pnl || []).forEach(function (z) { not.push({ label: z.label, cents: z.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });
     if (det.transfers_cents) { not.push({ label: 'Transfers between our own accounts', cents: det.transfers_cents, why: 'money moved, not spent' }); }
   }
-  var notes = ['Profit is dated by invoice date. Expenses are what was PAID in the period (bank date).'];
+  var notes = ['Sales margins follow the customer invoice date. Operating expenses and RTM activity follow recorded payment dates.'];
   if (!hidden && (x.goods_lines > 0 || x.transport_lines > 0)) { notes.push('The table’s Goods revenue and Transport charged columns show ALL sale lines; the sums above use only the lines whose cost is known, which is why they can be smaller.'); }
   if (!ok) { notes.push('The expense columns are not loaded or not shown for this row, so the final figure is not worked out.'); }
   return { lines: lines, not_used: not, notes: notes, funding: (det && det.funding) || [] };

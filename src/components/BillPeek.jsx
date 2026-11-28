@@ -22,7 +22,7 @@ export default function BillPeek(props) {
       {line('Bill total', money(b.bill_total_cents))}
       {general ? line(props.paidLabel, money(b.cents)) : line('Paid from ' + (props.payer || 'these') + ' funds', money(b.cents) + (b.bill_total_cents !== null && b.bill_total_cents !== undefined && b.cents !== b.bill_total_cents ? ' (part of the bill)' : ''))}
       {general ? (props.extraLines || []).map(function (x, i) { return line(x[0], x[1], 'x' + i); }) : null}
-      {general ? null : line('Paid on', b.paid_date || '—')}{general ? null : line('From the transfer of', b.transfer_date || '—')}
+      {general ? null : line('Paid on', b.paid_date || '—')}{general ? null : b.starting_balance_as_of ? line('From starting balance dated', b.starting_balance_as_of) : line('From the transfer of', b.transfer_date || '—')}
     </tbody></table>
     <div className="px-3 py-2 text-[11px]" style={{ color: SUB }}>{general ? (props.note || '') : 'Where and in which month this report counts the bill’s cost is not verified here. To see its lines, payments and history: Accounting → Bills → search this bill number.'}</div>
     <div className="px-3 py-2 flex gap-2 justify-end flex-wrap" style={{ borderTop: '1px solid ' + LINE }}>
