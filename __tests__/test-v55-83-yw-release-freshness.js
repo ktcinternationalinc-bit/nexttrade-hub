@@ -91,7 +91,7 @@ async function call(m) {
   DB.release_signoffs.push({ id: 1, item_id: 'wh-order-queue', scope: 'warehouse', action: 'go', sha: 'ae404ef4f57b2bfe07a9f92fe142817f7917c85d', approval_text: 'Approved', detail: {}, ref_id: null, signed_by_name: 'Max', recorded_by: null, created_at: '2026-11-24T13:12:14Z' });
   var b = await call(route);
   check('2: first answer = what the database said then (worker off, last seen 24 Nov 12:08)', a.ok === true && a.worker && a.worker.enabled === false && a.worker.last_seen === '2026-11-24T12:08:52Z', a.worker || a);
-  check('3: second answer = the database NOW (worker on, fresh check-in, 1 history row) — no frozen copy', b.ok === true && b.worker.enabled === true && b.worker.last_seen !== a.worker.last_seen && b.history.length === 1, { w: b.worker, h: (b.history || []).length });
+  check('3: second answer includes the fresh worker check-in and new approval', b.ok === true && b.worker.enabled === true && b.worker.last_seen !== a.worker.last_seen && b.history.length === a.history.length + 1 && b.history.some((entry) => entry.row === 1), { w: b.worker, h: (b.history || []).length });
   check('4: nothing at all was written to Next\'s Data Cache, nothing served from it', cacheWrites === 0 && cacheHits === 0, { cacheWrites: cacheWrites, cacheHits: cacheHits });
 
   // ── 2. the same with the fix taken out: the test must catch the frozen screen ──

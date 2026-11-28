@@ -43,7 +43,8 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
               }
               body.item_ids.forEach((id, i) => { Object.assign(signoffs[id], { kind: 'go', head: i + 1, requestId: i + 1,
                 at: '2026-11-24T13:12:14Z', by: 'Max', sha: 'a'.repeat(40), canGo: false, canWithdraw: true }); });
-              return { ok: true, note: 'Queued for execution, not yet deployed.' };
+              return { ok: true, requests: body.item_ids.map((id, i) => ({ id: i + 1, item_id: id })),
+                note: 'Queued for execution, not yet deployed.' };
             }
             window.releaseReads++;
             const snapshot = structuredClone(data);
@@ -89,6 +90,7 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
             const top = bar.getBoundingClientRect().top;
             return top >= 65 && top <= 67 && scrollY > 100;
           });
+          assert.ok(await toolbar.getByRole('button', { name: 'Refresh', exact: true }).isVisible());
           await reviewButton.click();
           const dialog = page.getByRole('dialog');
           assert.ok((await dialog.innerText()).includes('One') && !(await dialog.innerText()).includes('Two'));
@@ -96,7 +98,7 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           await dialog.getByText('Review passed.', { exact: false }).waitFor();
           assert.equal(await page.evaluate(() => window.posts.length), 1);
           await dialog.getByRole('button', { name: 'Approve and queue deployment', exact: true }).click();
-          await page.getByText('Queued for execution, not yet deployed.').waitFor();
+          await page.getByText('Requests #1, #2. Queued for execution, not yet deployed.', { exact: true }).waitFor();
           const posts = await page.evaluate(() => window.posts);
           assert.deepEqual(posts[0].item_ids, ['fix-0', 'fix-2']);
           assert.deepEqual(posts[1].item_ids, ['fix-0', 'fix-2']);
@@ -178,10 +180,14 @@ const code = transform(fs.readFileSync(path.join(root, 'src/components/ChangeSch
           });
           await page.getByRole('alert').getByText('Live release status is unavailable.', { exact: false }).waitFor();
           assert.equal(await page.getByRole('checkbox').count(), 0);
+          await page.evaluate(() => { delete window.releaseData.signoffsError; });
+          await page.getByRole('group', { name: 'Change Schedule controls' }).getByRole('button', { name: 'Refresh', exact: true }).click();
+          await toolbar.getByRole('button', { name: 'Refresh', exact: true }).waitFor();
           if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: process.env.TEST_SCREENSHOT.replace('.png', '-' + width + '.png'), fullPage: true });
         } else {
           assert.equal(await page.getByRole('checkbox').count(), 0);
           assert.equal(await page.getByRole('button', { name: /Review selected|Run review/ }).count(), 0);
+          assert.ok(await page.getByRole('group', { name: 'Change Schedule controls' }).getByRole('button', { name: 'Refresh', exact: true }).isVisible());
         }
         assert.deepEqual(errors, []);
         const sizes = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, width: innerWidth }));

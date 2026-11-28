@@ -382,7 +382,12 @@ export default function ChangeScheduleTab() {
     }
     setSending(true);
     callApi('/api/releases/signoff', 'POST', payload)
-      .then(function (j) { if (!j || !j.ok) throw new Error((j && j.error) || 'Could not queue the release.'); setMessage(j.note); setPicked({}); setReview(null); load(); })
+      .then(function (j) {
+        if (!j || !j.ok) throw new Error((j && j.error) || 'Could not queue the release.');
+        var requests = (j.requests || []).map(function (request) { return '#' + request.id; });
+        setMessage(requests.length ? 'Request' + (requests.length > 1 ? 's ' : ' ') + requests.join(', ') + '. ' + j.note : j.note);
+        setPicked({}); setReview(null); load();
+      })
       .catch(function (e) { setMessage(e.message); }).finally(function () { setSending(false); });
   }
   var reviewedVersion = review?.version && version?.versions?.find(function (entry) { return entry.id === review.version.id; });
@@ -403,8 +408,7 @@ export default function ChangeScheduleTab() {
             {(data && data.intro) || "What's live on production, what's waiting on fix staging, and what each change still needs before it moves."}
           </p>
           <div style={{ font: '600 11px ' + C.mono, color: C.muted, marginTop: 6 }}>
-            {loading ? 'Loading…' : ('Updated ' + ((data && data.updated) || '—') + ((data && data.updatedBy) ? ' · ' + data.updatedBy : ''))}
-            <button onClick={load} style={{ marginLeft: 10, font: '600 11px ' + C.mono, color: C.codex, background: 'transparent', border: '1px solid ' + C.line, borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>Refresh</button>
+            {data && 'Release plan updated ' + (data.updated || '—') + (data.updatedBy ? ' · ' + data.updatedBy : '')}
           </div>
           <div style={{ marginTop: 8, fontSize: '.78rem', color: C.muted, background: 'rgba(56,189,248,.07)', border: '1px solid ' + C.line, borderRadius: 8, padding: '7px 10px', maxWidth: '80ch' }}>
             {(data && data.statusNote) || 'This is the maintained release plan as of the date shown — not a live deployment feed. A change is only “on production” once it was deployed and verified by hand.'}
@@ -444,12 +448,15 @@ export default function ChangeScheduleTab() {
             </div>}
           </div>; })}
         </section>}
-        {canSign && statusReadable && <div ref={toolbarRef} role="group" aria-label="Selected Warehouse changes" style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
-          <div role="status" style={{ color: data?.workerOnline ? C.prod : C.max, marginBottom: 8 }}>
-            {active.length} active request{active.length === 1 ? '' : 's'} · {workerLabel}
-            {checkedAt && <div style={{ color: C.muted, fontSize: 11 }}>Status checked {fmtWhen(checkedAt)}</div>}
+        <div ref={toolbarRef} role="group" aria-label={canSign && statusReadable ? 'Selected Warehouse changes' : 'Change Schedule controls'} style={{ position: 'sticky', top: headerHeight, zIndex: 20, background: C.panel, border: '1px solid ' + C.line, borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+            <div role="status" style={{ color: data?.workerOnline && statusReadable ? C.prod : C.max }}>
+              {statusReadable ? active.length + ' active request' + (active.length === 1 ? '' : 's') + ' · ' + workerLabel : 'Live release status unavailable'}
+              <div style={{ color: C.muted, fontSize: 11 }}>{loading ? 'Refreshing status…' : checkedAt && 'Status checked ' + fmtWhen(checkedAt)}</div>
+            </div>
+            <button onClick={load} style={btn(C.codex, false)}>Refresh</button>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {canSign && statusReadable && <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
             <b>{selectedIds.length} selected</b>
             {selectionAction === 'go' ? <>
               <button disabled={!selectedIds.length || sending || reviewing || reviewOpen} style={btn(C.prod, true)} onClick={function () { openReview('go'); }}>Review selected deployments</button>
@@ -459,11 +466,11 @@ export default function ChangeScheduleTab() {
               <button disabled={reviewOpen} style={btn(C.muted, false)} onClick={function () { switchSelection('go'); }}>Return to deployments</button>
             </>}
             <button disabled={!selectedIds.length || reviewOpen} style={btn(C.muted, false)} onClick={function () { setPicked({}); }}>Clear selection</button>
-          </div>
-          {!selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>
+          </div>}
+          {canSign && statusReadable && !selectedIds.length && <div style={{ color: C.muted, marginTop: 5, fontSize: '.82rem' }}>
             {selectionAction === 'go' ? (readyToSelect ? 'Select a ready change to review and approve.' : 'No changes are ready for deployment review.') : 'Select deployed changes under Already on production.'}
           </div>}
-        </div>}
+        </div>
         {message && !review && <div role="status" style={{ color: C.prod }}>{message}</div>}
         {review && <section ref={reviewPanel} role="dialog" tabIndex={-1} aria-label="Review warehouse release" style={{ border: '1px solid ' + C.line, borderRadius: 8, padding: 16 }}>
           <h2>{review.version ? 'Restore Warehouse version #' + review.version.id : review.action === 'go' ? 'Production release review' : 'Confirm selected code rollbacks'}</h2>
