@@ -9,6 +9,7 @@ import { companyByKey } from '../lib/companies';
 import { learnMatchText, lineShown } from '../lib/company-rule-learn';
 import StatementImport from './StatementImport';
 import NextradeTaxReport from './NextradeTaxReport';
+import { NEXTRADE_SOURCE_LABELS } from '../lib/nextrade-tax-report';
 import { isStalePending, pendingLabel } from '../lib/pending-age'; // v55.83-XT
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -19,7 +20,6 @@ var inpS = { background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1' };
 function btn(bg, fg) { return { background: bg, color: fg }; }
 var DIR_WORDS = { any: 'money in or out', 'in': 'money in only', out: 'money out only' }; // v55.83-UB
 var KTC_BILL_WORDS = { created: '🧾 KTC bill made', attached: '🔗 attached to a KTC bill' };
-var SOURCE_LABELS = { plaid: 'Plaid', csv: 'CSV import', pdf: 'PDF import', manual: 'Manual entry', statement: 'Statement import' };
 
 export default function CompanyBooksTab(props) {
   var comp = companyByKey(props.company);
@@ -67,15 +67,16 @@ export default function CompanyBooksTab(props) {
   }
   // v55.83-VK (Codex 19 Nov 20:27 P1 / P3) — opening the page WRITES NOTHING. It only counts the lines shown that a rule
   // covers and says so in a bar; a rule categorizes lines only when a person presses Apply and answers the question.
-  function loadLines() {
+  function loadLines(start, end) {
+    start = start || from; end = end || to;
     setBusy(true); setRuleWait(null);
-    return api({ action: 'lines', from: from, to: to }).then(function (j) {
+    return api({ action: 'lines', from: start, to: end }).then(function (j) {
       if (j && j.ok) {
         setLines(j.lines || []); setCats(j.categories || cats); setErr(''); setSqlMissing(j.sql_missing || ''); setSel({});
         if (j.ktc_categories) { setKtc({ map: j.ktc_map || {}, cats: j.ktc_categories || [] }); }
         var waiting = (j.lines || []).some(function (l) { return !l.company_category && !l.pending && !l.transfer_group_id; });
         if (canManage && waiting && !j.sql_missing) {
-          return api({ action: 'apply_rules', from: from, to: to, preview: true }).then(function (a) { if (a && a.ok && a.would > 0) { setRuleWait({ would: a.would, bills: a.would_bills || 0 }); } });
+          return api({ action: 'apply_rules', from: start, to: end, preview: true }).then(function (a) { if (a && a.ok && a.would > 0) { setRuleWait({ would: a.would, bills: a.would_bills || 0 }); } });
         }
       }
       else { setErr((j && j.error) || 'Could not load the lines.'); }
@@ -335,7 +336,7 @@ export default function CompanyBooksTab(props) {
             return <React.Fragment key={l.id}><tr style={{ borderTop: '1px solid #e2e8f0', background: l.company_category ? '#f0fdf4' : '#ffffff' }}>
               <td className="p-1">{canManage && <input type="checkbox" disabled={l.pending === true} checked={!!sel[l.id] && l.pending !== true} onChange={function (e) { if (l.pending === true) { return; } var n = Object.assign({}, sel); n[l.id] = e.target.checked; setSel(n); }} />}</td>
               <td className="p-1 whitespace-nowrap">{l.date}{l.pending ? <div className="text-[10px] font-bold" style={{ color: isStalePending(l) ? '#b45309' : '#64748b' }}>{pendingLabel(l)}</div> : ''}</td>
-              <td className="p-1 whitespace-nowrap">{l.is_card ? '💳 ' : '🏦 '}{l.account_label}{comp.key === 'nextrade' && SOURCE_LABELS[l.source] && <div className="text-[10px]" style={{ color: '#475569' }}>{SOURCE_LABELS[l.source]}</div>}</td>
+              <td className="p-1 whitespace-nowrap">{l.is_card ? '💳 ' : '🏦 '}{l.account_label}{comp.key === 'nextrade' && NEXTRADE_SOURCE_LABELS[l.source] && <div className="text-[10px]" style={{ color: '#475569' }}>{NEXTRADE_SOURCE_LABELS[l.source]}</div>}</td>
               <td className="p-1">{l.name}{canManage && !l.company_category && !l.pending && !l.transfer_group_id && <div><button disabled={busy} onClick={function () { openRule(l); }} className="mt-1 text-[10px] font-bold underline" style={{ color: '#5b21b6' }}>Create rule</button></div>}</td>
               <td className="p-1 text-right whitespace-nowrap font-bold" style={{ color: l.direction === 'in' ? '#166534' : '#991b1b' }}>{l.payroll_restricted ? <span title="Payroll amount restricted — needs the Payroll / salaries: view switch" style={{ color: '#64748b' }}>🔒 payroll</span> : <>{l.direction === 'in' ? '+' : '−'}{fmt(l.amount_abs)}</>}</td>
               <td className="p-1">
@@ -385,7 +386,10 @@ export default function CompanyBooksTab(props) {
       {lines && !shown.length && <div className="text-[11px] mt-2" style={{ color: '#64748b' }}>Nothing to show for these dates and filters.</div>}
     </div>}
 
-    {view === 'tax_report' && <NextradeTaxReport api={api} exportCsv={exportCsv} />}
+    {view === 'tax_report' && <NextradeTaxReport api={api} exportCsv={exportCsv} onReview={function (start, end) {
+      setFrom(start); setTo(end); setShow('uncat'); setQ(''); setView('lines');
+      loadLines(start, end); loadAccounts();
+    }} />}
 
     {view === 'totals' && totals && <div>
       <div className="flex gap-3 flex-wrap mb-2 text-[11px]">

@@ -17,7 +17,8 @@ console.log('VK — books learn rules; categorized lines stay; wire bill tree');
 
 var L = require(path.join(root, 'src/lib/company-rule-learn.js'));
 var T = require(path.join(root, 'src/lib/wire-bill-tree.js'));
-var tax = require(path.join(root, 'src/lib/nextrade-tax-report.js')).nextradeTaxReport;
+var taxLib = require(path.join(root, 'src/lib/nextrade-tax-report.js'));
+var tax = taxLib.nextradeTaxReport;
 
 var taxCategories = [{ key: 'sales', label: 'Sales', kind: 'income' }, { key: 'materials', label: 'Materials', kind: 'cogs' }, { key: 'utilities', label: 'Utilities', kind: 'expense' }];
 function taxLine(category, amount, fields) {
@@ -35,6 +36,23 @@ var usd = report.currencies.find(function (row) { return row.currency === 'USD';
 var cad = report.currencies.find(function (row) { return row.currency === 'CAD'; });
 check('Nextrade tax report uses posted dates, nets refunds, and keeps currencies separate', report.first === '2026-01-01' && usd.summary.income === 10000 && usd.summary.cost_of_goods === 2000 && usd.summary.expenses === 1300 && usd.summary.net === 6700 && cad.summary.expenses === 4000, report);
 check('Transfers and uncategorized activity appear outside the tax summary', usd.rows.some(function (row) { return row.kind === 'transfer' && row.money_out === 30000; }) && usd.summary.review_count === 1, usd);
+
+var details = tax([
+  taxLine(null, 12.34, { id: 'imported', date: '2025-12-31', posted_date: '2026-01-03', account_id: 'provider-account-id',
+    name: 'Wave deposit', direction: 'in', bank_source: taxLib.NEXTRADE_WAVE_TD_SOURCE,
+    source: 'wave_csv', source_file: 'wave.csv', source_row: '22', plaid_transaction_id: 'provider-transaction-id' }),
+  taxLine(null, 456, { id: 'masked', name: 'Restricted payee', payroll_restricted: true }),
+], taxCategories, '2026-01-01', '2026-12-31', new Map([['provider-account-id', 'TD •1795']]));
+var underlying = details.currencies[0].rows[0].transactions;
+check('Tax drill-down ties to the posted period and preserves the Wave CSV citation', details.count === 1 &&
+  underlying.length === 1 && underlying[0].date === '2026-01-03' && underlying[0].amount === 1234 &&
+  underlying[0].account === 'TD •1795' && underlying[0].source_row === '22' && underlying[0].source_file === 'wave.csv' &&
+  details.accounts[0].wave_count === 1, details);
+check('Tax drill-down never exports restricted rows or provider IDs', !/Restricted payee|provider-account-id|provider-transaction-id/.test(JSON.stringify(details)), details);
+var largeReport = tax(Array.from({ length: 4001 }, function () { return taxLine('materials', 1); }), taxCategories, '2026-01-01', '2026-12-31');
+check('Long periods keep complete totals with no partial drill-down', !largeReport.details_available &&
+  largeReport.count === 4001 && largeReport.currencies[0].summary.cost_of_goods === 400100 &&
+  largeReport.currencies[0].rows[0].transactions === undefined, largeReport);
 
 // ── the filter ──
 var la = { company_category: 'elec' }, lb = { company_category: null };

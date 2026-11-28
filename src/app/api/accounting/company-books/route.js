@@ -14,7 +14,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { audit } from '../../../../lib/audit-server';
 import { companyByKey, COMPANY_KINDS, categoryKey, bestCompanyRule, companyTotals, normMatch, NEXTRADE_COMPANY_ID } from '../../../../lib/companies';
-import { nextradeTaxReport } from '../../../../lib/nextrade-tax-report';
+import { NEXTRADE_WAVE_TD_SOURCE, nextradeTaxReport } from '../../../../lib/nextrade-tax-report';
 import { categorizeLine, partyName, wantsBill, loadBillCutoff, beforeCutoff, NEXTRADE_BILL_CUTOFF } from '../../../../lib/nextrade-bills-server'; // v55.83-TW (Codex P1-2): one database function, all or nothing
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP private bank accounts — respected here too
 import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
@@ -38,6 +38,7 @@ function missingRel(e) { return /does not exist|schema cache|Could not find the 
 function missingPrivateColumn(e) { var c = String((e && e.code) || ''); var m = String((e && e.message) || ''); return (c === '42703' || c === 'PGRST204') && /is_private/.test(m) && /does not exist|schema cache/i.test(m) && !/permission/i.test(m); }
 function transactionSource(line) {
   var source = String(line.bank_source || '');
+  if (source === NEXTRADE_WAVE_TD_SOURCE) { return 'wave_csv'; }
   if (source.startsWith('[CSV]')) { return 'csv'; }
   if (source.startsWith('[PDF]')) { return 'pdf'; }
   if (source.startsWith('[HAND]')) { return 'manual'; }
@@ -58,7 +59,8 @@ function readFail(what, e) { return NextResponse.json({ ok: false, error: missin
 async function pageLines(db, companyId, from, to, taxReport) {
   var out = [];
   for (var pg = 0; pg < 30; pg++) {
-    var columns = LINE_COLS + (taxReport ? ', iso_currency' : companyId === NEXTRADE_COMPANY_ID ? ', bank_source, plaid_transaction_id' : '');
+    var columns = LINE_COLS + (companyId === NEXTRADE_COMPANY_ID ? ', bank_source, plaid_transaction_id' : '');
+    if (taxReport) { columns += ', iso_currency, source_file:raw->>source_file, source_row:raw->>source_row'; }
     var query = db.from('bank_transactions').select(columns).eq('wave_business_id', companyId)
       .or('review_status.is.null,review_status.neq.duplicate');
     if (taxReport) {
@@ -339,10 +341,22 @@ export async function POST(req) {
       var linesOut = (pl.data || []).map(function (l) { var c = byKey[l.company_category]; return (c && c.is_payroll) ? Object.assign({}, l, { name: 'Warehouse staff', merchant_name: null }) : l; });
       // v55.83-XE — without 'payroll.view' a payroll line keeps its date, account and category, but not its amount
       var payK = payrollKeys(catsL.data || []); var hiddenPay = 0;
-      if (!pay.canSee) { linesOut = linesOut.map(function (l) { if (payK[l.company_category]) { hiddenPay++; return maskPayrollLine(l); } return l; }); }
+      if (!pay.canSee) {
+        linesOut = linesOut.map(function (l) {
+          var sourcePayroll = l.bank_source === NEXTRADE_WAVE_TD_SOURCE && /\b(?:payroll|salar(?:y|ies)|wages|adp|gusto)\b/i.test(l.name || '');
+          if (payK[l.company_category] || sourcePayroll) { hiddenPay++; return maskPayrollLine(l); }
+          return l;
+        });
+      }
       if (taxReport) {
         if (pl.capped) { return fail('This period contains too many transactions. Choose a shorter period for a complete report.', 422); }
-        return NextResponse.json({ ok: true, report: nextradeTaxReport(linesOut, catsL.data || [], from, to), from: from, to: to,
+        var reportAccounts = await db.from('plaid_accounts').select('plaid_account_id, name, mask').eq('wave_business_id', cid);
+        if (reportAccounts.error) { return readFail('the accounts for the tax report', reportAccounts.error); }
+        var accountLabels = new Map(dropPrivate(reportAccounts.data || [], scope, 'plaid_account_id').map(function (a) {
+          return [a.plaid_account_id, (a.name || 'Account') + (a.mask ? ' ••' + a.mask : '')];
+        }));
+        var reportLines = linesOut.map(function (l) { return Object.assign({}, l, { source: transactionSource(l) }); });
+        return NextResponse.json({ ok: true, report: nextradeTaxReport(reportLines, catsL.data || [], from, to, accountLabels), from: from, to: to,
           payroll_restricted: !pay.canSee || payZD.canSeeLines === false, accounts_restricted: !scope.all });
       }
       if (action === 'totals') {
