@@ -155,6 +155,8 @@ const excluded = assemble({ ...reimbursement, nextradeExpenses: [{ ...nexttradeU
 assert.deepEqual(included.nextrade_operating.charges_by_category.map(c => [c.key, c.total]), [['utilities', 458.18]]);
 assert.deepEqual(excluded.nextrade_operating.charges_by_category, []);
 assert.equal(excluded.bank_cash.cents, included.bank_cash.cents);
+assert.equal(included.combined_expenses.cents, 45818);
+assert.equal(excluded.combined_expenses.cents, 0);
 assert.equal(excluded.nextrade_reimbursements.cents, 45818);
 assert.equal(included.paid.cents - excluded.paid.cents, 45818);
 assert.equal(included.billed.cents - excluded.billed.cents, 45818);
@@ -170,6 +172,8 @@ const ktcCategories = new Map([[utilities.key, utilities], [technology.key, tech
 assert.equal(nextradeExpenseCategory(internet, new Map(), ktcCategories), utilities);
 assert.equal(nextradeExpenseCategory(internet, new Map([['internet', 'technology']]), ktcCategories), technology);
 assert.equal(nextradeExpenseCategory(technology, new Map(), ktcCategories), technology);
+const payrollTaxes = { key: 'payroll_taxes', label: 'Payroll Taxes', kind: 'expense' };
+assert.equal(nextradeExpenseCategory(payrollTaxes, new Map([['payroll_taxes', 'taxes']]), new Map([['payroll_taxes', payrollTaxes]])), payrollTaxes);
 const validCharge = { date: june.from, direction: 'out', amount_abs: 458.18 };
 assert.equal(isNextradeKtcExpense(validCharge, internet), true);
 assert.equal(isNextradeKtcExpense({ ...validCharge, date: '2026-05-31' }, internet), false);
@@ -310,15 +314,24 @@ assert.doesNotMatch(editable, /Edit category for rtm/);
 const reconciledJune = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], invoiceRows: [], comparison: juneKtc }));
 assert.match(reconciledJune, /KTC Bank &amp; Card Activity \$332,551\.90[\s\S]*Expenses Paid This Period \$271,790\.36/);
 assert.match(reconciledJune, />Bills &amp; Charges Incurred<\/button>/);
-assert.match(reconciledJune, /<details open=""[^>]*><summary[^>]*>[\s\S]*?Cash out for expenses and funding<\/span><span[^>]*>\$332,551\.90[\s\S]*?Daily Work → All Transactions/);
-for (const [category, amount] of [['Vendor payment', '187,844.94'], ['Taxes', '53,880.82'], ['Professional Fees', '10,250.00'], ['Utilities', '691.84'], ['RTM funding', '76,000.00'], ['Customer payment', '110.00']]) {
+assert.match(reconciledJune, /<details open=""[^>]*><summary[^>]*>[\s\S]*?Cash out for expenses and funding · by category<\/span><span[^>]*>\$334,453\.00[\s\S]*?Daily Work → All Transactions/);
+for (const [category, amount] of [['Vendor payment', '187,844.94'], ['Taxes', '53,880.82'], ['Professional Fees', '10,250.00'], ['Utilities', '1,150.02'], ['RTM funding', '76,000.00'], ['Customer payment', '110.00']]) {
   assert.equal(reconciledJune.split(`<span>${category}</span>`).length - 1, 1, category);
   assert.ok(reconciledJune.slice(reconciledJune.indexOf(`<span>${category}</span>`)).split('</summary>')[0].includes('$' + amount), category);
 }
 assert.doesNotMatch(reconciledJune, /Other direct KTC bank expenses|RTM \/ NextTrade funding activity|KTC bank payments awaiting an expense category/);
-assert.match(reconciledJune, /\$332,551\.90<span[^>]*>\$1,901\.10 \(NextTrade\)/);
-assert.match(reconciledJune, /<span>Utilities<\/span><span[^>]*>\$691\.84<span[^>]*>\$458\.18 \(NextTrade\)<\/span>[\s\S]*?utility-bank<\/div>[\s\S]*?NextTrade utility vendor \(NextTrade\)/);
-assert.match(reconciledJune, /<span>Bank Charges<\/span><span[^>]*>\$174\.30<span[^>]*>\$151\.00 \(NextTrade\)/);
+assert.match(reconciledJune, /<span>Utilities<\/span><span[^>]*>\$1,150\.02[\s\S]*?utility-bank<\/div>[\s\S]*?NextTrade utility vendor \(NextTrade\)/);
+assert.match(reconciledJune, /<span>Bank Charges<\/span><span[^>]*>\$325\.30/);
+const splitTaxes = assemble({
+  spendingRows: [row('tax-payment', 'taxes', 53880.82)],
+  nextradeExpenses: [{ id: 'nexttrade-payroll-tax', date: june.from, cents: 1542682, category: 'payroll_taxes', label: 'Payroll Taxes', who: 'Payroll tax payment' }],
+  labels: { taxes: 'Taxes', payroll_taxes: 'Payroll Taxes' },
+});
+const taxHtml = renderToStaticMarkup(React.createElement(PeriodPaidComparison, { period, periods: [period], invoiceRows: [], comparison: splitTaxes }));
+assert.match(taxHtml, /<span>Taxes<\/span><span[^>]*>\$69,307\.64/);
+assert.match(taxHtml, /<span>General Taxes<\/span><span[^>]*>\$53,880\.82/);
+assert.match(taxHtml, /<span>Payroll Taxes<\/span><span[^>]*>\$15,426\.82<span[^>]*> \(NextTrade\)/);
+assert.match(taxHtml, /Payroll tax payment \(NextTrade\)/);
 assert.doesNotMatch(reconciledJune, /NextTrade charges incurred for KTC · reference/);
 assert.match(reconciledJune, /Customer payment[\s\S]*?misclassified-debit[\s\S]*?Money out is categorized as Customer payment/);
 assert.match(reconciledJune, /style="color:#991b1b">-\$4,144\.00<\/td>/);

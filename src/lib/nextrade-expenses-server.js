@@ -22,6 +22,9 @@ function normalizeLabel(label) { return String(label || '').trim().toLowerCase()
 
 export function nextradeExpenseCategory(category, mappings, ktcCategories) {
   const mapped = mappings.get(category.key);
+  if (category.key === 'payroll_taxes' && (!mapped || mapped === 'taxes')) {
+    return ktcCategories.get('payroll_taxes') || category;
+  }
   if (mapped) return ktcCategories.get(mapped) || { key: mapped, label: category.label, kind: category.kind };
   if (ktcCategories.has(category.key)) return ktcCategories.get(category.key);
   const matches = [...ktcCategories.values()].filter(item => normalizeLabel(item.label) === normalizeLabel(category.label));

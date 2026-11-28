@@ -74,42 +74,47 @@ function RecordList({ rows, visible, onOpenInvoice, onOpenBill, showCategory, pa
   </div>;
 }
 
-function RecordTotals({ cents, nexttradeCents }) {
+function RecordTotals({ cents, nexttradeOnly }) {
   return <span className="shrink-0 text-right tabular-nums text-[#0f172a]" style={negativeInk(cents)}>{money(cents)}
-    {nexttradeCents != null && <span className="block text-[12px] font-medium text-slate-600"><Amount cents={nexttradeCents} /> (NextTrade)</span>}
+    {nexttradeOnly && <span className="text-[12px] font-medium text-slate-600"> (NextTrade)</span>}
   </span>;
 }
 
-function Records({ title, group, children, initiallyOpen, nexttradeCents, ...detail }) {
+function Records({ title, group, children, initiallyOpen, nexttradeOnly, showRecords = true, ...detail }) {
   return <details open={initiallyOpen} className="rounded border border-slate-200 px-3 py-2">
-    <summary className="cursor-pointer font-semibold text-[#1d4ed8]"><span className="inline-flex w-[calc(100%-1rem)] justify-between gap-2 align-top"><span>{title}</span><RecordTotals cents={group.cents} nexttradeCents={nexttradeCents} /></span></summary>
-    <div className="mt-1.5">{children}<RecordList rows={group.rows} {...detail} /></div>
+    <summary className="cursor-pointer font-semibold text-[#1d4ed8]"><span className="inline-flex w-[calc(100%-1rem)] justify-between gap-2 align-top"><span>{title}</span><RecordTotals cents={group.cents} nexttradeOnly={nexttradeOnly} /></span></summary>
+    <div className="mt-1.5">{children}{showRecords && <RecordList rows={group.rows} {...detail} />}</div>
   </details>;
 }
 
-function CategoryRecords({ title, group, nexttrade, visible, children, initiallyOpen, fundingByCompany, ...detail }) {
+function CategoryRecords({ title, group, visible, children, initiallyOpen, fundingByCompany, taxBreakdown, ...detail }) {
   const categories = new Map();
-  function addRow(row, fromNextTrade) {
+  if (visible) group.rows.forEach(row => {
     const key = row.category || '';
-    if (!categories.has(key)) categories.set(key, { label: row.label, cents: 0, nexttradeCents: null, rows: [] });
+    if (!categories.has(key)) categories.set(key, { key, label: row.label, cents: 0, rows: [] });
     const entry = categories.get(key);
     entry.rows.push(row);
-    if (fromNextTrade) entry.nexttradeCents = (entry.nexttradeCents || 0) + row.cents;
-    else entry.cents += row.cents;
-  }
-  if (visible) {
-    group.rows.forEach(row => addRow(row, false));
-    nexttrade?.rows.forEach(row => addRow(row, true));
+    entry.cents += row.cents;
+  });
+  const taxes = taxBreakdown ? ['taxes', 'payroll_taxes'].flatMap(key => categories.has(key) ? [categories.get(key)] : []) : [];
+  const entries = [...categories.values()].filter(entry => !taxes.includes(entry));
+  if (taxes.length) entries.push({ key: 'tax_breakdown', label: 'Taxes', cents: taxes.reduce((total, entry) => total + entry.cents, 0), subcategories: taxes });
+  function category(entry, label = entry.label) {
+    return <Records key={entry.key} title={label || 'Uncategorized'} group={entry} visible={visible}
+      nexttradeOnly={entry.rows.every(row => row.source_company === 'NextTrade')} {...detail}>
+      {fundingByCompany?.[entry.key]?.reconciliation && <FundingSummary reconciliation={fundingByCompany[entry.key].reconciliation} />}
+    </Records>;
   }
   return <details open={initiallyOpen} className="rounded border border-slate-200 px-3 py-2">
-    <summary className="cursor-pointer font-semibold text-[#1d4ed8]"><span className="inline-flex w-[calc(100%-1rem)] justify-between gap-2 align-top"><span>{title}</span><RecordTotals cents={group.cents} nexttradeCents={nexttrade?.cents} /></span></summary>
+    <summary className="cursor-pointer font-semibold text-[#1d4ed8]"><span className="inline-flex w-[calc(100%-1rem)] justify-between gap-2 align-top"><span>{title}</span><RecordTotals cents={group.cents} /></span></summary>
     <div className="my-1.5 space-y-1.5">{children}
       {!visible && <p className="text-slate-600">Transaction detail access is required to see the underlying records.</p>}
       {visible && !categories.size && <p className="text-slate-600">No records for this period.</p>}
-      {Array.from(categories, ([key, entry]) => ({ key, ...entry })).sort((a, b) => b.cents + (b.nexttradeCents || 0) - a.cents - (a.nexttradeCents || 0)).map(entry =>
-        <Records key={entry.key} title={entry.label || 'Uncategorized'} group={entry} nexttradeCents={entry.nexttradeCents} visible={visible} {...detail}>
-          {fundingByCompany?.[entry.key]?.reconciliation && <FundingSummary reconciliation={fundingByCompany[entry.key].reconciliation} />}
-        </Records>)}
+      {entries.sort((a, b) => b.cents - a.cents).map(entry => entry.subcategories
+        ? <Records key={entry.key} title={entry.label} group={entry} showRecords={false}>
+            <div className="space-y-1">{entry.subcategories.map(child => category(child, child.key === 'taxes' ? 'General Taxes' : 'Payroll Taxes'))}</div>
+          </Records>
+        : category(entry))}
     </div>
   </details>;
 }
@@ -144,7 +149,7 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
   const mode = expenseBases.find(option => option.key === basis) || expenseBases[0];
   const expenseGroup = available ? comparison[{ bank: 'bank_cash', vendor: 'paid', billed: 'billed' }[mode.key]] : null;
   const bankView = mode.key === 'bank';
-  const nexttradeInBankView = bankView && comparison?.nextrade_charges?.count > 0 ? comparison.nextrade_charges : undefined;
+  const groupedExpenses = bankView ? comparison?.combined_expenses || expenseGroup : expenseGroup;
   const review = available ? comparison.other_review ?? comparison.review : null;
   const paymentsByTransfer = new Map();
   const partnerBilled = comparison?.partner_billed;
@@ -210,13 +215,13 @@ export default function PeriodPaidComparison({ period, periods, onPeriod, compar
         visible={visible} onOpenInvoice={onOpenInvoice} categoryPicker={categoryPicker}>
         {comparison.managed_sales_remittances.count > 0 && <p className="text-slate-700">Includes <Amount cents={comparison.managed_sales_remittances.cents} /> transferred in from NextTrade-managed sales.</p>}
       </CategoryRecords>}
-      {expenseGroup && <CategoryRecords key={mode.key} title={bankView ? mode.expense : mode.expense + ' · by category'} group={expenseGroup}
-        visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} initiallyOpen={bankView} nexttrade={nexttradeInBankView}
+      {groupedExpenses && <CategoryRecords key={mode.key} title={mode.expense + ' · by category'} group={groupedExpenses}
+        visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker} initiallyOpen={bankView} taxBreakdown
         paymentsByTransfer={bankView ? paymentsByTransfer : undefined} fundingByCompany={bankView ? comparison.funding_by_company : undefined}>
         {bankView && <p className="text-slate-700">KTC bank and credit-card transactions use the saved categories and posting dates from {onOpenTransactions
           ? <button type="button" className={link} onClick={onOpenTransactions}>Daily Work → All Transactions</button>
           : 'Daily Work → All Transactions'}. Open a category to see the payments.</p>}
-        {nexttradeInBankView && <p className="text-slate-700">NextTrade charges appear in the same expense categories. Amounts marked (NextTrade) are included in Expenses Paid This Period.</p>}
+        {bankView && comparison.nextrade_charges?.count > 0 && <p className="text-slate-700">Category totals combine KTC payments and NextTrade expenses. The KTC bank and card figure above includes any reimbursements it paid.</p>}
       </CategoryRecords>}
       {!bankView && comparison.bank_review?.count > 0 && <Records title="KTC bank payments awaiting an expense category" group={comparison.bank_review} visible={visible} categoryPicker={categoryPicker} showCategory><p className="mb-1.5 text-[#713f12]">These amounts appear in KTC Bank &amp; Card Activity. Assign an expense category to include them in Expenses Paid This Period.</p></Records>}
       {!bankView && review?.count > 0 && <Records title="Other payments to reconcile" group={review} visible={visible} onOpenBill={onOpenBill} categoryPicker={categoryPicker}><p className="mb-1.5 text-[#713f12]">Review the underlying bills and funding links. Some amounts are already represented by a bank transaction.</p></Records>}

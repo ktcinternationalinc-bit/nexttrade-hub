@@ -319,10 +319,16 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
   });
   const fundingRows = funding.map(row => row.source === 'Funds sent' ? { ...row, allocation: allocationByTransfer.get(row.id) } : row);
   const cashRows = bankExpenses.map(row => reimbursementByBank.has(row.id) ? { ...row, reimbursement_cents: reimbursementByBank.get(row.id) } : row);
-  const bankCash = group(cashRows.concat(fundingRows.map(row => {
+  const bankCashRows = cashRows.concat(fundingRows.map(row => {
     const category = fundingCategory(row.label);
     return { ...row, category: category.key, label: category.label, who: row.who || row.label };
-  })));
+  }));
+  const bankCash = group(bankCashRows);
+  const combinedExpenses = group(bankCashRows.flatMap(row => {
+    if (!row.reimbursement_cents) return [row];
+    const cents = row.cents - row.reimbursement_cents;
+    return cents ? [{ ...row, cents }] : [];
+  }).concat(charges));
   const netPayments = paid.filter(row => !row.nexttrade_reimbursement);
   return { rows_visible: showRows, paid: group(netPayments.concat(charges)), receipts: group(cashReceipts.receipts),
     bank_receipts: group(receipts), managed_sales_receipts: group(cashReceipts.sales), managed_sales_remittances: group(cashReceipts.remittances),
@@ -334,7 +340,7 @@ export function buildPaidComparison({ bills, payments, customerPayments = [], pa
     nextrade_operating: { charges_by_category: Array.from(chargeCategories.values()), direct_by_category: directCategoryCents,
       direct_rows: showRows ? directReimbursements.map(({ bank_id, cents: amount }) => ({ bank_id, cents: amount })) : [] },
     review: group(review.concat(bankReview)), bank_review: group(bankReview), other_review: group(review),
-    bank_cash: bankCash,
+    bank_cash: bankCash, combined_expenses: combinedExpenses,
     billed: group(billed.concat(charges)),
     unclassified_receipts: group(unclassifiedReceipts), other_deposits: group(otherDeposits), partner_billed: group(partnerBilled), partner_schedule: group(expectedPartnerFees), partner_paid_cents: sum(paid.filter(row => row.category === 'partner_fees')) };
 }
@@ -349,7 +355,7 @@ export function combinePaidComparisons(parts) {
       return group ? { cents: total.cents + group.cents, count: total.count + group.count, rows: total.rows.concat(group.rows) } : total;
     }, { cents: 0, count: 0, rows: [] });
   }
-  for (const key of ['paid', 'receipts', 'bank_receipts', 'managed_sales_receipts', 'managed_sales_remittances', 'funding', 'funded_paid', 'bank_cash', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'review', 'unclassified_receipts', 'other_deposits', 'partner_billed', 'partner_schedule']) {
+  for (const key of ['paid', 'receipts', 'bank_receipts', 'managed_sales_receipts', 'managed_sales_remittances', 'funding', 'funded_paid', 'bank_cash', 'combined_expenses', 'billed', 'nextrade_charges', 'nextrade_reimbursements', 'review', 'unclassified_receipts', 'other_deposits', 'partner_billed', 'partner_schedule']) {
     totals[key] = combineGroups(part => part[key]);
   }
   const balances = parts.map(part => part.managed_sales_balance).filter(Boolean).sort((a, b) => a.from.localeCompare(b.from));
