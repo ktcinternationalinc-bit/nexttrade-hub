@@ -1,5 +1,5 @@
 'use strict';
-const { DATA_WORKER_VERSION } = require('./selection');
+const { SCHEMA_WORKER_VERSION } = require('./selection');
 function channel(url, token) {
   if (url !== 'https://nexttrade-hub.vercel.app') throw new Error('Unexpected Hub worker endpoint.');
   if (!/^[a-f0-9]{64}$/.test(token || '')) throw new Error('Invalid worker credential.');
@@ -14,11 +14,11 @@ function channel(url, token) {
       if (!['release_signoffs', 'release_worker_status'].includes(table)) throw new Error('Worker channel cannot access this table.');
       const q = { select() { return q; }, eq() { return q; }, order() { return q; }, limit() { return q; }, in() { requests = true; return q; },
         upsert(row) { enabled = row.enabled === true; return q; },
-        then(resolve, reject) { return call(table === 'release_worker_status' ? { op: 'heartbeat', enabled, version: DATA_WORKER_VERSION } : { op: requests ? 'requests' : 'history' }).then(resolve, reject); } };
+        then(resolve, reject) { return call(table === 'release_worker_status' ? { op: 'heartbeat', enabled, version: SCHEMA_WORKER_VERSION } : { op: requests ? 'requests' : 'history' }).then(resolve, reject); } };
       return q;
     },
     rpc(name, p) {
-      if (name === 'release_claim') return call({ op: 'claim', request: p.p_request, version: DATA_WORKER_VERSION });
+      if (name === 'release_claim') return call({ op: 'claim', request: p.p_request, version: SCHEMA_WORKER_VERSION });
       if (name === 'release_finish') return call({ op: 'finish', request: p.p_request, event: p.p_event, attention: p.p_attention });
       throw new Error('Worker channel cannot call this function.');
     }

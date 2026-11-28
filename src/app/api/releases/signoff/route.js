@@ -72,6 +72,13 @@ export async function POST(request) {
   if (action === 'go' && ordered.some(function (it) { return it.dataChange; }) && !sa.isSuperAdmin) {
     return deny('Only a super admin can approve a Warehouse database change.', 403);
   }
+  if (action === 'go' && ordered.some(selection.isSchemaRelease)) {
+    var schemaWorker = await db.from('release_worker_status').select('enabled,last_seen,version').eq('id', 1).maybeSingle();
+    if (schemaWorker.error || !schemaWorker.data?.enabled || schemaWorker.data.version !== selection.SCHEMA_WORKER_VERSION ||
+        !(Date.now() - Date.parse(schemaWorker.data.last_seen) < 120000)) {
+      return deny('Wait for the Warehouse migration worker to come online before approving this change.', 409);
+    }
+  }
   var rows = [];
   for (var i = 0; i < ordered.length; i++) {
     var item = ordered[i];

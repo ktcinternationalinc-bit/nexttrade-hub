@@ -64,11 +64,8 @@ function executeDataCommand(item, data, runner) {
     dependsOn: item.dependsOn } };
 }
 
-function loadOrderQueueMigrations(item, requestId, warehouseRepo, tmpDir, runner) {
-  if (!isOrderQueueRelease(item) || !Number.isSafeInteger(requestId) || requestId < 1) {
-    throw new Error('The Order Queue database release was not recognized.');
-  }
-  const migrations = item.manifest.dataPlan.migrations.map(file => {
+function migrationFiles(item, warehouseRepo, tmpDir) {
+  return item.manifest.dataPlan.migrations.map(file => {
     const source = execFileSync('git', ['show', item.manifest.sha + ':nextrade-app/database/migrations/' + file.name],
       { cwd: warehouseRepo, maxBuffer: 1024 * 1024 });
     if (createHash('sha256').update(source).digest('hex') !== file.sha256) throw new Error('Migration fingerprint differs: ' + file.name);
@@ -76,21 +73,31 @@ function loadOrderQueueMigrations(item, requestId, warehouseRepo, tmpDir, runner
     fs.writeFileSync(localPath, source);
     return { ...file, localPath };
   });
+}
+function uploadMigrationFiles(migrations, backupDir, runner) {
+  const privateDir = backupDir + '/migrations';
+  if (runner.run("mkdir -m 700 '" + privateDir + "'").code !== 0) throw new Error('Could not create the private migration folder.');
+  return migrations.map(file => {
+    const remotePath = privateDir + '/' + file.name;
+    if (runner.put(file.localPath, remotePath).code !== 0) throw new Error('Could not upload a reviewed Warehouse migration.');
+    const verified = runner.run("sha256sum '" + remotePath + "'");
+    if (verified.code !== 0 || verified.out.trim().split(/\s+/)[0] !== file.sha256) {
+      throw new Error('Uploaded Warehouse migration fingerprint differs.');
+    }
+    return remotePath;
+  });
+}
+
+function loadOrderQueueMigrations(item, requestId, warehouseRepo, tmpDir, runner) {
+  if (!isOrderQueueRelease(item) || !Number.isSafeInteger(requestId) || requestId < 1) {
+    throw new Error('The Order Queue database release was not recognized.');
+  }
+  const migrations = migrationFiles(item, warehouseRepo, tmpDir);
   return function prepareDatabase({ appRoot, backupDir }) {
     if (!/^\/home\/[a-z0-9_-]+\/public_html$/.test(appRoot) || !/^\/home\/[a-z0-9_-]+\/code-backups\/request-[0-9]+-[0-9]{14}$/.test(backupDir)) {
       throw new Error('Unexpected Order Queue production or backup folder.');
     }
-    const privateDir = backupDir + '/migrations';
-    if (runner.run("mkdir -m 700 '" + privateDir + "'").code !== 0) throw new Error('Could not create the private migration folder.');
-    const paths = migrations.map(file => {
-      const remotePath = privateDir + '/' + file.name;
-      if (runner.put(file.localPath, remotePath).code !== 0) throw new Error('Could not upload a reviewed Order Queue migration.');
-      const verified = runner.run("sha256sum '" + remotePath + "'");
-      if (verified.code !== 0 || verified.out.trim().split(/\s+/)[0] !== file.sha256) {
-        throw new Error('Uploaded Order Queue migration fingerprint differs.');
-      }
-      return remotePath;
-    });
+    const paths = uploadMigrationFiles(migrations, backupDir, runner);
     const backup = 'zz_order_queues_before_' + requestId;
     const program = `<?php
       require 'vendor/autoload.php';
@@ -117,4 +124,4 @@ function loadOrderQueueMigrations(item, requestId, warehouseRepo, tmpDir, runner
   };
 }
 
-module.exports = { prepareDataCommand, executeDataCommand, loadOrderQueueMigrations };
+module.exports = { prepareDataCommand, executeDataCommand, loadOrderQueueMigrations, migrationFiles, uploadMigrationFiles };

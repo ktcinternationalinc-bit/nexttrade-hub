@@ -498,6 +498,9 @@ export default function ChangeScheduleTab() {
           {review.action === 'go' && review.result?.passed && review.result.results.some(function (r) { return r.dataChange; }) && <p style={{ color: C.data }}>
             Approval includes the listed production database work. The worker checks the prerequisites and backs up the affected data first.
           </p>}
+          {review.action === 'go' && review.result?.passed && review.result.results.some(function (r) { return r.writeFreeze; }) && <p>
+            After approval, this request waits for its Warehouse maintenance window. The worker keeps writes paused for the production check.
+          </p>}
           {review.result?.passed && review.result.waitsForWorker && <p style={{ color: C.max }}>
             The worker that handles these database changes is offline. You can approve now, and the changes will wait in the queue.
           </p>}

@@ -28,7 +28,8 @@ export async function POST(request) {
     switch (body.op) {
       case 'heartbeat':
         result = await db.from('release_worker_status').upsert({ id: 1, worker, enabled: body.enabled === true,
-          version: body.version === selection.DATA_WORKER_VERSION ? selection.DATA_WORKER_VERSION : 'warehouse-worker-v1', last_seen: new Date().toISOString() }); break;
+          version: [selection.DATA_WORKER_VERSION, selection.SCHEMA_WORKER_VERSION].includes(body.version) ? body.version : 'warehouse-worker-v1',
+          last_seen: new Date().toISOString() }); break;
       case 'history': {
         // The worker reads history after claiming the exclusive execution lock.
         const claim = await db.from('release_execution').select('request_id').eq('worker', worker).eq('phase', 'running').maybeSingle();
@@ -57,11 +58,9 @@ export async function POST(request) {
         // v55.83-YQ (Max, 24 Nov) — while warehouse releases are STOPPED (or the switch cannot be read) no request is handed out.
         if ((await readReleasePause(db)).paused) return response({ data: false, paused: true });
         if (!Number.isSafeInteger(Number(body.request)) || Number(body.request) < 1) return response({ error: { message: 'Invalid request ID.' } }, 400);
-        if (body.version !== selection.DATA_WORKER_VERSION) {
-          const candidate = await db.from('release_signoffs').select('detail').eq('id', body.request).eq('scope', 'warehouse').maybeSingle();
-          if (candidate.error) return response({ error: { message: 'Request type could not be confirmed.' } }, 409);
-          if (candidate.data?.detail?.candidate?.dataChange === true) return response({ data: false });
-        }
+        const candidate = await db.from('release_signoffs').select('detail').eq('id', body.request).eq('scope', 'warehouse').maybeSingle();
+        if (candidate.error) return response({ error: { message: 'Request type could not be confirmed.' } }, 409);
+        if (!selection.workerSupports(candidate.data?.detail?.candidate, body.version)) return response({ data: false });
         result = await db.rpc('release_claim', { p_request: body.request, p_worker: worker }); break;
       case 'finish':
         result = await db.rpc('release_finish', { p_request: body.request, p_worker: worker, p_event: body.event, p_attention: body.attention }); break;

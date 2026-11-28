@@ -37,9 +37,10 @@ export async function POST(request) {
     return reply({ error: 'A super admin must review and approve Warehouse database changes.' }, 403);
   }
   let waitsForWorker = false;
-  if (items.some(selection.supportedDataPlan)) {
+  const dataItems = items.filter(selection.supportedDataPlan);
+  if (dataItems.length) {
     const worker = await db.from('release_worker_status').select('enabled,last_seen,version').eq('id', 1).maybeSingle();
-    waitsForWorker = !!worker.error || !worker.data?.enabled || worker.data.version !== selection.DATA_WORKER_VERSION ||
+    waitsForWorker = !!worker.error || !worker.data?.enabled || dataItems.some(item => !selection.workerSupports(item, worker.data.version)) ||
       !(Date.now() - Date.parse(worker.data.last_seen) < 120000);
   }
   const results = items.map(item => {
@@ -47,11 +48,14 @@ export async function POST(request) {
     return { id, title: item.title, sha: item.manifest?.sha || item.proposedBuild || '', passed: states[id].canGo,
       files: item.manifest?.files?.map(file => file.path) || [], note: states[id].why,
       evidence: item.manifest ? item.behavioralQa?.summary || '' : '', steps: item.releaseSteps || [],
-      dataChange: item.dataChange === true,
+      dataChange: item.dataChange === true, writeFreeze: selection.isSchemaRelease(item),
       migrations: item.manifest?.dataPlan?.migrations?.map(file => file.name) || [] };
   });
   const plan = selection.selectionPlan(register.items, states, ids, 'go');
   if (!plan.ok) return reply({ ok: true, passed: false, results, problems: [...new Set(plan.problems)] });
+  if (waitsForWorker && dataItems.some(selection.isSchemaRelease)) {
+    return reply({ ok: true, passed: false, results, problems: ['Wait for the Warehouse migration worker to come online before approving this change.'] });
+  }
   const receipt = issueReview(who.userId, ids, register, heads);
   if (!receipt) return reply({ error: 'The review could not be signed.' }, 503);
   return reply({ ok: true, passed: true, results, receipt, waitsForWorker,

@@ -323,7 +323,9 @@ function deployLive(o) {
     clearCaches(s, appRoot, o.cacheCmds);
     // "The site answers" only proves the app did not fall over (not a 5xx, not silence). It does NOT prove the
     // change works: that is a separate, recorded check by a person before the change is called live (Codex #5).
-    var so = siteOk(o.runner, o.siteUrl);
+    var so = o.verifyAfterMove ?
+      { ok: true, status: o.verifyAfterMove({ appRoot: appRoot, backupDir: backupDir }).status } :
+      siteOk(o.runner, o.siteUrl);
     out.siteStatus = so.status;
     if (!so.ok) { throw new Error('the site answered ' + so.status + ' after the move'); }
     out.ok = true;

@@ -232,10 +232,10 @@
       "date": "2026-11-26",
       "where": "staging",
       "status": "queued",
-      "needsCodex": true,
+      "needsCodex": false,
       "needsMax": true,
       "dataChange": true,
-      "waitingFor": "Simultaneous reservation fix passed a two-connection MariaDB check. Waiting for ACID on production, the signed-in staging and restore checks, and a worker that can run the reviewed migrations.",
+      "waitingFor": "Waiting for verified ACID and the Warehouse migration worker.",
       "routesChanged": false,
       "configChanged": false,
       "dependsOn": [
@@ -248,10 +248,10 @@
       "backup": "Archive the production code, affected tables and migration ledger before the move. Compare row counts and record digests before and after.",
       "rollback": "Preserve the schema and reservation history. Use a verified code version compatible with active split holds or recover forward. One-click restore across this change stays blocked.",
       "releaseSteps": [
-        "Verify ACID on production. Use the named migration plan to recheck code fingerprints, schema, seed matches and existing reservations. Complete authenticated staging and restore checks.",
-        "After approval, pause the affected writers. Archive the exact production code and affected tables. Run only the three named migrations in order.",
-        "Compare original row digests and inventory totals. Install the exact code, generate production's build and version files, and verify before reopening writes.",
-        "Legacy reservations stay marked not yet split until a user confirms how much is in each form."
+        "Verify Order Queue and ACID on production.",
+        "Approve this exact build and the three listed migrations. The worker waits for the request-specific write freeze.",
+        "Pause affected Warehouse writers and confirm the maintenance window. The worker verifies code files, takes backups and compares the original database records before and after the migrations.",
+        "Confirm the new code and application routes. Complete the production smoke check and resume writes after verification."
       ],
       "environments": {
         "staging": {
@@ -286,6 +286,155 @@
           "verification": null,
           "review": "not requested; signed-in walk and PDF download still pending"
         }
+      },
+      "manifest": {
+        "sha": "dbd633c8d141f55e20787b17aa02674793580c10",
+        "target": "production",
+        "dataCompatible": false,
+        "files": [
+          {
+            "path": "app/Http/Controllers/Admin/CGTGradeController.php",
+            "before": "24d7a1df808f4f162c7224ed47c325c481a2eec135bb23eb6e49ffc22bc50293",
+            "after": "a96138a338f0f36fdbbacc0b9ab9c0c680230f6cb77eb7b225787dc7aa6c94a8"
+          },
+          {
+            "path": "app/Http/Controllers/Admin/DashboardController.php",
+            "before": "dafac7eb3ebb32cf7f9b798fe876f73a240d7ffb84fb5c1a2741232a3c0fb33f",
+            "after": "a050583448183210c5d68d9fc4510ceb28ea5f4c1f8cba623069fbb1c50eda50"
+          },
+          {
+            "path": "app/Http/Controllers/Admin/InventoryController.php",
+            "before": "817f86150c5ec813e2182c625ef7ddce10678a0dd248b91dfb4fce6537a969fd",
+            "after": "2cca08b18882a53edeff8cd5c1785edb690532473c92ab3927b61562a411670c"
+          },
+          {
+            "path": "app/Http/Controllers/Admin/OrderController.php",
+            "before": "d48fbbe6dcc41a06919d7c68439c992c38e60add492db47917d390227c995ca3",
+            "after": "71004319d1307aad03b05002656a18fb6a5366498ef9fe738a69ed603d8f7fc8"
+          },
+          {
+            "path": "app/Http/Requests/CGTGrade/StoreRequest.php",
+            "before": "bccdb4eeb704d2f6a76c6ceaa54ce888abfffb3638ef5c7bef465a85a34ca373",
+            "after": "63394ed936d35571f47825545420599d2562cc4567cd58c775cd5cb03aca10fe"
+          },
+          {
+            "path": "app/Http/Requests/CGTGrade/UpdateRequest.php",
+            "before": "58558ffcd148c55da39dda88b0c39f13e39de5812207d7aec29142f8a62149d1",
+            "after": "333a8548d80402728daa31d60675619b7ab269ac3563d5e337f69275acc1eb88"
+          },
+          {
+            "path": "app/Models/CGTGrade.php",
+            "before": "6cdf74f10bd34f5a53169b128a34a9bdce42590a7b9a2e420efa6d2f531d82ce",
+            "after": "b87cbce6cea6d7ed4d2812e0517e4534d3a519ec27b1f7bc54d2a36567d31baf"
+          },
+          {
+            "path": "app/Models/OrderQueue.php",
+            "before": "2cdb6bc638172aa11150b19cdf801cb086f706c3026703641e9ac648f2c400a8",
+            "after": "fce998b7f291f87b3765a0c4dcdc263608690a7d8053195d15451bd99de7de3e"
+          },
+          {
+            "path": "app/Services/OrderQueueService.php",
+            "before": "7fba57306b21f16820d6a513fbef5c87e08924edf53b24ac394676ecfcc5cabb",
+            "after": "af906b4e4681fd09c3baa582cce7129a90e9e0bad2e9ee79d0d81d30ab4ddbf8"
+          },
+          {
+            "path": "app/Services/StockBlocks.php",
+            "before": "",
+            "after": "1bbee2da73829b413de87978f95341d46ab3fd0cf8a2b987fdb6a58c1b75dc11"
+          },
+          {
+            "path": "resources/views/admin/modules/cgt-grades/create.blade.php",
+            "before": "86950d53441ca9485b7964d3de05f05089458604f2d8b540006093c4298cc862",
+            "after": "6419f511f75dd277576593746b555cc845dbe195a26ab7d93d364de6334ebe90"
+          },
+          {
+            "path": "resources/views/admin/modules/cgt-grades/edit.blade.php",
+            "before": "5fed1c6e6d79506b641b20d612325bb729fac3fa8fcbdbff050c574c49e2fbdc",
+            "after": "1cc42138061f82ffc35768d576c6e777072fb1dea20b07f57955b6641b0f1c69"
+          },
+          {
+            "path": "resources/views/admin/modules/dashboard/cgt_inventory_summary.blade.php",
+            "before": "1fecd95b4da5e7c9b95c32e110c04a88b2528019714d8626b7d09578651f2da0",
+            "after": "863f21f18d9ce5cbcf262bebdf2e32fc312e84c65298b36cbc1c083d39b63729"
+          },
+          {
+            "path": "resources/views/admin/modules/dashboard/index.blade.php",
+            "before": "32b3724921bc9c0701a0f74438fea1081d09726c793b85862cf0fb987584bc58",
+            "after": "86242197a5d3392a2ce66fc027859ad8a7180fe0dc06d0d3a5fad3c978d5a1bb"
+          },
+          {
+            "path": "resources/views/admin/modules/dashboard/nt_inventory_summary.blade.php",
+            "before": "4d99e64ff7d95d0c4427a512dd00beedadd996b7e29403df37781e1afccba13f",
+            "after": "3ac7af11df9dbdebc1745ac8d98546d37b53d57ebe0f65f21f5af4b5ce7bb01b"
+          },
+          {
+            "path": "resources/views/admin/modules/dashboard/stock_blocks.blade.php",
+            "before": "",
+            "after": "407a08843e98bd9f001fb0bdaf520271cbf33a89c9b62e44a62e3f06d0a97fb2"
+          },
+          {
+            "path": "resources/views/admin/modules/dashboard/stock_inside.blade.php",
+            "before": "",
+            "after": "8d19227e9b30c6fc04b8d08276c83ee9bcbc3b2db9b6e8932695f0948c189f45"
+          },
+          {
+            "path": "resources/views/admin/modules/inventory/inventory_summary_data.blade.php",
+            "before": "37b0dfbd230c10f18b285e3d22d023779ed247a7196840f82aa2046c64971943",
+            "after": "7686837d21ee3e20b19bd75bb289e6e23307001cf286227ee6a007aa0e8ba5ca"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/pending_order/pending_order_pdf.blade.php",
+            "before": "0563e70974f8298c93c336e45b47fb8fdc1d49cf26393dc5b1ddfd0b3e743cc2",
+            "after": "53b82205a78d4f63c94827a8dab281f2fa6a8e57c94de798c928f8b78f45119b"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/pending_order/pending_order_queue.blade.php",
+            "before": "695e628e75adb1563eb17099d5091538280bee482cffb75100b18242d52ee102",
+            "after": "d742aa46d3d9948c5d508d34c42203157147eaacb761c02e3a35a1d6c3928cbb"
+          },
+          {
+            "path": "resources/views/admin/partials/footer.blade.php",
+            "before": "6d9c54b9f2444e61da0bc813e800340ec4939869d41739bf371f4d32c66a20c2",
+            "after": "06475f625e5c06351b8763c04a495f0f6efd4e4a5084f94eacb00c702a3c1779"
+          },
+          {
+            "path": "tools/verify-build.php",
+            "before": "",
+            "after": "18b78869607f0d81926b9d0033d2a9ea620088d5ace3c77e8dda92cbcf0dee00"
+          }
+        ],
+        "dataPlan": {
+          "kind": "warehouse-rolls-schema-v1",
+          "scriptHash": "7a4687aa05f1e69f7627c65e4da44c96360a3d0ae6c6148bee81ee7e694084ba",
+          "migrations": [
+            {
+              "name": "2026_11_25_000001_add_not_rolls_to_c_g_t_grades.php",
+              "sha256": "e025adff3d62f58f0aeb8e3a05f0a273609663ef5b3515ee2d8b18d8f10a0280"
+            },
+            {
+              "name": "2026_11_25_000002_add_form_to_order_queues.php",
+              "sha256": "c694f70fc26f959ac7a8282bed7c6b66fbe043dbba980c396e20cc1bc160081b"
+            },
+            {
+              "name": "2026_11_26_000001_mark_legacy_order_queue_lines_not_yet_split.php",
+              "sha256": "1d640e99e9ccba0d9ca536a5674830dc7d541657d3478499701121d962984771"
+            }
+          ]
+        }
+      },
+      "codexRef": {
+        "sha": "dbd633c8d141f55e20787b17aa02674793580c10",
+        "target": "production",
+        "manifestDigest": "c4f24bd6484da1c1b9f14bd1d774854aeda80b86b75161687ab6e78f75af3296",
+        "feedbackRef": "docs/2026-11-28-warehouse-data-migration-plans.md#checks-completed-on-november-28"
+      },
+      "behavioralQa": {
+        "sha": "dbd633c8d141f55e20787b17aa02674793580c10",
+        "target": "production",
+        "manifestDigest": "c4f24bd6484da1c1b9f14bd1d774854aeda80b86b75161687ab6e78f75af3296",
+        "kind": "behavioral",
+        "result": "PASS",
+        "summary": "Isolated fix staging passed signed-in reservation release and real permission middleware, legacy splitting and picking data, two concurrent MariaDB requests, three exact migrations, original-record checks, backup restores and refusal to replay."
       }
     },
     {
@@ -306,7 +455,9 @@
         "Back up the 2,806 matching records, set their unit to W, and verify the update. If these records change again, the worker stops before updating any pallets."
       ],
       "files": "scan_in_logs.unit for 2,806 checked weight skews with blank units",
-      "dependsOn": ["wh-bug-001-save-path"],
+      "dependsOn": [
+        "wh-bug-001-save-path"
+      ],
       "manifest": {
         "sha": "f8572e1bbd445f537e1959875e3f4964f03270fe",
         "target": "production",
@@ -455,12 +606,94 @@
       "dependsOn": [
         "wh-skin-b-charts"
       ],
-      "waitingFor": "Checklist, authenticated feed and migration rehearsals passed. Waiting for Charts on production, signed-in staging and restore checks, and a worker that can run the reviewed migrations.",
+      "waitingFor": "Waiting for verified Charts and the Warehouse migration worker.",
       "meta": "28 Nov · Revised release candidate 6e40a73 protects mandatory ACID checks and stored load timestamps.",
       "desc": "Adds order-stage requirements and ACID checklist rules while preserving the live read-only Hub feeds. Production has four missing checklist columns.",
       "files": "Order controller, checklist service and Blade templates, optional Hub ping configuration, and three migrations",
       "backup": "Archive the production code, order-status tables and migration ledger before the move. Compare original row digests after migration.",
-      "rollback": "Restore compatible code and preserve all checklist columns, entered data and load-time precision."
+      "rollback": "Restore compatible code and preserve all checklist columns, entered data and load-time precision.",
+      "manifest": {
+        "sha": "6e40a733f1ab344d10b1bb6fa0f32d66f391b0c7",
+        "target": "production",
+        "dataCompatible": false,
+        "files": [
+          {
+            "path": "app/Http/Controllers/Admin/OrderController.php",
+            "before": "f66e855dcc624598ca32870c338af16a6a8627f4a376f2da01416cffb20ab85c",
+            "after": "d48fbbe6dcc41a06919d7c68439c992c38e60add492db47917d390227c995ca3"
+          },
+          {
+            "path": "app/Services/HubPing.php",
+            "before": "",
+            "after": "0d595ab06761ee290a4ffa69bd6d43e21312f906fb1a4dbd5a38565494546254"
+          },
+          {
+            "path": "app/Services/OrderStageRules.php",
+            "before": "",
+            "after": "26bd914754d9d0aa811e62d4b76fd4b6eaae5c7b14817db29a537b18e4c66b3f"
+          },
+          {
+            "path": "config/services.php",
+            "before": "7a908353d2016ea22de1c116ec6fd2213b23a0895a2f4f985307e9d76435f14f",
+            "after": "2b42f44d2ee515d2880310cf53bec728255927b898855a93b4738064c1d2722a"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/edit.blade.php",
+            "before": "178c2b10b01f05156896c616c97c3ed93b7b9fc813f4af987461e8864ce8c919",
+            "after": "3f2a585ad593ded240a1eef75b1870eec923aa133de379a88ca69a1af85dcd25"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/edit_OrderUSA.blade.php",
+            "before": "44408e74f623ebbe871cee867ae70d6475642b9c919af70b04c993f3d8b064af",
+            "after": "16a82c7a66067e5436cafe67ba61d973964506915bbdec01b07a8b132310dcf1"
+          },
+          {
+            "path": "resources/views/admin/modules/orders/partials/stage_rule_field.blade.php",
+            "before": "",
+            "after": "3a380cb6fa9dfe33f2831b500fc97ba9fb07f7fc842bad1e10e4be2278b2fc57"
+          }
+        ],
+        "dataPlan": {
+          "kind": "warehouse-acid-schema-v1",
+          "scriptHash": "7a4687aa05f1e69f7627c65e4da44c96360a3d0ae6c6148bee81ee7e694084ba",
+          "migrations": [
+            {
+              "name": "2026_11_16_000001_add_stage_rule_columns_to_order_status_requirements.php",
+              "sha256": "4725f70341371c34e7796e7770ef8ce60867177ec5bcc494f7f21069180efbf7"
+            },
+            {
+              "name": "2026_11_16_000002_add_note_to_order_statuses.php",
+              "sha256": "c783f3bcb793cee934b41a35bc8c3f4c3a27549699b8346517f91171f555f516"
+            },
+            {
+              "name": "2026_11_17_000001_add_load_time_known_to_order_status_requirements.php",
+              "sha256": "c8a4e9c8e47b7997007fa9d8f8e35b9a221b244ceec3181c6e40c34eb30ec033"
+            }
+          ]
+        }
+      },
+      "codexRef": {
+        "sha": "6e40a733f1ab344d10b1bb6fa0f32d66f391b0c7",
+        "target": "production",
+        "manifestDigest": "240173db20f5c418fda78f4fa41172b84009d949437f62f402b2a90fbc7f2bb9",
+        "feedbackRef": "docs/2026-11-28-warehouse-data-migration-plans.md#checks-completed-on-november-28"
+      },
+      "behavioralQa": {
+        "sha": "6e40a733f1ab344d10b1bb6fa0f32d66f391b0c7",
+        "target": "production",
+        "manifestDigest": "240173db20f5c418fda78f4fa41172b84009d949437f62f402b2a90fbc7f2bb9",
+        "kind": "behavioral",
+        "result": "PASS",
+        "summary": "Isolated fix staging passed signed-in checklist save and real permission middleware, mandatory ACID and End Stage rules, authenticated feed, three exact MariaDB migrations, original-record checks, backup restores and refusal to replay."
+      },
+      "configChanged": true,
+      "routesChanged": false,
+      "releaseSteps": [
+        "Verify Charts on production.",
+        "Approve this exact build and the three listed migrations. The worker waits for the request-specific write freeze.",
+        "Pause affected Warehouse writers and confirm the maintenance window. The worker verifies code files, takes backups and compares the original database records before and after the migrations.",
+        "Confirm the new code and application routes. Complete the production smoke check and resume writes after verification."
+      ]
     },
     {
       "id": "wh-receipt-1325",

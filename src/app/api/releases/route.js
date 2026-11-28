@@ -66,7 +66,7 @@ export async function GET(request) {
   var canSign = userHasPermission(ctx, 'releases.manage');
   var worker = null; var executions = []; var executionReady = false;
   try {
-    var wr = await db.from('release_worker_status').select('enabled, last_seen').eq('id', 1).maybeSingle();
+    var wr = await db.from('release_worker_status').select('enabled, last_seen, version').eq('id', 1).maybeSingle();
     var er = await db.from('release_execution').select('request_id, phase, started_at, finished_at').in('phase', ['running', 'attention']);
     executionReady = !wr.error && !er.error;
     worker = wr.data || null; executions = er.data || [];
@@ -94,6 +94,16 @@ export async function GET(request) {
     if (canSign && stt.canGo && it.dataChange && !ctx.isSuperAdmin) {
       stt.canGo = false;
       stt.why = 'Ask a super admin to approve this database change.';
+    }
+    if (stt.canGo && selection.isSchemaRelease(it)) {
+      var dependency = it.dependsOn.find(function (id) { return latest[id]?.where !== 'live'; });
+      if (dependency) {
+        stt.canGo = false;
+        stt.why = 'Waiting for production verification of ' + (items.find(function (other) { return other.id === dependency; })?.title || dependency) + '.';
+      } else if (!workerOnline || !selection.workerSupports(it, worker.version)) {
+        stt.canGo = false;
+        stt.why = 'Waiting for the Warehouse migration worker.';
+      }
     }
     if (!executionReady) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; }
     if (!canSign || !readable) { stt.canGo = false; stt.canRollback = false; stt.canWithdraw = false; }

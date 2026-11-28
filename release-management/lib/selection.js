@@ -2,6 +2,27 @@
 // Shared by the Hub and the office worker. Candidate files are immutable, reviewed code artifacts.
 var crypto = require('crypto');
 var DATA_WORKER_VERSION = 'warehouse-worker-v1-database-releases';
+var SCHEMA_WORKER_VERSION = 'warehouse-worker-v2-schema-releases';
+var SCHEMA_RELEASES = {
+  'wh-stage-rules': {
+    kind: 'warehouse-acid-schema-v1',
+    dependencies: ['wh-skin-b-charts'],
+    migrations: [
+      '2026_11_16_000001_add_stage_rule_columns_to_order_status_requirements.php',
+      '2026_11_16_000002_add_note_to_order_statuses.php',
+      '2026_11_17_000001_add_load_time_known_to_order_status_requirements.php',
+    ],
+  },
+  'wh-oq-rolls': {
+    kind: 'warehouse-rolls-schema-v1',
+    dependencies: ['wh-order-queue', 'wh-stage-rules'],
+    migrations: [
+      '2026_11_25_000001_add_not_rolls_to_c_g_t_grades.php',
+      '2026_11_25_000002_add_form_to_order_queues.php',
+      '2026_11_26_000001_mark_legacy_order_queue_lines_not_yet_split.php',
+    ],
+  },
+};
 var ORDER_QUEUE_MIGRATIONS = [
   '2026_11_15_000001_add_release_columns_to_order_queues.php',
   '2026_11_15_000002_add_released_by_to_order_queues.php',
@@ -37,18 +58,33 @@ function isOrderQueueRelease(item) {
     && Array.isArray(plan.migrations) && plan.migrations.length === ORDER_QUEUE_MIGRATIONS.length
     && plan.migrations.every(function (file, index) { return file?.name === ORDER_QUEUE_MIGRATIONS[index] && /^[a-f0-9]{64}$/.test(file.sha256 || ''); }));
 }
-function supportedDataPlan(item) { return isPalletCorrection(item) || isOrderQueueRelease(item); }
+function isSchemaRelease(item) {
+  var spec = Object.hasOwn(SCHEMA_RELEASES, item?.id) ? SCHEMA_RELEASES[item.id] : null;
+  var plan = item?.manifest?.dataPlan;
+  return !!(spec && item.dataChange === true && plan?.kind === spec.kind && /^[a-f0-9]{64}$/.test(plan.scriptHash || '') &&
+    Array.isArray(item.dependsOn) && item.dependsOn.length === spec.dependencies.length &&
+    spec.dependencies.every(function (id) { return item.dependsOn.includes(id); }) &&
+    Array.isArray(plan.migrations) && plan.migrations.length === spec.migrations.length &&
+    spec.migrations.every(function (name, i) { return plan.migrations[i]?.name === name && /^[a-f0-9]{64}$/.test(plan.migrations[i].sha256 || ''); }));
+}
+function supportedDataPlan(item) { return isPalletCorrection(item) || isOrderQueueRelease(item) || isSchemaRelease(item); }
+function workerSupports(item, version) {
+  if (!item?.dataChange) return true;
+  if (isSchemaRelease(item)) return version === SCHEMA_WORKER_VERSION;
+  return (isPalletCorrection(item) || isOrderQueueRelease(item)) && [DATA_WORKER_VERSION, SCHEMA_WORKER_VERSION].includes(version);
+}
 function codePath(p) {
-  return typeof p === 'string' && /^(app\/|resources\/views\/|public\/assets\/|routes\/|config\/)[A-Za-z0-9._\/-]+\.(php|js|css|json|svg|png|jpg|jpeg|webp|woff2?)$/.test(p)
-    && !p.split('/').some(function (s) { return s === '..' || s === '.' || s === '' || s.indexOf('.env') === 0; });
+  return p === 'tools/verify-build.php' || (typeof p === 'string' && /^(app\/|resources\/views\/|public\/assets\/|routes\/|config\/)[A-Za-z0-9._\/-]+\.(php|js|css|json|svg|png|jpg|jpeg|webp|woff2?)$/.test(p)
+    && !p.split('/').some(function (s) { return s === '..' || s === '.' || s === '' || s.indexOf('.env') === 0; }));
 }
 function candidateProblems(item) {
   var out = []; var m = item && item.manifest;
   if (!item || item.repo !== 'nextrade_WAREHOUSE') { return ['Not an NT Warehouse code change.']; }
   var dataOnly = isPalletCorrection(item);
+  var schema = isSchemaRelease(item);
   if (item.dataChange && !supportedDataPlan(item)) { return ['This database change needs a reviewed execution plan.']; }
-  if (!m || !/^[0-9a-f]{40}$/.test(m.sha || '') || m.target !== 'production' || m.dataCompatible !== true ||
-      !Array.isArray(m.files) || (dataOnly ? m.files.length !== 0 : !m.files.length || (m.dataPlan && !isOrderQueueRelease(item)))) {
+  if (!m || !/^[0-9a-f]{40}$/.test(m.sha || '') || m.target !== 'production' || m.dataCompatible !== !schema ||
+      !Array.isArray(m.files) || (dataOnly ? m.files.length !== 0 : !m.files.length || (m.dataPlan && !isOrderQueueRelease(item) && !schema))) {
     out.push('Exact build, reviewed file fingerprints and data-compatible rollback confirmation are required.'); return out;
   }
   var seen = {};
@@ -89,7 +125,12 @@ function selectionPlan(items, states, ids, action) {
         paths[f.path] = id;
       });
       (it.dependsOn || []).forEach(function (dep) {
-        if (ids.indexOf(dep) < 0 && !['live', 'deployed'].includes((states[dep] || {}).where)) problems.push(it.title + ': select ' + (byId[dep]?.title || dep) + ' too, or deploy it first.');
+        var where = (states[dep] || {}).where;
+        if (isSchemaRelease(it)) {
+          if (where !== 'live') problems.push(it.title + ': verify ' + (byId[dep]?.title || dep) + ' on production first.');
+        } else if (ids.indexOf(dep) < 0 && !['live', 'deployed'].includes(where)) {
+          problems.push(it.title + ': select ' + (byId[dep]?.title || dep) + ' too, or deploy it first.');
+        }
       });
     } else {
       (items || []).forEach(function (other) {
@@ -110,4 +151,4 @@ function selectionPlan(items, states, ids, action) {
   chosen.forEach(visit);
   return { ok: problems.length === 0, problems: problems, items: ordered };
 }
-module.exports = { DATA_WORKER_VERSION, digest, codePath, supportedDataPlan, isPalletCorrection, isOrderQueueRelease, candidateProblems, selectionPlan };
+module.exports = { DATA_WORKER_VERSION, SCHEMA_WORKER_VERSION, digest, codePath, supportedDataPlan, workerSupports, isPalletCorrection, isOrderQueueRelease, isSchemaRelease, candidateProblems, selectionPlan };
